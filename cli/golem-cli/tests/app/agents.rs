@@ -12,8 +12,15 @@ use anyhow::Context;
 
 use goldenfile::Mint;
 use golem_cli::fs;
+use golem_cli::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
 use golem_cli::model::language::GuestLanguage;
 use golem_cli::versions;
+use golem_common::model::durable_stream::{
+    SessionStreamRole, StreamRegisteredRecord, StreamTerminal, StreamTerminalAuthor,
+    StreamTerminalOrigin, StreamTerminalRecord,
+};
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::schema::FromSchema;
 use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
@@ -214,6 +221,79 @@ pub(super) fn assert_generated_driver(output: std::process::Output, language: &s
     );
 }
 
+/// Each streamed line names the invocation that wrote it, and the stream of an invocation ends
+/// at the finish of that invocation. `agent stream` names the invocation of each line in the same
+/// way.
+#[test]
+#[timeout("15 minutes")]
+async fn test_agent_invoke_stream_attributes_lines_to_their_invocation() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let first = invoke_logging(&ctx, &agent, "round 0").await;
+    let second = invoke_logging(&ctx, &agent, "round 1").await;
+    assert_ne!(first, second);
+
+    let marker = format!("streamed {}", Uuid::new_v4());
+    let stream = ctx.cli_process_after_line([cmd::AGENT, "stream", &agent], &marker);
+    let invoked = async {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        invoke_logging(&ctx, &agent, &marker).await
+    };
+    let ((mut stream, line), streamed) = tokio::join!(stream, invoked);
+    stream.kill().await.unwrap();
+    assert!(line.contains(&format!("[{streamed}]")), "{line}");
+}
+
+/// Invokes `bug_golem1265`, which logs `Got <message>`, and returns the invocation ID that the
+/// streamed log line and the invocation finish both carry.
+async fn invoke_logging(ctx: &TestContext, agent: &str, message: &str) -> String {
+    let invoked = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            agent,
+            "bug_golem1265",
+            &format!("\"{message}\""),
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(invoked.success_or_dump());
+    let events = invoked
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .filter(|document| document["$type"] == "agent.stream")
+        .collect::<Vec<_>>();
+    let id_of = |kind: &str, message: Option<&str>| {
+        events
+            .iter()
+            .filter(|event| {
+                event["kind"] == kind
+                    && message.is_none_or(|message| {
+                        event["message"]
+                            .as_str()
+                            .is_some_and(|text| text.ends_with(message))
+                    })
+            })
+            .map(|event| {
+                event["invocationId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    let logged = id_of("log", Some(&format!("Got {message}")));
+    let finished = id_of("invocation-finished", None);
+    assert_eq!(logged.len(), 1, "{events:#?}");
+    assert_eq!(finished, logged, "{events:#?}");
+    let (owner, uuid) = logged[0].split_at(logged[0].len() - 37);
+    assert_eq!(owner, agent);
+    assert!(Uuid::parse_str(&uuid[1..]).is_ok(), "{}", logged[0]);
+    logged[0].clone()
+}
+
 #[test]
 #[timeout("15 minutes")]
 async fn test_agent_stream_ends_when_stdout_is_closed() {
@@ -304,28 +384,6 @@ async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_w
     assert!(!oplog.stderr_text().contains("Broken pipe"));
 }
 
-/// Whether the oplog entry is a cancel of a stream with the given role and reason. The record is
-/// a schema value, so the names of the enum cases come from its graph.
-fn stream_cancel_is(entry: &serde_json::Value, role: &str, reason: &str) -> bool {
-    let record = &entry["entry"]["record"];
-    let case_name = |type_name: &str, case: &serde_json::Value| -> Option<String> {
-        let def = record["graph"]["defs"]
-            .as_array()?
-            .iter()
-            .find(|def| def["name"] == type_name)?;
-        def["body"]["value"]["cases"][case["value"]["case"].as_u64()? as usize]
-            .as_str()
-            .map(str::to_string)
-    };
-    let fields = &record["value"]["value"]["fields"];
-    let is_cancel = record["graph"]["root"]["value"]["id"]
-        .as_str()
-        .is_some_and(|id| id.ends_with("StreamCancelRecord"));
-    is_cancel
-        && case_name("StreamCancelRole", &fields[5]).as_deref() == Some(role)
-        && case_name("StreamCancelReason", &fields[6]).as_deref() == Some(reason)
-}
-
 /// Runs `agent invoke` with raw stdout and lets the reader of stdout leave after the first byte.
 /// Asserts that the command ends with the exit code of SIGPIPE and that the server got the cancel
 /// of the output stream from a consumer that dropped it.
@@ -358,7 +416,7 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
             "oplog",
             &invoke_agent,
             "--query",
-            "stream-cancel",
+            "stream-terminal OR stream-registered",
             flag::FORMAT,
             "json",
         ])
@@ -366,13 +424,30 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
     assert!(cancels.success_or_dump());
     let entries = cancels
         .stdout()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .map(|line| serde_json::from_str::<AgentOplogEntryView>(line).unwrap())
+        .collect::<Vec<_>>();
+    let output_streams = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            AgentOplogEntryContent::Full(PublicOplogEntry::StreamRegistered(params)) => {
+                let record = StreamRegisteredRecord::from_value(params.record.value()).unwrap();
+                (record.session_role == Some(SessionStreamRole::Output)).then_some(entry.index)
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>();
     assert!(
-        entries
-            .iter()
-            .any(|entry| stream_cancel_is(entry, "OutputConsumer", "GuestDrop")),
-        "the server received no cancel of the output stream for a consumer that dropped it: {entries:#?}"
+        entries.iter().any(|entry| match &entry.entry {
+            AgentOplogEntryContent::Full(PublicOplogEntry::StreamTerminal(params)) => {
+                let record = StreamTerminalRecord::from_value(params.record.value()).unwrap();
+                output_streams.contains(&record.stream_id.0.as_u64())
+                    && record.authored_by == StreamTerminalAuthor::Guest
+                    && record.origin == StreamTerminalOrigin::Control
+                    && matches!(record.terminal, StreamTerminal::ConsumerCancelled { .. })
+            }
+            _ => false,
+        }),
+        "the server received no guest-authored ConsumerCancelled control terminal for the dropped output stream: {entries:#?}"
     );
 }
 
@@ -1348,8 +1423,11 @@ async fn test_streaming_invocation_cli_end_to_end() {
             "increment_scalar",
         ])
         .await;
-    assert!(after_interrupt.success_or_dump());
-    assert!(after_interrupt.stdout_contains("1"));
+    assert!(!after_interrupt.success());
+    assert!(
+        after_interrupt.stderr_contains("Previous Invocation Failed (previous-invocation-failed)")
+    );
+    assert!(after_interrupt.stderr_contains("invocation interrupted"));
 }
 
 /// The Go external bridge against the same streaming agent: inputs, outputs,
@@ -3992,6 +4070,14 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
         String::from_utf8_lossy(&repeated.stderr)
     );
     assert!(String::from_utf8_lossy(repeated.stdout()).contains("a ba ba b"));
+    let document: serde_json::Value = serde_json::from_slice(repeated.stdout()).unwrap();
+    let receipt = &document["response"];
+    let owner: golem_common::model::AgentId =
+        serde_json::from_value(receipt["agentId"].clone()).unwrap();
+    let owner = format!("{}:{}", owner.component_id.0, owner.agent_id);
+    let invocation_id = receipt["idempotencyKey"].as_str().unwrap();
+    Uuid::parse_str(invocation_id).expect("the receipt contains the final invocation UUID");
+    assert_ne!(invocation_id, "structured-cli-repeat");
 
     let lookup = ctx
         .cli_with_input(
@@ -4000,11 +4086,11 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
                 "json",
                 cmd::TOOL,
                 cmd::INVOKE,
-                "--component",
-                "tool-raw-stdout:provider",
+                "--agent",
+                &owner,
                 "--lookup",
                 "--idempotency-key",
-                "structured-cli-repeat",
+                invocation_id,
                 "raw-output",
                 "--",
                 "repeat",
@@ -4807,10 +4893,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         ])
         .await;
     assert!(!outputs.success());
-    assert!(
-        outputs
-            .stderr_contains("Agent Service - Error: 500 Internal Server Error, Invocation Failed")
-    );
+    assert!(outputs.stderr_contains("Invocation Failed (invocation-failed)"));
 }
 
 // Invocations on code-first typescript agents, with complex types / functions.

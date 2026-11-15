@@ -22,7 +22,7 @@ use golem_common::model::oplog::{
     PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
+use golem_common::model::{AgentId, AgentInvocationPayload, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::BTreeMap;
@@ -253,10 +253,21 @@ fn stored_test_card(card_id: CardId) -> StoredCard {
     })
 }
 
+fn replayed_invocation_id() -> golem_common::model::InvocationId {
+    uuid::Uuid::from_u128(1).into()
+}
+
 fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
+    invocation_started_for(replayed_invocation_id(), wallet_pin)
+}
+
+fn invocation_started_for(
+    invocation_id: golem_common::model::InvocationId,
+    wallet_pin: InvocationWalletPin,
+) -> OplogEntry {
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
-        idempotency_key: IdempotencyKey::new("wallet-pin-replay".to_string()),
+        invocation_id,
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         trace_id: TraceId::generate(),
         trace_states: Vec::new(),
@@ -1009,6 +1020,7 @@ fn anchored_error(entity_parent_start_index: u64, retry_from: u64) -> OplogEntry
     OplogEntry::error(
         Some(OplogIndex::from_u64(entity_parent_start_index)),
         OplogErrorKind::Invocation,
+        Some(replayed_invocation_id()),
         AgentError::TransientError("retry".to_string()),
         OplogIndex::from_u64(retry_from),
         None,
@@ -2382,6 +2394,7 @@ async fn selected_snapshot_leaves_only_post_snapshot_invocation_pin_for_root() {
             active_cards: Vec::new(),
             wallet_generation: 7,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         invocation_started(pin.clone()),
         start_now(),
@@ -3082,6 +3095,7 @@ async fn error_hint_between_start_and_end_resolves() {
         OplogEntry::error(
             None,
             OplogErrorKind::Invocation,
+            Some(replayed_invocation_id()),
             AgentError::TransientError("boom".to_string()),
             OplogIndex::from_u64(2),
             None,
@@ -3466,8 +3480,13 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
 }
 
 fn invocation_finished() -> OplogEntry {
+    invocation_finished_for(replayed_invocation_id())
+}
+
+fn invocation_finished_for(invocation_id: golem_common::model::InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::now_utc(),
+        invocation_id,
         result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
         method_name: None,
         consumed_fuel: 0,
@@ -3478,7 +3497,119 @@ fn invocation_finished() -> OplogEntry {
 async fn read_invocation_finished(
     rs: &ReplayState,
 ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
-    rs.get_oplog_entry_agent_invocation_finished().await
+    rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
+        .await
+        .map(|finished| finished.map(|(_, result)| result))
+}
+
+fn test_invocation_wallet_pin() -> InvocationWalletPin {
+    InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: [5; 32],
+            generation: 1,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: None,
+    }
+}
+
+fn invocation_error_for(
+    invocation_id: golem_common::model::InvocationId,
+    retry_from: u64,
+) -> OplogEntry {
+    OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        Some(invocation_id),
+        AgentError::TransientError("boom".to_string()),
+        OplogIndex::from_u64(retry_from),
+        None,
+    )
+}
+
+#[test]
+async fn replayed_finished_naming_another_invocation_is_rejected() {
+    // [RecoverySucceeded, AgentInvocationFinished(other)] — the recorded terminal is in the
+    // position of the replayed invocation's terminal, but it names another invocation.
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        invocation_finished_for(uuid::Uuid::from_u128(2).into()),
+    ])
+    .await;
+
+    let result = read_invocation_finished(&rs).await;
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected an unexpected-oplog-entry error, got {result:?}"
+    );
+}
+
+#[test]
+async fn replayed_finished_naming_the_replayed_invocation_is_accepted() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        invocation_finished(),
+    ])
+    .await;
+
+    let (finished_index, result) = rs
+        .get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
+        .await
+        .unwrap()
+        .expect("expected the matching invocation terminal");
+    assert_eq!(finished_index, OplogIndex::from_u64(2));
+    assert!(matches!(result, AgentInvocationResult::AgentInitialization));
+}
+
+async fn replay_invocation_with_error(
+    error_invocation_id: golem_common::model::InvocationId,
+) -> Result<(), WorkerExecutorError> {
+    // [RemoveRetryPolicy, AgentInvocationStarted, Start, Error(retry_from: Start), End,
+    //  AgentInvocationFinished]
+    let rs = replay_state_over(vec![
+        remove_retry_policy(),
+        invocation_started(test_invocation_wallet_pin()),
+        start_now(),
+        invocation_error_for(error_invocation_id, 3),
+        end_for(3, 42),
+        invocation_finished(),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await?
+        .expect("expected invocation start");
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await?;
+    rs.await_resolution(handle).await?;
+    read_invocation_finished(&rs).await?;
+    Ok(())
+}
+
+#[test]
+async fn replayed_invocation_error_naming_a_finished_invocation_is_accepted() {
+    // A background task that outlives its invocation records retry errors that name the earlier,
+    // already finished invocation. An `Error` is a hint, so it never makes replay diverge.
+    replay_invocation_with_error(uuid::Uuid::from_u128(3).into())
+        .await
+        .expect("an error naming a finished invocation must replay");
+}
+
+#[test]
+async fn replayed_invocation_error_naming_the_replayed_invocation_is_accepted() {
+    replay_invocation_with_error(replayed_invocation_id())
+        .await
+        .expect("an error of the replayed invocation must replay");
 }
 
 #[test]
@@ -4489,16 +4620,15 @@ fn consumer_observation_with_parent(
 ) -> OplogEntry {
     use golem_common::model::durable_stream::{
         LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
-        StreamConsumerObservation, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-        StreamEndResult, StreamOffset, StreamRegistrationInvocation, StreamSessionRecord,
+        StreamConsumerObservation, StreamConsumerTerminalRecord, StreamOffset,
+        StreamRegistrationInvocation, StreamSessionRecord, StreamTerminal,
     };
     let observation = if guest {
         StreamConsumerObservation::Guest { parent_start_index }
     } else {
         StreamConsumerObservation::Host
     };
-    let session_key =
-        StreamRegistrationInvocation::Local(IdempotencyKey::new("observations".to_string()));
+    let session_key = StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(501).into());
     let reader_id = LocalStreamReaderId {
         introducing_oplog_index: OplogIndex::from_u64(1),
         binding_slot: reader_slot,
@@ -4513,7 +4643,8 @@ fn consumer_observation_with_parent(
             reader_id,
             source_offset,
             consumer_read_ordinal: 1,
-            terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+            authored_by: golem_common::base_model::durable_stream::StreamTerminalAuthor::Guest,
+            terminal: StreamTerminal::Finished,
         })
     } else {
         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
@@ -4547,7 +4678,7 @@ fn attachment_terminal_observation(guest: bool, parent: Option<OplogIndex>) -> O
                 creation_start: OplogIndex::INITIAL,
                 slot: ToolAttachmentSlot::Stdout,
             },
-            logical_invocation: IdempotencyKey::new("attachment-observation".into()),
+            logical_invocation: uuid::Uuid::from_u128(4).into(),
             observation: if guest {
                 StreamConsumerObservation::Guest {
                     parent_start_index: parent,
@@ -5402,7 +5533,7 @@ async fn invocation_boundary_after_guest_observation_preserves_finished_or_incom
             .unwrap();
         barrier.acknowledge();
         assert_eq!(
-            rs.get_oplog_entry_agent_invocation_finished()
+            rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
                 .await
                 .unwrap()
                 .is_some(),
@@ -13388,7 +13519,7 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
 #[test_r::timeout("30s")]
 async fn disposal_refusal_without_collection_preserves_recorded_calls() {
     use golem_common::model::durable_stream::{
-        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamCancelRole,
+        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamEndpointSide,
         StreamRecordReference, StreamRegistrationInvocation,
     };
     use golem_common::model::oplog::attachment::{
@@ -13440,15 +13571,14 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
         let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
         let refusal = if input {
             SerializableToolAdmissionRefusal::BeforeDurableInputDisposal {
-                session: StreamRegistrationInvocation::Local(IdempotencyKey::new(
-                    "refused-input".into(),
-                )),
+                session: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(502).into()),
                 binding: Box::new(StreamBindingRecord {
                     transport_stream_id: 1,
                     source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
                     role: SessionStreamRole::Input,
                 }),
-                role: StreamCancelRole::InputConsumer,
+                direction: SessionStreamRole::Input,
+                side: StreamEndpointSide::Consumer,
             }
         } else {
             SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
@@ -14396,12 +14526,14 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
             None,
             Default::default(),
             None,
+            None,
         ),
         OplogEntry::successful_update(
             ComponentRevision::new(2).unwrap(),
             1,
             None,
             Default::default(),
+            None,
             None,
         ),
         start_now(),
@@ -14541,6 +14673,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
             active_cards: vec![selected.clone()],
             wallet_generation: 7,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         start_now(),
         OplogEntry::CardDerived {
@@ -15020,4 +15153,186 @@ async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition
         drain.await;
         drop(contention);
     }
+}
+
+async fn bootstrap_cursor_over(
+    oplog: &Arc<InMemoryOplog>,
+    skip_through: u64,
+    target: u64,
+    tail: BootstrapTail,
+) -> ReplayState {
+    ReplayState::new_for_bootstrap(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        &DeletedRegions::default(),
+        OplogIndex::from_u64(skip_through),
+        OplogIndex::from_u64(target),
+        tail,
+    )
+    .await
+    .expect("failed to build bootstrap cursor")
+}
+
+async fn oplog_of(entries: Vec<OplogEntry>) -> Arc<InMemoryOplog> {
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    oplog
+}
+
+/// The history `[RecoverySucceeded, resolution 2..=3, now 4..=5, resolution 6..=7]`, whose
+/// bootstrap block is the `now` call at `4..=5`.
+fn history_with_bootstrap_block() -> Vec<OplogEntry> {
+    vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_resolution(),
+        end_for(2, 5),
+        start_now(),
+        end_for(4, 42),
+        start_resolution(),
+        end_for(6, 7),
+    ]
+}
+
+async fn claim_and_resolve(rs: &ReplayState, name: HostFunctionName) -> (u64, u64) {
+    let handle = rs
+        .claim_concurrent_start(&name, &DurableFunctionType::ReadLocal)
+        .await
+        .unwrap();
+    let start = u64::from(handle.start_idx());
+    match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => (start, u64::from(end_idx)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn strict_bootstrap_cursor_replays_its_block_after_history_that_the_main_cursor_replays_later()
+ {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let main_position = main.last_replayed_index();
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+
+    let claimed = claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+    bootstrap.ensure_bootstrap_consumed().await.unwrap();
+
+    assert_eq!(claimed, (4, 5));
+    assert!(bootstrap.at_replay_tail());
+    assert!(!bootstrap.is_live_published());
+    assert!(
+        bootstrap
+            .cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .is_empty(),
+        "a bootstrap cursor records no replay events, not even ReplayFinished"
+    );
+    assert_eq!(main.last_replayed_index(), main_position);
+    assert!(main.has_replay_remaining());
+    assert_eq!(
+        claim_and_resolve(&main, HostFunctionName::MonotonicClockResolution).await,
+        (2, 3)
+    );
+}
+
+#[test]
+async fn strict_bootstrap_cursor_diverges_on_a_durable_call_after_its_block() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+    let memory = replay_linear_memory();
+    claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+
+    let outcome = bootstrap
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    let switched = bootstrap.finish_bootstrap_replay().await;
+
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+    assert!(matches!(
+        switched,
+        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+    ));
+    assert!(!bootstrap.is_live_published());
+    assert_eq!(memory.reconciliation_grant_bytes(1), 2);
+}
+
+#[test]
+async fn strict_bootstrap_cursor_diverges_on_an_unconsumed_block() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let unconsumed = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+    let empty = bootstrap_cursor_over(&oplog, 1, 1, BootstrapTail::Strict).await;
+
+    assert!(matches!(
+        unconsumed.ensure_bootstrap_consumed().await,
+        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+    ));
+    assert!(empty.at_replay_tail());
+    assert!(
+        !empty.is_live_published(),
+        "an exhausted bootstrap cursor does not publish live at construction"
+    );
+    empty.ensure_bootstrap_consumed().await.unwrap();
+}
+
+#[test]
+async fn live_bootstrap_cursor_replays_a_partial_block_then_goes_live_locally() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let main_position = main.last_replayed_index();
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Live).await;
+    let memory = replay_linear_memory();
+
+    let claimed = claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+    let outcome = bootstrap
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    let switched = bootstrap.finish_bootstrap_replay().await.unwrap();
+
+    assert_eq!(claimed, (4, 5));
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+    assert_eq!(switched, Some(OplogIndex::from_u64(5)));
+    assert!(bootstrap.is_live_published());
+    assert!(
+        bootstrap
+            .cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        memory.reconciliation_grant_bytes(1),
+        2,
+        "the live switch of a bootstrap cursor leaves the linear memory in replay"
+    );
+    assert_eq!(main.last_replayed_index(), main_position);
+    assert!(!main.is_live_published());
 }

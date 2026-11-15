@@ -67,7 +67,7 @@ pub(in crate::custom_api) fn document() -> String {
     json!({"openapi":"3.1.0","info":{"title":"Provider","version":"1"},"paths":{"/":{"get":{"responses":{"200":{"description":"ok"}}}}}}).to_string()
 }
 type Call = (
-    IdempotencyKey,
+    golem_common::model::InvocationRequestKey,
     oneshot::Sender<Result<String, OpenApiError>>,
 );
 struct ControlledInvoker(mpsc::UnboundedSender<Call>);

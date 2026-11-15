@@ -84,7 +84,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         wallet_pin,
                     })) => {
                         let agent_invocation = AgentInvocation::from_parts(
-                            idempotency_key.clone(),
+                            idempotency_key,
                             invocation_payload,
                             invocation_context.clone(),
                         );
@@ -179,7 +179,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .set_current_idempotency_key(idempotency_key.clone())
+                            .set_current_idempotency_key(idempotency_key)
                             .await;
 
                         let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
@@ -263,7 +263,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     && store.as_context().data().durable_ctx().is_live()
                                 {
                                     let worker = worker.clone();
-                                    let idempotency_key = idempotency_key.clone();
                                     let result = store.run_concurrent(async move |_accessor| {
                                         worker.complete_durable_streaming_session(&idempotency_key).await
                                     }).await;
@@ -484,6 +483,58 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )));
         }
         result.map_err(|error| ReplayFailure { error, diverged })
+    }
+
+    /// Begins the bootstrap phase of the primary Store, before its core initializer runs.
+    /// `cursor` is the bootstrap cursor that stands in place of the main cursor until
+    /// [`Self::finish_bootstrap_phase`]; with `None` the initializer runs on the main cursor.
+    /// Either way the phase observes the durable calls that the initializer appends or claims.
+    pub(crate) async fn enter_bootstrap_phase(&mut self, cursor: Option<ReplayState>) {
+        let main = cursor.map(|cursor| std::mem::replace(&mut self.state.replay_state, cursor));
+        let replayed_before = self.state.replay_state.last_replayed_non_hint_index();
+        let appended_before = self.state.oplog.last_added_non_hint_entry().await;
+        self.state.bootstrap = Some(BootstrapPhase {
+            main,
+            first_start: None,
+            replayed_before,
+            appended_before,
+        });
+    }
+
+    /// Ends the bootstrap phase: it restores the main cursor and records the bootstrap range of
+    /// the durable calls that the initializer appended or claimed. A bootstrap cursor whose
+    /// recorded block is not consumed fails with a divergence.
+    pub(crate) async fn finish_bootstrap_phase(&mut self) -> Result<(), WorkerExecutorError> {
+        let Some(phase) = self.state.bootstrap.take() else {
+            return Ok(());
+        };
+        let consumed = match &phase.main {
+            Some(_) => self.state.replay_state.ensure_bootstrap_consumed().await,
+            None => Ok(()),
+        };
+        let replayed = self.state.replay_state.last_replayed_non_hint_index();
+        let appended = self.state.oplog.last_added_non_hint_entry().await;
+        if let Some(main) = phase.main {
+            self.state.replay_state = main;
+        }
+        consumed?;
+        let end = [
+            (replayed > phase.replayed_before).then_some(replayed),
+            appended.filter(|_| appended != phase.appended_before),
+        ]
+        .into_iter()
+        .flatten()
+        .max();
+        self.state.bootstrap_range = phase.first_start.map(|start| OplogRegion {
+            start,
+            end: end.map_or(start, |end| end.max(start)),
+        });
+        Ok(())
+    }
+
+    /// The bootstrap range of this generation, which a `Snapshot` entry names.
+    pub(crate) fn bootstrap_range(&self) -> Option<OplogRegion> {
+        self.state.bootstrap_range.clone()
     }
 }
 

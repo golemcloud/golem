@@ -84,7 +84,6 @@ use golem_client::api::{
 };
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::application::ApplicationName;
@@ -1551,23 +1550,6 @@ impl AppCommandHandler {
 
         if deploy_diff.tool_publication_plan.has_conflicts() {
             bail!("Tool publication plan contains conflicts");
-        }
-
-        // Emit schema evolution warnings
-        for (component_name, new_props) in &deploy_diff.deployable_manifest.components {
-            if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
-                let warnings = validate_schema_evolution(old_agent_types, &new_props.agent_types);
-                for w in &warnings {
-                    log_warn_action(
-                        "Schema evolution",
-                        format!(
-                            "component {}: {}",
-                            component_name.0.log_color_highlight(),
-                            w
-                        ),
-                    );
-                }
-            }
         }
 
         Ok(Some((deploy_diff, deployment_version)))

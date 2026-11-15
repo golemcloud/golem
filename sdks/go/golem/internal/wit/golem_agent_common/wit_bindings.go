@@ -538,6 +538,14 @@ func MakePrincipalAnonymous() Principal {
 	return Principal{PrincipalAnonymous, nil}
 }
 
+// The principals that caused an invocation.
+type Caller struct {
+	// The principal at the root of the call tree.
+	Original Principal
+	// The principal that made this call.
+	Immediate Principal
+}
+
 type AgentConstructor struct {
 	Name        witTypes.Option[string]
 	Description string

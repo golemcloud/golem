@@ -108,6 +108,9 @@ async fn p3_status_retry_header_wait_observes_interrupt(
         .await?;
     let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&worker_id, &key, "post_with_status_retry_policy")
+        .await?;
     let invocation = executor.invoke_and_await_agent_with_key(
         &component,
         &agent_id,
@@ -222,7 +225,7 @@ async fn p3_status_retry_header_wait_observes_interrupt(
     );
     assert_eq!(oplog.iter().filter(|entry| matches!(
         &entry.entry, PublicOplogEntry::AgentInvocationStarted(params)
-            if matches!(&params.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == key)
+            if matches!(&params.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == stored_key)
     )).count(), 1);
     assert_eq!(oplog.iter().filter(|entry| matches!(
         &entry.entry, PublicOplogEntry::AgentInvocationFinished(params)

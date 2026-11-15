@@ -310,7 +310,8 @@ async fn rust_generated_native_stream_bridge_e2e() {
         };
         if scenario == "fatal"
             && !output.success()
-            && output.stderr_contains("durable stream ended with error context")
+            && output.stderr_contains("stream terminated: Failed(Interrupted(")
+            && output.stderr_contains("value-node index out of range: 0")
         {
             continue;
         }

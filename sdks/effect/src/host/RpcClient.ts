@@ -14,7 +14,8 @@ export class RpcHostError {
 }
 
 export interface RpcInvocationHandle {
-  readonly metadata: AgentHost.InvocationMetadata
+  /** Absent when the host rejected the call; `get` then fails with the rejection error. */
+  readonly metadata: AgentHost.InvocationMetadata | undefined
   readonly get: () => Promise<CoreTypes.SchemaValueTree | undefined>
   readonly cancel: () => void
   readonly drop: () => void

@@ -20,6 +20,10 @@ const golemAliases = [
   },
   { find: "golem:agent/host@2.0.0", replacement: resolve(mockDir, "golem-agent-host.ts") },
   { find: "golem:agent/common@2.0.0", replacement: resolve(mockDir, "golem-agent-common.ts") },
+  {
+    find: "golem:agent/invocation-context@2.0.0",
+    replacement: resolve(mockDir, "golem-agent-invocation-context.ts"),
+  },
   { find: "golem:core/types@2.0.0", replacement: resolve(mockDir, "golem-core-types.ts") },
   { find: "golem:secrets/reveal@0.1.0", replacement: resolve(mockDir, "golem-secrets.ts") },
   { find: "golem:secrets/types@0.1.0", replacement: resolve(mockDir, "golem-secrets.ts") },

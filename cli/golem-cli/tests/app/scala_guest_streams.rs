@@ -326,7 +326,8 @@ async fn test_scala_agent_guest_stream_producer_errors_e2e() {
         "fatal producer was converted to clean EOF"
     );
     assert!(
-        fatal.stderr_contains("durable stream ended with error context"),
+        fatal.stderr_contains("stream terminated: Failed(Interrupted(")
+            && fatal.stderr_contains("value-node index out of range: 0"),
         "expected a fatal stream operation failure: {}",
         fatal.stderr().collect::<Vec<_>>().join("\n")
     );

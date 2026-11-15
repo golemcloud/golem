@@ -400,6 +400,7 @@ fn test_durable_stream_policy(call: &CallAgentBehaviour) -> DurableStreamRoutePo
         }
     }
     DurableStreamRoutePolicy {
+        family_id: 0,
         slots,
         allow_external_writes: true,
         allow_stream_delete: true,
@@ -1160,6 +1161,7 @@ fn durable_stream_custom_policy_shapes_public_openapi() {
         SchemaType::stream(Some(SchemaType::u8())),
     )]);
     call.durable_streams = Some(DurableStreamRoutePolicy {
+        family_id: 0,
         slots: vec![
             DurableStreamSlot {
                 canonical_name: "payload".into(),
@@ -1226,6 +1228,7 @@ fn durable_stream_concrete_preflights_are_not_emitted_as_openapi_operations() {
         };
         call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
         call.durable_streams = Some(DurableStreamRoutePolicy {
+            family_id: 0,
             slots: vec![DurableStreamSlot {
                 canonical_name: "$result".into(),
                 public_name: "events".into(),

@@ -51,7 +51,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
-    InvocationStatus, OwnedAgentId, PromiseId,
+    InvocationId, InvocationRequestKey, InvocationStatus, OwnedAgentId, PromiseId,
 };
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -130,6 +130,7 @@ pub trait WorkerProxy: Send + Sync {
         schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -207,6 +208,7 @@ pub trait WorkerProxy: Send + Sync {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
@@ -228,14 +230,14 @@ pub trait WorkerProxy: Send + Sync {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError>;
 
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: InvocationId,
         receipt: ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -244,7 +246,7 @@ pub trait WorkerProxy: Send + Sync {
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         environment_id: Option<EnvironmentId>,
         auth_ctx: &AuthCtx,
     ) -> Result<InvocationStatus, WorkerProxyError>;
@@ -254,7 +256,7 @@ pub trait WorkerProxy: Send + Sync {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -509,6 +511,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -541,6 +544,10 @@ impl WorkerProxy for RemoteWorkerProxy {
             .map_err(|error: String| {
                 WorkerProxyError::InternalError(WorkerExecutorError::invalid_request(error))
             })?;
+        let request_key = idempotency_key
+            .clone()
+            .map(InvocationRequestKey::Internal)
+            .unwrap_or_else(|| InvocationRequestKey::external(None, None));
         let first_dispatch = AtomicBool::new(true);
 
         let response: InvokeAgentResponse = self
@@ -568,6 +575,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     mode: proto_mode,
                     schedule_at: proto_schedule_at,
                     idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                    request_key: Some(request_key.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env.clone(),
@@ -579,6 +587,8 @@ impl WorkerProxy for RemoteWorkerProxy {
                     freshness_disposition: proto_freshness_disposition,
                     config: config.clone().into_iter().map(Into::into).collect(),
                     scope_card: proto_scope_card.clone(),
+                    expected_callee_fingerprint: expected_callee_fingerprint
+                        .map(|fingerprint| fingerprint.0.into()),
                 }))
             })
             .await?
@@ -908,6 +918,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         debug!("Forking remote worker");
@@ -920,6 +931,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     target_agent_id: Some(target_agent_id.clone().into()),
                     oplog_index_cutoff: u64::from(*oplog_index_cutoff),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: Some(principal.clone().into()),
                 }))
             })
             .await?
@@ -983,6 +995,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     agent_id: Some(promise_id.agent_id.clone().into()),
                     complete_parameters: Some(CompleteParameters {
                         oplog_idx: promise_id.oplog_idx.into(),
+                        fingerprint: Some(promise_id.fingerprint.0.into()),
                         data: data.clone(),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -1003,7 +1016,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         debug!(agent_id=%agent_id, idempotency_key=%idempotency_key, "Cancelling invocation on remote agent");
@@ -1013,7 +1026,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("cancel_invocation", move |client| {
                 Box::pin(client.cancel_invocation(CancelInvocationRequest {
                     agent_id: Some(agent_id.clone().into()),
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(idempotency_key.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     scheduled: None,
                 }))
@@ -1033,7 +1046,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: InvocationId,
         receipt: ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -1043,7 +1056,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("cancel_invocation", move |client| {
                 Box::pin(client.cancel_invocation(CancelInvocationRequest {
                     agent_id: Some(target.agent_id().into()),
-                    idempotency_key: Some(key.clone().into()),
+                    idempotency_key: Some(key.into()),
                     auth_ctx: Some(auth.clone().into()),
                     scheduled: Some(
                         golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
@@ -1068,7 +1081,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         environment_id: Option<EnvironmentId>,
         auth_ctx: &AuthCtx,
     ) -> Result<InvocationStatus, WorkerProxyError> {
@@ -1085,7 +1098,8 @@ impl WorkerProxy for RemoteWorkerProxy {
                     method_parameters: None,
                     mode: proto_mode,
                     schedule_at: None,
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(IdempotencyKey::from_uuid(idempotency_key.0).into()),
+                    request_key: None,
                     context: None,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: Some(Principal::anonymous().into()),
@@ -1094,6 +1108,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         as i32,
                     config: Vec::new(),
                     scope_card: None,
+                    expected_callee_fingerprint: None,
                 }))
             })
             .await?
@@ -1120,7 +1135,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -1137,7 +1152,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     agent_id: Some(target_agent_id.clone().into()),
                     environment_id: Some(environment_id.into()),
                     component_revision: component_revision.into(),
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(idempotency_key.into()),
                     account_id: Some(account_id.into()),
                     config: config.clone().into_iter().collect(),
                     metadata: Some(metadata.clone()),
@@ -1175,6 +1190,7 @@ mod tests {
         StreamInvocationIdentity, StreamMappingRole, invocation_request, invocation_response,
         invocation_session_result,
     };
+    use golem_common::model::InvocationId;
     use golem_common::model::agent::AgentTarget;
     use golem_common::model::component::ComponentId;
     use golem_schema::proto::golem::schema::{
@@ -1186,10 +1202,17 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::{Request, Response, Status};
+    use uuid::Uuid;
+
+    fn accepted_invocation_id() -> InvocationId {
+        InvocationId(Uuid::from_u128(18))
+    }
 
     #[derive(Clone, Default)]
     struct FlakyWorkerService {
         dispositions: Arc<Mutex<Vec<i32>>>,
+        expected_callee_fingerprints:
+            Arc<Mutex<Vec<Option<golem_schema::proto::golem::common::Uuid>>>>,
         streaming_requests: Arc<Mutex<Vec<InvocationRequest>>>,
         require_takeover: bool,
         reject_takeover: bool,
@@ -1340,7 +1363,7 @@ mod tests {
                         response: Some(invocation_response::Response::Accepted(
                             InvocationAccepted {
                                 agent_id: start.agent_id.clone(),
-                                idempotency_key: start.idempotency_key.clone(),
+                                idempotency_key: Some(accepted_invocation_id().into()),
                                 component_revision: Some(0),
                                 attachment_id: (!self.joined_origin_observer)
                                     .then(|| uuid::Uuid::from_u128(17).into()),
@@ -1366,7 +1389,7 @@ mod tests {
                                     )),
                                     component_revision: Some(0),
                                     agent_id: start.agent_id,
-                                    idempotency_key: start.idempotency_key,
+                                    idempotency_key: Some(accepted_invocation_id().into()),
                                     agent_fingerprint: start.expected_callee_fingerprint,
                                     ..Default::default()
                                 },
@@ -1419,7 +1442,7 @@ mod tests {
                         response: Some(invocation_response::Response::Accepted(
                             InvocationAccepted {
                                 agent_id: resume.agent_id.clone(),
-                                idempotency_key: resume.idempotency_key.clone(),
+                                idempotency_key: resume.idempotency_key,
                                 component_revision: Some(0),
                                 attachment_id: resume.attachment_id,
                                 attempt_id: resume.attempt_id,
@@ -1461,6 +1484,10 @@ mod tests {
             let mut dispositions = self.dispositions.lock().unwrap();
             let request = request.into_inner();
             dispositions.push(request.freshness_disposition);
+            self.expected_callee_fingerprints
+                .lock()
+                .unwrap()
+                .push(request.expected_callee_fingerprint);
             if let Some(scope_card) = request.scope_card {
                 self.scope_card_payloads
                     .lock()
@@ -1471,9 +1498,10 @@ mod tests {
                 Err(Status::unavailable("ambiguous transport failure"))
             } else {
                 Ok(Response::new(InvokeAgentResponse {
-                    result: Some(invoke_agent_response::Result::Success(
-                        InvokeAgentSuccess::default(),
-                    )),
+                    result: Some(invoke_agent_response::Result::Success(InvokeAgentSuccess {
+                        result: Some(SchemaValue::Tuple { elements: vec![] }.try_into().unwrap()),
+                        ..Default::default()
+                    })),
                 }))
             }
         }
@@ -1886,9 +1914,12 @@ mod tests {
             control
                 .cancel_stream(
                     key.clone(),
-                    StreamCancelRole::OutputConsumer,
-                    StreamCancelReason::Cancelled,
-                    None,
+                    StreamCancellationRequest {
+                        direction: SessionStreamRole::Output,
+                        side: StreamEndpointSide::Consumer,
+                        authored_by: StreamTerminalAuthor::Guest,
+                        terminal: StreamTerminal::ConsumerCancelled { details: None },
+                    },
                 )
                 .await,
             Err(StreamStoreError::Oplog(_))
@@ -1901,9 +1932,12 @@ mod tests {
             control
                 .cancel_stream(
                     key.clone(),
-                    StreamCancelRole::OutputConsumer,
-                    StreamCancelReason::Cancelled,
-                    None,
+                    StreamCancellationRequest {
+                        direction: SessionStreamRole::Output,
+                        side: StreamEndpointSide::Consumer,
+                        authored_by: StreamTerminalAuthor::Guest,
+                        terminal: StreamTerminal::ConsumerCancelled { details: None },
+                    },
                 )
                 .await
                 .unwrap()
@@ -1952,6 +1986,7 @@ mod tests {
                 None,
                 None,
                 InvocationFreshnessDisposition::KnownFresh,
+                None,
                 agent_id.clone(),
                 HashMap::new(),
                 InvocationContextStack::fresh(),
@@ -1984,6 +2019,83 @@ mod tests {
         let scope_card_payloads = scope_card_payloads.lock().unwrap();
         assert_eq!(scope_card_payloads.len(), 2);
         assert_eq!(scope_card_payloads[0], scope_card_payloads[1]);
+    }
+
+    #[test]
+    async fn remote_rpc_sends_the_expected_callee_fingerprint_on_every_attempt() {
+        let service = FlakyWorkerService::default();
+        let expected_callee_fingerprints = service.expected_callee_fingerprints.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerServiceServer::new(service)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        let proxy = Arc::new(RemoteWorkerProxy::new(&WorkerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            ..Default::default()
+        }));
+        let rpc = RemoteInvocationRpc::new(proxy, Arc::new(ShardServiceDefault::new()));
+        let callee = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "pinned-callee".to_string(),
+        };
+        let caller = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "caller".to_string(),
+        };
+        let fingerprint = AgentFingerprint(uuid::Uuid::new_v4());
+
+        // The first attempt fails as unavailable, so the fire-and-forget call is sent twice.
+        rpc.invoke(
+            AgentTarget::Current(callee.clone()),
+            EnvironmentId::new(),
+            Some(IdempotencyKey::fresh()),
+            InvocationFreshnessDisposition::MayExist,
+            Some(fingerprint),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            &caller,
+            &[],
+            InvocationContextStack::fresh(),
+            vec![],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+        rpc.invoke_and_await(
+            AgentTarget::Current(callee),
+            EnvironmentId::new(),
+            Some(IdempotencyKey::fresh()),
+            InvocationFreshnessDisposition::MayExist,
+            Some(fingerprint),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            &caller,
+            &[],
+            InvocationContextStack::fresh(),
+            vec![],
+            &AuthCtx::System,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *expected_callee_fingerprints.lock().unwrap(),
+            vec![Some(fingerprint.0.into()); 3]
+        );
     }
 
     #[test]
@@ -2078,7 +2190,7 @@ mod tests {
                     callee_environment_id: Some(caller_environment.into()),
                     callee: Some(caller.clone().into()),
                     callee_fingerprint: Some(caller_fingerprint.0.into()),
-                    idempotency_key: Some(IdempotencyKey::fresh().into()),
+                    idempotency_key: Some(InvocationId(Uuid::new_v4()).into()),
                 }),
                 component_revision: Some(0),
                 element_schema_fingerprint: vec![5; 32],
@@ -2092,7 +2204,7 @@ mod tests {
             callee_environment_id: Some(caller_environment.into()),
             callee: Some(caller.clone().into()),
             callee_fingerprint: Some(caller_fingerprint.0.into()),
-            idempotency_key: Some(IdempotencyKey::new("origin-invocation".into()).into()),
+            idempotency_key: Some(InvocationId(Uuid::from_u128(1)).into()),
         };
         let (accepted_sender, accepted_receiver) = tokio::sync::oneshot::channel();
         let result = rpc
@@ -2139,7 +2251,10 @@ mod tests {
         assert_eq!(first_start, replayed_start);
         assert_eq!(first_start.origin_invocation, Some(origin));
         assert_eq!(accepted.agent_id, first_start.agent_id);
-        assert_eq!(accepted.idempotency_key, first_start.idempotency_key);
+        assert_eq!(
+            accepted.idempotency_key,
+            Some(accepted_invocation_id().into())
+        );
         assert_eq!(accepted.environment_id, first_start.environment_id);
         assert_eq!(
             accepted.callee_fingerprint,
@@ -2168,7 +2283,7 @@ mod tests {
         let Some(invocation_request::Request::ResumeAttach(resume)) = &requests[2].request else {
             panic!("third request was not ResumeAttach");
         };
-        assert_eq!(resume.idempotency_key, first_start.idempotency_key);
+        assert_eq!(resume.idempotency_key, accepted.idempotency_key);
         assert_eq!(resume.agent_id, first_start.agent_id);
         assert_eq!(resume.environment_id, first_start.environment_id);
         assert_eq!(

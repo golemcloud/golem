@@ -19,7 +19,8 @@ impl std::fmt::Debug for DroppedDurableInput {
         formatter
             .debug_struct("DroppedDurableInput")
             .field("transport_stream_id", &self.transport_stream_id)
-            .field("role", &self.role)
+            .field("direction", &self.direction)
+            .field("side", &self.side)
             .finish_non_exhaustive()
     }
 }
@@ -175,7 +176,8 @@ impl DroppedDurableInput {
             SerializableToolAdmissionRefusal::BeforeDurableInputDisposal {
                 session: self.streams.session_reference.clone(),
                 binding: Box::new(binding),
-                role: self.role,
+                direction: self.direction,
+                side: self.side,
             },
         )
     }
@@ -258,9 +260,14 @@ impl DroppedDurableInput {
             .streams
             .cancel_stream(
                 self.transport_stream_id,
-                self.role,
-                StreamCancelReason::GuestDrop,
-                Some("guest dropped its durable readable stream end".to_string()),
+                StreamCancellationRequest {
+                    direction: self.direction,
+                    side: self.side,
+                    authored_by: StreamTerminalAuthor::Guest,
+                    terminal: StreamTerminal::ConsumerCancelled {
+                        details: Some("guest dropped its durable readable stream end".to_string()),
+                    },
+                },
                 None,
             )
             .await
@@ -277,7 +284,7 @@ impl DroppedDurableInput {
             Err(error) => {
                 tracing::warn!(
                     transport_stream_id = self.transport_stream_id,
-                    role = ?self.role,
+                    direction = ?self.direction,
                     error = %error,
                     "Cancellation of dropped durable stream failed"
                 );
@@ -302,17 +309,14 @@ impl DurableInputDropTask {
 }
 
 pub(super) fn durable_stream_cancel_error(
-    role: StreamCancelRole,
-    reason: StreamCancelReason,
-    details: Option<String>,
+    authored_by: StreamTerminalAuthor,
+    terminal: StreamTerminal,
 ) -> anyhow::Error {
-    anyhow::Error::new(ClassifiedHostError {
-        kind: HostFailureKind::Permanent,
-        message: format!(
-            "durable stream cancelled ({role:?}, {reason:?}): {}",
-            details.unwrap_or_default()
-        ),
-    })
+    crate::durable_host::stream_bus::StreamTerminalError {
+        authored_by,
+        terminal,
+    }
+    .into_trap()
 }
 
 impl DurableInputProducer {
@@ -358,7 +362,7 @@ impl DurableInputProducer {
     /// as one.
     pub(crate) fn with_producer_cancel_observer(
         mut self,
-        reason: Arc<OnceLock<StreamCancelReason>>,
+        reason: Arc<OnceLock<StreamError>>,
     ) -> Self {
         self.producer_cancel = Some(reason);
         self
@@ -433,36 +437,26 @@ impl DurableInputProducer {
             CommittedProducerStreamEventPayload::PackedU8(byte) => {
                 Ok(DurableInputEvent::Item(SchemaValue::U8(byte)))
             }
-            CommittedProducerStreamEventPayload::End(StreamEndResult::Ok) => {
+            CommittedProducerStreamEventPayload::Terminal(terminal) => {
                 self.finished = true;
-                Ok(DurableInputEvent::End)
-            }
-            CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) => Err(
-                anyhow::anyhow!("durable stream ended with error context: {error:?}"),
-            ),
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
-                reason,
-                ..
-            } => {
-                if let Some(observer) = &self.producer_cancel {
-                    let _ = observer.set(reason);
+                // Synthetic source loss has no producer terminal or author.
+                let authored_by = event
+                    .terminal_author
+                    .unwrap_or(StreamTerminalAuthor::Protocol);
+                if let StreamTerminal::Failed(error) = &terminal
+                    && let Some(observer) = &self.producer_cancel
+                {
+                    let _ = observer.set(error.clone());
+                    return Ok(DurableInputEvent::Terminal {
+                        authored_by,
+                        terminal: StreamTerminal::Finished,
+                    });
                 }
-                self.finished = true;
-                Ok(DurableInputEvent::End)
+                Ok(DurableInputEvent::Terminal {
+                    authored_by,
+                    terminal,
+                })
             }
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
-                ..
-            } => {
-                self.finished = true;
-                Ok(DurableInputEvent::Cancelled)
-            }
-            CommittedProducerStreamEventPayload::Cancel {
-                role: role @ StreamCancelRole::System,
-                reason,
-                details,
-            } => Err(durable_stream_cancel_error(role, reason, details)),
         }
     }
 
@@ -472,7 +466,7 @@ impl DurableInputProducer {
         admission: Option<&mpsc::UnboundedSender<DurableInputReceiveAdmission>>,
     ) -> anyhow::Result<Option<DurableInputEvent>> {
         if self.finished {
-            return Ok(Some(DurableInputEvent::End));
+            anyhow::bail!("durable input stream already terminated");
         }
         if self.pending.is_none() {
             let guard = if let Some(admission) = admission {
@@ -533,19 +527,13 @@ impl Drop for DurableInputProducer {
         let Some(drop_event_sink) = &self.drop_event_sink else {
             return;
         };
-        let role = match self.input.role.direction() {
-            SessionStreamRole::Input => StreamCancelRole::InputConsumer,
-            SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
-            SessionStreamRole::ToolStdin
-            | SessionStreamRole::ToolStdout
-            | SessionStreamRole::ToolStderr => unreachable!(),
-        };
         let _ = drop_event_sink.send(DropEvent::CancelDroppedDurableInput {
             cancellation: Box::new(DroppedDurableInput {
                 streams: self.input.streams.clone(),
                 transport_stream_id: self.input.transport_stream_id,
                 consumer_read_ordinal: self.guest_read_ordinal.load(Ordering::Acquire),
-                role,
+                direction: self.input.role.direction(),
+                side: StreamEndpointSide::Consumer,
             }),
         });
     }
@@ -574,9 +562,9 @@ impl DurableInputProducer {
                     None,
                 )));
             }
-            let item = std::task::ready!(self.poll_value(cx, store, false, Some(capacity)))?;
+            let item = std::task::ready!(self.poll_value(cx, store, false, Some(capacity)));
             let Some(observation) = self.pending_observation.take() else {
-                return Poll::Ready(Ok((item, None)));
+                return Poll::Ready(item.map(|item| (item, None)));
             };
             let ctx = store.data().durable_ctx();
             let (result, receiver) = oneshot::channel();
@@ -609,10 +597,16 @@ impl DurableInputProducer {
         let observer = result.map_err(|_| {
             WorkerExecutorError::runtime("durable stream read delivery task ended without a result")
         })??;
-        Poll::Ready(Ok((
-            self.pending_guest_value.take().unwrap(),
-            Some(self.track_guest_consumption(observer)),
-        )))
+        let observer = self.track_guest_consumption(observer);
+        match self.pending_guest_value.take().unwrap() {
+            Ok(item) => Poll::Ready(Ok((item, Some(observer)))),
+            Err(error) => {
+                // Wasmtime propagates a native trap without a read-consumption callback.
+                // Observe it at error emission, after the same guest-delivery gate.
+                observer(wasmtime::component::TerminalConsumption::Delivered)?;
+                Poll::Ready(Err(error))
+            }
+        }
     }
 
     pub(super) fn track_guest_consumption(
@@ -647,20 +641,14 @@ impl DurableInputProducer {
                 self.dropping = true;
                 self.pending = None;
                 self.pending_activity = None;
-                let role = match self.input.role.direction() {
-                    SessionStreamRole::Input => StreamCancelRole::InputConsumer,
-                    SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
-                    SessionStreamRole::ToolStdin
-                    | SessionStreamRole::ToolStdout
-                    | SessionStreamRole::ToolStderr => unreachable!(),
-                };
                 let (result, receiver) = oneshot::channel();
                 let task = DurableInputDropTask {
                     cancellation: DroppedDurableInput {
                         streams: self.input.streams.clone(),
                         transport_stream_id: self.input.transport_stream_id,
                         consumer_read_ordinal: self.guest_read_ordinal.load(Ordering::Acquire),
-                        role,
+                        direction: self.input.role.direction(),
+                        side: StreamEndpointSide::Consumer,
                     },
                     result,
                 };
@@ -794,14 +782,19 @@ impl DurableInputProducer {
             .and_then(|read| read.guest_bytes.clone());
         let value = match self.finish_receive(receive_result) {
             Ok(DurableInputEvent::Item(value)) => value,
-            Ok(DurableInputEvent::End) => {
+            Ok(DurableInputEvent::Terminal {
+                terminal: StreamTerminal::Finished,
+                ..
+            }) => {
                 return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
-            // A consumer cancel that this read did not request (`finish` returned above), such
-            // as the end of the invocation that owns an unread input, ends the stream for the
-            // reader. Wasmtime accepts `Cancelled` only as the answer to `finish`.
-            Ok(DurableInputEvent::Cancelled) => {
-                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
+            Ok(DurableInputEvent::Terminal {
+                authored_by,
+                terminal,
+            }) => {
+                return Poll::Ready(Err(wasmtime::Error::from_anyhow(
+                    durable_stream_cancel_error(authored_by, terminal),
+                )));
             }
             Err(error) => {
                 self.finished = true;
@@ -932,12 +925,10 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableByteInputProducer {
 
 /// Maps one read of a durable byte input to the stdin of a tool body.
 ///
-/// A cancel by the input's producer with the reason `cancelled` is not an error of the stream:
-/// the body reads it as one `cancelled` item, and then the stream ends. Every other end of the
-/// input, including a producer cancel with another reason, is a clean end without an item.
+/// Producer failures are delivered as one failure item, followed by the end of the stream.
 fn tool_stdin_delivery(
     item: DurableInputItem,
-    cancelled_by_producer: bool,
+    producer_failure: Option<&StreamError>,
 ) -> wasmtime::Result<ToolStdinDelivery> {
     Ok(match item {
         DurableInputItem::Bytes(bytes) => ToolStdinDelivery::Chunk(bytes.to_vec()),
@@ -945,8 +936,16 @@ fn tool_stdin_delivery(
         DurableInputItem::Value(_) => {
             return Err(wasmtime::Error::msg("tool stdin contains a non-byte value"));
         }
-        DurableInputItem::Terminal(StreamResult::Dropped) if cancelled_by_producer => {
-            ToolStdinDelivery::Cancelled
+        DurableInputItem::Terminal(StreamResult::Dropped) if producer_failure.is_some() => {
+            ToolStdinDelivery::Failed(match producer_failure.unwrap() {
+                StreamError::Cancelled => ByteStreamFailure::Cancelled,
+                StreamError::Abandoned => ByteStreamFailure::Abandoned,
+                StreamError::ResourceExhausted(_) => ByteStreamFailure::ResourceExhausted,
+                StreamError::Trapped(message) | StreamError::Interrupted(message) => {
+                    ByteStreamFailure::Failed(message.clone())
+                }
+                StreamError::Failed(value) => ByteStreamFailure::Failed(format!("{value:?}")),
+            })
         }
         DurableInputItem::Terminal(result) => ToolStdinDelivery::End(result),
     })
@@ -1002,18 +1001,14 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableToolStdinProducer {
                 let _ = observer(consumption);
             })?;
         }
-        let cancelled_by_producer = matches!(
-            self.producer_cancel.get(),
-            Some(StreamCancelReason::Cancelled)
-        );
-        match tool_stdin_delivery(item, cancelled_by_producer) {
+        match tool_stdin_delivery(item, self.producer_cancel.get()) {
             Ok(ToolStdinDelivery::Chunk(bytes)) => {
                 destination.set_buffer(Some(Ok(bytes)));
                 Poll::Ready(Ok(StreamResult::Completed))
             }
-            Ok(ToolStdinDelivery::Cancelled) => {
+            Ok(ToolStdinDelivery::Failed(failure)) => {
                 self.ended = true;
-                destination.set_buffer(Some(Err(ByteStreamFailure::Cancelled)));
+                destination.set_buffer(Some(Err(failure)));
                 Poll::Ready(Ok(StreamResult::Completed))
             }
             Ok(ToolStdinDelivery::End(result)) => Poll::Ready(Ok(result)),
@@ -1022,5 +1017,52 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableToolStdinProducer {
                 Poll::Ready(Err(error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn tool_stdin_delivers_every_producer_failure_as_a_failure_item() {
+        for error in [
+            StreamError::Interrupted("deleted input".into()),
+            StreamError::Trapped("producer trap".into()),
+            StreamError::ResourceExhausted("memory limit".into()),
+            StreamError::Abandoned,
+            StreamError::Cancelled,
+            StreamError::Failed(Box::new(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::u64()),
+                SchemaValue::U64(917),
+            ))),
+        ] {
+            let delivery = tool_stdin_delivery(
+                DurableInputItem::Terminal(StreamResult::Dropped),
+                Some(&error),
+            )
+            .unwrap();
+            let ToolStdinDelivery::Failed(failure) = delivery else {
+                panic!("producer failure was lost at tool stdin: {error:?}")
+            };
+            match (error, failure) {
+                (StreamError::Cancelled, ByteStreamFailure::Cancelled)
+                | (StreamError::Abandoned, ByteStreamFailure::Abandoned)
+                | (StreamError::ResourceExhausted(_), ByteStreamFailure::ResourceExhausted) => {}
+                (
+                    StreamError::Trapped(expected) | StreamError::Interrupted(expected),
+                    ByteStreamFailure::Failed(actual),
+                ) => assert_eq!(actual, expected),
+                (StreamError::Failed(expected), ByteStreamFailure::Failed(actual)) => {
+                    assert_eq!(actual, format!("{expected:?}"))
+                }
+                (error, failure) => panic!("wrong tool stdin failure for {error:?}: {failure:?}"),
+            }
+        }
+        assert!(matches!(
+            tool_stdin_delivery(DurableInputItem::Terminal(StreamResult::Dropped), None).unwrap(),
+            ToolStdinDelivery::End(StreamResult::Dropped)
+        ));
     }
 }

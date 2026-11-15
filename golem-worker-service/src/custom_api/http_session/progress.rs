@@ -8,8 +8,8 @@
 
 use golem_api_grpc::proto::golem::worker::input_stream_item;
 use golem_api_grpc::proto::golem::worker::{
-    DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRequest,
-    ResumeAttach, StreamCancelReason, StreamMappingRole, invocation_request,
+    DurableStreamMapping, InputStreamItem, InvocationAccepted, InvocationRequest, ResumeAttach,
+    StreamDirection, StreamEnd, StreamMappingRole, StreamTerminalAuthor, invocation_request,
     invocation_session_result,
 };
 use golem_schema::proto::golem::schema::{ListValue, SchemaValue, schema_value};
@@ -81,11 +81,19 @@ impl Command {
                 input.terminal = true;
                 (
                     InvocationRequest {
-                        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                             transport_stream_id: INPUT_STREAM_ID,
-                            sequence: input.next_sequence,
+                            producer_sequence: input.next_sequence,
+                            direction: StreamDirection::Input as i32,
+                            authored_by: StreamTerminalAuthor::Guest as i32,
+                            outcome: Some(
+                                golem_common::model::durable_stream::StreamTerminal::Finished
+                                    .try_into()
+                                    .expect("finished terminal has no capabilities"),
+                            ),
                             durable_stream_id: None,
                             epoch: 0,
+                            durable_offset: Vec::new(),
                         })),
                     },
                     Some(credits),
@@ -106,15 +114,7 @@ impl Command {
                 {
                     return Ok(None);
                 }
-                (
-                    output_cancel_request(
-                        stream_id,
-                        durable_id,
-                        epoch,
-                        StreamCancelReason::ConsumerDrop,
-                    ),
-                    None,
-                )
+                (output_cancel_request(stream_id, durable_id, epoch), None)
             }
         };
         Ok(Some(PreparedCommand { request, credits }))
@@ -190,7 +190,7 @@ impl InputProgress {
         let retain = permit.is_some()
             || matches!(
                 request.request,
-                Some(invocation_request::Request::InputEnd(_))
+                Some(invocation_request::Request::StreamEnd(ref end)) if end.direction() == StreamDirection::Input
             );
         if retain {
             let encoded_bytes = request.encoded_len();

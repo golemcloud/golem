@@ -363,6 +363,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )?),
             primary_invocation_start_index: None,
             invocation_principal: None,
+            invocation_id: None,
             owner_execution,
             runtime_suspension: None,
             guest_imports: Default::default(),
@@ -575,6 +576,7 @@ impl PrivateDurableWorkerState {
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
+            last_state_change: None,
             operator_authorized_oplog_processor_invocation: Arc::new(AtomicBool::new(false)),
             component_metadata,
             owner_component_metadata,
@@ -634,6 +636,8 @@ impl PrivateDurableWorkerState {
             baseline_role,
             snapshot_replay_purpose,
             authoritative_replay_failure: Arc::new(AtomicBool::new(false)),
+            bootstrap: None,
+            bootstrap_range: None,
             resource_limit_entry,
         })
     }

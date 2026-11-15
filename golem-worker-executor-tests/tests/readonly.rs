@@ -199,7 +199,7 @@ async fn t2_read_only_caches_until_write(
 async fn wait_for_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -892,7 +892,7 @@ fn assert_well_formed_record(typed: &golem_common::schema::TypedSchemaValue) {
 async fn wait_for_principal_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
     worker_id: &AgentId,
     principal: &golem_common::model::agent::Principal,
 ) -> anyhow::Result<()> {
@@ -980,7 +980,7 @@ async fn t7_ttl_expires_cache_entry(
 async fn wait_for_ttl_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);

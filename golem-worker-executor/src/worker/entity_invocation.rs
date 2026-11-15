@@ -1248,11 +1248,13 @@ where
 mod tests {
     use super::*;
     use golem_common::model::AgentId;
+    use golem_common::model::InvocationId;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use std::sync::Mutex;
     use test_r::test;
+    use uuid::Uuid;
 
     fn cleanup_operation() -> (
         Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
@@ -1818,9 +1820,9 @@ mod tests {
                 },
             ),
             InvocationExecutionMode::Live,
-            golem_common::model::IdempotencyKey::fresh(),
+            InvocationId(Uuid::new_v4()),
             false,
-            golem_common::model::IdempotencyKey::fresh(),
+            InvocationId(Uuid::new_v4()),
         )
         .unwrap();
         let registration = slot.register(&scope, Default::default()).unwrap();

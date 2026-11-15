@@ -43,7 +43,7 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey, InvocationStatus,
+    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, InvocationId, InvocationStatus,
     OwnedAgentId, ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
@@ -100,6 +100,7 @@ struct LivePluginState {
     sending_up_to: OplogIndex,
     send_in_progress: bool,
     last_batch_start: OplogIndex,
+    delivery: Option<Vec<u8>>,
 }
 
 #[async_trait]
@@ -135,7 +136,7 @@ pub trait OplogProcessorPlugin: Send + Sync {
         environment_id: EnvironmentId,
         target_agent_id: &AgentId,
         caller_account_id: AccountId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<InvocationStatus, WorkerExecutorError>;
 }
 
@@ -256,7 +257,7 @@ fn oplog_processor_idempotency_key(
     plugin_installation_id: &EnvironmentPluginGrantId,
     batch_first_index: OplogIndex,
     batch_last_index: OplogIndex,
-) -> IdempotencyKey {
+) -> InvocationId {
     let mut buf = Vec::with_capacity(128);
     buf.extend_from_slice(b"oplog-proc-v1\0");
     buf.extend_from_slice(source_agent_id.component_id.0.as_bytes());
@@ -266,5 +267,5 @@ fn oplog_processor_idempotency_key(
     buf.extend_from_slice(plugin_installation_id.0.as_bytes());
     buf.extend_from_slice(&batch_first_index.as_u64().to_be_bytes());
     buf.extend_from_slice(&batch_last_index.as_u64().to_be_bytes());
-    IdempotencyKey::from_uuid(Uuid::new_v5(&OPLOG_PROC_NS, &buf))
+    InvocationId(Uuid::new_v5(&OPLOG_PROC_NS, &buf))
 }

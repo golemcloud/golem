@@ -42,8 +42,8 @@ use crate::services::{
     key_value, oplog, promise, rdbms, scheduler, shard_manager, worker, worker_activator,
     worker_enumeration, worker_fork,
 };
-use crate::worker::Worker;
 use crate::worker::invocation::validate_agent_method_invocation;
+use crate::worker::{CreateIntent, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -61,7 +61,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
     AgentError as ModelAgentError, AgentInvocationMode, AgentPrincipal, AgentTarget,
-    InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;
@@ -69,7 +69,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey,
+    InvocationRequestKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
@@ -118,7 +119,7 @@ pub trait Rpc: Send + Sync {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -131,6 +132,7 @@ pub trait Rpc: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
+        request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -151,12 +153,17 @@ pub trait Rpc: Send + Sync {
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
+    /// `expected_callee_fingerprint` pins the call to one incarnation of the target: when that
+    /// incarnation no longer exists, the call fails with [`RpcError::NotFound`] and the method
+    /// never runs on another incarnation. Durable targets always pass the fingerprint of their
+    /// activation; ephemeral targets pass none.
     async fn invoke_and_await(
         &self,
         target: AgentTarget,
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -219,12 +226,14 @@ pub trait Rpc: Send + Sync {
         .into())
     }
 
+    /// `expected_callee_fingerprint` has the same meaning as for [`Rpc::invoke_and_await`].
     async fn invoke(
         &self,
         target: AgentTarget,
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -376,6 +385,9 @@ impl From<WorkerExecutorError> for RpcError {
         match value {
             WorkerExecutorError::AgentAlreadyExists { agent_id } => RpcError::Denied {
                 details: format!("Worker {agent_id} already exists"),
+            },
+            error @ WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => RpcError::Denied {
+                details: error.to_string(),
             },
             WorkerExecutorError::AgentNotFound { agent_id } => RpcError::NotFound {
                 details: format!("Worker {agent_id} not found"),

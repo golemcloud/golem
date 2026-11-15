@@ -171,6 +171,12 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::AgentAlreadyExists(err) => {
                     format!("Worker Already Exists: Worker ID = {:?}", err.agent_id)
                 }
+                worker_execution_error::Error::CreateIdempotencyKeyConflict(err) => {
+                    format!(
+                        "Create Idempotency Key Conflict: Agent ID = {:?}",
+                        err.agent_id
+                    )
+                }
                 worker_execution_error::Error::AgentCreationFailed(err) => format!(
                     "Worker Creation Failed: Worker ID = {:?}, Details: {}",
                     err.agent_id, err.details

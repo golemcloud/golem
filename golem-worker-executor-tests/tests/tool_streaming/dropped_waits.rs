@@ -24,7 +24,7 @@ struct ClockToolOwner {
     environment_state: Arc<TestEnvironmentStateService>,
     executor: TestWorkerExecutor,
     caller_component: golem_common::model::component::ComponentDto,
-    agent: golem_common::model::agent::ParsedAgentId,
+    agent: golem_common::model::agent::ParsedAgentKey,
     worker_id: golem_common::model::AgentId,
 }
 

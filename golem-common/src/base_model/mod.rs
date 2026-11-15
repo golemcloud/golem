@@ -40,6 +40,7 @@ pub mod error;
 pub mod external_agent_secret;
 pub mod http_api_deployment;
 pub mod invocation_context;
+pub mod invocation_id;
 pub mod json;
 pub mod login;
 pub mod mcp_deployment;
@@ -65,6 +66,7 @@ pub mod worker;
 pub mod worker_filter;
 
 pub use durable_stream::*;
+pub use invocation_id::{IdempotencyScope, InvocationRequestKey, OwnedInvocationId};
 pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
@@ -147,6 +149,9 @@ newtype_uuid!(
     wit_name: "agent-fingerprint",
     wit_owner: "golem:core@2.0.0/types"
 );
+
+// The unique part of an accepted invocation identity, without its owning agent.
+newtype_uuid!(InvocationId);
 
 #[cfg(feature = "full")]
 impl From<Timestamp> for wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
@@ -327,17 +332,9 @@ impl AsRef<AgentId> for &AgentId {
     }
 }
 
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
+// The schema of `PromiseId` is implemented in `schema::common_impls`: it follows the WIT
+// `promise-id` record, whose `fingerprint` is a plain `uuid`.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -347,18 +344,30 @@ impl AsRef<AgentId> for &AgentId {
 #[serde(rename_all = "camelCase")]
 pub struct PromiseId {
     pub agent_id: AgentId,
+    /// The incarnation of the agent that created the promise. A re-created agent keeps its
+    /// agent ID but gets a new fingerprint, so this tells apart the promises of the two.
+    pub fingerprint: AgentFingerprint,
     pub oplog_idx: OplogIndex,
 }
 
 impl PromiseId {
     pub fn to_redis_key(&self) -> String {
-        format!("{}:{}", self.agent_id.to_redis_key(), self.oplog_idx)
+        format!(
+            "{}:{}:{}",
+            self.agent_id.to_redis_key(),
+            self.fingerprint,
+            self.oplog_idx
+        )
     }
 }
 
 impl Display for PromiseId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.agent_id, self.oplog_idx)
+        write!(
+            f,
+            "{}/{}/{}",
+            self.agent_id, self.fingerprint, self.oplog_idx
+        )
     }
 }
 
@@ -587,12 +596,14 @@ impl IdempotencyKey {
 
     /// Generates a deterministic idempotency key in the namespace of `base` from arbitrary bytes.
     pub fn derived_from_bytes(base: &IdempotencyKey, name: &[u8]) -> Self {
-        let namespace = if let Ok(base_uuid) = Uuid::parse_str(&base.value) {
-            base_uuid
-        } else {
-            Uuid::new_v5(&Self::ROOT_NS, base.value.as_bytes())
-        };
-        Self::from_uuid(Uuid::new_v5(&namespace, name))
+        Self::from_uuid(Uuid::new_v5(&base.to_uuid(), name))
+    }
+
+    /// The UUID of this key: the key itself when it is a UUID, otherwise a UUIDv5 of the key in
+    /// the ROOT_NS namespace.
+    pub fn to_uuid(&self) -> Uuid {
+        Uuid::parse_str(&self.value)
+            .unwrap_or_else(|_| Uuid::new_v5(&Self::ROOT_NS, self.value.as_bytes()))
     }
 }
 

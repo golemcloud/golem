@@ -238,6 +238,14 @@ interface common {
     account-id: account-id
   }
 
+  /// The principals that caused an invocation.
+  record caller {
+    /// The principal at the root of the call tree.
+    original:  principal,
+    /// The principal that made this call.
+    immediate: principal,
+  }
+
   record agent-constructor {
     name:          option<string>,
     description:   string,

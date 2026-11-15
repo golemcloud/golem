@@ -237,6 +237,15 @@ declare module 'golem:agent/common@2.0.0' {
   {
     tag: 'anonymous'
   };
+  /**
+   * The principals that caused an invocation.
+   */
+  export type Caller = {
+    /** The principal at the root of the call tree. */
+    original: Principal;
+    /** The principal that made this call. */
+    immediate: Principal;
+  };
   export type AgentConstructor = {
     name?: string;
     description: string;

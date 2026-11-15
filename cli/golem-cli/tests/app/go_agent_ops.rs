@@ -237,7 +237,8 @@ async fn test_go_agent_ops() {
     // fails.
     assert!(
         text.contains("stream producer failed: intentional producer failure")
-            || text.contains("durable stream ended with error"),
+            || (text.contains("stream terminated: Failed(Trapped(")
+                && text.contains("DeterministicTrap")),
         "{text}"
     );
 }

@@ -184,10 +184,8 @@ struct AgentRuntime;
 #[doc(hidden)]
 pub fn install_agent_exports() {
     let _ = super::exports::AGENT.set(super::exports::AgentHooks {
-        initialize: |name, input, principal| {
-            Box::pin(AgentRuntime::initialize(name, input, principal))
-        },
-        invoke: |name, input, principal| Box::pin(AgentRuntime::invoke(name, input, principal)),
+        initialize: |name, input| Box::pin(AgentRuntime::initialize(name, input)),
+        invoke: |name, input| Box::pin(AgentRuntime::invoke(name, input)),
         get_definition: AgentRuntime::get_definition,
         discover: AgentRuntime::discover_agent_types,
         load: |snapshot| Box::pin(AgentRuntime::load(snapshot)),
@@ -201,8 +199,8 @@ impl Guest for AgentRuntime {
     async fn initialize(
         agent_type: String,
         input: crate::schema::wit::wire::SchemaValueTree,
-        principal: Principal,
     ) -> Result<(), AgentError> {
+        let principal = super::immediate_caller();
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
@@ -239,8 +237,8 @@ impl Guest for AgentRuntime {
     async fn invoke(
         method_name: String,
         input: crate::schema::wit::wire::SchemaValueTree,
-        principal: Principal,
     ) -> Result<Option<crate::schema::wit::wire::SchemaValueTree>, AgentError> {
+        let principal = super::immediate_caller();
         {
             let agent_id = agent_id_from_env();
             parse_agent_id(&agent_id).map_err(|e| AgentError::InvalidInput(e.to_string()))?;

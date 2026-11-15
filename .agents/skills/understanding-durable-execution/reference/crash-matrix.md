@@ -101,7 +101,7 @@ owns the one replay/tool-generation reset. Acceptance and typed notification are
 | Before `PendingAgentInvocation` commits | nothing | Caller was never told "accepted"; retrying with the same key enqueues once | Acceptance returns only after commit |
 | After `PendingAgentInvocation`, before `AgentInvocationStarted` | pending hint | Status fold sees the pending invocation; the invocation loop runs it | Status is folded from the oplog (`worker/status.rs`) |
 | Mid-invocation | `Started` + prefix of calls | Prefix replays, guest continues live from the tail | Every host input in the prefix is recorded |
-| After `AgentInvocationFinished` commits, before waiters are notified | `Finished` | `lookup_invocation_result(key)` returns the recorded result; the guest does not run | `CommitLevel::Always` before notification |
+| After `AgentInvocationFinished` commits, before waiters are notified | `Finished` | `lookup_invocation_result(invocation_id)` returns the recorded result; the guest does not run | `CommitLevel::Always` before notification |
 | Spawned store task still active at finish | must not happen | `tail_work.rs` blocks `Finished` until no task is active (bounded by tail-drain timeout) | `AgentInvocationFinished` is the last *positional* entry of the invocation; hints (stream session completion) may follow |
 
 ## Durable RPC (`durable_host/rpc/mod.rs`)

@@ -39,9 +39,10 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
-use crate::worker::status::fold_invocation_result_entries;
+use crate::worker::status::{InvocationRequests, fold_invocation_result_entries};
 use async_trait::async_trait;
 use desert_rust::BinarySerializer;
+use futures::future::BoxFuture;
 use golem_common::base_model::durable_stream::StreamSessionKey;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::card::CardTransferIndex;
@@ -49,9 +50,10 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
-    DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey,
-    InvocationResultMembership, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    ShardEpoch, ShardId, SourceCardTransferIndex, SourceCardTransferState, SuccessfulUpdateRecord,
+    DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, InvocationId,
+    InvocationResultMembership, InvocationResultPosition, OwnedAgentId, ReceivedCardTransferIndex,
+    ReceivedCardTransferState, ShardEpoch, ShardId, SourceCardTransferIndex,
+    SourceCardTransferState, SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -80,16 +82,15 @@ fn rejections_to_store(
     (kept != current).then(|| kept.into_iter().collect())
 }
 
-fn invocation_result_index_field(key: &IdempotencyKey) -> String {
-    format!("{INVOCATION_RESULT_INDEX_FIELD_PREFIX}{}", key.value)
+fn invocation_result_index_field(key: &InvocationId) -> String {
+    format!("{INVOCATION_RESULT_INDEX_FIELD_PREFIX}{key}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub struct InvocationResultIndexMetadata {
     pub covered_through: OplogIndex,
     pub revert_generation: u64,
-    pub current_idempotency_key: Option<IdempotencyKey>,
-    pub cancelled_idempotency_key: Option<IdempotencyKey>,
+    pub requests: InvocationRequests,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
@@ -98,12 +99,12 @@ struct PersistedInvocationResult {
     // revert generation, so a complete same-generation index cannot retain older-generation
     // fields.
     revert_generation: u64,
-    oplog_index: OplogIndex,
+    position: InvocationResultPosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvocationResultIndexLookup {
-    Found(OplogIndex),
+    Found(InvocationResultPosition),
     DefinitiveMiss,
     Incomplete,
 }
@@ -201,8 +202,9 @@ pub trait WorkerService: Send + Sync {
     /// Returns `Err` when the storage could not be reached. Safe to run again, and it is: by
     /// `Worker::delete`'s staged deletion and by the worker service's re-dispatch. The oplog goes
     /// after everything it can rebuild, so a run that stops part-way leaves the oplog the next one
-    /// re-derives the rest from. Only the recovery-index entry follows it; one a crash leaves
-    /// behind names no oplog, and the next recovery scan drops it.
+    /// re-derives the rest from. The promises of the incarnation, which nothing rebuilds, and the
+    /// recovery-index entry follow it; a recovery-index entry a crash leaves behind names no
+    /// oplog, and the next recovery scan drops it.
     ///
     /// `expected_epoch` is the epoch the caller's oplog handle asserts, confirmed before anything is
     /// removed; refused, nothing is removed and the result is [`WorkerExecutorError::OplogFenced`],
@@ -221,6 +223,17 @@ pub trait WorkerService: Send + Sync {
         expected_epoch: Option<ShardEpoch>,
         after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Runs `operation` while no [`remove`](Self::remove) of the agent runs on this executor:
+    /// `remove` holds the agent's lifecycle gate exclusively and `operation` holds it shared. A
+    /// check and a write that `operation` makes therefore both precede such a removal or both
+    /// follow it. Only a running or waiting `remove` delays `operation`; the agent's execution
+    /// does not.
+    async fn run_excluding_removal<'a>(
+        &self,
+        agent_id: &AgentId,
+        operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError>;
 
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
     /// key and the dedicated `agent_mode` key), leaving the oplog untouched.
@@ -262,7 +275,7 @@ pub trait WorkerService: Send + Sync {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError>;
 
     async fn lookup_durable_stream_public_binding(
@@ -270,6 +283,7 @@ pub trait WorkerService: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, SessionError>;
 
@@ -341,7 +355,7 @@ pub trait WorkerService: Send + Sync {
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
         _status: &AgentStatusRecord,
-        _idempotency_key: &IdempotencyKey,
+        _idempotency_key: &InvocationId,
     ) -> Result<InvocationResultIndexLookup, String> {
         Ok(InvocationResultIndexLookup::Incomplete)
     }
@@ -488,11 +502,11 @@ pub struct DefaultWorkerService {
 
 #[derive(Default)]
 struct AgentLifecycleGates {
-    gates: StdMutex<HashMap<OwnedAgentId, Weak<RwLock<()>>>>,
+    gates: StdMutex<HashMap<AgentId, Weak<RwLock<()>>>>,
 }
 
 struct AgentLifecycleGate {
-    owned_agent_id: OwnedAgentId,
+    agent_id: AgentId,
     gate: Arc<RwLock<()>>,
     registry: Arc<AgentLifecycleGates>,
 }
@@ -502,28 +516,28 @@ impl Drop for AgentLifecycleGate {
         let mut gates = self.registry.gates.lock().unwrap();
         if Arc::strong_count(&self.gate) == 1
             && gates
-                .get(&self.owned_agent_id)
+                .get(&self.agent_id)
                 .is_some_and(|registered| registered.ptr_eq(&Arc::downgrade(&self.gate)))
         {
-            gates.remove(&self.owned_agent_id);
+            gates.remove(&self.agent_id);
         }
     }
 }
 
 impl AgentLifecycleGates {
-    fn acquire(self: &Arc<Self>, owned_agent_id: &OwnedAgentId) -> AgentLifecycleGate {
+    fn acquire(self: &Arc<Self>, agent_id: &AgentId) -> AgentLifecycleGate {
         let mut gates = self.gates.lock().unwrap();
         let gate = gates
-            .get(owned_agent_id)
+            .get(agent_id)
             .and_then(Weak::upgrade)
             .unwrap_or_else(|| {
                 let gate = Arc::new(RwLock::new(()));
-                gates.insert(owned_agent_id.clone(), Arc::downgrade(&gate));
+                gates.insert(agent_id.clone(), Arc::downgrade(&gate));
                 gate
             });
 
         AgentLifecycleGate {
-            owned_agent_id: owned_agent_id.clone(),
+            agent_id: agent_id.clone(),
             gate,
             registry: self.clone(),
         }
@@ -596,8 +610,8 @@ impl DefaultWorkerService {
         }
     }
 
-    fn lifecycle_gate(&self, owned_agent_id: &OwnedAgentId) -> AgentLifecycleGate {
-        self.lifecycle_gates.acquire(owned_agent_id)
+    fn lifecycle_gate(&self, agent_id: &AgentId) -> AgentLifecycleGate {
+        self.lifecycle_gates.acquire(agent_id)
     }
 
     fn invocation_result_index_namespace(

@@ -22,7 +22,7 @@ pub mod graph;
 pub mod host_managed;
 pub mod metadata;
 pub mod multimodal;
-#[cfg(feature = "full")]
+#[cfg(feature = "protobuf")]
 pub mod protobuf;
 pub mod render;
 pub mod schema_type;

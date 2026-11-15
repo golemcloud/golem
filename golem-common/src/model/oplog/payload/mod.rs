@@ -56,8 +56,8 @@ use crate::model::oplog::types::{
 use crate::model::oplog::{CardInstallFailure, PayloadId};
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::{
-    AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
-    ScanCursor,
+    AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, InvocationId,
+    InvocationRequestKey, OplogIndex, OwnedInvocationId, PromiseId, ScanCursor,
 };
 use crate::oplog_payload;
 use crate::schema::schema_value::SecretValuePayload;
@@ -175,7 +175,7 @@ oplog_payload! {
         },
         GolemRpcInvoke {
             remote_agent_id: AgentId,
-            idempotency_key: IdempotencyKey,
+            request_key: InvocationRequestKey,
             method_name: String,
             input: SchemaValue,
             #[schema(skip)]
@@ -191,7 +191,7 @@ oplog_payload! {
         },
         GolemRpcScheduledInvocation {
             remote_agent_id: AgentId,
-            idempotency_key: IdempotencyKey,
+            request_key: InvocationRequestKey,
             method_name: String,
             input: SchemaValue,
             datetime: SerializableDateTime,
@@ -414,7 +414,7 @@ oplog_payload! {
         EntityInvocation {
             metadata: Vec<u8>,
             input: TypedSchemaValue,
-            stream_session_idempotency_key: IdempotencyKey,
+            stream_session_idempotency_key: InvocationId,
         },
         GolemToolInvocationRejected {
             attempt_ordinal: u64,
@@ -445,6 +445,12 @@ oplog_payload! {
         },
         SocketsUdpPermissionCheck {
             addresses: Vec<String>
+        },
+        GolemRpcPrepareInvocation {
+            invocation_start_index: OplogIndex,
+            remote_agent_id: AgentId,
+            method_name: String,
+            request_key: InvocationRequestKey,
         },
     }
 }
@@ -558,7 +564,8 @@ oplog_payload! {
             result: SerializableInvokeResult
         },
         GolemRpcScheduledInvocation {
-            schedule_id: SerializableScheduleId
+            schedule_id: SerializableScheduleId,
+            invocation_id: OwnedInvocationId,
         },
         GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
         GolemRpcUnit {},
@@ -806,6 +813,9 @@ oplog_payload! {
             wallet_id_hash: Vec<u8>,
             generation: u64,
         },
+        GolemRpcPrepareInvocation {
+            result: Result<AgentFingerprint, SerializableRpcError>,
+        },
     }
 }
 
@@ -818,13 +828,17 @@ oplog_payload! {
     golem_schema_derive::FromSchema,
 )]
 pub struct HostResponseGolemRpcScheduledInvocationCompat {
-    pub result: Result<SerializableScheduleId, SerializableRpcError>,
+    pub result: Result<(SerializableScheduleId, OwnedInvocationId), SerializableRpcError>,
 }
 
 impl From<HostResponseGolemRpcScheduledInvocationCompat> for HostResponse {
     fn from(value: HostResponseGolemRpcScheduledInvocationCompat) -> Self {
         match value.result {
-            Ok(schedule_id) => HostResponseGolemRpcScheduledInvocation { schedule_id }.into(),
+            Ok((schedule_id, invocation_id)) => HostResponseGolemRpcScheduledInvocation {
+                schedule_id,
+                invocation_id,
+            }
+            .into(),
             Err(error) => HostResponseGolemRpcScheduledInvocationError { error }.into(),
         }
     }
@@ -836,7 +850,7 @@ impl TryFrom<HostResponse> for HostResponseGolemRpcScheduledInvocationCompat {
     fn try_from(value: HostResponse) -> Result<Self, Self::Error> {
         match value {
             HostResponse::GolemRpcScheduledInvocation(value) => Ok(Self {
-                result: Ok(value.schedule_id),
+                result: Ok((value.schedule_id, value.invocation_id)),
             }),
             HostResponse::GolemRpcScheduledInvocationError(value) => Ok(Self {
                 result: Err(value.error),
@@ -1060,6 +1074,7 @@ pub mod host_functions {
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents, denied = denied::golem_api::agents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
+        (GolemRpcWasmRpcPrepareInvocation => "golem::rpc::wasm-rpc", "prepare-invocation", GolemRpcPrepareInvocation, GolemRpcPrepareInvocation),
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
         (GolemToolAwaitInvokeResults => "golem::tool::internal", "await-invoke-results", GolemToolAwaitInvokeResults, GolemToolAwaitInvokeResults),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),

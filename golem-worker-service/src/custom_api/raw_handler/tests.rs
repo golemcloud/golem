@@ -4,6 +4,55 @@ use golem_schema::proto::golem::schema::{
 };
 use test_r::test;
 
+#[test]
+#[test_r::timeout("10s")]
+async fn rejected_invocation_identity_conflict_returns_422_before_response_headers() {
+    use crate::api::common::ApiEndpointError;
+    use crate::custom_api::http_session::tests::{accepted, harness};
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationRejected, InvocationRejectionReason, InvocationResponse, invocation_response,
+    };
+    use poem::IntoResponse;
+
+    let h = harness(1);
+    let Some(invocation_response::Response::Accepted(identity)) = accepted(1, None).response else {
+        unreachable!()
+    };
+    h.response_txs[0]
+        .send(Ok(InvocationResponse {
+            response: Some(invocation_response::Response::Rejected(
+                InvocationRejected {
+                    reason: InvocationRejectionReason::IdempotencyConflict as i32,
+                    error: "invocation has a different attached card".into(),
+                    idempotency_key: identity.idempotency_key,
+                    agent_id: identity.agent_id,
+                    ..Default::default()
+                },
+            )),
+        }))
+        .await
+        .unwrap();
+    let mut session = h.start_session();
+    let error = receive_response_head(
+        &mut session,
+        poem::Body::empty(),
+        &mut None,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
+    .unwrap_err();
+    let response = ApiEndpointError::from(error).into_response();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+    assert_eq!(body["code"], "IDEMPOTENCY_CONFLICT");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("different attached card")
+    );
+}
+
 fn value(value: schema_value::Value) -> ProtoValue {
     ProtoValue { value: Some(value) }
 }

@@ -27,6 +27,7 @@ use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::HostGetPromiseResult;
 use crate::preview2::golem_api_1_x::host::HostGetPromiseResultWithStore;
 use crate::preview2::golem_api_1_x::host::HostWithStore;
+use crate::services::HasWorker;
 use crate::services::promise::PromiseHandle;
 use crate::services::promise::PromiseService;
 use crate::workerctx::WorkerCtx;
@@ -85,16 +86,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                 }
             }
         }
-        let (promise_service, agent_id) = accessor.with(|mut access| {
+        let (promise_service, agent_id, fingerprint) = accessor.with(|mut access| {
             let ctx = access.get();
             (
                 ctx.public_state.promise_service.clone(),
                 ctx.agent_id().clone(),
+                ctx.public_state
+                    .worker()
+                    .get_initial_worker_metadata()
+                    .fingerprint,
             )
         });
         // The Start index remains the promise identity across incomplete replay.
         let promise_id = match promise_service
-            .create(&agent_id, handle.start_index())
+            .create(&agent_id, fingerprint, handle.start_index())
             .await
         {
             Ok(promise_id) => promise_id,
@@ -131,13 +136,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
     ) -> anyhow::Result<Vec<u8>> {
         reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let resource_rep = resource.rep();
-        let (entry, self_agent_id) = accessor.with(|mut access| {
+        let (entry, self_agent_id, self_fingerprint) = accessor.with(|mut access| {
             let ctx = access.get();
             let entry = ctx
                 .table()
                 .get(&Resource::<GetPromiseResultEntry>::new_borrow(resource_rep))?
                 .clone();
-            Ok::<_, anyhow::Error>((entry, ctx.agent_id().clone()))
+            let fingerprint = ctx
+                .public_state
+                .worker()
+                .get_initial_worker_metadata()
+                .fingerprint;
+            Ok::<_, anyhow::Error>((entry, ctx.agent_id().clone(), fingerprint))
         })?;
 
         drain_dropped_call_events_access(accessor, accessor.getter())
@@ -168,8 +178,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
             }
         }
 
-        // Only the agent that originally created the promise is woken up when it is completed.
-        if entry.promise_id.agent_id != self_agent_id {
+        // Only the incarnation that originally created the promise is woken up when it is
+        // completed.
+        if entry.promise_id.agent_id != self_agent_id
+            || entry.promise_id.fingerprint != self_fingerprint
+        {
             return Err(handle.trap(anyhow!(
                 "Tried awaiting a promise not created by the current agent"
             )));

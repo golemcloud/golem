@@ -1,7 +1,7 @@
 package golem:agent@2.0.0;
 
 interface host {
-    use golem:core/types@2.0.0.{uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value, permission-card};
+    use golem:core/types@2.0.0.{uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value, permission-card, invocation-id};
     use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use common.{agent-error, agent-type, registered-agent-type, typed-agent-config-value};
 
@@ -60,7 +60,7 @@ interface host {
     /// target, `agent-id` contains the generated one-shot phantom ID.
     record invocation-metadata {
       agent-id: string,
-      idempotency-key: string,
+      invocation-id: invocation-id,
     }
 
     /// Result of an awaited invocation together with its final identity.
@@ -69,9 +69,10 @@ interface host {
       %result: option<schema-value-tree>,
     }
 
-    /// Asynchronous invocation handle together with its final identity.
+    /// Asynchronous invocation handle together with its final identity, when
+    /// preparation succeeded. Rejected calls report their error through the future.
     record async-invocation-with-metadata {
-      metadata: invocation-metadata,
+      metadata: option<invocation-metadata>,
       %future: future-invoke-result,
     }
 

@@ -35,6 +35,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     FilesystemSnapshotName, OplogIndex, SnapshotFault, UpdateDescription,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
     AgentStatusRecord, AssistedSelection, AuthoritativeSnapshot, AuthoritativeSnapshotKind,
     AutomaticSnapshot, PendingUpdateKind, PendingUpdateRef, SnapshotFiles, UsableAutomaticSnapshot,
@@ -249,6 +250,24 @@ pub(crate) fn periodic_baseline(
     }
 }
 
+/// The index of the automatic snapshot record that holds the state of the agent for its next
+/// periodic snapshot: the record that a start of `status` with an empty update queue selects under
+/// the rejections of `exclusions`. A record whose filesystem snapshot is not confirmed, such as a
+/// record whose upload failed, and a record that a start rejected hold no state, so a change before
+/// them still needs a periodic snapshot. `enabled` tells whether this executor keeps filesystem
+/// snapshots.
+pub(crate) fn periodic_snapshot_holding_state(
+    status: &AgentStatusRecord,
+    exclusions: &SnapshotExclusions,
+    enabled: bool,
+) -> Option<OplogIndex> {
+    let filter = AutomaticSnapshotFilter {
+        queue: QueueFilter::Empty,
+        ..exclusions.filter(status, enabled, false)
+    };
+    select_automatic_snapshot(status, filter).map(|snapshot| snapshot.index)
+}
+
 /// The strategy entry of the unselected automatic update `head`: a snapshot-assisted update from
 /// `selected`, or a plain automatic update, which replays the whole history on the target.
 fn strategy(
@@ -264,6 +283,7 @@ fn strategy(
             snapshot_index: snapshot.index,
             snapshot_revision: snapshot.component_revision,
             filesystem_snapshot: snapshot.filesystem_snapshot,
+            snapshot_bootstrap: snapshot.bootstrap,
         },
         None => UpdateDescription::Automatic {
             target_revision: head.target_revision,
@@ -333,10 +353,11 @@ pub(crate) enum SelectedBaseline {
     },
     /// The authoritative baseline of a successful snapshot-assisted update: the `Snapshot` entry
     /// at `index` and its filesystem snapshot. Its replay revision is the source revision of the
-    /// update.
+    /// update. `bootstrap` is the bootstrap range that the successful update names.
     AssistedPromoted {
         index: OplogIndex,
         name: Option<FilesystemSnapshotName>,
+        bootstrap: Option<OplogRegion>,
     },
     /// The snapshot-based manual update at the head of the queue, whose record is its
     /// `PendingUpdate` entry. `previous` is the authoritative baseline before it.
@@ -345,8 +366,12 @@ pub(crate) enum SelectedBaseline {
         previous: Option<AuthoritativeSnapshot>,
     },
     /// The authoritative baseline of a successful snapshot-based manual update: its
-    /// `PendingUpdate` entry at `index`.
-    ManualPromoted { index: OplogIndex },
+    /// `PendingUpdate` entry at `index`. `bootstrap` is the bootstrap range that the successful
+    /// update names.
+    ManualPromoted {
+        index: OplogIndex,
+        bootstrap: Option<OplogRegion>,
+    },
     /// No record: the initial files of the replay revision.
     InitialFiles,
 }
@@ -543,16 +568,22 @@ fn authoritative_baseline(status: &AgentStatusRecord) -> SelectedBaseline {
         Some(AuthoritativeSnapshot {
             index,
             kind: AuthoritativeSnapshotKind::ManualUpdate,
-        }) => SelectedBaseline::ManualPromoted { index: *index },
+            bootstrap,
+        }) => SelectedBaseline::ManualPromoted {
+            index: *index,
+            bootstrap: bootstrap.clone(),
+        },
         Some(AuthoritativeSnapshot {
             index,
             kind:
                 AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                     filesystem_snapshot,
                 },
+            bootstrap,
         }) => SelectedBaseline::AssistedPromoted {
             index: *index,
             name: filesystem_snapshot.clone(),
+            bootstrap: bootstrap.clone(),
         },
         None => SelectedBaseline::InitialFiles,
     }

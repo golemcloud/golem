@@ -48,7 +48,12 @@ declare_unions! {
         McpImportDiscovery(McpImportDiscovery),
 
         /// A non-fatal tool middleware compilation diagnostic.
-        ToolMiddleware(ToolMiddlewareWarning)
+        ToolMiddleware(ToolMiddlewareWarning),
+
+        /// An agent type's constructor changed in a way that changes the key of
+        /// existing agents. It is deployed because the environment's compatibility
+        /// check is disabled; existing keyed agents are no longer reachable by their key.
+        IncompatibleConstructorChange(IncompatibleConstructorChange)
     }
 }
 
@@ -76,6 +81,12 @@ declare_structs! {
     pub struct McpImportDiscovery {
         pub import_index: Option<u32>,
         pub upstream_tool_name: Option<String>,
+        pub reason: String,
+    }
+
+    pub struct IncompatibleConstructorChange {
+        pub agent_type: AgentTypeName,
+        pub path: String,
         pub reason: String,
     }
 
@@ -136,6 +147,13 @@ impl fmt::Display for DeployValidationWarning {
                     .map(|(agent, tool)| format!(" for agent {agent} and tool {tool}"))
                     .unwrap_or_default(),
                 message = w.message,
+            ),
+            DeployValidationWarning::IncompatibleConstructorChange(w) => write!(
+                f,
+                "Agent type `{agent_type}` changes its constructor at {path} ({reason}); existing keyed agents of this type are no longer reachable by their key.",
+                agent_type = w.agent_type,
+                path = w.path,
+                reason = w.reason,
             ),
         }
     }

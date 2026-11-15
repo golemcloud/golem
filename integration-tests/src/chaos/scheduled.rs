@@ -48,7 +48,7 @@ use crate::chaos::ScheduledConfig;
 use crate::chaos::history::{FireRecord, Stream, TargetFireLog};
 use crate::chaos::workload::{self, SCHEDULE_EMITTER_AGENT, WorkloadContext};
 use chrono::{DateTime, Utc};
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
@@ -260,7 +260,7 @@ pub fn start(
 async fn register_one(ctx: &WorkloadContext, index: u32, target: &str, seq: u64, lead: Duration) {
     let emitter = ctx.agent_name(Stream::Scheduled, index);
     let key = ctx.idempotency_key(target, seq);
-    let parsed: ParsedAgentId = agent_id!(SCHEDULE_EMITTER_AGENT, emitter);
+    let parsed: ParsedAgentKey = agent_id!(SCHEDULE_EMITTER_AGENT, emitter);
 
     // Computed once, outside the retry, so a retried registration asks for the
     // same instant. A due time that moved with each attempt would make the fire
@@ -316,7 +316,7 @@ pub async fn warm(ctx: &WorkloadContext, targets: &[String]) -> usize {
             let index = (offset * READ_CONCURRENCY + position) as u32;
             batch.spawn(async move {
                 let emitter = ctx.agent_name(Stream::Scheduled, index);
-                let parsed: ParsedAgentId = agent_id!(SCHEDULE_EMITTER_AGENT, emitter.clone());
+                let parsed: ParsedAgentKey = agent_id!(SCHEDULE_EMITTER_AGENT, emitter.clone());
                 if let Err(e) = ctx
                     .user
                     .invoke_and_await_agent(&ctx.counters, &parsed, "warm", data_value!())

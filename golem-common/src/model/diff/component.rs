@@ -20,6 +20,7 @@ use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use crate::model::json::NormalizedJsonValue;
 use crate::model::tool::ToolBindingInput;
+use crate::schema::AgentTypeSchema;
 use crate::schema::ComponentConfigSchema;
 use crate::schema::tool::{Tool, ToolMiddleware};
 use serde::Serialize;
@@ -31,6 +32,11 @@ use uuid::Uuid;
 #[serde(rename_all = "camelCase")]
 pub struct Component {
     pub wasm_hash: Hash,
+    /// Agent type declarations by agent type name. The registry stores the declarations
+    /// that the component update sends, so they are not derived from `wasm_hash`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(serialize_with = "serialize_with_mode")]
+    pub agent_types: BTreeMap<String, HashOf<AgentTypeSchema>>,
     #[serde(serialize_with = "serialize_with_mode")]
     pub component_config: HashOf<ComponentConfig>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -50,6 +56,8 @@ pub struct Component {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDiff {
     pub wasm_changed: bool,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_type_changes: BTreeMapDiff<String, HashOf<AgentTypeSchema>>,
     pub component_config_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_type_provision_config_changes: BTreeMapDiff<String, HashOf<AgentTypeProvisionConfig>>,
@@ -65,6 +73,10 @@ impl Diffable for Component {
 
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let wasm_changed = new.wasm_hash != current.wasm_hash;
+        let agent_type_changes = new
+            .agent_types
+            .diff_with_current(&current.agent_types)?
+            .unwrap_or_default();
         let component_config_changed = !new.component_config.equals(&current.component_config)?;
         let agent_type_provision_config_changes = new
             .agent_type_provision_configs
@@ -81,6 +93,7 @@ impl Diffable for Component {
 
         Ok(
             if wasm_changed
+                || !agent_type_changes.is_empty()
                 || component_config_changed
                 || !agent_type_provision_config_changes.is_empty()
                 || !tool_deployment_config_changes.is_empty()
@@ -88,6 +101,7 @@ impl Diffable for Component {
             {
                 Some(ComponentDiff {
                     wasm_changed,
+                    agent_type_changes,
                     component_config_changed,
                     agent_type_provision_config_changes,
                     tool_deployment_config_changes,
@@ -132,6 +146,20 @@ pub struct ToolMiddlewareDeploymentConfig {
 impl Hashable for ToolMiddlewareDeploymentConfig {
     fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
+    }
+}
+
+impl Hashable for AgentTypeSchema {
+    fn hash(&self) -> Result<Hash, DiffError> {
+        hash_from_serialized_value(self)
+    }
+}
+
+impl Diffable for AgentTypeSchema {
+    type DiffResult = AgentTypeSchema;
+
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok((new.hash()? != current.hash()?).then(|| new.clone()))
     }
 }
 
@@ -286,11 +314,59 @@ mod tests {
     fn component(tool_config: ToolDeploymentConfig) -> Component {
         Component {
             wasm_hash: Hash::empty(),
+            agent_types: BTreeMap::new(),
             component_config: super::ComponentConfig::default().into(),
             agent_type_provision_configs: BTreeMap::new(),
             tool_deployment_configs: BTreeMap::from([("grep".to_string(), tool_config.into())]),
             tool_middleware_deployment_configs: BTreeMap::new(),
         }
+    }
+
+    fn counter_agent_type(id_type: crate::schema::SchemaType) -> crate::schema::AgentTypeSchema {
+        use crate::schema::agent::{
+            AgentConstructorSchema, AgentTypeKind, AgentTypeSchema, InputSchema, NamedField,
+        };
+        AgentTypeSchema {
+            type_name: crate::model::agent::AgentTypeName("Counter".to_string()),
+            kind: AgentTypeKind::Regular,
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([NamedField::user_supplied("id", id_type)]),
+            },
+            methods: Vec::new(),
+            dependencies: Vec::new(),
+            mode: crate::model::agent::AgentMode::Durable,
+            http_mount: None,
+            snapshotting: crate::model::agent::Snapshotting::Disabled(crate::model::Empty {}),
+            config: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn declaration_only_agent_type_change_changes_component_hash_and_diff() {
+        let with_agent_type = |id_type| Component {
+            agent_types: BTreeMap::from([(
+                "Counter".to_string(),
+                counter_agent_type(id_type).into(),
+            )]),
+            ..component(tool_config(None))
+        };
+        let current = with_agent_type(crate::schema::SchemaType::string());
+        let new = with_agent_type(crate::schema::SchemaType::u64());
+
+        assert_ne!(current.hash().unwrap(), new.hash().unwrap());
+        let diff = new.diff_with_current(&current).unwrap().unwrap();
+        assert!(!diff.wasm_changed);
+        assert!(matches!(
+            diff.agent_type_changes.get("Counter"),
+            Some(BTreeMapDiffValue::Update(DiffForHashOf::ValueDiff { diff }))
+                if *diff == counter_agent_type(crate::schema::SchemaType::u64())
+        ));
     }
 
     #[test]

@@ -1,0 +1,17 @@
+package golem:agent@2.0.0;
+
+/// Describes the invocation that runs the calling code. Every function reads values recorded
+/// with the start of the invocation, so no function is a durable call.
+interface invocation-context {
+  use golem:core/types@2.0.0.{invocation-id as current-invocation-id};
+  use common.{caller as invocation-caller};
+
+  /// Returns the ID of the running invocation. A nested tool call returns the ID of the
+  /// enclosing invocation. Returns none outside an invocation: during component initialization,
+  /// in snapshot save and load, and in oplog processing.
+  invocation-id: func() -> option<current-invocation-id>;
+
+  /// Returns the principals that caused the running invocation. Code that runs without a
+  /// recorded principal, such as snapshot save and load, gets the agent itself as both principals.
+  caller: func() -> invocation-caller;
+}

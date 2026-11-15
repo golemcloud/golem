@@ -25,8 +25,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey, OwnedAgentId,
-    Timestamp,
+    AgentInvocationPayload, AgentInvocationResult, ForkResult, OwnedAgentId, Timestamp,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
@@ -126,7 +125,7 @@ impl ReplayEvent {
 #[derive(Debug, Clone)]
 pub struct AgentInvocationStartedEntry {
     pub oplog_index: OplogIndex,
-    pub idempotency_key: IdempotencyKey,
+    pub idempotency_key: golem_common::model::InvocationId,
     pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,
     pub wallet_pin: InvocationWalletPin,
@@ -398,7 +397,7 @@ struct ToolAttachmentReconstruction {
     logical_observations: HashMap<
         (
             golem_common::model::oplog::attachment::ToolAttachmentId,
-            IdempotencyKey,
+            golem_common::model::InvocationId,
             u64,
         ),
         (OplogIndex, Option<OplogIndex>),
@@ -498,14 +497,9 @@ impl ToolAttachmentReconstruction {
             if self.history.source_was_removed(read) {
                 continue;
             }
-            let key = (
-                read.attachment,
-                read.logical_invocation.clone(),
-                read.ordinal,
-            );
+            let key = (read.attachment, read.logical_invocation, read.ordinal);
             if read.reobserves.is_none() {
-                self.logical_observations
-                    .insert(key.clone(), (*index, None));
+                self.logical_observations.insert(key, (*index, None));
                 if let ToolAttachmentReadOutcome::TypedChunk(end)
                 | ToolAttachmentReadOutcome::RawBytes { end, .. } = read.outcome
                 {
@@ -596,6 +590,9 @@ struct ReplayCursor {
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
     wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
+    /// `Some` for a cursor over the bootstrap block of a core initializer: it records no replay
+    /// events, and its live switch publishes only its own phase.
+    bootstrap: Option<BootstrapTail>,
     owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
     /// Serializes every cursor-advance transaction. A transaction that consumes a
     /// `CompletionDelivered` marker transfers this guard to the matching replay delivery token;
@@ -704,6 +701,16 @@ struct ReplayCursor {
         std::sync::Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,
     #[cfg(test)]
     retained_claim_miss: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+}
+
+/// What a bootstrap cursor does when its initializer makes a durable call after the recorded
+/// block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BootstrapTail {
+    /// The call diverges: the block must hold every durable call of the initializer.
+    Strict,
+    /// The call continues live and appends after the block.
+    Live,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

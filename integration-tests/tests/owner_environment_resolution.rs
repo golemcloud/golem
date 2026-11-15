@@ -241,7 +241,7 @@ fn assert_evidence(value: SchemaValue, marker: &str, secret: &str, reserved: boo
 async fn invoke_probe(
     user: &TestUserContext<EnvBasedTestDependencies>,
     component: &golem_common::model::component::ComponentDto,
-    agent: &golem_common::model::agent::ParsedAgentId,
+    agent: &golem_common::model::agent::ParsedAgentKey,
     expected_use: u64,
     amount: u64,
     commit_amount: u64,

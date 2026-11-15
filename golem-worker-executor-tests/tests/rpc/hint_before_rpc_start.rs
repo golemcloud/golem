@@ -48,7 +48,7 @@ impl Rpc for DispatchThenHangRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -62,6 +62,7 @@ impl Rpc for DispatchThenHangRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: golem_common::model::AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -70,6 +71,7 @@ impl Rpc for DispatchThenHangRpc {
             .schedule_invocation(
                 owned_agent_id,
                 expected_fingerprint,
+                request_key,
                 invocation,
                 scheduled_at,
                 auth_ctx,
@@ -114,6 +116,7 @@ impl Rpc for DispatchThenHangRpc {
         environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method: String,
         input: SchemaValue,
         created_by: AccountId,
@@ -132,6 +135,7 @@ impl Rpc for DispatchThenHangRpc {
                 environment_id,
                 key,
                 freshness,
+                expected_callee_fingerprint,
                 method,
                 input,
                 created_by,
@@ -155,6 +159,7 @@ impl Rpc for DispatchThenHangRpc {
         environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method: String,
         input: SchemaValue,
         created_by: AccountId,
@@ -172,6 +177,7 @@ impl Rpc for DispatchThenHangRpc {
                 environment_id,
                 key,
                 freshness,
+                expected_callee_fingerprint,
                 method,
                 input,
                 created_by,
@@ -363,7 +369,7 @@ async fn repair_after_stdout_hint_executes_target_once(
                 PublicAgentInvocation::AgentMethodInvocation(method)
                     if method.method_name == "inc_by" =>
                 {
-                    Some((entry.oplog_index, method.idempotency_key.clone()))
+                    Some((entry.oplog_index, method.invocation_id))
                 }
                 _ => None,
             },
@@ -371,19 +377,37 @@ async fn repair_after_stdout_hint_executes_target_once(
         })
         .collect();
     let attempts = attempts.lock().unwrap().clone();
+    let caller_key = executor
+        .external_invocation_key(&caller, &key, "inc_after_stdout")
+        .await?;
+    let target_live_key = match &live_key {
+        Some(live_key) => Some(
+            executor
+                .finalized_invocation_key(
+                    &target,
+                    &InvocationRequestKey::Internal(live_key.clone()),
+                    "inc_by",
+                )
+                .await?,
+        ),
+        None => None,
+    };
     eprintln!(
         "mode {mode}: hint at {hint}, Start at {start}, End at {ends:?}; attempt keys {attempts:?}; \
          keys derived from the hint index {:?} and from the index before it {:?}; \
          target inc_by AgentInvocationStarted (index, key) {increments:?}; counter {count}; \
          recovered caller result {recovered:?}",
-        IdempotencyKey::derived(&key, hint),
-        IdempotencyKey::derived(&key, hint.previous()),
+        IdempotencyKey::derived(&IdempotencyKey::new(caller_key.to_string()), hint),
+        IdempotencyKey::derived(
+            &IdempotencyKey::new(caller_key.to_string()),
+            hint.previous()
+        ),
     );
 
     recovered?;
     let increments_for_attempt_key = increments
         .iter()
-        .filter(|(_, key)| Some(key) == live_key.as_ref())
+        .filter(|(_, key)| Some(key) == target_live_key.as_ref())
         .count();
     assert_eq!(
         (increments_for_attempt_key, increments.len(), count),

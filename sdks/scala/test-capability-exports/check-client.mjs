@@ -12,9 +12,7 @@ globalThis.__capabilityToolInvoke = (name, path, input, stdin, stdout, stderr) =
   assert.equal(stdin, undefined);
   assert.equal(stdout, undefined);
   assert.equal(stderr, undefined);
-  return provider.golemTool010Guest.invoke(name, path, input, stdin, stdout, stderr, {
-    tag: "anonymous",
-  });
+  return provider.golemTool010Guest.invoke(name, path, input, stdin, stdout, stderr);
 };
 register("./host-module-hooks.mjs", import.meta.url, {
   data: {

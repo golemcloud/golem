@@ -332,6 +332,7 @@ pub fn add_agent_method_http_routes(
                         http_mount,
                         http_endpoint,
                         stream_limits,
+                        route_id,
                     )
                     .map(|(http_input, policy)| (http_input, Some(policy)))
                     .map_err(&make_route_validation_error),
@@ -1452,6 +1453,7 @@ mod tests {
             };
             assert_eq!(call.route_mode, AgentRouteMode::DurableStreams);
             let policy = call.durable_streams.as_ref().unwrap();
+            assert_eq!(policy.family_id, 0);
             assert_eq!(policy.slots.len(), 1);
             assert_eq!(policy.slots[0].canonical_name, "events");
             assert_eq!(policy.slots[0].public_name, "incoming");
@@ -1512,6 +1514,51 @@ mod tests {
         let rest = compiled_call_agent_behaviour(AgentMode::Durable, false);
         assert_eq!(rest.route_mode, AgentRouteMode::Plain);
         assert_eq!(rest.durable_streams, None);
+    }
+
+    #[test]
+    fn durable_stream_families_keep_distinct_base_ids_through_transports() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].output_schema =
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::string()))));
+        let mut second_endpoint = agent.methods[0].http_endpoint[0].clone();
+        second_endpoint
+            .path_suffix
+            .push(golem_common::model::agent::PathSegment::Literal(
+                LiteralSegment {
+                    value: "other".into(),
+                },
+            ));
+        agent.methods[0].http_endpoint.push(second_endpoint);
+
+        let (routes, errors) = compile_test_routes_from(&agent, 37);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(routes.len(), 34);
+        let mut endpoint_ids = BTreeSet::new();
+        let mut families = BTreeMap::<i32, usize>::new();
+        for route in routes {
+            assert!(endpoint_ids.insert(route.route_id));
+            let expected_family = if route.route_id < 54 { 37 } else { 54 };
+            let RouteBehaviour::CallAgent(call) = &route.behaviour else {
+                panic!()
+            };
+            assert_eq!(
+                call.durable_streams.as_ref().unwrap().family_id,
+                expected_family
+            );
+            let bytes = desert_rust::serialize(&route, Vec::new()).unwrap();
+            let restored: UnboundCompiledRoute = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(restored.route_id, route.route_id);
+            let proto: golem_api_grpc::proto::golem::customapi::RouteBehaviour =
+                restored.behaviour.into();
+            let RouteBehaviour::CallAgent(restored) = RouteBehaviour::try_from(proto).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(restored.durable_streams, call.durable_streams);
+            *families.entry(expected_family).or_default() += 1;
+        }
+        assert_eq!(families, BTreeMap::from([(37, 17), (54, 17)]));
     }
 
     #[test]

@@ -53,6 +53,38 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         )
       }
     },
+    test("ResolvedAgent metadata calls surface a rejected call's error and expose its metadata as absent") {
+      val agentType = rpcAgentType
+      val invoker   = new RecordingRpcInvoker
+      val resolved  = resolvedAgent(invoker, agentType)
+      val method    = findMethod[RpcParityAgent, SampleInput, SampleOutput](agentType, "rpcCall")
+      val started   = InvocationMetadata(
+        "RpcParityAgent(\"t\")",
+        golem.InvocationId("RpcParityAgent(\"t\")", java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
+      )
+
+      invoker.enqueueInvokeResult(Left("denied: missing permission"))
+      invoker.enqueueInvokeResult(Left("denied: missing permission"))
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("ok"))))
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("ok"))))
+
+      ZIO.fromFuture { _ =>
+        for {
+          awaited    <- errorOf(resolved.awaitWithMetadata(method, SampleInput("a", 1)))
+          cancelable <- resolved.cancelableAwaitWithMetadata(method, SampleInput("b", 2))
+          rejection  <- errorOf(cancelable.result)
+          unstarted  <- errorOf(resolved.awaitWithMetadata(method, SampleInput("d", 4)))
+          _           = invoker.asyncMetadata = Some(started)
+          accepted   <- resolved.awaitWithMetadata(method, SampleInput("c", 3))
+        } yield assertTrue(
+          awaited == "denied: missing permission",
+          cancelable.metadata.isEmpty,
+          rejection == "denied: missing permission",
+          unstarted == "protocol-error: completed invocation has no metadata",
+          accepted == InvocationResult(started, SampleOutput("ok"))
+        )
+      }
+    },
     test("ResolvedAgent routes fire-and-forget calls through trigger and schedule") {
       val agentType = rpcAgentType
       val invoker   = new RecordingRpcInvoker
@@ -267,6 +299,9 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
   private def permissionCard(name: String): PermissionCard =
     PermissionCard.fromRaw(scala.scalajs.js.Dynamic.literal(name = name).asInstanceOf[JsPermissionCardResource])
 
+  private def errorOf(future: Future[_]): Future[String] =
+    future.transform(result => scala.util.Success(result.failed.map(_.getMessage).getOrElse("<succeeded>")))
+
   private def rpcAgentType: AgentType[RpcParityAgent, Any] =
     AgentClient.agentType[RpcParityAgent].asInstanceOf[AgentType[RpcParityAgent, Any]]
 
@@ -307,6 +342,8 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
 
     private val invokeResults = mutable.Queue.empty[Either[String, Option[JsSchemaValueTree]]]
 
+    var asyncMetadata: Option[InvocationMetadata] = None
+
     def enqueueInvokeResult(result: Either[String, Option[JsSchemaValueTree]]): Unit =
       invokeResults.enqueue(result)
 
@@ -335,6 +372,19 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         }
       } else Future.successful(None)
     }
+
+    override def asyncInvokeAndAwaitWithMetadata(
+      functionName: String,
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
+    ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] =
+      Right(
+        AsyncInvocation(
+          asyncMetadata,
+          asyncInvokeAndAwait(functionName, input, scopeCard),
+          CancellationToken.fromFunction(() => ())
+        )
+      )
 
     override def cancelableAsyncInvokeAndAwait(
       functionName: String,

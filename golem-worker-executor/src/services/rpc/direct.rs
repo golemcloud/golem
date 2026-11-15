@@ -195,7 +195,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             .await?;
         let parsed_agent_id = match &existing_metadata {
             Some(metadata) => metadata.parse_agent_id(&component.metadata),
-            None => ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata),
+            None => ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata),
         }
         .map_err(|details| RpcError::ProtocolError { details })?;
         validate_agent_method_invocation(
@@ -206,6 +206,101 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         )
         .map_err(Into::into)
     }
+
+    /// Resolves the target of a scalar call and validates the method against it; a method with
+    /// live streams fails with `live_streams_details`. With `expected_fingerprint` only that
+    /// existing incarnation is accepted, and a missing or different one fails as not found before
+    /// the method is validated against its revision; without one, the method is validated against
+    /// the latest metadata and the target is created when it does not exist.
+    async fn rpc_target_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: Option<AgentFingerprint>,
+        method_name: &str,
+        method_parameters: &SchemaValue,
+        request_key: &InvocationRequestKey,
+        self_env: &[(String, String)],
+        config: Vec<AgentConfigEntryDto>,
+        self_agent_id: &AgentId,
+        self_stack: &InvocationContextStack,
+        principal: Principal,
+        freshness_disposition: InvocationFreshnessDisposition,
+        live_streams_details: &str,
+    ) -> Result<Arc<Worker<Ctx>>, RpcError> {
+        // The exact-existing lookup also refuses a generation that a deletion retires, before
+        // its status is read: once the durable state is removed its state actor is gone.
+        let pinned = match expected_fingerprint {
+            Some(expected_fingerprint) => Some(
+                Worker::get_exact_existing_suspended_for_response(
+                    self,
+                    owned_agent_id,
+                    principal.clone(),
+                    Some(expected_fingerprint),
+                )
+                .await?
+                .0,
+            ),
+            None => None,
+        };
+        let uses_live_streams = match &pinned {
+            Some(worker) => {
+                let status = worker.get_pinned_status().await?;
+                let component = self
+                    .component_service()
+                    .get_metadata(worker.component_id(), Some(status.component_revision))
+                    .await?;
+                let parsed_agent_id = worker
+                    .get_initial_worker_metadata()
+                    .parse_agent_id(&component.metadata)
+                    .map_err(|details| RpcError::ProtocolError { details })?;
+                validate_agent_method_invocation(
+                    &component.metadata,
+                    Some(&parsed_agent_id),
+                    method_name,
+                    method_parameters,
+                )?
+            }
+            None => {
+                self.validate_method_invocation(
+                    owned_agent_id,
+                    method_name,
+                    method_parameters,
+                    freshness_disposition,
+                )
+                .await?
+            }
+        };
+        if uses_live_streams {
+            return Err(RpcError::ProtocolError {
+                details: live_streams_details.to_string(),
+            });
+        }
+        Worker::<Ctx>::validate_invocation_freshness(
+            self,
+            owned_agent_id,
+            &request_key.owner_key(method_name),
+            freshness_disposition,
+        )
+        .await?;
+        match pinned {
+            Some(worker) => Ok(worker),
+            None => Ok(Worker::get_or_create_suspended_with_freshness(
+                self,
+                owned_agent_id,
+                Some(self_env.to_vec()),
+                config,
+                None,
+                Some(self_agent_id.clone()),
+                self_stack,
+                principal,
+                freshness_disposition,
+                CreateIntent::Invocation {
+                    idempotency_key: Some(request_key.owner_key(method_name)),
+                },
+            )
+            .await?),
+        }
+    }
 }
 
 #[async_trait]
@@ -213,7 +308,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -257,6 +352,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
+        request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -277,6 +373,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .schedule_invocation(
                     owned_agent_id,
                     expected_fingerprint,
+                    request_key,
                     invocation,
                     scheduled_at,
                     auth_ctx,
@@ -284,6 +381,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .await;
         }
         let AgentInvocation::AgentMethod {
+            idempotency_key,
             method_name,
             input,
             principal,
@@ -312,10 +410,25 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(expected_fingerprint),
             )
             .await?;
-        if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint {
-            return Err(WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()).into());
+        let final_id = request_key.finalize(
+            worker.get_initial_worker_metadata().agent_id,
+            expected_fingerprint,
+            method_name,
+        );
+        if *idempotency_key != final_id.id() {
+            return Err(RpcError::ProtocolError {
+                details: "scheduled invocation identity does not match its prepared request"
+                    .to_string(),
+            });
         }
-        let status = worker.get_last_known_status().await;
+        // This caller holds no task-scope bind, so a deletion may already have stopped the
+        // cached generation's state actor.
+        let status = worker
+            .deleted_incarnation_as_not_found(
+                Some(expected_fingerprint),
+                worker.try_get_last_known_status().await,
+            )
+            .await?;
         let component = self
             .component_service()
             .get_metadata(worker.component_id(), Some(status.component_revision))
@@ -334,8 +447,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 details: "live streams cannot be used in scheduled invocations".to_string(),
             });
         }
+        let scheduled = worker.schedule_invocation(invocation, scheduled_at).await;
         worker
-            .schedule_invocation(invocation, scheduled_at)
+            .deleted_incarnation_as_not_found(Some(expected_fingerprint), scheduled)
             .await
             .map_err(Into::into)
     }
@@ -379,7 +493,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Worker::<Ctx>::validate_invocation_freshness(
                     self,
                     owned_agent_id,
-                    key,
+                    &InvocationRequestKey::Internal(key.clone()).owner_key(method_name),
                     freshness_disposition,
                 )
                 .await?;
@@ -401,6 +515,12 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     agent_id: self_agent_id.clone(),
                 }),
                 freshness_disposition,
+                CreateIntent::Create {
+                    exclusive: false,
+                    idempotency_key: idempotency_key.as_ref().map(|key| {
+                        InvocationRequestKey::Internal(key.clone()).owner_key(method_name)
+                    }),
+                },
             )
             .await?;
 
@@ -434,6 +554,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -473,41 +594,30 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
-            if self
-                .validate_method_invocation(
+            let principal = caller_agent_principal(self_agent_id);
+            let request_key = idempotency_key
+                .map(InvocationRequestKey::Internal)
+                .unwrap_or_else(|| InvocationRequestKey::external(None, None));
+            let worker = self
+                .rpc_target_worker(
                     owned_agent_id,
+                    expected_callee_fingerprint,
                     &method_name,
                     &method_parameters,
+                    &request_key,
+                    self_env,
+                    config,
+                    self_agent_id,
+                    &self_stack,
+                    principal.clone(),
                     freshness_disposition,
+                    "live streams require the attached streaming RPC",
                 )
-                .await?
-            {
-                return Err(RpcError::ProtocolError {
-                    details: "live streams require the attached streaming RPC".to_string(),
-                });
-            }
-
-            let principal = caller_agent_principal(self_agent_id);
-            let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
-            Worker::<Ctx>::validate_invocation_freshness(
-                self,
-                owned_agent_id,
-                &idempotency_key,
-                freshness_disposition,
-            )
-            .await?;
-            let worker = Worker::get_or_create_suspended_with_freshness(
-                self,
-                owned_agent_id,
-                Some(self_env.to_vec()),
-                config,
-                None,
-                Some(self_agent_id.clone()),
-                &self_stack,
-                principal.clone(),
-                freshness_disposition,
-            )
-            .await?;
+                .await?;
+            let metadata = worker.get_initial_worker_metadata();
+            let idempotency_key = request_key
+                .finalize(metadata.agent_id, metadata.fingerprint, &method_name)
+                .id();
 
             let invocation = AgentInvocation::AgentMethod {
                 idempotency_key,
@@ -518,7 +628,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 scope_card,
             };
 
-            let output = worker.invoke_and_await(invocation).await?;
+            let output = worker
+                .invoke_and_await_pinned(invocation, expected_callee_fingerprint, || Ok(()))
+                .await?;
 
             match output.result {
                 AgentInvocationResult::AgentMethod { output } => Ok(output),
@@ -535,6 +647,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     owned_agent_id.environment_id,
                     Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
                     freshness_disposition,
+                    expected_callee_fingerprint,
                     method_name,
                     method_parameters,
                     self_created_by,
@@ -611,33 +724,23 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
 
+        let request_key = InvocationRequestKey::Internal(idempotency_key.clone());
         Worker::<Ctx>::validate_invocation_freshness(
             self,
             owned_agent_id,
-            &idempotency_key,
+            &request_key.owner_key(&method_name),
             InvocationFreshnessDisposition::MayExist,
         )
         .await?;
         let principal = caller_agent_principal(self_agent_id);
-        let (worker, _response_lease) = Worker::get_or_create_suspended_for_response(
+        let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
             self,
             owned_agent_id,
-            Some(self_env.to_vec()),
-            config.clone(),
-            None,
-            Some(self_agent_id.clone()),
-            &self_stack,
             principal.clone(),
-            InvocationFreshnessDisposition::MayExist,
+            Some(expected_callee_fingerprint),
         )
         .await?;
-        if worker.get_initial_worker_metadata().fingerprint != expected_callee_fingerprint {
-            return Err(RpcError::ProtocolError {
-                details: "expected callee fingerprint does not match the active agent incarnation"
-                    .to_string(),
-            });
-        }
-        let status = worker.get_last_known_status().await;
+        let status = worker.get_pinned_status().await?;
         let component = self
             .component_service()
             .get_metadata(worker.component_id(), Some(status.component_revision))
@@ -666,6 +769,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             method_name: Some(method_name.clone()),
             input: None,
             idempotency_key: Some(idempotency_key.clone().into()),
+            request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                 parent: Some(self_agent_id.clone().into()),
                 env: HashMap::from_iter(self_env.to_vec()),
@@ -692,8 +796,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map_err(|details| RpcError::ProtocolError { details })?,
             external_tool: None,
         };
+        let idempotency_key = InvocationRequestKey::Internal(idempotency_key)
+            .finalize(
+                owned_agent_id.agent_id(),
+                expected_callee_fingerprint,
+                &method_name,
+            )
+            .id();
         let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key,
             method_name,
             input,
             invocation_context: self_stack,
@@ -717,6 +828,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let acceptance = worker
             .clone()
             .accept_durable_streaming_invocation(request)
+            .await;
+        let acceptance = worker
+            .deleted_incarnation_as_not_found(Some(expected_callee_fingerprint), acceptance)
             .await?;
         accepted.await.map_err(|_| RpcError::RemoteInternalError {
             details: "durable streaming acceptance was not committed".to_string(),
@@ -731,7 +845,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             })?;
         let _ = accepted_inputs.send(InvocationAccepted {
             agent_id: start.agent_id.clone(),
-            idempotency_key: start.idempotency_key.clone(),
+            idempotency_key: Some(idempotency_key.into()),
             component_revision: Some(component.revision.get()),
             attachment_id: (!acceptance.joined_origin_observer)
                 .then(|| acceptance.prepared.attempt.attachment_id.0.into()),
@@ -776,7 +890,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 details: error.to_string(),
             })?;
         let result = acceptance.streams.wait_persisted_result();
-        let completion = worker.await_enqueued_invocation(idempotency_key);
+        let completion = async {
+            let output = worker
+                .clone()
+                .await_enqueued_invocation(idempotency_key)
+                .await;
+            worker
+                .deleted_incarnation_as_not_found(Some(expected_callee_fingerprint), output)
+                .await
+        };
         tokio::pin!(result);
         tokio::pin!(completion);
         let result = tokio::select! {
@@ -926,6 +1048,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -964,42 +1087,30 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
-            if self
-                .validate_method_invocation(
+            let principal = caller_agent_principal(self_agent_id);
+            let request_key = idempotency_key
+                .map(InvocationRequestKey::Internal)
+                .unwrap_or_else(|| InvocationRequestKey::external(None, None));
+            let worker = self
+                .rpc_target_worker(
                     owned_agent_id,
+                    expected_callee_fingerprint,
                     &method_name,
                     &method_parameters,
+                    &request_key,
+                    self_env,
+                    config,
+                    self_agent_id,
+                    &self_stack,
+                    principal.clone(),
                     freshness_disposition,
+                    "live streams cannot be used in fire-and-forget invocations",
                 )
-                .await?
-            {
-                return Err(RpcError::ProtocolError {
-                    details: "live streams cannot be used in fire-and-forget invocations"
-                        .to_string(),
-                });
-            }
-
-            let principal = caller_agent_principal(self_agent_id);
-            let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
-            Worker::<Ctx>::validate_invocation_freshness(
-                self,
-                owned_agent_id,
-                &idempotency_key,
-                freshness_disposition,
-            )
-            .await?;
-            let worker = Worker::get_or_create_suspended_with_freshness(
-                self,
-                owned_agent_id,
-                Some(self_env.to_vec()),
-                config,
-                None,
-                Some(self_agent_id.clone()),
-                &self_stack,
-                principal.clone(),
-                freshness_disposition,
-            )
-            .await?;
+                .await?;
+            let metadata = worker.get_initial_worker_metadata();
+            let idempotency_key = request_key
+                .finalize(metadata.agent_id, metadata.fingerprint, &method_name)
+                .id();
 
             let invocation = AgentInvocation::AgentMethod {
                 idempotency_key,
@@ -1010,7 +1121,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 scope_card: None,
             };
 
-            match worker.invoke_and_start(invocation).await? {
+            let started = worker.clone().invoke_and_start(invocation).await;
+            match worker
+                .deleted_incarnation_as_not_found(expected_callee_fingerprint, started)
+                .await?
+            {
                 crate::worker::ResultOrSubscription::Finished(Err(err)) => Err(err.into()),
                 crate::worker::ResultOrSubscription::Finished(Ok(_)) => Ok(()),
                 crate::worker::ResultOrSubscription::Pending(_) => Ok(()),
@@ -1022,6 +1137,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     owned_agent_id.environment_id,
                     Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
                     freshness_disposition,
+                    expected_callee_fingerprint,
                     method_name,
                     method_parameters,
                     self_created_by,

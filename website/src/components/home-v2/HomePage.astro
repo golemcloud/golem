@@ -1,0 +1,584 @@
+---
+import { Image } from "astro:assets";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Details from "../../components/home-v2/Details.astro";
+import Visual from "../../components/home-v2/Visual.astro";
+import HeroVMs from "./HeroVMs.astro";
+import Icon from "../../components/home-v2/Icon.astro";
+import UseCase from "../../components/home-v2/UseCase.astro";
+import HeadingLines from "../../components/home-v2/HeadingLines.astro";
+import TextLink from "../../components/home-v2/TextLink.astro";
+import ExecutionExample from "../../components/home-v2/ExecutionExample.astro";
+import OperationsMap from "../../components/home-v2/OperationsMap.astro";
+import { golemLinks as links } from "../../data/home-preview/golem-links";
+import { text as t, paragraphs, lines, instruction } from "../../data/home-preview/golem-2";
+import "../../styles/home-v2.css";
+import brand from "../../assets/logo/golem-horizontal-white.png";
+import samuel from "../../assets/testimonials/samuel-iyeh.jpg";
+import ziverge from "../../assets/logo/ziverge.png";
+import social from "../../assets/logo/golem-social.png";
+import warpmind from "../../assets/logo/warpmind.png";
+import seeta from "../../assets/logo/seeta-ai-assistant.png";
+import journai from "../../assets/logo/golem-journai.png";
+import johnethel from "../../assets/logo/johnethel-lms.png";
+const logos = [ziverge, social, warpmind, seeta, journai, johnethel];
+const logoNames = [
+  "Ziverge",
+  "Golem Social",
+  "WarpMind",
+  "Seeta AI Assistant",
+  "JournAI",
+  "Johnethel LMS",
+];
+const metrics = t(3, "Metrics")
+  .split("\n")
+  .slice(2)
+  .map((line) =>
+    line
+      .split("|")
+      .slice(1, -1)
+      .map((v) => v.trim())
+  );
+const docs = links.docs;
+const github = "https://github.com/golemcloud/golem";
+const languages = t(7, "Language selector").split(" · ");
+const capabilityKeys = [
+  "Give work a budget",
+  "See what happened",
+  "Coordinate work",
+  "Operate applications",
+];
+const capabilityIds = ["budget", "journal", "coordinate", "operate"];
+---
+
+<BaseLayout preview title="Golem — The cloud for the agent era" description={t(1, "Introduction")}>
+  <div class="g2-page">
+    <a class="g2-skip" href="#main">Skip to content</a>
+    <header class="g2-nav">
+      <div class="g2-wrap nav-inner">
+        <a class="g2-brand" href="#top" aria-label="Golem home"
+          ><Image src={brand} alt="Golem" width={126} loading="eager" /></a
+        ><nav aria-label="Main navigation">
+          <a href="#platform">Platform</a><a href="#build">Use cases</a><a href="#languages"
+            >Developers</a
+          ><a href={docs}>Docs <span aria-hidden="true">↗</span></a>
+        </nav><a class="nav-cta" href="#start">Start building <span aria-hidden="true">↗</span></a
+        ><button
+          class="nav-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="mobile-nav"
+          aria-label="Open navigation"><span></span><span></span></button
+        >
+      </div><nav id="mobile-nav" class="mobile-nav" aria-label="Mobile navigation" hidden>
+        <a href="#platform">Platform</a><a href="#build">Use cases</a><a href="#languages"
+          >Developers</a
+        ><a href={docs}>Documentation ↗</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="g2-hero g2-dark" id="top">
+        <div class="g2-wrap">
+          <div class="hero-grid">
+            <div class="hero-copy">
+              <div class="hero-runtime">
+                <span class="hero-runtime-kind">{t(1, "Eyebrow")}</span>
+                <span class="hero-hosts">
+                  {
+                    t(1, "Deployment choices")
+                      .split(" · ")
+                      .map((choice) => <span>{choice}</span>)
+                  }
+                </span>
+              </div><h1>{t(1, "Heading")}</h1><p class="hero-intro">{t(1, "Introduction")}</p><p
+                class="hero-foundation"
+              >
+                {t(1, "Execution foundation")}
+              </p><div class="actions">
+                <a class="g2-button" href="#start">{lines(t(1, "Actions"))[0]}</a><TextLink
+                  href="#platform"
+                  label={lines(t(1, "Actions"))[1]}
+                />
+              </div>
+            </div><HeroVMs />
+          </div><div class="proof-strip">
+            <p>{paragraphs(t(1, "Proof strip"))[0]}</p><div>
+              {
+                logos.map((logo, i) => (
+                  <Image src={logo} alt={logoNames[i]} width={140} loading="eager" />
+                ))
+              }
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="g2-section g2-light" id="platform">
+        <div class="g2-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">{t(2, "Eyebrow")}</p><h2>{t(2, "Heading")}</h2><p
+              class="section-intro"
+            >
+              {t(2, "Introduction")}
+            </p>
+          </div><Visual kind="primitives" /><div class="primitive-copy two-cols">
+            {
+              ["Actors", "Functions"].map((key) => (
+                <div>
+                  <>
+                    <div class="primitive-heading">
+                      <>
+                        <h3>{key}</h3>
+                        <span>{paragraphs(t(2, key))[0]}</span>
+                      </>
+                    </div>
+                    <p>{paragraphs(t(2, key))[1]}</p>
+                  </>
+                </div>
+              ))
+            }
+          </div><div class="below-model">
+            <p>{paragraphs(t(2, "Below the panels"))[0]}</p><TextLink
+              href={links.primitives}
+              label={paragraphs(t(2, "Below the panels"))[1]}
+            />
+          </div><Details section={2} id="primitive-details" />
+        </div>
+      </section>
+
+      <section class="g2-section g2-dark execution-section" id="vm">
+        <div class="g2-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">{t(3, "Eyebrow")}</p><h2>{t(3, "Heading")}</h2><p
+              class="section-intro"
+            >
+              {t(3, "Introduction")}
+            </p>
+          </div><div class="metrics">
+            {
+              metrics.map(([figure, label]) => (
+                <div>
+                  <>
+                    <strong>{figure}</strong>
+                    <span>{label}</span>
+                  </>
+                </div>
+              ))
+            }
+          </div><div class="guarantees two-cols">
+            <article>
+              <div class="guarantee-title">
+                <Icon name="clock" /><h3><HeadingLines parts={["Transparent", "durability"]} /></h3>
+              </div><p class="guarantee-description">
+                {paragraphs(t(3, "Transparent durability"))[0]}
+              </p><Visual kind="durability" /><p class="guarantee-payoff">
+                <HeadingLines parts={t(3, "Durability payoff").split(/(?<=\.) /)} />
+              </p><TextLink href={links.durability} label={lines(t(3, "Links"))[0]} />
+            </article><article>
+              <div class="guarantee-title">
+                <Icon name="shield" /><h3>
+                  <HeadingLines parts={["Runtime-enforced", "permissions"]} />
+                </h3>
+              </div><p class="guarantee-description">
+                {t(3, "Runtime-enforced permissions")}
+              </p><Visual kind="security" /><p class="guarantee-payoff">
+                <HeadingLines parts={t(3, "Security payoff").split(/(?<=\.) /)} />
+              </p><TextLink href={links.permissions} label={lines(t(3, "Links"))[1]} />
+            </article>
+          </div><ExecutionExample /><p class="transactional-statement">
+            {paragraphs(t(3, "Transparent durability"))[1].replace(/\\?\*$/, "")}<a
+              href="#transactional-detail"
+              class="asterisk"
+              aria-label="Details about transactional execution"
+              data-open-transaction>*</a
+            >
+          </p><Details
+            section={3}
+            id="durability-details"
+            keys={[
+              "View: Wait and resume",
+              "View: Recover on another node",
+              "The whole VM, beyond saved data",
+            ]}
+          /><Details
+            section={3}
+            id="transactional-detail"
+            keys={["What does the asterisk mean?"]}
+          /><div id="security-details">
+            <Details section={3} keys={["Authority is enforced by the runtime"]} />
+            <Details section={6} keys={["Models, tools and secrets"]} />
+          </div>
+        </div>
+      </section>
+
+      <section class="g2-section g2-light" id="build">
+        <div class="g2-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">WHAT YOU BUILD</p><h2>{t(4, "Heading")}</h2><p class="section-intro">
+              {t(4, "Introduction")}
+            </p>
+          </div><div class="use-cases">
+            <UseCase index={0} /><UseCase index={1} />
+            <div id="app-demo">
+              <div class="app-story-intro">
+                <h3>{paragraphs(t(4, "Disposable apps"))[0]}</h3><p>
+                  {paragraphs(t(4, "Disposable apps"))[2]}
+                </p>
+              </div><Visual kind="apps" />
+            </div>
+            <UseCase index={2} />
+          </div><Details section={4} />
+        </div>
+      </section>
+
+      <section class="g2-section g2-light capabilities-section" id="capabilities">
+        <div class="g2-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">SHARED CAPABILITIES</p><h2>{t(5, "Heading")}</h2>
+          </div><div class="capability-layout">
+            <div class="capability-list" role="group" aria-label="Explore platform capabilities">
+              {
+                capabilityKeys.map((key, i) => (
+                  <button
+                    type="button"
+                    class="capability-item"
+                    data-capability={capabilityIds[i]}
+                    aria-pressed={i === 1 ? "true" : "false"}
+                  >
+                    <>
+                      <span class="capability-number">0{i + 1}</span>
+                      <span>
+                        <>
+                          <strong>{key}</strong>
+                          <span>{paragraphs(t(5, key))[0]}</span>
+                        </>
+                      </span>
+                      <span class="capability-pointer" aria-hidden="true">
+                        ↗
+                      </span>
+                    </>
+                  </button>
+                ))
+              }
+            </div><Visual kind="journal" />
+          </div><div class="section-end">
+            <TextLink href={links.capabilities} label="Explore platform capabilities →" />
+          </div><Details section={5} id="platform-details" />
+        </div>
+      </section>
+
+      <section class="g2-section g2-dark agent-section" id="agents">
+        <div class="g2-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">{t(6, "Eyebrow")}</p><h2>{t(6, "Heading")}</h2><p
+              class="section-intro"
+            >
+              {t(6, "Introduction")}
+            </p>
+          </div><Visual kind="deployment" /><div class="agent-features">
+            {
+              [
+                "A complete app, created by an agent",
+                "The same power at every level",
+                "Authority stays outside the model",
+                "Work when there is work",
+              ].map((key, i) => (
+                <article>
+                  <>
+                    <span class="feature-number">0{i + 1}</span>
+                    <h3>
+                      <HeadingLines
+                        parts={
+                          [
+                            ["A complete app,", "created by an agent"],
+                            ["The same power", "at every level"],
+                            ["Authority stays", "outside the model"],
+                            ["Work when", "there is work"],
+                          ][i]
+                        }
+                      />
+                    </h3>
+                    <p>{paragraphs(t(6, key))[0]}</p>
+                  </>
+                </article>
+              ))
+            }
+          </div><TextLink href={links.quickstart} label="Build an agent on Golem →" /><Details
+            section={6}
+            keys={["Build and deploy from inside Golem"]}
+          />
+        </div>
+      </section>
+
+      <section class="g2-section g2-light" id="languages">
+        <div class="g2-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">LANGUAGES &amp; LIBRARIES</p><h2>{t(7, "Heading")}</h2><p
+              class="section-intro"
+            >
+              {t(7, "Introduction")}
+            </p>
+          </div><div class="language-strip" aria-label="Supported SDKs">
+            {
+              languages.map((language, i) => (
+                <a href={links.languages[language]} class="language">
+                  <span aria-hidden="true">{["TS", "ε", "R", "S", "M", "Go", "Py"][i]}</span>
+                  {language}
+                </a>
+              ))
+            }
+          </div><div class="language-copy language-copy-grid">
+            <article>
+              <h3><HeadingLines parts={["JavaScript and Python", "ecosystems"]} /></h3><p>
+                {t(7, "JavaScript and Python ecosystems")}
+              </p>
+            </article><article>
+              <h3><HeadingLines parts={["Connect existing", "applications"]} /></h3><p>
+                {t(7, "Connect existing applications")}
+              </p>
+            </article><div class="stacked-links">
+              <TextLink href={links.sdk} label={lines(t(7, "Links"))[0]} /><TextLink
+                href={links.packages}
+                label={lines(t(7, "Links"))[1]}
+              />
+            </div>
+          </div><Details section={7} id="runtime-support" />
+        </div>
+      </section>
+
+      <section class="g2-section g2-light operations-section" id="run">
+        <div class="g2-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">DEPLOYMENT &amp; OPERATIONS</p><h2>{t(8, "Heading")}</h2><p
+              class="section-intro"
+            >
+              {t(8, "Introduction")}
+            </p>
+          </div><OperationsMap /><div class="deployment-options">
+            {
+              ["Local", "Your infrastructure", "Golem Cloud"].map((key, i) => (
+                <article>
+                  <>
+                    <Icon name={["terminal", "server", "cloud"][i]} size={29} />
+                    <h3>{key}</h3>
+                    <p>{t(8, key)}</p>
+                    <TextLink
+                      href={i === 2 ? links.cloud : i === 0 ? links.quickstart : links.selfHost}
+                      label={lines(t(8, "Actions"))[i]}
+                    />
+                  </>
+                </article>
+              ))
+            }
+          </div><Details section={8} /><figure class="customer-quote">
+            <blockquote>{paragraphs(t(8, "Customer proof"))[0]}</blockquote><figcaption>
+              <Image src={samuel} alt="" width={48} height={48} /><div>
+                <strong>Samuel Iyeh</strong><span
+                  >AI Software Engineer · Building Johnethel LMS</span
+                >
+              </div><Image class="quote-logo" src={johnethel} alt="Johnethel LMS" width={130} />
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="g2-section g2-start" id="start">
+        <div class="g2-wrap">
+          <div class="start-layout">
+            <div class="start-copy">
+              <p class="eyebrow">START BUILDING</p><h2>{t(9, "Heading")}</h2><p
+                class="section-intro"
+              >
+                {t(9, "Introduction")}
+              </p><div class="stacked-links">
+                <TextLink href={links.quickstart} label={lines(t(9, "Actions"))[1]} /><TextLink
+                  href={github}
+                  label={lines(t(9, "Actions"))[2]}
+                />
+              </div>
+            </div><div class="agent-prompt">
+              <div class="prompt-header">
+                <span><Icon name="terminal" size={18} />Your next project</span><span>01</span>
+              </div><p id="agent-instruction">{instruction}</p><div class="copy-row">
+                <button type="button" class="g2-button" data-copy-instruction
+                  >Copy instructions <span aria-hidden="true">↗</span></button
+                ><span role="status" class="copy-status"></span>
+              </div>
+            </div>
+          </div><Details section={9} />
+        </div>
+      </section>
+    </main>
+    <footer class="g2-footer">
+      <div class="g2-wrap">
+        <a class="g2-brand" href="#top" aria-label="Golem home"
+          ><Image src={brand} alt="Golem" width={110} /></a
+        ><p>The cloud for the agent era</p><nav aria-label="Footer navigation">
+          <a href={docs}>Documentation ↗</a><a href={github}>GitHub ↗</a><a
+            href="https://discord.com/invite/UjXeH8uG4x">Community ↗</a
+          >
+        </nav>
+      </div>
+    </footer>
+  </div>
+</BaseLayout>
+
+<script>
+  import { balanceDescriptions } from "../../components/home-v2/balance-copy";
+  balanceDescriptions();
+  const toggle = document.querySelector<HTMLButtonElement>(".nav-toggle");
+  const mobileNav = document.querySelector<HTMLElement>(".mobile-nav");
+  function closeNav() {
+    toggle?.setAttribute("aria-expanded", "false");
+    toggle?.setAttribute("aria-label", "Open navigation");
+    if (mobileNav) mobileNav.hidden = true;
+  }
+  toggle?.addEventListener("click", () => {
+    const open = toggle.getAttribute("aria-expanded") !== "true";
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+    if (mobileNav) mobileNav.hidden = !open;
+  });
+  mobileNav?.querySelectorAll("a").forEach((link) => link.addEventListener("click", closeNav));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && toggle?.getAttribute("aria-expanded") === "true") {
+      closeNav();
+      toggle.focus();
+    }
+  });
+  window.matchMedia("(min-width: 601px)").addEventListener("change", (event) => {
+    if (event.matches) closeNav();
+  });
+  document.querySelectorAll<HTMLAnchorElement>('a[href^="#"]').forEach((link) =>
+    link.addEventListener("click", () => {
+      const id = link.hash.slice(1);
+      if (!id) return;
+      const target = document.getElementById(id);
+      if (link.hasAttribute("data-open-transaction"))
+        target?.querySelector("details")?.setAttribute("open", "");
+      else if (target?.matches(".g2-details, #security-details"))
+        target.querySelector("details")?.setAttribute("open", "");
+    })
+  );
+
+  const scenarioButtons = document.querySelectorAll<HTMLButtonElement>("[data-scenario]");
+  scenarioButtons.forEach((button) =>
+    button.addEventListener("click", () => {
+      const recover = button.dataset.scenario === "recover";
+      scenarioButtons.forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+      const values: Record<string, string> = recover
+        ? {
+            start: "Node A",
+            first: "Execution interrupted",
+            middle: "Durable record",
+            zero: "↻",
+            metric: "Replay",
+            store: "Recorded results reused",
+            last: "Node B",
+            end: "Memory · stack · files",
+            caption: "Same execution. Reconstructed on another node.",
+          }
+        : {
+            start: "Running",
+            first: "Wait for approval",
+            middle: "Suspended",
+            zero: "0",
+            metric: "CPU / RAM",
+            store: "Execution in durable storage",
+            last: "Approval arrives",
+            end: "Memory · stack · files",
+            caption: "Same execution. No running VM during the wait.",
+          };
+      Object.entries(values).forEach(([key, value]) => {
+        const el = document.querySelector(`[data-life-${key}]`);
+        if (el) el.textContent = value;
+      });
+      const codeLine = document.querySelector<HTMLElement>(".lifecycle .code-line");
+      if (codeLine)
+        codeLine.textContent = recover ? "Runtime handles recovery" : "await approval()";
+      document
+        .querySelector(".lifecycle")
+        ?.setAttribute(
+          "aria-label",
+          recover
+            ? "Golem reconstructs the interrupted VM on another node, reusing recorded results and resuming the same execution."
+            : "While waiting, the running VM unloads. Memory, call stack and files remain durable. On approval, execution resumes mid-function."
+        );
+    })
+  );
+
+  let stage = 0;
+  const budgetRows = document.querySelectorAll<HTMLElement>("[data-budget-row]");
+  function updateBudgets() {
+    budgetRows.forEach((row) => {
+      const amount = Number(row.dataset.amount);
+      const input = row.querySelector<HTMLInputElement>("input")!;
+      const cap = Number(input.value);
+      const valid = Number.isFinite(cap) && cap > 0;
+      input.setAttribute("aria-invalid", String(!valid));
+      const status = row.querySelector<HTMLElement>("[data-budget-status]")!;
+      const bar = row.querySelector<HTMLElement>(".budget-track span")!;
+      bar.style.setProperty(
+        "--spent",
+        `${stage === 2 && valid ? Math.min((amount / cap) * 100, 100) : (amount / 1240) * 100}%`
+      );
+      row.classList.toggle("over-budget", stage === 2 && valid && amount > cap);
+      status.textContent = !valid
+        ? "Enter a cap greater than $0"
+        : amount > cap
+          ? `$${(amount - cap).toLocaleString()} over cap`
+          : `$${(cap - amount).toLocaleString()} remaining`;
+    });
+  }
+  document.querySelectorAll<HTMLButtonElement>("[data-app-stage]").forEach((button) =>
+    button.addEventListener("click", () => {
+      stage = Number(button.dataset.appStage);
+      document
+        .querySelectorAll("[data-app-stage]")
+        .forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+      document.querySelector<HTMLElement>("[data-app-overview]")!.hidden = stage > 0;
+      document.querySelector<HTMLElement>("[data-app-breakdown]")!.hidden = stage === 0;
+      document
+        .querySelectorAll<HTMLElement>("[data-cap-control], [data-budget-status]")
+        .forEach((el) => (el.hidden = stage !== 2));
+      document.querySelector(".app-version")!.textContent = [
+        "Monthly overview",
+        "By category",
+        "Category budgets",
+      ][stage];
+      updateBudgets();
+    })
+  );
+  budgetRows.forEach((row) => row.querySelector("input")?.addEventListener("input", updateBudgets));
+  function showCapability(button: HTMLButtonElement) {
+    document
+      .querySelectorAll("[data-capability]")
+      .forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+    document
+      .querySelectorAll<HTMLElement>("[data-cap-panel]")
+      .forEach((panel) => (panel.hidden = panel.dataset.capPanel !== button.dataset.capability));
+  }
+  document.querySelectorAll<HTMLButtonElement>("[data-capability]").forEach((button) => {
+    button.addEventListener("click", () => showCapability(button));
+    button.addEventListener("focus", () => showCapability(button));
+  });
+
+  document
+    .querySelector<HTMLButtonElement>("[data-copy-instruction]")
+    ?.addEventListener("click", async () => {
+      const prompt = document.getElementById("agent-instruction")!;
+      const status = document.querySelector(".copy-status")!;
+      try {
+        await navigator.clipboard.writeText(prompt.textContent?.trim() || "");
+        status.textContent = "Copied. Ready for your agent.";
+      } catch {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(prompt);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        status.textContent = "Instructions selected. Press ⌘C or Ctrl+C to copy.";
+      }
+    });
+</script>

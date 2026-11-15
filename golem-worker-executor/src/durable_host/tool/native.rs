@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::attachment::{AttachmentStreamProducer, AttachmentStreamRead};
 use super::{
     Accessor, Arc, AttachmentController, ByteStreamFailure, DurabilityHost, DurableInputEndpoint,
     DurableStreamHandle, DurableWorkerCtx, EntityBodyFinalization, EntityBodyOutcome,
@@ -20,16 +21,105 @@ use super::{
     IntoTypedSchemaValue, LiveStreamEndpoint, NativeToolInvocation, NativeToolKey, NativeToolTask,
     Resource, RetainedEntityStore, RetainedNativeContext, SchemaGraph, SchemaType,
     SchemaValueStream, SerializableEntityBodyExecution, SerializableToolOperationTerminal,
-    SerializableToolRpcError, SessionError, SessionStreamRole, StreamReader, StreamSession,
+    SerializableToolRpcError, SessionError, SessionStreamRole, StreamSession,
     ToolAttachmentCounterparty, ToolBodyStdin, ToolCallDispatch, ToolCallStdin, ToolCallTarget,
     ToolInvocationAttempt, ToolInvocationInput, ToolInvocationOutput, ToolOutputWriterEntry,
     ToolSidecarInvocation, Weak, WorkerCtx, WorkerCtxExecutable, WorkerExecutorError,
-    accounted_byte_output_stream_pair, admit_tool_response_secret_holds, anyhow,
-    cleanup_failed_tool_dispatch, close_stdin, create_native_underlying_stdin,
-    create_output_attachment, dispatch_tool_attempt, durability, encode_tool_operation_terminal,
-    encode_tool_terminal, first_output_limit_error, mcp, native_output_handles, operation,
-    reject_output, spawn_tool_execution, tool_rpc_for_current_owner, validate_native_tool_output,
+    admit_tool_response_secret_holds, anyhow, cleanup_failed_tool_dispatch, close_stdin,
+    create_native_underlying_stdin, create_output_attachment, dispatch_tool_attempt, durability,
+    encode_tool_operation_terminal, encode_tool_terminal, first_output_limit_error, mcp,
+    native_output_handles, operation, reject_output, spawn_tool_execution,
+    tool_rpc_for_current_owner, validate_native_tool_output,
 };
+use crate::durable_host::stream_bus::{LiveStreamPublishError, LiveStreamPublisher};
+use crate::durable_host::stream_transport::{
+    FrontendInterrupt, SourceLifecycle, accounted_relay_stream_pair,
+};
+use crate::worker::suspension::RuntimeSource;
+use golem_schema::schema::SchemaValue;
+
+struct NativeOutputRelay {
+    source: AttachmentStreamProducer,
+    publisher: LiveStreamPublisher<SchemaValue>,
+    lifecycle: Arc<SourceLifecycle>,
+    runtime_source: Option<RuntimeSource>,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    interrupt: FrontendInterrupt,
+    finished: bool,
+}
+
+impl NativeOutputRelay {
+    async fn run(mut self) -> anyhow::Result<()> {
+        let mut activity = self
+            .runtime_source
+            .as_ref()
+            .map(RuntimeSource::external_activity);
+        let relay = async {
+            loop {
+                let read = std::future::poll_fn(|cx| self.source.poll_read(cx));
+                let item = match (&mut activity, &self.runtime_source) {
+                    (Some(activity), Some(source)) => activity.receive(source, read).await,
+                    _ => read.await,
+                }
+                .map_err(anyhow::Error::from)?;
+                if (self.runtime_teardown)() {
+                    return Ok(false);
+                }
+                let publication = match item {
+                    AttachmentStreamRead::Chunk { bytes, .. } => {
+                        let mut result = Ok(0);
+                        for byte in bytes {
+                            result = self.publisher.publish_item(SchemaValue::U8(byte)).await;
+                            if result.is_err() {
+                                break;
+                            }
+                        }
+                        result.map(|_| false)
+                    }
+                    AttachmentStreamRead::Failure { failure, .. } => {
+                        let terminal = AttachmentStreamProducer::failure_terminal(failure);
+                        self.publisher
+                            .publish_terminal(terminal.authored_by, terminal.terminal)
+                            .await
+                            .map(|_| true)
+                    }
+                    AttachmentStreamRead::Terminal {
+                        result: wasmtime::component::StreamResult::Cancelled,
+                        ..
+                    } => return Ok(false),
+                    AttachmentStreamRead::Terminal { .. } => {
+                        self.publisher.publish_end().await.map(|_| true)
+                    }
+                };
+                match publication {
+                    Ok(false) => {}
+                    Ok(true) | Err(LiveStreamPublishError::Closed) => return Ok(true),
+                    Err(error) => anyhow::bail!("failed to relay tool output: {error:?}"),
+                }
+            }
+        };
+        let completed = tokio::select! {
+            biased;
+            _ = self.lifecycle.cancelled() => false,
+            kind = &mut self.interrupt => return Err(kind.into()),
+            result = relay => result?,
+        };
+        if completed {
+            self.finished = true;
+            self.lifecycle.finish();
+        }
+        Ok(())
+    }
+}
+
+impl Drop for NativeOutputRelay {
+    fn drop(&mut self) {
+        // Store loss leaves output reconstruction to the attachment's durable history.
+        if !self.finished {
+            self.lifecycle.abort();
+        }
+    }
+}
 
 pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
     worker: Arc<crate::worker::Worker<Ctx>>,
@@ -511,7 +601,7 @@ impl NativeToolTask {
             };
             let (output, consumer) =
                 create_output_attachment(accessor, false).map_err(wasmtime::Error::from_anyhow)?;
-            let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
+            let (endpoint, relay) = accessor.with(|mut access| -> wasmtime::Result<_> {
                 let capacity = access.get().live_stream_event_capacity();
                 let runtime_teardown = native_output_runtime_teardown_probe(
                     access.get().stream_runtime_teardown_probe(),
@@ -523,20 +613,24 @@ impl NativeToolTask {
                     .runtime_suspension
                     .as_ref()
                     .map(|runtime| runtime.source());
-                let (sink, stream) = accounted_byte_output_stream_pair(
-                    capacity,
-                    runtime_teardown,
+                let (publisher, endpoint) =
+                    accounted_relay_stream_pair(capacity, runtime_source.clone())
+                        .map_err(wasmtime::Error::msg)?;
+                let relay = NativeOutputRelay {
+                    source: consumer.into_stream_producer(),
+                    publisher,
+                    lifecycle: endpoint.lifecycle(),
                     runtime_source,
+                    runtime_teardown,
                     interrupt,
-                )
-                .map_err(wasmtime::Error::msg)?;
-                let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
-                reader.pipe(&mut access, sink)?;
-                stream
-                    .take_host_endpoint::<LiveStreamEndpoint>()
-                    .map_err(wasmtime::Error::msg)
+                    finished: false,
+                };
+                Ok((endpoint, relay))
             })?;
-            Ok((Some(output), Some((streams.clone(), handle, endpoint))))
+            Ok((
+                Some(output),
+                Some((streams.clone(), handle, endpoint, relay)),
+            ))
         };
         let (stdout, stdout_drain) = create_output(stdout_handle)?;
         let (stderr, stderr_drain) = create_output(stderr_handle)?;
@@ -621,17 +715,24 @@ impl NativeToolTask {
             };
             Ok::<_, anyhow::Error>(response)
         };
-        let drain = |drain: Option<(StreamSession, DurableStreamHandle, LiveStreamEndpoint)>| async move {
-            if let Some((streams, handle, endpoint)) = drain {
-                streams
-                    .drain_registered_output(
-                        handle,
-                        endpoint,
-                        Arc::new(SchemaGraph::empty()),
-                        SchemaType::u8(),
-                    )
-                    .await
-                    .map_err(SessionError::into_trap)?;
+        let drain = |drain: Option<(
+            StreamSession,
+            DurableStreamHandle,
+            LiveStreamEndpoint,
+            NativeOutputRelay,
+        )>| async move {
+            if let Some((streams, handle, endpoint, relay)) = drain {
+                tokio::try_join!(relay.run(), async {
+                    streams
+                        .drain_registered_output(
+                            handle,
+                            endpoint,
+                            Arc::new(SchemaGraph::empty()),
+                            SchemaType::u8(),
+                        )
+                        .await
+                        .map_err(SessionError::into_trap)
+                })?;
             }
             Ok::<_, anyhow::Error>(())
         };
@@ -689,5 +790,106 @@ impl NativeToolTask {
             .send(response)
             .map_err(|_| wasmtime::Error::msg("native tool result receiver dropped"))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::stream_bus::LiveStreamEventPayload;
+    use crate::durable_host::tool::attachment::{AttachmentMemory, attachment_pair};
+    use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn native_output_relay_retains_chunk_charge_and_publishes_typed_failure() {
+        let (producer, consumer, _) = attachment_pair(8, AttachmentMemory::inert());
+        producer.configure_live();
+        producer.write(vec![17, 255, 39]).await.unwrap();
+        producer.fail(ByteStreamFailure::Cancelled).unwrap();
+        let controller = producer.controller();
+        let (publisher, endpoint) = accounted_relay_stream_pair(1, None).unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+        let relay = NativeOutputRelay {
+            source: consumer.into_stream_producer(),
+            publisher,
+            lifecycle: lifecycle.clone(),
+            runtime_source: None,
+            runtime_teardown: Arc::new(|| false),
+            interrupt: Box::pin(std::future::pending()),
+            finished: false,
+        };
+        let run = relay.run();
+        tokio::pin!(run);
+        assert!(futures::poll!(&mut run).is_pending());
+        assert_eq!(controller.metadata().buffered_bytes, 0);
+        assert_eq!(controller.metadata().charged_bytes, 3);
+        for (offset, byte) in [17, 255, 39].into_iter().enumerate() {
+            let event = primary.recv().await.unwrap();
+            assert_eq!(event.offset, offset as u64);
+            assert_eq!(
+                event.payload,
+                LiveStreamEventPayload::Item(SchemaValue::U8(byte))
+            );
+            if offset < 2 {
+                assert!(futures::poll!(&mut run).is_pending());
+                assert_eq!(
+                    controller.metadata().charged_bytes,
+                    if offset == 0 { 3 } else { 0 }
+                );
+            }
+        }
+        run.await.unwrap();
+        assert_eq!(controller.metadata().charged_bytes, 0);
+        let event = primary.recv().await.unwrap();
+        assert_eq!(event.offset, 3);
+        assert_eq!(
+            event.payload,
+            LiveStreamEventPayload::Terminal {
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                    "tool output cancelled".into()
+                )),
+            }
+        );
+        assert!(!lifecycle.is_aborted());
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn dropping_backpressured_native_output_relay_does_not_publish_a_terminal() {
+        let (producer, consumer, _) = attachment_pair(8, AttachmentMemory::inert());
+        producer.configure_live();
+        producer.write(vec![17, 255, 39]).await.unwrap();
+        let controller = producer.controller();
+        let (publisher, endpoint) = accounted_relay_stream_pair(1, None).unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+        let relay = NativeOutputRelay {
+            source: consumer.into_stream_producer(),
+            publisher,
+            lifecycle: lifecycle.clone(),
+            runtime_source: None,
+            runtime_teardown: Arc::new(|| false),
+            interrupt: Box::pin(std::future::pending()),
+            finished: false,
+        };
+        let mut run = Box::pin(relay.run());
+        assert!(futures::poll!(&mut run).is_pending());
+        assert_eq!(controller.metadata().charged_bytes, 3);
+        drop(run);
+        assert_eq!(controller.metadata().charged_bytes, 0);
+        assert!(lifecycle.is_aborted());
+        let event = primary.recv().await.unwrap();
+        assert_eq!(event.offset, 0);
+        assert_eq!(
+            event.payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(17))
+        );
+        let read = primary.recv();
+        tokio::pin!(read);
+        assert!(futures::poll!(&mut read).is_pending());
     }
 }

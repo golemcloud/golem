@@ -216,6 +216,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             observational_owner,
             invocation_id,
             logical_key_position: None,
+            agent_invocation: ctx.state.get_current_idempotency_key(),
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN)
@@ -234,6 +235,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         requires_agent_authority: bool,
         invocation_id: Option<DurableInvocationId>,
     ) -> Result<BegunCall<Pair, P, Ctx>, WorkerExecutorError> {
+        ctx.state.refuse_on_bootstrap_cursor(format_args!(
+            "the accessor call {}",
+            Pair::HOST_FUNCTION_NAME
+        ))?;
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         if claim_options.require_recorded_start
             && (durable_execution_state.is_live || durable_execution_state.snapshotting_mode)
@@ -750,6 +755,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         executed: ExecutedAccessStart<Pair, P>,
     ) -> Self {
+        if executed.state.has_recorded_start() {
+            ctx.state.observe_bootstrap_start(executed.start_idx);
+        }
         DurableCallSession {
             start_idx: executed.start_idx,
             state: executed.state,

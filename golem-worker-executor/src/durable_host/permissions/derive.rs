@@ -17,9 +17,9 @@ use super::{
     CardResourcePattern, CardVerb, DateTime, DecidedScopeParent, DelegationCard, DelegationSurface,
     DerivedGrantSets, DurabilityHost, DurableWorkerCtx, EffectiveSurface,
     GolemPermissionsDeriveDecision, GolemPermissionsDeriveFromWalletDecision,
-    GolemPermissionsDerivePersist, GolemPermissionsDeriveScopeDecision, IdempotencyKey,
-    PermissionCardEntry, PermissionCardHandleRep, PermissionPattern, PersistentDerivationSource,
-    PolymorphicCard, PolymorphicPermissionPattern, Resource, ScopeCard, ScopeDerivationParent,
+    GolemPermissionsDerivePersist, GolemPermissionsDeriveScopeDecision, PermissionCardEntry,
+    PermissionCardHandleRep, PermissionPattern, PersistentDerivationSource, PolymorphicCard,
+    PolymorphicPermissionPattern, Resource, ScopeCard, ScopeDerivationParent,
     SerializablePermissionError, StoredCard, Utc, WalletDerivationParent, WorkerCtx,
     WorkerExecutorError, agent_delegation_surface_from_wallet, anyhow,
     caller_monomorphization_context, derive_expires_at, durable_now, ensure_card_permission,
@@ -275,7 +275,7 @@ pub(super) fn decide_scope_derivation_parent<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     wallet: &[StoredCard],
     handle: &Resource<PermissionCardHandleRep>,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
 ) -> DecidedScopeParent {
     match permission_card_scope_card(ctx, handle) {
         Err(error) => DecidedScopeParent::Refused(permission_error_to_serializable(

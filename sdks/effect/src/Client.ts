@@ -15,10 +15,16 @@ import {
   type NonSecretOverride,
 } from "./Config.js"
 import * as Datetime from "./Datetime.js"
+import type { InvocationId } from "./InvocationId.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "./host/RpcClient.js"
-import { awaitInvocation, scheduleCancelableInvocation, wrapHostThrow } from "./internal/rpc.js"
+import {
+  awaitInvocation,
+  invocationMetadataFromHost,
+  scheduleCancelableInvocation,
+  wrapHostThrow,
+} from "./internal/rpc.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
 import {
   compileCallerParamBindings,
@@ -46,7 +52,16 @@ export type RemoteCallError =
 
 const responseError = (reason: string): RemoteCallError => ({ _tag: "RemoteResponseError", reason })
 
-export type InvocationMetadata = AgentHost.InvocationMetadata
+/**
+ * Host metadata of one invocation: the agent ID text of the target and the typed invocation ID.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface InvocationMetadata {
+  readonly agentId: string
+  readonly invocationId: InvocationId
+}
 export interface EphemeralInvocationResult<T> {
   readonly metadata: InvocationMetadata
   readonly value: T
@@ -389,7 +404,10 @@ const buildRemote = (
       if (streaming) return rejectNonAwaitedStream()
       return encode(input).pipe(
         Effect.flatMap((tree) =>
-          Effect.try({ try: () => rpc.invoke(name, tree), catch: wrapHostThrow }),
+          Effect.try({
+            try: () => invocationMetadataFromHost(rpc.invoke(name, tree)),
+            catch: wrapHostThrow,
+          }),
         ),
         Effect.map((metadata) => (ephemeral ? metadata : undefined)),
       )

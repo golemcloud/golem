@@ -13,6 +13,7 @@ import { createToolClientRuntime } from '../src/bridge/tool';
 import { ToolType } from '../src/toolReflection';
 import '../src/schema/zod';
 import { componentPlugin, discoverCapabilities } from '../scripts/component.mjs';
+import { hostInvocationMetadata } from './invocationMetadataTestSupport';
 
 const nativeRequire = createRequire(import.meta.url);
 const fixtures = path.resolve('tests/components');
@@ -113,6 +114,7 @@ function instantiate(code, overrides = {}, format = 'cjs') {
   const host = {
     DatabaseSync: class {},
     getEnvironment: () => [['GOLEM_AGENT_ID', 'Counter()']],
+    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' } }),
     parseAgentId: () => [
       'Counter',
       { graph: { typeNodes: [], defs: [], root: 0 }, value: unit },
@@ -752,8 +754,10 @@ describe('component exports', () => {
     let configReads = 0;
     let secretDrops = 0;
     let title;
+    let principal = { tag: 'anonymous' };
     const runtime = await instantiate(output.code, {
       makeAgentId: () => 'Counter()',
+      caller: () => ({ original: principal, immediate: principal }),
       getConfigValue(path, graph) {
         expect(graph.typeNodes.length).toBeGreaterThan(0);
         if (path.join('.') === 'group.title')
@@ -790,7 +794,7 @@ describe('component exports', () => {
         asyncInvokeAndAwait(method, input) {
           calls.push({ method, input });
           return {
-            metadata: {},
+            metadata: hostInvocationMetadata('Counter()'),
             future: {
               get: async () => ({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 }),
               cancel() {},
@@ -804,13 +808,14 @@ describe('component exports', () => {
       },
     });
     expect(runtime.guest.discoverAgentTypes()).toHaveLength(1);
-    await runtime.guest.initialize('Counter', structuredClone(unit), { tag: 'anonymous' });
-    expect(
-      await runtime.guest.invoke('principal', structuredClone(unit), {
-        tag: 'golem-user',
-        val: { accountId: { uuid: { highBits: 17n, lowBits: 31n } } },
-      }),
-    ).toEqual({
+    await runtime.guest.initialize('Counter', structuredClone(unit));
+    principal = {
+      tag: 'golem-user',
+      val: { accountId: { uuid: { highBits: 17n, lowBits: 31n } } },
+    };
+    const principalResult = await runtime.guest.invoke('principal', structuredClone(unit));
+    principal = { tag: 'anonymous' };
+    expect(principalResult).toEqual({
       root: 3,
       valueNodes: [
         { tag: 'uuid-value', val: { highBits: 17n, lowBits: 31n } },
@@ -820,27 +825,25 @@ describe('component exports', () => {
       ],
     });
     expect(configReads).toBe(0);
-    expect(
-      await runtime.guest.invoke('configured', structuredClone(unit), { tag: 'anonymous' }),
-    ).toEqual({ valueNodes: [{ tag: 'string-value', val: 'absent:value1' }], root: 0 });
+    expect(await runtime.guest.invoke('configured', structuredClone(unit))).toEqual({
+      valueNodes: [{ tag: 'string-value', val: 'absent:value1' }],
+      root: 0,
+    });
     title = 'present';
-    expect(
-      await runtime.guest.invoke('configured', structuredClone(unit), { tag: 'anonymous' }),
-    ).toEqual({ valueNodes: [{ tag: 'string-value', val: 'present:value2' }], root: 0 });
+    expect(await runtime.guest.invoke('configured', structuredClone(unit))).toEqual({
+      valueNodes: [{ tag: 'string-value', val: 'present:value2' }],
+      root: 0,
+    });
     expect(secretDrops).toBe(2);
     expect(
-      await runtime.guest.invoke(
-        'unitResult',
-        {
-          valueNodes: [
-            { tag: 'record-value', val: [] },
-            { tag: 'result-value', val: { tag: 'ok-value', val: 0 } },
-            { tag: 'record-value', val: [1] },
-          ],
-          root: 2,
-        },
-        { tag: 'anonymous' },
-      ),
+      await runtime.guest.invoke('unitResult', {
+        valueNodes: [
+          { tag: 'record-value', val: [] },
+          { tag: 'result-value', val: { tag: 'ok-value', val: 0 } },
+          { tag: 'record-value', val: [1] },
+        ],
+        root: 2,
+      }),
     ).toEqual({
       valueNodes: [
         { tag: 'record-value', val: [] },
@@ -848,17 +851,13 @@ describe('component exports', () => {
       ],
       root: 1,
     });
-    const remote = await runtime.guest.invoke(
-      'remote',
-      {
-        valueNodes: [
-          { tag: 'u32-value', val: 17 },
-          { tag: 'record-value', val: [0] },
-        ],
-        root: 1,
-      },
-      { tag: 'anonymous' },
-    );
+    const remote = await runtime.guest.invoke('remote', {
+      valueNodes: [
+        { tag: 'u32-value', val: 17 },
+        { tag: 'record-value', val: [0] },
+      ],
+      root: 1,
+    });
     expect(remote).toEqual({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 });
     expect(calls).toEqual([
       {
@@ -911,7 +910,6 @@ describe('component exports', () => {
     const streamed = await runtime.guest.invoke(
       'stream',
       input({ tag: 'string-value', val: 'last' }),
-      { tag: 'anonymous' },
     );
     const iterator = streamed.valueNodes[streamed.root].val.iterable[Symbol.asyncIterator]();
     expect(schemaValueFromWit((await iterator.next()).value)).toMatchObject({
@@ -930,7 +928,7 @@ describe('component exports', () => {
     });
     await iterator.return();
     expect(closes).toBe(1);
-    await expect(runtime.guest.invoke('stream', unit, { tag: 'anonymous' })).rejects.toMatchObject({
+    await expect(runtime.guest.invoke('stream', unit)).rejects.toMatchObject({
       tag: 'invalid-input',
     });
     expect(closes).toBe(1);
@@ -951,9 +949,6 @@ describe('component exports', () => {
         undefined,
         undefined,
         undefined,
-        {
-          tag: 'anonymous',
-        },
       );
     const choice = {
       valueNodes: [
@@ -1155,18 +1150,18 @@ describe('component exports', () => {
         capabilities.middleware ? ['greeting-policy'] : [],
       );
       if (!capabilities.agents) {
-        await expect(
-          exports.guest.initialize('missing', unit, { tag: 'anonymous' }),
-        ).rejects.toEqual({ tag: 'invalid-type', val: 'missing' });
+        await expect(exports.guest.initialize('missing', unit)).rejects.toEqual({
+          tag: 'invalid-type',
+          val: 'missing',
+        });
         await expect(
           exports.loadSnapshot.load({ payload: new Uint8Array(), mimeType: 'application/json' }),
         ).rejects.toBe('This component does not define agents');
       } else {
-        await exports.guest.initialize('Counter', unit, { tag: 'anonymous' });
+        await exports.guest.initialize('Counter', unit);
         const result = await exports.guest.invoke(
           'add',
           wireValue(z.object({ amount: z.number() }), { amount: 11 }).value,
-          { tag: 'anonymous' },
         );
         expect(compileSchema(z.number()).fromValue(schemaValueFromWit(result))).toBe(18);
         const snapshot = await exports.saveSnapshot.save();
@@ -1189,9 +1184,6 @@ describe('component exports', () => {
           undefined,
           undefined,
           undefined,
-          {
-            tag: 'anonymous',
-          },
         );
         expect(compileSchema(z.string()).fromValue(schemaValueFromWit(result.result.value))).toBe(
           'Hello, Ada!',
@@ -1201,9 +1193,7 @@ describe('component exports', () => {
           value: input.value,
         };
         await expect(
-          exports.tool.invoke('greet', [], poisonGraphInput, undefined, undefined, undefined, {
-            tag: 'anonymous',
-          }),
+          exports.tool.invoke('greet', [], poisonGraphInput, undefined, undefined, undefined),
         ).resolves.toHaveProperty('result.value');
         await expect(
           exports.tool.invoke(
@@ -1213,14 +1203,11 @@ describe('component exports', () => {
             undefined,
             undefined,
             undefined,
-            { tag: 'anonymous' },
           ),
         ).rejects.toMatchObject({ tag: 'invalid-input' });
       } else {
         await expect(
-          exports.tool.invoke('greet', [], input, undefined, undefined, undefined, {
-            tag: 'anonymous',
-          }),
+          exports.tool.invoke('greet', [], input, undefined, undefined, undefined),
         ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'greet' });
         let closed = false;
         const stdin = {
@@ -1235,9 +1222,7 @@ describe('component exports', () => {
           },
         };
         await expect(
-          exports.tool.invoke('greet', [], input, stdin, undefined, undefined, {
-            tag: 'anonymous',
-          }),
+          exports.tool.invoke('greet', [], input, stdin, undefined, undefined),
         ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'greet' });
         expect(closed).toBe(true);
       }
@@ -1253,7 +1238,6 @@ describe('component exports', () => {
           undefined,
           undefined,
           undefined,
-          { tag: 'anonymous' },
           {
             invoke() {
               throw new Error('The short-circuit middleware must not invoke the underlying tool');
