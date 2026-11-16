@@ -48,13 +48,14 @@ It owns no code. The library in each SDK owns its types, its transport and its p
 
 ## How consumers check against it
 
-This directory holds only Markdown today. The checks arrive with the files that later tickets add
-next to it:
+This directory holds the contract text and the shared provider fixture corpus. SDK tests read the
+shared files directly; there are no generated SDK copies. Canonical capability schemas arrive with
+GOL-1972 after nested-secret support is available.
 
 | File (added by) | Check |
 | -- | -- |
-| One canonical schema file per capability type (GOL-1353) | Each SDK's tests assert that the schema it emits for a capability type equals the canonical file (Rule 15; plan D2). |
-| The provider fixture corpus: requests, responses, streams, errors, rerank responses and `estimateTokens` vectors (GOL-1353, recorded by GOL-1355–GOL-1357) | Each SDK's unit tests replay the same files. A cargo-make task copies them for Scala and MoonBit, and a CI check fails on a stale copy (plan D13). |
+| One canonical schema file per capability type (GOL-1972) | Each SDK's tests assert that the schema it emits for a capability type equals the canonical file (Rule 15; plan D2). |
+| The provider fixture corpus: requests, responses, streams, errors, rerank responses and `estimateTokens` vectors (GOL-1353, recorded by GOL-1355–GOL-1357) | Each SDK's unit tests replay the shared files directly. `cargo make check-ai-contract` checks corpus integrity in CI. See [corpus.md](corpus.md) for the format and current coverage. |
 | Voice fixtures (GOL-1371) | Each SDK's voice package replays the same audio and event sequences. |
 | Projection vectors in `test-data/reflection-conformance/v1.json` (GOL-1359 interim, GOL-1599 final) | Each SDK's existing reflection conformance run checks the Golem AI projection against the same vectors as MCP. |
 
