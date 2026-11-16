@@ -28,6 +28,11 @@
 //!   [`AccountTreeRepoError::ConcurrentModification`] when the node has moved on.
 //! - Path and ancestry reads are single statements, so each result comes from one database
 //!   snapshot.
+//! - Writes take the guards of [`crate::repo::account_guard`] before any data row: a child
+//!   creation takes shared guards on its ancestors, a node change an exclusive guard on the node
+//!   and shared guards on its ancestors. A purge also takes a shared guard on the node's assigned
+//!   definition and exclusive guards on the definitions it owns, and removes them with the node;
+//!   their history stays.
 //!
 //! The repository never changes a node's parent or depth: creation derives the depth and
 //! [`AccountNodeChange`] has neither field. The database does not enforce this rule.
@@ -37,6 +42,7 @@
 //! no live repository or service uses this code. HA-15 moves the schema into the production
 //! migrations and the active account path, with its own migration and active-path tests.
 
+use crate::repo::account_guard::{DbGuards, GuardClass, GuardMode, GuardSet, is_guard_timeout};
 use crate::repo::model::account_tree::{
     AccountLifecycleState, AccountNodeChange, AccountNodeRecord, AccountNodeRevisionRecord,
     AccountTreeRepoError,
@@ -50,20 +56,23 @@ use futures::FutureExt;
 use golem_common::model::account_path::{AccountPath, AccountSegment};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, SqlDateTime};
 use indoc::indoc;
+use std::time::Duration;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 /// The test-only schema scripts, in order. Tests run them after the production migrations.
 pub mod preview_schema {
-    pub const POSTGRES: &[&str] = &[include_str!(
-        "../../db/preview/hierarchical-accounts/postgres/001_account_tree.sql"
-    )];
-    pub const SQLITE: &[&str] = &[include_str!(
-        "../../db/preview/hierarchical-accounts/sqlite/001_account_tree.sql"
-    )];
+    pub const POSTGRES: &[&str] = &[
+        include_str!("../../db/preview/hierarchical-accounts/postgres/001_account_tree.sql"),
+        include_str!("../../db/preview/hierarchical-accounts/postgres/002_plan_storage.sql"),
+    ];
+    pub const SQLITE: &[&str] = &[
+        include_str!("../../db/preview/hierarchical-accounts/sqlite/001_account_tree.sql"),
+        include_str!("../../db/preview/hierarchical-accounts/sqlite/002_plan_storage.sql"),
+    ];
 }
 
 #[async_trait]
@@ -238,6 +247,7 @@ impl<Repo: AccountTreeRepo> AccountTreeRepo for LoggedAccountTreeRepo<Repo> {
 
 pub struct DbAccountTreeRepo<DBP: Pool> {
     db_pool: DBP,
+    guard_timeout: Duration,
 }
 
 static METRICS_SVC_NAME: &str = "account_tree";
@@ -247,7 +257,10 @@ const NODE_COLUMNS: &str = "account_id, parent_id, segment, depth, display_name,
 
 impl<DBP: Pool> DbAccountTreeRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
-        Self { db_pool }
+        Self {
+            db_pool,
+            guard_timeout: crate::repo::plan_storage::DEFAULT_GUARD_TIMEOUT,
+        }
     }
 
     pub fn logged(db_pool: DBP) -> LoggedAccountTreeRepo<Self>
@@ -340,6 +353,53 @@ impl DbAccountTreeRepo<PostgresPool> {
         Ok(())
     }
 
+    /// The IDs of the node and its ancestors, root first, read outside the write transaction.
+    async fn discover_ancestry(&self, account_id: Uuid) -> Result<Vec<Uuid>, RepoError> {
+        let mut ro = self.with_ro("discover_ancestry").begin().await?;
+        let rows: Vec<(Uuid,)> = ro
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    WITH RECURSIVE chain AS (
+                        SELECT account_id, parent_id, depth FROM account_nodes WHERE account_id = $1
+                        UNION ALL
+                        SELECT p.account_id, p.parent_id, p.depth
+                        FROM account_nodes p JOIN chain c ON p.account_id = c.parent_id)
+                    SELECT account_id FROM chain ORDER BY depth
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+        ro.commit().await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// The plan the node is assigned and the definitions it owns.
+    async fn plan_links_in(
+        api: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> Result<(Option<Uuid>, Vec<Uuid>), RepoError> {
+        let assigned: Option<(Uuid,)> = api
+            .fetch_optional_as(
+                sqlx::query_as(
+                    "SELECT plan_id FROM account_plan_assignments WHERE account_id = $1",
+                )
+                .bind(account_id),
+            )
+            .await?;
+        let owned: Vec<(Uuid,)> = api
+            .fetch_all_as(
+                sqlx::query_as(
+                    "SELECT plan_id FROM account_plans WHERE owner_account_id = $1 ORDER BY plan_id",
+                )
+                .bind(account_id),
+            )
+            .await?;
+        Ok((
+            assigned.map(|(id,)| id),
+            owned.into_iter().map(|(id,)| id).collect(),
+        ))
+    }
+
     async fn get_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         account_id: Uuid,
@@ -374,6 +434,14 @@ fn new_node(
         created_at: now.clone(),
         updated_at: now,
         modified_by: actor,
+    }
+}
+
+fn guard_error(error: RepoError) -> AccountTreeRepoError {
+    if is_guard_timeout(&error) {
+        AccountTreeRepoError::Contention
+    } else {
+        error.into()
     }
 }
 
@@ -417,9 +485,21 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
         display_name: Option<String>,
         actor: Uuid,
     ) -> Result<AccountNodeRecord, AccountTreeRepoError> {
+        let ancestry = self.discover_ancestry(parent_id).await?;
+        if ancestry.is_empty() {
+            return Err(AccountTreeRepoError::ParentNotFound);
+        }
+        let mut guards = GuardSet::new();
+        guards
+            .add_all(GuardClass::Account, ancestry, GuardMode::Shared)
+            .add(GuardClass::Account, account_id, GuardMode::Exclusive);
+        let timeout = self.guard_timeout;
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create_child", |tx| {
                 async move {
+                    DbGuards::<PostgresPool>::acquire_in_tx(tx, &guards, timeout)
+                        .await
+                        .map_err(guard_error)?;
                     let parent = Self::get_in_tx(tx, parent_id)
                         .await?
                         .ok_or(AccountTreeRepoError::ParentNotFound)?;
@@ -461,10 +541,22 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
         actor: Uuid,
     ) -> Result<RequiresNotificationSignal<AccountNodeRecord>, AccountTreeRepoError> {
         let expected = self::expected_revision(expected_revision)?;
+        let mut ancestry = self.discover_ancestry(account_id).await?;
+        if ancestry.pop().is_none() {
+            return Err(AccountTreeRepoError::NotFound);
+        }
+        let mut guards = GuardSet::new();
+        guards
+            .add_all(GuardClass::Account, ancestry, GuardMode::Shared)
+            .add(GuardClass::Account, account_id, GuardMode::Exclusive);
+        let timeout = self.guard_timeout;
         let record = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
                 async move {
+                    DbGuards::<PostgresPool>::acquire_in_tx(tx, &guards, timeout)
+                        .await
+                        .map_err(guard_error)?;
                     let current = Self::get_in_tx(tx, account_id)
                         .await?
                         .ok_or(AccountTreeRepoError::NotFound)?;
@@ -524,9 +616,36 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
         _actor: Uuid,
     ) -> Result<RequiresNotificationSignal<()>, AccountTreeRepoError> {
         let expected = self::expected_revision(expected_revision)?;
+        let mut ancestry = self.discover_ancestry(account_id).await?;
+        if ancestry.pop().is_none() {
+            return Err(AccountTreeRepoError::NotFound);
+        }
+        let links = {
+            let mut ro = self.with_ro("purge_discover").begin().await?;
+            let links = Self::plan_links_in(&mut ro, account_id).await?;
+            ro.commit().await?;
+            links
+        };
+        let mut guards = GuardSet::new();
+        guards
+            .add_all(GuardClass::Account, ancestry, GuardMode::Shared)
+            .add(GuardClass::Account, account_id, GuardMode::Exclusive)
+            .add_all(GuardClass::Plan, links.0, GuardMode::Shared)
+            .add_all(
+                GuardClass::Plan,
+                links.1.iter().copied(),
+                GuardMode::Exclusive,
+            );
+        let timeout = self.guard_timeout;
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "purge", |tx| {
                 async move {
+                    DbGuards::<PostgresPool>::acquire_in_tx(tx, &guards, timeout)
+                        .await
+                        .map_err(guard_error)?;
+                    if Self::plan_links_in(tx, account_id).await? != links {
+                        return Err(AccountTreeRepoError::ConcurrentModification);
+                    }
                     let current = Self::get_in_tx(tx, account_id)
                         .await?
                         .ok_or(AccountTreeRepoError::NotFound)?;
@@ -536,6 +655,17 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
                     if current.own_state != i16::from(AccountLifecycleState::DeletionGrace) {
                         return Err(AccountTreeRepoError::NotInDeletionGrace);
                     }
+                    tx.execute(
+                        sqlx::query("DELETE FROM account_plan_assignments WHERE account_id = $1")
+                            .bind(account_id),
+                    )
+                    .await?;
+                    // An owned definition of a childless node has no members.
+                    tx.execute(
+                        sqlx::query("DELETE FROM account_plans WHERE owner_account_id = $1")
+                            .bind(account_id),
+                    )
+                    .await?;
                     let deleted = tx
                         .execute(
                             sqlx::query(
