@@ -16,6 +16,7 @@ pub mod attachment;
 pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
+mod replay_divergence;
 
 use crate::base_model::agent::{AgentMode, OwnerKind};
 use crate::base_model::component::ComponentRevision;
@@ -33,6 +34,7 @@ use crate::model::card::{CardId, PublicCardHolder, PublicInvocationWalletPin};
 use crate::oplog_entry;
 use crate::schema::TypedSchemaValue;
 pub use public_types::*;
+pub use replay_divergence::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

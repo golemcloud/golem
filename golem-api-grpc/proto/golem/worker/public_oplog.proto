@@ -141,6 +141,56 @@ message DurableInvocationId {
   uint64 ordinal = 2;
 }
 
+// The first entry at which a replay did not reproduce the recorded execution.
+message ReplayDivergence {
+  uint64 oplog_index = 1;
+  ReplayStep expected = 2;
+  ReplayStep actual = 3;
+  repeated StartIdentityField mismatched = 4;
+}
+
+// One step of a replay.
+message ReplayStep {
+  oneof step {
+    ReplayHostCall host_call = 1;
+    golem.common.Empty invocation_end = 2;
+    golem.common.Empty end_of_history = 3;
+    string other = 4;
+  }
+}
+
+// The identity of a recorded `Start`, or of the call that a replay made in its place.
+message ReplayHostCall {
+  string function_name = 1;
+  WrappedFunctionType durable_function_type = 2;
+  optional uint64 parent_start_index = 3;
+  optional DurableInvocationId invocation_id = 4;
+  optional uint64 observational_owner = 5;
+  bool carries_request = 6;
+  optional golem.schema.TypedSchemaValue request = 7;
+}
+
+// An identity field of a recorded `Start`.
+enum StartIdentityField {
+  START_IDENTITY_FIELD_FUNCTION_NAME = 0;
+  START_IDENTITY_FIELD_FUNCTION_TYPE = 1;
+  START_IDENTITY_FIELD_INVOCATION_ID = 2;
+  START_IDENTITY_FIELD_OBSERVATIONAL_OWNER = 3;
+  START_IDENTITY_FIELD_REQUEST_PRESENCE = 4;
+  START_IDENTITY_FIELD_PARENT = 5;
+}
+
+// Why an update failed.
+enum UpdateFailureClass {
+  UPDATE_FAILURE_CLASS_DIVERGENCE = 0;
+  UPDATE_FAILURE_CLASS_TARGET_TRAP = 1;
+  UPDATE_FAILURE_CLASS_NOT_REPLAYABLE = 2;
+  UPDATE_FAILURE_CLASS_TARGET_REJECTED = 3;
+  UPDATE_FAILURE_CLASS_INTERRUPTED = 4;
+  UPDATE_FAILURE_CLASS_OPERATIONAL = 5;
+  UPDATE_FAILURE_CLASS_OTHER = 6;
+}
+
 message StartParameters {
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 parent_start_index = 3;
