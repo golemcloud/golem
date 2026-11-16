@@ -288,9 +288,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     });
 
     let invocation_principal = call.principal();
-    let invocation_key = call.invocation_key(store.data().get_current_idempotency_key().await);
     let durable_ctx = store.data_mut().durable_ctx_mut();
-    durable_ctx.set_invocation_key(invocation_key);
     durable_ctx.set_invocation_principal(invocation_principal);
     durable_ctx.set_invocation_id(call.has_invocation_id());
     let call_future = async {
@@ -2012,21 +2010,6 @@ impl PreparedCall {
     /// save and load, and oplog processing are not.
     fn has_invocation_id(&self) -> bool {
         matches!(self, Self::Invoke { .. } | Self::ExternalTool { .. })
-    }
-
-    /// The invocation the call runs under. A snapshot call runs under a random key that names
-    /// no invocation, so it is agent-level work.
-    fn invocation_key(
-        &self,
-        current: Option<golem_common::model::InvocationId>,
-    ) -> crate::durable_host::attribution::InvocationKey {
-        use crate::durable_host::attribution::InvocationKey;
-        match (self, current) {
-            (Self::SaveSnapshot | Self::LoadSnapshot { .. }, _) | (_, None) => {
-                InvocationKey::AgentLevel
-            }
-            (_, Some(id)) => InvocationKey::Invocation(id),
-        }
     }
 
     fn principal(&self) -> Option<golem_common::model::agent::Principal> {

@@ -172,6 +172,7 @@ pub(super) fn next_tool_attempt_ordinal<Ctx: WorkerCtx>(
     let parent = ctx.owner_invocation_id()?;
     let next = ctx
         .state
+        .invocation_state_mut()
         .tool_invocation_attempt_ordinals
         .entry(parent.clone())
         .or_default();

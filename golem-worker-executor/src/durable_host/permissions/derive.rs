@@ -722,7 +722,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                 &upper_positive,
                 &upper_negative,
             )?;
-            let ordinal = self.state.scope_card_mint_ordinal;
+            let ordinal = self.state.invocation_state().scope_card_mint_ordinal;
             let next_ordinal = ordinal.checked_add(1).ok_or_else(|| {
                 permissions_types::PermissionError::NotPermitted(
                     "scope-card mint ordinal exhausted".to_string(),
@@ -743,7 +743,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         self.state
             .invocation_scope_handles
             .insert(handle.rep(), root_card_ids);
-        self.state.scope_card_mint_ordinal = next_ordinal;
+        self.state.invocation_state_mut().scope_card_mint_ordinal = next_ordinal;
         Ok(Ok(handle))
     }
 }

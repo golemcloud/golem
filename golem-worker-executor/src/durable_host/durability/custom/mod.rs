@@ -46,6 +46,8 @@ use wasmtime::component::{Access, Accessor, HasSelf, Resource, TerminalConsumpti
 
 #[derive(Debug, Clone)]
 pub(crate) struct ActiveCustomInvocation {
+    /// The invocation that began the custom durable invocation.
+    pub owner: InvocationKey,
     pub parent_start_index: Option<OplogIndex>,
     initiating_children: Arc<AtomicUsize>,
 }
@@ -330,6 +332,8 @@ impl CustomInvocationContext {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OpenCustomInvocationScope {
+    /// The invocation that opened the scope.
+    pub owner: InvocationKey,
     pub owner_start_index: OplogIndex,
     pub resource_rep: u32,
 }
@@ -425,9 +429,11 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             context: next.clone(),
             finishing: false,
         })?;
+        let owner = access.get().state.attributed_key();
         access.get().state.custom_invocation_scopes.insert(
             scope_id,
             OpenCustomInvocationScope {
+                owner,
                 owner_start_index: start_index,
                 resource_rep: resource.rep(),
             },
@@ -1082,9 +1088,11 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             })?;
         let start_index = lifecycle.wait_start().await?;
         accessor.with(|mut access| {
+            let owner = access.get().state.attributed_key();
             access.get().state.active_custom_invocations.insert(
                 start_index,
                 ActiveCustomInvocation {
+                    owner,
                     parent_start_index,
                     initiating_children: Arc::new(AtomicUsize::new(0)),
                 },
@@ -1117,9 +1125,11 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 )
                 .await?;
             accessor.with(|mut access| {
+                let owner = access.get().state.attributed_key();
                 access.get().state.active_custom_invocations.insert(
                     start_index,
                     ActiveCustomInvocation {
+                        owner,
                         parent_start_index,
                         initiating_children: Arc::new(AtomicUsize::new(0)),
                     },

@@ -84,12 +84,14 @@ fn observation(invocation_id: Option<String>, caller: &str) -> Observation {
     }
 }
 
-/// The text form of every `report` invocation recorded in the probe's oplog, in order.
-async fn report_invocation_ids(
+/// The start index and the text form of every `method` invocation recorded in the probe's
+/// oplog, in order.
+async fn method_invocations(
     executor: &impl TestDsl,
     agent_id: &AgentId,
     parsed: &ParsedAgentKey,
-) -> anyhow::Result<Vec<String>> {
+    method: &str,
+) -> anyhow::Result<Vec<(OplogIndex, String)>> {
     Ok(executor
         .get_oplog(agent_id, OplogIndex::INITIAL)
         .await?
@@ -97,14 +99,30 @@ async fn report_invocation_ids(
         .filter_map(|entry| match entry.entry {
             PublicOplogEntry::AgentInvocationStarted(params) => match params.invocation {
                 PublicAgentInvocation::AgentMethodInvocation(call)
-                    if call.method_name == "report" =>
+                    if call.method_name == method =>
                 {
-                    Some(format!("{parsed}.{}", call.invocation_id))
+                    Some((
+                        entry.oplog_index,
+                        format!("{parsed}.{}", call.invocation_id),
+                    ))
                 }
                 _ => None,
             },
             _ => None,
         })
+        .collect())
+}
+
+/// The text form of every `report` invocation recorded in the probe's oplog, in order.
+async fn report_invocation_ids(
+    executor: &impl TestDsl,
+    agent_id: &AgentId,
+    parsed: &ParsedAgentKey,
+) -> anyhow::Result<Vec<String>> {
+    Ok(method_invocations(executor, agent_id, parsed, "report")
+        .await?
+        .into_iter()
+        .map(|(_, id)| id)
         .collect())
 }
 
@@ -324,6 +342,113 @@ async fn snapshot_save_and_load_see_no_invocation_and_the_agent_itself(
     assert_eq!(
         report.method,
         observation(reports.last().cloned(), &user_text)
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+/// The anchors of the recorded `generate_idempotency-key` calls, in order.
+async fn idempotency_key_anchors(
+    executor: &impl TestDsl,
+    agent_id: &AgentId,
+) -> anyhow::Result<Vec<Option<OplogIndex>>> {
+    Ok(executor
+        .get_oplog(agent_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "golem::api::generate_idempotency-key" =>
+            {
+                Some(params.invocation_id.map(|id| id.anchor))
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_spawned_guest_future_answers_for_the_method_that_spawned_it_live_and_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let (creator, creator_text) = golem_user();
+    let (user, user_text) = golem_user();
+    let probe = agent_id!(PROBE, format!("spawned-{}", context.redis_prefix()));
+    let probe_id = AgentId {
+        component_id: component.id,
+        agent_id: probe.to_string(),
+    };
+
+    let mut live = Vec::new();
+    for principal in [creator, user] {
+        let observation: Observation = serde_json::from_str(
+            &executor
+                .invoke_and_await_agent_as_principal(
+                    &component,
+                    &probe,
+                    principal,
+                    "report_from_spawned_future",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<String>()?,
+        )?;
+        live.push(observation);
+    }
+    let invocations =
+        method_invocations(&executor, &probe_id, &probe, "report_from_spawned_future").await?;
+    assert_eq!(invocations.len(), 2);
+    assert_eq!(
+        live,
+        vec![
+            observation(Some(invocations[0].1.clone()), &creator_text),
+            observation(Some(invocations[1].1.clone()), &user_text),
+        ],
+        "a spawned future reads the ID and the caller of the method that spawned it"
+    );
+    let anchors = vec![Some(invocations[0].0), Some(invocations[1].0)];
+    assert_eq!(
+        idempotency_key_anchors(&executor, &probe_id).await?,
+        anchors,
+        "the durable calls of a spawned future are numbered under the method's invocation"
+    );
+    assert!(
+        !executor
+            .get_oplog(&probe_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_))),
+        "recovery must replay the invocations, not load a snapshot"
+    );
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let replayed: Vec<Observation> = serde_json::from_str(
+        &executor
+            .invoke_and_await_agent(&component, &probe, "spawned_future_reports", data_value!())
+            .await?
+            .into_typed::<String>()?,
+    )?;
+    assert_eq!(
+        replayed, live,
+        "replay attributes each spawned future to the same invocation as the live run"
+    );
+    assert_eq!(
+        idempotency_key_anchors(&executor, &probe_id).await?,
+        anchors,
+        "replay claims the recorded calls instead of making new ones"
     );
 
     drop(executor);

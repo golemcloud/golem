@@ -979,13 +979,12 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let instance_pre = linker
             .instantiate_pre(component)
             .map_err(|error| self.creation_error(error.into()))?;
-        // Instantiation runs the core initializer, which is agent-level work.
+        // Instantiation runs the core initializer under the invocation the Store is created for:
+        // the entity invocation of an entity Store, and no invocation for a fresh primary Store.
         let attribution = store.data().durable_ctx().attribution.clone();
+        let invocation_key = store.data().durable_ctx().invocation_key();
         let instance = attribution
-            .scoped(
-                Some(crate::durable_host::attribution::InvocationKey::AgentLevel),
-                instance_pre.instantiate_async(&mut *store),
-            )
+            .instantiating(invocation_key, instance_pre.instantiate_async(&mut *store))
             .await
             .map_err(|error| match instantiation_failure(&self.runtime, &error) {
                 Some(failure) => failure,

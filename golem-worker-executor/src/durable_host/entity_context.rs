@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )),
             _ => {
                 if let Some(scope) = &scope {
-                    if let Some(started) = scope.span_started() {
+                    let context = if let Some(started) = scope.span_started() {
                         let span = InvocationContextSpan::local()
                             .with_span_id(started.span_id.clone())
                             .with_start(started.started_at)
@@ -59,17 +59,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             started.trace_states.clone(),
                         )
                         .limit_depth(self.state.config.limits.max_invocation_context_stack_depth);
-                        let (context, current_span_id) = InvocationContext::from_stack(stack)
-                            .map_err(WorkerExecutorError::runtime)?;
-                        self.state.invocation_context.switch_to(context);
-                        self.state.current_span_id = current_span_id;
-                    }
+                        Some(
+                            InvocationContext::from_stack(stack)
+                                .map_err(WorkerExecutorError::runtime)?,
+                        )
+                    } else {
+                        None
+                    };
                     self.state
                         .set_current_idempotency_key(*scope.idempotency_key());
+                    if let Some((context, current_span_id)) = context {
+                        let state = self.state.loop_invocation_state_mut();
+                        state.invocation_context.switch_to(context);
+                        state.current_span_id = current_span_id;
+                    }
                     self.state.entity_logical_key_position =
                         scope.logical_key_positions().then_some(OplogIndex::INITIAL);
                 } else {
-                    self.state.current_idempotency_key = None;
+                    self.state.clear_current_idempotency_key();
                     self.state.entity_logical_key_position = None;
                 }
                 self.state.inherited_invocation_scope = scope
@@ -129,14 +136,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.entity_tool_operation.clone()
     }
 
+    /// Sets the principal of the export call the invocation loop runs.
     pub(crate) fn set_invocation_principal(&mut self, principal: Option<Principal>) {
-        self.invocation_principal = principal;
+        self.state.loop_invocation_state_mut().principal = principal;
     }
 
-    /// Installs the ID of the running invocation, or removes it when `running` is false.
+    /// Installs the ID of the invocation the loop runs, or removes it when `running` is false.
     pub(crate) fn set_invocation_id(&mut self, running: bool) {
-        self.invocation_id = running
-            .then(|| self.state.get_current_idempotency_key())
+        let invocation_id = running
+            .then(|| self.state.invocations.loop_key().invocation_id())
             .flatten()
             .map(|key| {
                 golem_common::model::OwnedInvocationId::new(
@@ -144,20 +152,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     key,
                 )
             });
+        self.state.loop_invocation_state_mut().invocation_id = invocation_id;
     }
 
-    /// Records the invocation that the invocation loop runs next in this Store.
-    pub(crate) fn set_invocation_key(&mut self, key: attribution::InvocationKey) {
-        self.invocation_key = key;
-    }
-
-    /// The invocation that the invocation loop runs, or last ran, in this Store: the entity
-    /// invocation of an entity Store, otherwise the one set by [`Self::set_invocation_key`].
+    /// The invocation that the invocation loop runs, or last ran, in this Store. The loop arms
+    /// each export call with it.
     pub(crate) fn invocation_key(&self) -> attribution::InvocationKey {
-        match &self.entity_invocation_scope {
-            Some(scope) => attribution::InvocationKey::Invocation(*scope.idempotency_key()),
-            None => self.invocation_key,
-        }
+        self.state.invocations.loop_key()
     }
 
     /// The invocation that the running host code is attributed to; see [`attribution`].
@@ -170,16 +171,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn current_invocation_id(&self) -> Option<golem_common::model::OwnedInvocationId> {
         match &self.entity_invocation_scope {
             Some(scope) => scope.enclosing_invocation_id().cloned(),
-            None => self.invocation_id.clone(),
+            None => self.state.invocation_state().invocation_id.clone(),
         }
     }
 
     pub(crate) fn invocation_principal(&self) -> Principal {
-        self.invocation_principal.clone().unwrap_or_else(|| {
-            Principal::Agent(AgentPrincipal {
-                agent_id: self.owned_agent_id.agent_id.clone(),
+        self.state
+            .invocation_state()
+            .principal
+            .clone()
+            .unwrap_or_else(|| {
+                Principal::Agent(AgentPrincipal {
+                    agent_id: self.owned_agent_id.agent_id.clone(),
+                })
             })
-        })
     }
 
     pub(crate) fn set_entity_cancellation(
@@ -214,7 +219,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// invocation `Start` of an entity Store, or the `AgentInvocationStarted` of the primary Store.
     pub(crate) fn invocation_anchor(&self) -> Option<OplogIndex> {
         self.entity_parent_start_index().or(self
-            .primary_invocation_start_index
+            .state
+            .invocation_state()
+            .start_index
             .filter(|index| *index != OplogIndex::NONE))
     }
 
@@ -292,7 +299,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     )
                 }),
             OwnerRuntime::Agent => self
-                .primary_invocation_start_index
+                .state
+                .invocation_state()
+                .start_index
                 .filter(|index| *index != OplogIndex::NONE)
                 .map(OwnerInvocationId::Agent)
                 .ok_or_else(|| {

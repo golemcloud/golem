@@ -355,12 +355,13 @@ async fn emit_stdio_event_access<Ctx: WorkerCtx, U: 'static>(
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         let trace_context = ctx
             .state
+            .invocation_state()
             .invocation_context
-            .span_origin(&ctx.state.current_span_id)
+            .span_origin(&ctx.state.invocation_state().current_span_id)
             .map(
                 |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
                     trace_id,
-                    span_id: ctx.state.current_span_id.clone(),
+                    span_id: ctx.state.invocation_state().current_span_id.clone(),
                 },
             );
         let invocation_id = ctx.current_invocation_id().map(|id| id.id());

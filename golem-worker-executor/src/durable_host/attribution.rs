@@ -46,14 +46,26 @@ use wasmtime::component::{TaskGroupHook, TaskGroupId};
 pub(crate) enum InvocationKey {
     /// An agent or entity invocation of this Store, identified by its invocation ID.
     Invocation(InvocationId),
-    /// Work outside any invocation: instantiation, the component initializer, destructors and
-    /// Store-level tasks. It never carries invocation-bound authority.
+    /// Work outside any invocation, such as destructors and Store-level tasks. It never carries
+    /// invocation-bound authority.
     AgentLevel,
+}
+
+impl InvocationKey {
+    /// The invocation ID the key names, if any.
+    pub(crate) fn invocation_id(&self) -> Option<InvocationId> {
+        match self {
+            Self::Invocation(id) => Some(*id),
+            Self::AgentLevel => None,
+        }
+    }
 }
 
 #[derive(Default)]
 struct GroupState {
     armed: Option<InvocationKey>,
+    /// The invocation of the instantiation in progress, which starts groups without arming.
+    instantiating: Option<InvocationKey>,
     groups: HashMap<TaskGroupId, InvocationKey>,
     current: Option<TaskGroupId>,
 }
@@ -106,6 +118,22 @@ impl InvocationAttribution {
             }
             let _disarm = Disarm(self);
             future.as_mut().poll(cx)
+        })
+        .await
+    }
+
+    /// Polls the instantiation of this Store's component under `key`. Instantiation runs the
+    /// core initializer, whose task groups are not armed; they belong to `key`.
+    pub(crate) async fn instantiating<F: Future>(
+        &self,
+        key: InvocationKey,
+        future: F,
+    ) -> F::Output {
+        let mut future = pin!(future);
+        std::future::poll_fn(move |cx| {
+            self.state.lock().unwrap().instantiating = Some(key);
+            let _done = Instantiated(self);
+            self.with_scope(Some(key), || future.as_mut().poll(cx))
         })
         .await
     }
@@ -169,6 +197,15 @@ impl CapturedAttribution {
     }
 }
 
+/// Ends an instantiation poll, also when it panics.
+struct Instantiated<'a>(&'a InvocationAttribution);
+
+impl Drop for Instantiated<'_> {
+    fn drop(&mut self) {
+        self.0.state.lock().unwrap().instantiating = None;
+    }
+}
+
 /// Clears the armed key after the first poll of an export call, also when that poll panics.
 struct Disarm<'a>(&'a InvocationAttribution);
 
@@ -184,18 +221,11 @@ struct AttributionHook(InvocationAttribution);
 
 impl TaskGroupHook for AttributionHook {
     fn handle_start(&mut self, id: TaskGroupId) -> wasmtime::Result<()> {
-        let id_of_store = self.0.id();
         let mut state = self.0.state.lock().unwrap();
-        let key = match state.armed.take() {
+        let key = match state.armed.take().or(state.instantiating) {
             Some(key) => key,
             None => {
-                // Only instantiation starts groups without arming them, and it runs under a
-                // scoped `AgentLevel`. Any other unarmed export call is a missed path.
-                let instantiating =
-                    SCOPED.with(Cell::get) == Some((id_of_store, InvocationKey::AgentLevel));
-                if !instantiating {
-                    error!("An export call started a task group without an armed invocation");
-                }
+                error!("An export call started a task group without an armed invocation");
                 InvocationKey::AgentLevel
             }
         };
