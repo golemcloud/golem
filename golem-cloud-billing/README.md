@@ -269,8 +269,9 @@ paid order in several events, and the later ones change nothing. If Polar charge
 order after its settlement, the app logs `An order was paid after its settlement`, and an operator
 refunds the settlement order. The app has no `refunds:write`.
 
-Polar refuses a fixed price below $0.50. When the paid overage of the orders that Polar no longer
-collects is below that, the app writes it off: the orders do not suspend or hold the account.
+Polar refuses a fixed price below $0.50. When the paid overage of an order that Polar no longer
+collects is below that, the app writes the order off for good: it does not suspend or hold the
+account, and other unpaid orders do not change this.
 
 Only Polar support can void an original order or charge it again. Until then, the customer portal
 lists it as pending, also after its settlement.

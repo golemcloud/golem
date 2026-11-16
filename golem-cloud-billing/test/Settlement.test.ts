@@ -83,8 +83,8 @@ describe("planFor", () => {
     ["a revoked subscription whose unpaid order Polar voided", "suspended", [revokedUnpaid], [pending({ status: "void" })]],
     ["an ended subscription with overdue overage below the settlement minimum", "free", [ended], [pending({ ...overdue, ...belowMinimum })]],
     [
-      "an ended subscription with two overdue orders that reach the settlement minimum together",
-      "suspended",
+      "an ended subscription with two overdue orders below the settlement minimum, which reach it together",
+      "free",
       [ended],
       [pending({ ...overdue, meteredAmount: 25 }), pending({ ...overdue, orderId: "order_2", meteredAmount: 25 })]
     ],
@@ -153,6 +153,13 @@ describe("holdFor", () => {
     ["a void order with overage", ["unpaidOverage"], [revokedUnpaid], [pending({ status: "void" })], false],
     ["an order of an ended subscription with overage below the settlement minimum", [], [ended], [pending(belowMinimum)], false],
     [
+      "two orders of an ended subscription below the settlement minimum, which reach it together",
+      [],
+      [ended],
+      [pending(belowMinimum), pending({ ...belowMinimum, orderId: "order_2" })],
+      false
+    ],
+    [
       "an active subscription with every other reason",
       ["subscription", "unbilledUsage", "unpaidOverage"],
       [subscription()],
@@ -211,6 +218,14 @@ describe("settlementFor", () => {
 
   it("offers no settlement below the settlement minimum", () => {
     expect(settlementFor([ended], [pending(belowMinimum)])).toBeUndefined()
+    expect(settlementFor([ended], [pending(belowMinimum), pending({ ...belowMinimum, orderId: "order_2" })])).toBeUndefined()
+  })
+
+  it("leaves out an order below the settlement minimum, also next to an order that it settles", () => {
+    expect(settlementFor([ended], [pending(belowMinimum), pending({ orderId: "order_2", meteredAmount: 100 })])).toEqual({
+      orders: [{ orderId: "order_2", amount: 100 }],
+      amount: 100
+    })
   })
 
   it("settles only the orders that Polar no longer collects", () => {

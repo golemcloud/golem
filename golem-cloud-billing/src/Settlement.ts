@@ -75,14 +75,15 @@ export const ORDER_PAYMENT_GRACE_MS = 60 * 60 * 1000
 
 /**
  * The smallest amount of a settlement, in cents: the smallest fixed price of Polar in USD. Polar
- * refuses a checkout with a smaller price, so the app writes off the paid overage of the orders
- * that Polar no longer collects when it is smaller together (see `owedOrders`).
+ * refuses a checkout with a smaller price, so the app writes off an order that Polar no longer
+ * collects when its paid overage is smaller (see `owedOrders`).
  */
 export const SETTLEMENT_MINIMUM_CENTS = 50
 
 /**
  * The most orders that one settlement pays. Polar keeps a metadata value of at most 500
- * characters, which holds 13 order IDs. A later settlement pays the remaining orders.
+ * characters, which holds 13 order IDs. A later settlement pays the remaining orders. An account
+ * rarely owes more than one, because a suspended account cannot subscribe again before it settles.
  */
 export const SETTLEMENT_MAX_ORDERS = 13
 
@@ -128,30 +129,33 @@ const polarCollects = (order: UnpaidOrder, subscriptions: ReadonlyArray<Subscrip
       subscription.subscriptionId === order.subscriptionId && billableStatuses.includes(subscription.status)
   )
 
-const sumOf = (orders: ReadonlyArray<UnpaidOrder>): number =>
-  orders.reduce((sum, order) => sum + order.meteredAmount, 0)
-
-/** The unpaid orders with paid overage that Polar no longer collects, oldest first. */
-const uncollectedOrders = (
+/**
+ * The unpaid orders that a settlement can pay, oldest first: the ones that Polar no longer
+ * collects, with paid overage of at least `SETTLEMENT_MINIMUM_CENTS`.
+ */
+const settleableOrders = (
   subscriptions: ReadonlyArray<Subscription>,
   unpaidOrders: ReadonlyArray<UnpaidOrder>
 ): ReadonlyArray<UnpaidOrder> =>
-  unpaidOrders.filter((order) => order.meteredAmount > 0 && !polarCollects(order, subscriptions))
+  unpaidOrders.filter(
+    (order) => order.meteredAmount >= SETTLEMENT_MINIMUM_CENTS && !polarCollects(order, subscriptions)
+  )
 
 /**
- * The unpaid orders with paid overage that the account owes: each one that Polar collects, and the
- * ones that Polar no longer collects when their paid overage reaches `SETTLEMENT_MINIMUM_CENTS`
- * together. A smaller amount cannot be settled, so the app writes it off.
+ * The unpaid orders with paid overage that the account owes: each one that Polar collects, and each
+ * one that a settlement can pay. The app writes off each other order for good: Polar no longer
+ * collects it, and a checkout cannot settle its paid overage. Other unpaid orders do not change
+ * this, so a written-off order never comes back as a debt.
  */
 export const owedOrders = (
   subscriptions: ReadonlyArray<Subscription>,
   unpaidOrders: ReadonlyArray<UnpaidOrder>
-): ReadonlyArray<UnpaidOrder> => {
-  const writtenOff = sumOf(uncollectedOrders(subscriptions, unpaidOrders)) < SETTLEMENT_MINIMUM_CENTS
-  return unpaidOrders.filter(
-    (order) => order.meteredAmount > 0 && (polarCollects(order, subscriptions) || !writtenOff)
+): ReadonlyArray<UnpaidOrder> =>
+  unpaidOrders.filter(
+    (order) =>
+      order.meteredAmount > 0 &&
+      (polarCollects(order, subscriptions) || order.meteredAmount >= SETTLEMENT_MINIMUM_CENTS)
   )
-}
 
 /** What a settlement pays: the paid overage of each order, in cents, and the sum. */
 export interface SettlementOffer {
@@ -160,19 +164,20 @@ export interface SettlementOffer {
 }
 
 /**
- * The settlement that the account can pay: the paid overage of the oldest
- * `SETTLEMENT_MAX_ORDERS` unpaid orders that Polar no longer collects. None when Polar collects
- * every unpaid order, so that a settlement never pays an order that Polar can still charge, or when
- * the amount is below `SETTLEMENT_MINIMUM_CENTS`.
+ * The settlement that the account can pay: the paid overage of the oldest `SETTLEMENT_MAX_ORDERS`
+ * orders that a settlement can pay. None when no such order exists, so that a settlement never
+ * pays an order that Polar can still charge, or an order that the app wrote off.
  */
 export const settlementFor = (
   subscriptions: ReadonlyArray<Subscription>,
   unpaidOrders: ReadonlyArray<UnpaidOrder>
 ): SettlementOffer | undefined => {
-  const orders = uncollectedOrders(subscriptions, unpaidOrders).slice(0, SETTLEMENT_MAX_ORDERS)
-  const amount = sumOf(orders)
-  return amount >= SETTLEMENT_MINIMUM_CENTS
-    ? { orders: orders.map((order) => ({ orderId: order.orderId, amount: order.meteredAmount })), amount }
+  const orders = settleableOrders(subscriptions, unpaidOrders).slice(0, SETTLEMENT_MAX_ORDERS)
+  return orders.length > 0
+    ? {
+        orders: orders.map((order) => ({ orderId: order.orderId, amount: order.meteredAmount })),
+        amount: orders.reduce((sum, order) => sum + order.meteredAmount, 0)
+      }
     : undefined
 }
 
