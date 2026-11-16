@@ -7,6 +7,7 @@ import (
 	crand "crypto/rand"
 	"fmt"
 	"io"
+	"iter"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -106,6 +107,25 @@ func drawAfterBody() string {
 	}
 	remembered = fmt.Sprintf("%s,%s%d", b, out.String(), rand.Uint64())
 	return remembered
+}
+
+// sleepThenGet yields the results of two host calls, sleeping on a Go timer
+// before each.
+func sleepThenGet(prefix string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for i := range 2 {
+			time.Sleep(5 * time.Millisecond)
+			if !yield(get(fmt.Sprintf("/echo?v=%s%d", prefix, i+1))) {
+				return
+			}
+		}
+	}
+}
+
+func pullTwo(next func() (string, bool)) string {
+	a, _ := next()
+	b, _ := next()
+	return a + "+" + b
 }
 
 func op(name string, body func() string) string {
@@ -358,6 +378,18 @@ func init() {
 		})
 		time.Sleep(10 * time.Millisecond)
 		return b + "," + get("/echo?v=r")
+	})
+
+	agent.Handle(cdconc.PullInBody, func(_ *golem.Context[state], _ golem.Unit) string {
+		outer, stopOuter := iter.Pull(sleepThenGet("o"))
+		defer stopOuter()
+		a := op("op", func() string { return pullTwo(outer) })
+		b := op("op", func() string {
+			inner, stop := iter.Pull(sleepThenGet("i"))
+			defer stop()
+			return pullTwo(inner)
+		})
+		return a + "," + b + "," + get("/echo?v=r")
 	})
 
 	agent.Handle(cdconc.Echo, func(_ *golem.Context[state], _ golem.Unit) string {

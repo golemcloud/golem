@@ -1800,9 +1800,11 @@ durability outside custom operations, to the Rust poll/drop scope integration, o
 like Rust. The golemcloud/go runtime calls a switch hook whenever the goroutine about to run has
 another host context, and `cdctx` exchanges the task's context slot there; each scoped goroutine
 owns one snapshot handle while parked. Goroutines started in a body, and `time.AfterFunc`
-callbacks of its timers, inherit the scope, and `Run` waits for them before `finish-async`.
-Because a completed body is skipped on replay, runtime state shared by every goroutine would carry
-the body's effects out of it. The runtime therefore makes no host call for itself on wasip1 (the
+callbacks of its timers, inherit the scope, and `Run` waits for them before `finish-async`. An
+`iter.Pull` coroutine runs as part of the goroutine that switches to it: `coroswitch` hands over
+the switching goroutine's context and domain, whoever created the iterator. Because a completed
+body is skipped on replay, runtime state shared by every goroutine would carry the body's effects
+out of it. The runtime therefore makes no host call for itself on wasip1 (the
 scheduler, GC and scavenger read the latest clock reading the program made), and each operation
 runs in its own runtime domain: its own clock (advanced only by reads in the domain and by the
 domain's recorded `wait-until`), timers heap, and random state seeded from its parent's stream on

@@ -103,7 +103,9 @@ type Spec struct {
 // timers that the body sets, inherit the operation's scope, and Run returns
 // only after all of them have exited. If one of them never exits, Run does not
 // return and the invocation fails without a result. Timers that the body set
-// and that are still pending when it returns are stopped.
+// and that are still pending when it returns are stopped. An iter.Pull
+// iterator runs in the scope of the code that calls its next function,
+// wherever it was created.
 //
 // A completed operation replays its result without running the body, so the
 // rest of the program must observe the body only through its return value. The

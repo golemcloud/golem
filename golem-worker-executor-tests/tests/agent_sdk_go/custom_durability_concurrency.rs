@@ -995,3 +995,36 @@ async fn go_timers_of_a_finished_custom_body_are_stopped(
     assert_replays_cleanly(&outcome);
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn go_pull_iterator_consumed_inside_custom_body(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let outcome = run(
+        deps,
+        last_unique_id,
+        agent_sdk_go,
+        "pull",
+        "pull-in-body",
+        data_value!(),
+    )
+    .await?;
+    report("pull-in-body", &outcome);
+    assert_eq!(outcome.live.as_deref(), Ok("o1+o2,i1+i2,r"));
+    let ops = owned_sends(&outcome.calls, "cdconc::op");
+    assert_eq!(ops.len(), 2);
+    assert_eq!(
+        ops[0].1,
+        vec!["echo:o1".to_string(), "echo:o2".to_string()],
+        "an iterator created before the body runs in the body that consumes it"
+    );
+    assert_eq!(ops[1].1, vec!["echo:i1".to_string(), "echo:i2".to_string()]);
+    assert_eq!(root_sends(&outcome.calls), vec!["echo:r".to_string()]);
+    assert_replays_cleanly(&outcome);
+    Ok(())
+}
