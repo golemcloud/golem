@@ -59,6 +59,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     Create { record CreateParams => CreateParameters {
         timestamp: timestamp.into(),
         agent_id: agent_id.into(),
+        agent_type_name: agent_type_name.map(|name| name.0),
         owner_kind: match owner_kind {
             golem_common::model::agent::OwnerKind::ComponentAgent => {
                 oplog::OwnerKind::ComponentAgent
@@ -94,7 +95,6 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
             })
         })
         .collect::<Result<Vec<_>, String>>()?,
-        original_phantom_id: original_phantom_id.map(|id| id.into()),
         instance_id: instance_id.into(),
     } }
     Start { record StartParams => StartParameters {

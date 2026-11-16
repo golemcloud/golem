@@ -32,10 +32,10 @@ use std::sync::Arc;
 
 pub(super) fn invocation_metadata(invocation_id: &OwnedInvocationId) -> InvocationMetadata {
     InvocationMetadata {
-        agent_id: invocation_id.agent_id().agent_id.clone(),
+        agent_id: (*invocation_id.agent_id()).into(),
         invocation_id: golem_schema::schema::wit::wire::InvocationId {
             owner: golem_schema::schema::wit::wire::InvocationOwner::Agent(
-                invocation_id.agent_id().clone().into(),
+                (*invocation_id.agent_id()).into(),
             ),
             id: invocation_id.uuid().into(),
         },

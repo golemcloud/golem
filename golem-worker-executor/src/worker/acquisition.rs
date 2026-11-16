@@ -97,7 +97,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(last_error) = error_and_retry_count {
                     if status.last_error_kind == Some(OplogErrorKind::Recovery) {
                         Err(WorkerExecutorError::failed_to_resume_worker(
-                            owned_agent_id.agent_id.clone(),
+                            owned_agent_id.agent_id,
                             WorkerExecutorError::runtime(
                                 last_error.error.to_string(&last_error.stderr),
                             ),
@@ -293,7 +293,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_env.clone(),
                 worker_agent_config.clone(),
                 component_revision,
-                parent.clone(),
+                parent,
                 invocation_context_stack,
                 principal.clone(),
                 freshness_disposition,
@@ -372,7 +372,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
         if current.is_none_or(|identity| identity.fingerprint != expected_fingerprint) {
             return Err(WorkerExecutorError::AgentNotFound {
-                agent_id: owned_agent_id.agent_id.clone(),
+                agent_id: owned_agent_id.agent_id,
             });
         }
 
@@ -605,7 +605,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let create_intent = create_intent.clone();
                 let worker_env = worker_env.clone();
                 let worker_agent_config = worker_agent_config.clone();
-                let parent = parent.clone();
                 let invocation_context_stack = invocation_context_stack.clone();
                 let principal = principal.clone();
                 async move {
@@ -791,6 +790,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             })
         }
     }
+
     pub(crate) async fn ensure_existing_with_fingerprint(
         self: &Arc<Self>,
         _principal: Principal,
@@ -1622,7 +1622,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_oplog_entry =
                     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
-                        agent_id: initial_worker_metadata.agent_id.clone(),
+                        agent_id: initial_worker_metadata.agent_id,
                         component_id: initial_worker_metadata.component_id,
                         agent_type_name: initial_worker_metadata.agent_type_name.clone(),
                         canonical_key: initial_worker_metadata.canonical_key.clone(),
@@ -1637,7 +1637,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         env: initial_worker_metadata.env.clone(),
                         environment_id: initial_worker_metadata.environment_id,
                         created_by: initial_worker_metadata.created_by,
-                        parent: initial_worker_metadata.parent.clone(),
+                        parent: initial_worker_metadata.parent,
                         component_size: initial_worker_metadata.last_known_status.component_size,
                         initial_total_linear_memory_size: initial_worker_metadata
                             .last_known_status

@@ -24,7 +24,7 @@ inherit_test_dep!(
 );
 
 const WASM_RPC_DROP: &str = "golem::rpc::wasm-rpc::drop";
-const WASM_RPC_NEW: &str = "golem::rpc::wasm-rpc::new";
+const WASM_RPC_NEW: &str = "golem::rpc::wasm-rpc::upsert";
 const REPLAY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, IntoSchema)]
@@ -248,7 +248,7 @@ fn starts_named<'a>(
 }
 
 /// The settled-history rules every test in this file checks: no `wasm-rpc::drop` call, every
-/// `Start` has a terminal, every `SpanClosed` refers to a `wasm-rpc::new` span, and nothing
+/// `Start` has a terminal, every `SpanClosed` refers to a `wasm-rpc::upsert` span, and nothing
 /// positional follows the last `AgentInvocationFinished`.
 fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
     assert_eq!(
@@ -264,7 +264,7 @@ fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
                 .expect("a recorded SpanClosed names the Start that opened the span");
             assert!(
                 clients.contains(&start),
-                "the SpanClosed at {} names {start}, which is not a wasm-rpc::new Start",
+                "the SpanClosed at {} names {start}, which is not a wasm-rpc::upsert Start",
                 entry.oplog_index
             );
         }

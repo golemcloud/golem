@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::dispatch_target;
 use super::execution::known_fresh_dispatch_allowed;
 use super::{
     CancellationTokenEntry, RpcCallTarget, WasmRpcEntry, WasmRpcEntryPayload,
@@ -33,10 +34,10 @@ use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
+use golem_common::model::AgentId;
 use golem_common::model::AgentInvocation;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -72,7 +73,7 @@ pub(super) fn validate_cancellation_token_owner(
             token.owner
         )));
     }
-    if token.metadata.agent_id != token.recipient.agent_id.agent_id {
+    if AgentId::from(token.metadata.agent_id) != token.recipient.agent_id {
         return Err(WorkerExecutorError::runtime(
             "scheduled invocation cancellation token recipient does not match its metadata",
         ));
@@ -166,7 +167,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // wasmtime traps.
         let (
             logical_remote_agent_id,
-            ephemeral_logical_agent_id,
+            ephemeral,
             remote_agent_type,
             remote_method_streams,
             env,
@@ -177,7 +178,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let (env, config) = payload.target_activation.target_creation_data();
             (
                 payload.remote_agent_id.clone(),
-                payload.ephemeral_logical_agent_id.clone(),
+                payload.ephemeral.clone(),
                 payload.remote_agent_type.clone(),
                 payload.remote_method_streams.clone(),
                 env,
@@ -234,7 +235,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let call_target = RpcCallTarget::new(
             begun.idempotency_key_position(self),
             &logical_remote_agent_id,
-            ephemeral_logical_agent_id.as_ref(),
+            ephemeral.as_ref(),
             &method_name,
         );
         let call = match begun.resolve(self).await? {
@@ -322,7 +323,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.state.invocation_context.trace_states.clone(),
         );
 
-        let target_fingerprint = if ephemeral_logical_agent_id.is_some() {
+        let target_fingerprint = if ephemeral.is_some() {
             // The scheduled ephemeral target is created now, so the schedule commits in its oplog
             // and the wake pins this incarnation. The target runs nothing before the deadline.
             let freshness = if known_fresh_dispatch_allowed(first_live_dispatch, true) {
@@ -345,8 +346,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let rpc = self.rpc();
             let demand = rpc
                 .create_demand(
-                    AgentTarget::Current(remote_agent_id.agent_id()),
-                    remote_agent_id.environment_id,
+                    dispatch_target(&remote_agent_id, ephemeral.as_ref()),
                     &method_name,
                     self.created_by(),
                     self.agent_id(),

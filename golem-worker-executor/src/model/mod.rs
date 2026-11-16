@@ -20,7 +20,7 @@ use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::card::EffectiveSurface;
 use golem_common::model::card::StoredCard;
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };

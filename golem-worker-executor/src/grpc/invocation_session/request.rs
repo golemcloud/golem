@@ -17,16 +17,16 @@ use super::{
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamingInvocationRequest, EnvironmentId, FieldSource,
     HashMap, HashSet, InputStreamAck, IntoTypedSchemaValue, InvocationRequest, InvocationResponse,
     InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
-    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentKey,
-    PersistedInvocationTarget, PersistedStreamInvocationDescriptor, Principal,
-    ProducerRegistrationRequest, ResumeAttach, ResumeAttemptDescriptor, ResumeOperation,
-    SchemaGraph, SchemaType, SchemaValue, SchemaValueStream, SessionError, SessionStreamRole,
-    StartAttemptDescriptor, StreamCancellationRequest, StreamEndpointSide, StreamInvocationId,
-    StreamItemsPayload, StreamRegistrationCoordinate, StreamRegistrationInvocation,
-    StreamResumeCursor, StreamResumeOperation, StreamRootKind, StreamSession, StreamSessionMapping,
-    StreamSourceKind, StreamTerminal, StreamTerminalAuthor, StreamValuePathStep,
-    ToolByteStreamRole, ToolInvocationInput, ToolInvocationOutput, TransportStreamId,
-    WorkerExecutorError, decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, PersistedInvocationTarget,
+    PersistedStreamInvocationDescriptor, Principal, ProducerRegistrationRequest, ResumeAttach,
+    ResumeAttemptDescriptor, ResumeOperation, SchemaGraph, SchemaType, SchemaValue,
+    SchemaValueStream, SessionError, SessionStreamRole, StartAttemptDescriptor,
+    StreamCancellationRequest, StreamEndpointSide, StreamInvocationId, StreamItemsPayload,
+    StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamResumeCursor,
+    StreamResumeOperation, StreamRootKind, StreamSession, StreamSessionMapping, StreamSourceKind,
+    StreamTerminal, StreamTerminalAuthor, StreamValuePathStep, ToolByteStreamRole,
+    ToolInvocationInput, ToolInvocationOutput, TransportStreamId, WorkerExecutorError,
+    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
     durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
     encode_recursive_stream_value_with_schema, invocation_request, invocation_response, mpsc,
     schema_fingerprint_v1,
@@ -166,7 +166,7 @@ pub(crate) fn build_durable_streaming_request(
     };
     let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
-        callee: callee.clone(),
+        callee,
         callee_fingerprint,
         idempotency_key,
     };
@@ -315,7 +315,6 @@ pub(crate) fn build_durable_streaming_request(
             .map_err(WorkerExecutorError::invalid_request)?;
         let _: AgentId = origin
             .callee
-            .clone()
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -326,7 +325,7 @@ pub(crate) fn build_durable_streaming_request(
         let parent: AgentId = request
             .context
             .as_ref()
-            .and_then(|context| context.parent.clone())
+            .and_then(|context| context.parent)
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -548,7 +547,6 @@ pub(super) fn build_resume_attempt(
 ) -> Result<ResumeAttemptDescriptor, WorkerExecutorError> {
     let callee: AgentId = request
         .agent_id
-        .clone()
         .ok_or_else(|| WorkerExecutorError::invalid_request("resume agent_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
@@ -717,7 +715,7 @@ pub(super) fn require_expected_callee_fingerprint(
         )
     })?;
     if uuid::Uuid::from(expected) != actual.0 {
-        return Err(WorkerExecutorError::worker_not_found(agent_id.clone()));
+        return Err(WorkerExecutorError::worker_not_found(*agent_id));
     }
     Ok(())
 }
@@ -935,7 +933,7 @@ pub(super) fn start_agent_id(
 ) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
     use golem_api_grpc::proto::golem::worker::agent_target::Target;
     match start.target.as_ref()?.target.as_ref()? {
-        Target::Id(agent_id) => Some(agent_id.clone()),
+        Target::Id(agent_id) => Some(*agent_id),
         Target::Key(_) => None,
     }
 }

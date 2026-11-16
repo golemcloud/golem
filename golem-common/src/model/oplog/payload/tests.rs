@@ -827,7 +827,7 @@ use super::{
     HostRequestGolemRpcAsyncInvokeRejection, HostRequestGolemRpcInvoke, HostResponseGolemApiAgents,
 };
 use crate::model::agent::{
-    ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+    AgentTypeName, ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
 };
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
@@ -1370,9 +1370,12 @@ fn entity_invocation_host_payload_pair_roundtrips() {
 fn agent_type_by_agent_id_host_payload_pair_roundtrips() {
     assert_host_payload_pair_roundtrip::<host_functions::GolemAgentGetAgentTypeByAgentId>(
         HostRequestGolemAgentGetAgentTypeByAgentId {
-            agent_id: "Counter(main)".to_string(),
+            agent_id: crate::model::AgentId::from_parts(7, 1),
         },
-        HostResponseGolemAgentAgentType { result: Ok(None) },
+        HostResponseGolemAgentAgentType {
+            result: Ok(None),
+            type_id: None,
+        },
     );
 }
 
@@ -1956,7 +1959,7 @@ fn get_agents_page_preserves_opaque_cursor_in_durable_payload() {
     let cursor = ScanCursor::new("gsc1_recorded-token_雪".to_string());
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiGetAgents>(
         HostRequestGolemApiGetAgents {
-            component_id: ComponentId::new(),
+            agent_type_name: AgentTypeName("Counter".to_string()),
         },
         HostResponseGolemApiAgents {
             result: Ok((Some(cursor), Vec::new())),
@@ -1991,7 +1994,7 @@ fn durable_rpc_create_outcomes_roundtrip() {
             details: "whole-agent invocation required".to_string(),
         }),
     ] {
-        assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcNew>(
+        assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcUpsert>(
             HostRequestGolemRpcCreate {
                 remote_agent_id: AgentId::from_parts(7, 4),
             },

@@ -761,6 +761,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
         Ok(Self {
             agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
             owner_kind: crate::model::agent::OwnerKind::try_from(value.owner_kind)?,
+            agent_type_name: value
+                .agent_type_name
+                .map(crate::model::agent::AgentTypeName),
             environment_id: value
                 .environment_id
                 .ok_or("Missing environment_id")?
@@ -842,6 +845,7 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
         Ok(Self {
             agent_id: Some(value.agent_id.into()),
             owner_kind: value.owner_kind.into(),
+            agent_type_name: value.agent_type_name.map(|name| name.0),
             environment_id: Some(value.environment_id.into()),
             created_by: Some(value.created_by.into()),
             env: value.env,

@@ -118,6 +118,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         env.sort();
         let metadata = AgentMetadataForGuests {
             agent_id: metadata_dto.agent_id,
+            agent_type_name: metadata_dto.agent_type_name,
+            fingerprint: metadata_dto.fingerprint,
             args: vec![],
             env,
             config: TypedAgentConfigEntry::to_flat_map(&metadata_dto.config),

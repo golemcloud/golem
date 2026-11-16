@@ -31,7 +31,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostPayloadPair;
-use golem_common::model::oplog::host_functions::GolemRpcWasmRpcNew;
+use golem_common::model::oplog::host_functions::GolemRpcWasmRpcUpsert;
 use golem_common::model::{InvocationRequestKey, OwnedInvocationId};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::PermissionCardHandleDropper;
@@ -235,7 +235,7 @@ fn logical_ephemeral_rpc_connection_creation_is_local_durability() {
                 snapshotting_mode: false,
                 max_in_function_retry_delay: Duration::ZERO,
             },
-            GolemRpcWasmRpcNew::FQFN,
+            GolemRpcWasmRpcUpsert::FQFN,
         );
         assert!(retry.can_reexecute_on_incomplete_replay());
     }

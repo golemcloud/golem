@@ -19,7 +19,6 @@ pub(crate) mod stream_slots;
 pub(crate) use invocation::{CanStartWorker, from_proto_invocation_context};
 pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
 
-use crate::durable_host::agent_monomorphization_context;
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     PublicOplogPageLimits, check_oplog_cursor_query, get_public_oplog_entry, get_public_oplog_page,
@@ -79,12 +78,12 @@ use golem_common::metrics::api::{
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, TypedAgentConfigEntry,
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
 };
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
-use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};

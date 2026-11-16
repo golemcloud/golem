@@ -134,8 +134,8 @@ impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::
 
     fn try_from(filter: golem_api_1_x::host::AgentPropertyFilter) -> Result<Self, Self::Error> {
         let converted = match filter {
-            golem_api_1_x::host::AgentPropertyFilter::Name(filter) => {
-                golem_common::model::AgentFilter::new_name(filter.comparator.into(), filter.value)
+            golem_api_1_x::host::AgentPropertyFilter::Key(filter) => {
+                golem_common::model::AgentFilter::new_key(filter.comparator.into(), filter.value)
             }
             golem_api_1_x::host::AgentPropertyFilter::Version(filter) => {
                 golem_common::model::AgentFilter::new_revision(
@@ -202,6 +202,8 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
     fn from(value: AgentMetadataForGuests) -> Self {
         Self {
             agent_id: value.agent_id.into(),
+            agent_type_name: value.agent_type_name.map(|name| name.0),
+            fingerprint: value.fingerprint.0.into(),
             args: vec![],
             env: value.env,
             config: value.config.into_iter().collect(),

@@ -5841,7 +5841,7 @@ impl TestOplog {
             .unwrap();
         if let Some(failure) = failures.get_mut(&self.owned_agent_id.agent_id) {
             let expected_start = match failure.boundary {
-                RpcMemoryBoundary::CreationCompleted => HostFunctionName::GolemRpcWasmRpcNew,
+                RpcMemoryBoundary::CreationCompleted => HostFunctionName::GolemRpcWasmRpcUpsert,
                 RpcMemoryBoundary::InvocationCompleted | RpcMemoryBoundary::CompletionDelivered => {
                     HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult
                 }

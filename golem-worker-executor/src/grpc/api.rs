@@ -15,7 +15,7 @@
 use super::{
     ActivatePluginRequest, ActivatePluginResponse, AppendToStreamSlotRequest,
     AppendToStreamSlotResponse, AuthCtx, CancelInvocationRequest, CancelInvocationResponse,
-    ComponentId, DeactivatePluginRequest, DeactivatePluginResponse, DeliverCardTransferRequest,
+    DeactivatePluginRequest, DeactivatePluginResponse, DeliverCardTransferRequest,
     DeliverCardTransferResponse, DurableStreamAttachmentControlRequest,
     DurableStreamAttachmentControlResponse, DurableStreamRemoteError,
     DurableStreamSegmentReadRequest, DurableStreamSegmentReadResponse, ForkStreamSlotRequest,

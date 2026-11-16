@@ -145,6 +145,7 @@ pub trait WorkerProxy: Send + Sync {
     async fn create(
         &self,
         target: &ResolvedTarget,
+        exclusive: bool,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -485,6 +486,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn create(
         &self,
         target: &ResolvedTarget,
+        exclusive: bool,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -506,7 +508,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     unkeyed_id: unkeyed_id.clone(),
                     env: caller_env.clone(),
                     config: config.clone().into_iter().map(Into::into).collect(),
-                    ignore_already_existing: true,
+                    ignore_already_existing: !exclusive,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),

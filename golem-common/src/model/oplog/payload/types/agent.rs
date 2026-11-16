@@ -23,6 +23,8 @@ impl From<AgentMetadata> for AgentMetadataForGuests {
         value.env.sort();
         Self {
             agent_id: value.agent_id,
+            agent_type_name: value.agent_type_name,
+            fingerprint: value.fingerprint,
             args: vec![],
             env: value.env,
             config: TypedAgentConfigEntry::to_flat_map(&value.config),

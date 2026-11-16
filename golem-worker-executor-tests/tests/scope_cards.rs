@@ -2107,7 +2107,7 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
         .iter()
         .find_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
-                if params.function_name == "golem::rpc::wasm-rpc::new" =>
+                if params.function_name == "golem::rpc::wasm-rpc::upsert" =>
             {
                 Some(entry.oplog_index)
             }
@@ -2177,7 +2177,7 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
             .filter(|entry| matches!(
                 &entry.entry,
                 PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::rpc::wasm-rpc::new"
+                    if params.function_name == "golem::rpc::wasm-rpc::upsert"
             ))
             .count(),
         1,
@@ -2329,7 +2329,7 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
         .iter()
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
-                if params.function_name == "golem::rpc::wasm-rpc::new" =>
+                if params.function_name == "golem::rpc::wasm-rpc::upsert" =>
             {
                 Some((entry.oplog_index, params.request.clone()))
             }
@@ -2396,7 +2396,7 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
             .filter(|entry| matches!(
                 &entry.entry,
                 PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::rpc::wasm-rpc::new"
+                    if params.function_name == "golem::rpc::wasm-rpc::upsert"
             ))
             .count(),
         1,

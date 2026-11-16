@@ -43,6 +43,8 @@ message AgentMetadata {
   OwnerKind owner_kind = 21;
   // Identifies whether last_error came from an invocation or from startup/recovery.
   optional OplogErrorKind last_error_kind = 22;
+  // The name of the agent's type. Owners without an agent type have none.
+  optional string agent_type_name = 23;
 }
 
 message UpdateRecord {

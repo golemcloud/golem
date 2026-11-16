@@ -357,7 +357,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 Some(self_env.to_vec()),
                 config,
                 None,
-                Some(self_agent_id.clone()),
+                Some(*self_agent_id),
                 self_stack,
                 principal,
                 freshness_disposition,
@@ -509,6 +509,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -527,6 +528,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .remote_rpc
                 .create_and_initialize(
                     target.clone(),
+                    exclusive,
                     self_created_by,
                     self_agent_id,
                     self_env,
@@ -558,15 +560,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             Some(self_env.to_vec()),
             config,
             None,
-            Some(self_agent_id.clone()),
+            Some(*self_agent_id),
             &self_stack,
             Principal::Agent(AgentPrincipal {
-                agent_id: self_agent_id.clone(),
+                agent_id: *self_agent_id,
             }),
             InvocationFreshnessDisposition::MayExist,
             CreateIntent::Create {
                 owner: new_owner,
-                exclusive: false,
+                exclusive,
                 idempotency_key: Some(idempotency_key),
             },
         )
@@ -632,10 +634,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     Some(self_env.to_vec()),
                     config,
                     None,
-                    Some(self_agent_id.clone()),
+                    Some(*self_agent_id),
                     &self_stack,
                     Principal::Agent(AgentPrincipal {
-                        agent_id: self_agent_id.clone(),
+                        agent_id: *self_agent_id,
                     }),
                     freshness_disposition,
                     target.invocation_intent(idempotency_key.as_ref().map(|key| {
@@ -890,7 +892,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             idempotency_key: Some(idempotency_key.clone().into()),
             request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                parent: Some(self_agent_id.clone().into()),
+                parent: Some((*self_agent_id).into()),
                 env: HashMap::from_iter(self_env.to_vec()),
                 tracing: Some(self_stack.clone().into()),
             }),

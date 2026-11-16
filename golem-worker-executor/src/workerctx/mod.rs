@@ -67,7 +67,6 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
-use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;

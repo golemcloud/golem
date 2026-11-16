@@ -18,8 +18,7 @@ use super::{
     AgentInvocation, Arc, AuthCtx, CanStartWorker, DurableStreamRemoteError, HasAll,
     HasComponentService, HasConfig, InvocationFreshnessDisposition, Message, OwnedAgentId,
     UsesAllDeps, Worker, WorkerCtx, WorkerExecutorImpl, build_durable_streaming_request,
-    decode_invocation_input, extract_owned_agent_id, from_proto_invocation_context, golem,
-    stream_slots,
+    decode_invocation_input, from_proto_invocation_context, golem, stream_slots,
 };
 use crate::worker;
 use golem_api_grpc::proto::golem::workerexecutor::v1 as proto;
@@ -405,7 +404,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (committed, _receipt) = tokio::sync::oneshot::channel();
         let domain_request = build_durable_streaming_request(
             &request,
-            id.agent_id.clone(),
+            id.agent_id,
             Some(&parsed.agent_type),
             &component.metadata,
             revision,

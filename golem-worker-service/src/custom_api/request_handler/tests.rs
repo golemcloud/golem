@@ -323,6 +323,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
             AgentMetadataDto {
                 agent_id: id.clone(),
                 owner_kind: OwnerKind::ComponentAgent,
+                agent_type_name: None,
                 environment_id: harness.environment_id,
                 created_by: harness.account_id,
                 env: Default::default(),

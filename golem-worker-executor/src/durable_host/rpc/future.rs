@@ -38,7 +38,6 @@ use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::AgentFingerprint;
-use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
@@ -175,11 +174,17 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
             .await
             .map_err(SessionError::into_trap)?;
     }
-    let worker_proxy = accessor.with(|mut access| access.get().worker_proxy());
+    let (worker_proxy, remote_agent_id) = accessor.with(|mut access| {
+        let ctx = access.get();
+        (
+            ctx.worker_proxy(),
+            OwnedAgentId::new(ctx.owned_agent_id.environment_id, &request.remote_agent_id),
+        )
+    });
     match try_agent_auth_ctx_at_serialized_access(accessor, accessor.getter()).await {
         Ok(Some(auth_ctx)) => {
             if let Err(err) = worker_proxy
-                .cancel_invocation(&request.remote_agent_id, invocation_id.id(), &auth_ctx)
+                .cancel_invocation(&remote_agent_id, invocation_id.id(), &auth_ctx)
                 .await
             {
                 tracing::info!(err=%err, "Best-effort cancel_invocation failed");
@@ -246,7 +251,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 result: anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>>,
             },
             /// The single durable call is still open; drive it to its `End`. `request`,
-            /// `remote_agent_id`, and `env` are carried so a replay that finds an incomplete `Start`
+            /// `remote_target`, and `env` are carried so a replay that finds an incomplete `Start`
             /// (crash-after-`Start`) can re-dispatch the read-only RPC and complete it.
             /// `cancel_token` is shared with the state left in the table: a concurrent
             /// `future-invoke-result::cancel` (which finds `handle: None` there) triggers it, and
@@ -257,11 +262,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 streaming: Option<DurableStreamingTaskParams>,
                 request: HostRequestGolemRpcInvoke,
                 invocation_id: OwnedInvocationId,
-                remote_agent_id: OwnedAgentId,
+                remote_target: crate::worker::target::ResolvedTarget,
                 env: Vec<(String, String)>,
                 config: Vec<AgentConfigEntryDto>,
                 deferred_activation: Option<RpcTargetActivation>,
                 expected_callee_fingerprint: Option<AgentFingerprint>,
+                retry_properties: golem_common::model::retry_policy::RetryProperties,
                 span_id: SpanId,
                 cancel_token: tokio_util::sync::CancellationToken,
             },
@@ -310,11 +316,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     streaming,
                     request,
                     invocation_id,
-                    remote_agent_id,
+                    remote_target,
                     env,
                     config,
                     deferred_activation,
                     expected_callee_fingerprint,
+                    retry_properties,
                     span_id,
                     cancel_token,
                 } => {
@@ -327,11 +334,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         streaming: streaming.clone(),
                         request: request.clone(),
                         invocation_id: invocation_id.clone(),
-                        remote_agent_id: remote_agent_id.clone(),
+                        remote_target: remote_target.clone(),
                         env: env.clone(),
                         config: config.clone(),
                         deferred_activation: deferred_activation.clone(),
                         expected_callee_fingerprint: *expected_callee_fingerprint,
+                        retry_properties: retry_properties.clone(),
                         span_id: span_id.clone(),
                         cancel_token: cancel_token.clone(),
                     }
@@ -347,11 +355,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 streaming,
                 request,
                 invocation_id,
-                remote_agent_id,
+                remote_target,
                 env,
                 config,
                 deferred_activation,
                 expected_callee_fingerprint,
+                retry_properties,
                 span_id,
                 cancel_token,
             } => {
@@ -469,7 +478,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                 Ok::<_, anyhow::Error>(match streaming.clone() {
                                     Some(params) => spawn_streaming_invoke_and_await_task(
                                         ctx,
-                                        remote_agent_id.clone(),
+                                        remote_target.clone(),
                                         internal_rpc_child_key(&request.request_key)?,
                                         request.method_name.clone(),
                                         params,
@@ -482,7 +491,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     ),
                                     None => spawn_invoke_and_await_task(
                                         ctx,
-                                        &remote_agent_id,
+                                        &remote_target,
                                         internal_rpc_child_key(&request.request_key)?,
                                         request.method_name.clone(),
                                         request.input.clone(),
@@ -490,6 +499,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                         config.clone(),
                                         deferred_activation.clone(),
                                         expected_callee_fingerprint,
+                                        retry_properties.clone(),
                                         &span_id,
                                         retry_point,
                                         InvocationFreshnessDisposition::MayExist,
@@ -791,7 +801,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             Cancel {
                 handle: FutureInvokeCallHandle,
                 streaming: Option<DurableStreamingTaskParams>,
-                remote_agent_id: AgentId,
+                remote_agent_id: OwnedAgentId,
                 idempotency_key: golem_common::model::InvocationId,
                 span_id: SpanId,
             },
@@ -810,14 +820,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 FutureInvokeResultState::Active {
                     handle,
                     streaming,
-                    request,
                     invocation_id,
+                    remote_target,
                     span_id,
                     cancel_token,
                     ..
                 } => match handle.take() {
                     Some(handle) => {
-                        let remote_agent_id = request.remote_agent_id.clone();
+                        let remote_agent_id = remote_target.owned_agent_id.clone();
                         let idempotency_key = invocation_id.id();
                         let span_id = span_id.clone();
                         let streaming = streaming.clone();

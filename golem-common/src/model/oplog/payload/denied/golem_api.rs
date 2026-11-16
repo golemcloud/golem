@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::model::oplog::payload::{
-    HostRequestGolemApiOplogRead, HostResponseGolemApiAgentId, HostResponseGolemApiAgentMetadata,
-    HostResponseGolemApiFork, HostResponseGolemApiOplogChunk,
+    HostRequestGolemApiOplogRead, HostResponseGolemApiAgentMetadata, HostResponseGolemApiFork,
+    HostResponseGolemApiOplogChunk,
 };
 
 super::denied_with_message! {
@@ -24,11 +24,6 @@ super::denied_with_message! {
     oplog_entries => HostResponseGolemApiOplogEntries,
     webhook_url => HostResponseGolemAgentWebhookUrl,
     config_get => HostResponseConfigGetResponse,
-}
-
-/// A denied strict agent id resolution reports that the agent is not found.
-pub fn agent_id_not_found<R>(_request: &R, _denial: &str) -> HostResponseGolemApiAgentId {
-    HostResponseGolemApiAgentId { result: Ok(None) }
 }
 
 /// A denied agent metadata lookup reports that the agent does not exist.

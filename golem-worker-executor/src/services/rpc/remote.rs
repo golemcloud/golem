@@ -63,7 +63,7 @@ impl Rpc for RemoteInvocationRpc {
             });
         };
         let parent = match &principal {
-            Principal::Agent(agent) => Some(agent.agent_id.clone().into()),
+            Principal::Agent(agent) => Some(agent.agent_id.into()),
             _ => None,
         };
         let start = InvocationStart {
@@ -172,6 +172,7 @@ impl Rpc for RemoteInvocationRpc {
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
+        exclusive: bool,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -185,6 +186,7 @@ impl Rpc for RemoteInvocationRpc {
             .worker_proxy
             .create(
                 &target,
+                exclusive,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
@@ -278,7 +280,7 @@ impl Rpc for RemoteInvocationRpc {
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
-                self_agent_id.clone(),
+                *self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
                 config,
@@ -330,7 +332,7 @@ impl Rpc for RemoteInvocationRpc {
                 request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
                 idempotency_key: Some(idempotency_key.into()),
                 context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                    parent: Some(self_agent_id.clone().into()),
+                    parent: Some((*self_agent_id).into()),
                     env: HashMap::from_iter(self_env.to_vec()),
                     tracing: Some(self_stack.into()),
                 }),
@@ -418,7 +420,7 @@ impl Rpc for RemoteInvocationRpc {
                                 request: Some(invocation_request::Request::ResumeAttach(
                                     ResumeAttach {
                                         idempotency_key: accepted.idempotency_key,
-                                        agent_id: accepted.agent_id.clone(),
+                                        agent_id: accepted.agent_id,
                                         environment_id: accepted.environment_id,
                                         attachment_id: accepted.attachment_id,
                                         expected_callee_fingerprint: accepted.callee_fingerprint,
@@ -589,7 +591,7 @@ impl Rpc for RemoteInvocationRpc {
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
-                self_agent_id.clone(),
+                *self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
                 config,

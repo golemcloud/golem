@@ -121,10 +121,6 @@ oplog_payload! {
         GolemApiComponentSlug {
             component_slug: String
         },
-        GolemApiComponentSlugAndAgentName {
-            component_slug: String,
-            agent_name: String
-        },
         GolemApiForkAgent {
             source_agent_id: AgentId,
             target_agent_id: AgentId,
@@ -304,6 +300,10 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
+        GolemRpcCreateAgent {
+            agent_type_name: crate::model::agent::AgentTypeName,
+            keyed: bool
+        },
         GolemRpcBindSelf {
             remote_agent_id: AgentId,
             target_environment_id: EnvironmentId,
@@ -400,7 +400,7 @@ oplog_payload! {
             has_stdin: bool,
         },
         GolemApiGetAgents {
-            component_id: ComponentId,
+            agent_type_name: AgentTypeName,
         },
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>
@@ -432,7 +432,7 @@ oplog_payload! {
             error: SerializableToolRpcError,
         },
         GolemAgentGetAgentTypeByAgentId {
-            agent_id: String
+            agent_id: AgentId
         },
         ToolAttachmentWrite { request: ToolAttachmentWriteRequest },
         ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
@@ -505,8 +505,8 @@ oplog_payload! {
         GolemAgentWebhookUrl {
             result: Result<String, String>
         },
-        GolemApiAgentId {
-            result: Result<Option<AgentId>, String>
+        GolemAgentLookupAgentId {
+            result: Result<Option<AgentId>, SerializableRpcError>
         },
         GolemApiAgentMetadata {
             result: Result<Option<AgentMetadataForGuests>, String>
@@ -541,7 +541,9 @@ oplog_payload! {
             result: Result<Vec<RegisteredAgentTypeSchema>, String>
         },
         GolemAgentAgentType {
-            result: Result<Option<RegisteredAgentTypeSchema>, String>
+            result: Result<Option<RegisteredAgentTypeSchema>, String>,
+            /// The type ID of the found agent type, which the IDs of its agents carry.
+            type_id: Option<crate::model::type_id::TypeId>
         },
         GolemRdbmsColumns {
             result: Result<Vec<SerializableDbColumn>, SerializableRdbmsError>
@@ -686,6 +688,14 @@ oplog_payload! {
         },
         GolemRpcCreate {
             result: Result<AgentFingerprint, SerializableRpcError>,
+            target_environment_id: EnvironmentId
+        },
+        GolemRpcCreated {
+            result: Result<(AgentId, AgentFingerprint), SerializableRpcError>,
+            /// The deployed agent type that the live call looked up, so replay binds the client
+            /// to the same type without a registry lookup.
+            agent_type: Option<RegisteredAgentTypeSchema>,
+            type_id: Option<crate::model::type_id::TypeId>,
             target_environment_id: EnvironmentId
         },
         P3KeyvalueIncomingValueStream {
@@ -999,7 +1009,6 @@ pub mod host_functions {
         (GolemApiForkWorker => "golem::api", "fork_worker", GolemApiForkAgent, GolemApiUnit, denied = denied::golem_api::unit),
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit, denied = denied::golem_api::unit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
-        (GolemApiResolveAgentIdStrict => "golem::api", "resolve_agent_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId, denied = denied::golem_api::agent_id_not_found),
         (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork, denied = denied::golem_api::fork),
         (WebsocketClientConnect => "golem:websocket/client", "connect", WebsocketConnect, WebsocketConnectResponse),
         (WebsocketClientSend => "golem:websocket/client", "send", WebsocketSend, WebsocketSendResponse),
@@ -1013,7 +1022,9 @@ pub mod host_functions {
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
-        (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcUpsert => "golem::rpc::wasm-rpc", "upsert", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcGetById => "golem::rpc::wasm-rpc", "get-by-id", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcCreate => "golem::rpc::wasm-rpc", "create", GolemRpcCreateAgent, GolemRpcCreated),
         (GolemRpcWasmRpcBindSelf => "golem::rpc::wasm-rpc", "bind-self", GolemRpcBindSelf, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
         (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
@@ -1094,6 +1105,7 @@ pub mod host_functions {
         (McpToolCall => "golem::tool::mcp", "call", McpToolCall, McpToolCall),
         (McpToolPresence => "golem::tool::mcp", "presence", McpToolPresence, McpToolPresence),
         (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType),
+        (GolemAgentLookupAgentId => "golem::agent", "lookup_agent_id", GolemApiAgentId, GolemAgentLookupAgentId),
         (GolemToolCreateStdin => "golem::tool::host", "create-stdin", NoInput, ToolAttachmentCreated),
         (GolemToolCreateOutput => "golem::tool::host", "create-output", NoInput, ToolAttachmentCreated),
         (GolemToolStdinWrite => "golem::tool::host::tool-stdin-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),

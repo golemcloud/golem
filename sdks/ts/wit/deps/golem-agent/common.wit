@@ -2,7 +2,7 @@ package golem:agent@2.0.0;
 
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
-    metadata-envelope, agent-id, account-id, component-id};
+    metadata-envelope, agent-id, account-id};
   use golem:core/http@2.0.0.{http-route-mode, durable-stream-route-options,
     http-method as concrete-http-method, path-segment as neutral-path-segment,
     header-variable, query-variable, file-mapping, file-response-header};
@@ -39,10 +39,9 @@ interface common {
     http-router,
   }
 
-  /// Associates an agent type with a component that implements it
+  /// An agent type deployed in the current environment
   record registered-agent-type {
     agent-type: agent-type,
-    implemented-by: component-id
   }
 
   /// Dependent agent type. All schema roots inside it resolve against its own

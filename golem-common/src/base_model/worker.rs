@@ -128,6 +128,8 @@ declare_structs! {
     pub struct AgentMetadataDto {
         pub agent_id: AgentId,
         pub owner_kind: crate::base_model::agent::OwnerKind,
+        /// The name of the agent's type. Owners without an agent type have none.
+        pub agent_type_name: Option<crate::base_model::agent::AgentTypeName>,
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,

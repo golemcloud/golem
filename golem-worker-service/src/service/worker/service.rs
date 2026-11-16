@@ -4798,6 +4798,7 @@ mod tests {
                     last_oplog_index: OplogIndex::INITIAL,
                     fingerprint: self.fingerprint,
                     owner_kind: OwnerKind::ComponentAgent,
+                    agent_type_name: None,
                 }),
                 None => Err(WorkerServiceError::AgentNotFound(agent_id.clone())),
             }

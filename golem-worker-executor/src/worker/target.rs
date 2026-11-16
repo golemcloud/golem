@@ -231,6 +231,63 @@ pub async fn resolve_unkeyed(
     })
 }
 
+/// The keyed agent of `constructor`, from a constructor that the caller decoded against the
+/// deployed agent type with type ID `type_id`, which `component_id` implements. The host uses
+/// this instead of [`resolve_key`] because it derives the ID from recorded data alone, so replay
+/// derives the same ID without a registry lookup.
+pub fn keyed_target(
+    environment_id: EnvironmentId,
+    type_id: TypeId,
+    component_id: ComponentId,
+    constructor: ParsedAgentKey,
+) -> Result<ResolvedTarget, WorkerExecutorError> {
+    let key = AgentKey::new(
+        constructor.agent_type.clone(),
+        constructor.parameters.clone(),
+    )
+    .map_err(|err| WorkerExecutorError::invalid_request(err.to_string()))?;
+    let agent_id = AgentId::keyed(environment_id, type_id, &key);
+    Ok(ResolvedTarget {
+        owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
+        new_owner: Some(NewOwner::keyed(component_id, constructor)),
+        agent_mode: Some(AgentMode::Durable),
+    })
+}
+
+/// A new agent without a key at `agent_id`, which the host allocated for the constructor's
+/// agent type, so it carries that type's tag.
+pub fn unkeyed_target(
+    environment_id: EnvironmentId,
+    agent_id: AgentId,
+    component_id: ComponentId,
+    constructor: ParsedAgentKey,
+    agent_mode: AgentMode,
+) -> ResolvedTarget {
+    ResolvedTarget {
+        owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
+        new_owner: Some(NewOwner::unkeyed(component_id, constructor)),
+        agent_mode: Some(agent_mode),
+    }
+}
+
+/// The one-shot instance of an ephemeral agent type that runs the invocation with owner key
+/// `owner_key`, so a retry of the invocation reaches the same instance.
+pub fn ephemeral_invocation_target(
+    environment_id: EnvironmentId,
+    type_id: TypeId,
+    component_id: ComponentId,
+    constructor: ParsedAgentKey,
+    owner_key: &IdempotencyKey,
+) -> ResolvedTarget {
+    unkeyed_target(
+        environment_id,
+        AgentId::ephemeral_invocation(environment_id, type_id, owner_key),
+        component_id,
+        constructor,
+        AgentMode::Ephemeral,
+    )
+}
+
 async fn check_constructor(
     component_service: &dyn ComponentService,
     agent_types: &dyn AgentTypesService,

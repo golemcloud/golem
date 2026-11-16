@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{WorkerExecutorImpl, extract_owned_agent_id};
+use super::WorkerExecutorImpl;
 use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
 };

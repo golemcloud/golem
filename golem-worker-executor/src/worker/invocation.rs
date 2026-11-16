@@ -1283,7 +1283,6 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
@@ -1297,7 +1296,6 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                         accessor,
                         account_info,
                         config,
-                        component_id,
                         agent_id,
                         metadata,
                         first_entry_index,
@@ -1912,7 +1910,6 @@ enum LoweredCall {
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: core_wire::ComponentId,
         agent_id: core_wire::AgentId,
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
@@ -1954,7 +1951,6 @@ enum PreparedCall {
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: core_wire::ComponentId,
         agent_id: core_wire::AgentId,
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
@@ -2048,7 +2044,6 @@ fn materialize_call<Ctx: WorkerCtx>(
         LoweredCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
@@ -2056,7 +2051,6 @@ fn materialize_call<Ctx: WorkerCtx>(
         } => PreparedCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
@@ -2206,7 +2200,6 @@ pub fn lower_invocation(
             entries,
             ..
         } => {
-            let component_id: core_wire::ComponentId = metadata.component_id.into();
             let agent_id: core_wire::AgentId = metadata.agent_id.clone().into();
             let account_info = oplog_processor_exports::AccountInfo {
                 account_id: account_id.into(),
@@ -2228,7 +2221,6 @@ pub fn lower_invocation(
                 call: LoweredCall::ProcessOplogEntries {
                     account_info,
                     config,
-                    component_id,
                     agent_id,
                     metadata,
                     first_entry_index: u64::from(first_entry_index),

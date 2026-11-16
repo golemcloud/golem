@@ -38,7 +38,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentKey};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{
@@ -72,11 +72,10 @@ use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, ExternalToolInvocationParameters,
-    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostRequestGolemRpcInvoke,
-    HostRequestGolemRpcScheduledInvocation, HostResponse, HostResponseEntityInvocation,
-    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogEntry, OplogIndex,
-    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostResponse,
+    HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogEntry,
+    OplogIndex, PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
@@ -91,7 +90,7 @@ use golem_common::model::oplog::{
     SpanAttributes, SpanFinished, SpanKind, SpanOutcome, SpanStarted,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,
+    AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,
 };
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::graph::reachable_defs;

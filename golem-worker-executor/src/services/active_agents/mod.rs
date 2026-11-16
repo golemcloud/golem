@@ -84,7 +84,7 @@ use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::{InvocationFreshnessDisposition, OwnerKind, Principal};
+use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::entity::{

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::*;
-use golem_common::model::agent::OwnerKind;
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
 /// used plugin on each worker executor node.
@@ -198,6 +197,10 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 golem_api_grpc::proto::golem::worker::AgentMetadata {
                     agent_id: Some(worker_metadata.agent_id.clone().into()),
                     owner_kind: worker_metadata.owner_kind.into(),
+                    agent_type_name: worker_metadata
+                        .agent_type_name
+                        .as_ref()
+                        .map(|name| name.0.clone()),
                     environment_id: Some(worker_metadata.environment_id.into()),
                     env: HashMap::from_iter(worker_metadata.env.iter().cloned()),
                     config: worker_metadata

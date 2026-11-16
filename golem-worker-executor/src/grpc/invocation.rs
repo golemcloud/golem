@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    AgentMode, AgentStatusRecord, Arc, HasActiveAgents, HasAll, HasComponentService, Instrument,
+    AgentMode, AgentStatusRecord, Arc, HasActiveAgents, HasAll, Instrument,
     InvocationFreshnessDisposition, OwnedAgentId, ParsedAgentKey, UsesAllDeps, Worker, WorkerCtx,
     WorkerExecutorImpl, info_span,
 };
@@ -58,9 +58,7 @@ pub trait CanStartWorker {
 trait ProtobufInvocationDetails {
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId>;
     fn proto_agent_target(&self) -> Result<AgentTarget, WorkerExecutorError> {
-        let agent_id = self
-            .proto_agent_id()
-            .clone()
+        let agent_id = (*self.proto_agent_id())
             .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
         AgentId::try_from(agent_id)
             .map(AgentTarget::Id)
@@ -131,7 +129,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
         self.proto_invocation_context().as_ref().and_then(|ctx| {
             ctx.parent
                 .as_ref()
-                .and_then(|agent_id| agent_id.clone().try_into().ok())
+                .and_then(|agent_id| (*agent_id).try_into().ok())
         })
     }
 

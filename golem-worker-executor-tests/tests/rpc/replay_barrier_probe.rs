@@ -176,11 +176,11 @@ async fn real_rpc_retained_start_reconstruction_probe(
     assert!(delivered_a < end(starts[9]));
     let delivered_b = delivered(starts[9]);
     // A's client is released after its delivery and before B completes. The release is a
-    // hint, not a durable call: it closes the connection span opened by A's `wasm-rpc::new`.
+    // hint, not a durable call: it closes the connection span opened by A's `wasm-rpc::upsert`.
     let new_starts: Vec<_> = oplog
         .iter()
         .filter_map(|e| match &e.entry {
-            PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::new" => {
+            PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::upsert" => {
                 Some(e.oplog_index)
             }
             _ => None,

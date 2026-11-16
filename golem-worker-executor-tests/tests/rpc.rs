@@ -1145,7 +1145,7 @@ fn converted_rpc_span_ids(
             PublicOplogEntry::Start(start)
                 if matches!(
                     start.function_name.as_str(),
-                    "golem::rpc::wasm-rpc::new"
+                    "golem::rpc::wasm-rpc::upsert"
                         | "golem::rpc::wasm-rpc::invoke_and_await"
                         | "golem::rpc::wasm-rpc::invoke"
                 ) =>
@@ -1197,7 +1197,7 @@ fn assert_converted_rpc_span_lifecycle(
         let PublicOplogEntry::Start(start) = &entry.entry else {
             continue;
         };
-        if start.function_name == "golem::rpc::wasm-rpc::new" {
+        if start.function_name == "golem::rpc::wasm-rpc::upsert" {
             let terminal = oplog.iter().find_map(|candidate| match &candidate.entry {
                 PublicOplogEntry::End(end) if end.start_index == entry.oplog_index => Some(end),
                 _ => None,
@@ -1263,7 +1263,7 @@ async fn memory_growth_before_rpc_activation(
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let boundary_matches = oplog.windows(3).any(|entries| {
         matches!(&entries[0].entry, PublicOplogEntry::Start(start)
-            if start.function_name == "golem::rpc::wasm-rpc::new")
+            if start.function_name == "golem::rpc::wasm-rpc::upsert")
             && matches!(&entries[1].entry, PublicOplogEntry::End(end)
                 if end.start_index == entries[0].oplog_index)
             && matches!(&entries[2].entry, PublicOplogEntry::Error(error)
