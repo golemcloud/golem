@@ -8,9 +8,12 @@ pub(all) enum DurableFunctionType {
 } derive(Debug, Eq)
 
 ///|
-/// Errors detected while replaying a custom durable operation.
+/// Errors of a custom durable operation.
 pub suberror DurabilityError {
+  /// The replayed invocation does not match the operation.
   ReplayMismatch(String)
+  /// A task spawned in the body was still running when the body returned.
+  TaskOutlivedScope(String)
 } derive(Debug, Eq)
 
 ///|
@@ -33,7 +36,8 @@ fn DurableFunctionType::to_raw(
 /// is dropped without triggering a retry. If recovery later replays the incomplete invocation,
 /// the body runs again.
 ///
-/// The body cannot suspend. A task spawned in it aborts the invocation when the body returns.
+/// The body cannot suspend. A task spawned in it is cancelled and leaves the scope when the body
+/// returns, and the operation raises `DurabilityError::TaskOutlivedScope`.
 pub fn[
   Request : @schema.IntoSchema,
   Response : @schema.IntoSchema + @schema.FromSchema,
@@ -64,10 +68,13 @@ pub fn[
         if !consumed {
           invocation.drop()
         }
+        frame.detach_members()
         @async_core.pop_task_context_frame(frame)
       }
       let result = body()
-      frame.check_joined()
+      guard frame.running_tasks() == 0 && frame.running_producers() == 0 else {
+        raise DurabilityError::TaskOutlivedScope(function_name)
+      }
       let response = @model.typed_schema_value_to_wit(
         @schema.try_into_typed_schema_value(result),
       )
@@ -89,9 +96,15 @@ pub fn[
 /// The invocation's scope follows the task that runs the body: other tasks of the same agent
 /// invocation, and their host calls, are not attributed to it while the body waits. Tasks spawned
 /// in the body, including stream and future producers, inherit the scope. Join spawned tasks
-/// before the body returns; a task still running when the body exits aborts the invocation. The
-/// operation waits for the stream and future producers the body started, and cancels them when
-/// the body fails.
+/// before the body returns: the operation cancels a task that is still running when the body
+/// returns, and raises `DurabilityError::TaskOutlivedScope`. On success, the operation waits for
+/// the stream and future producers the body started.
+///
+/// When the body fails or is cancelled, the operation cancels the tasks and producers of the
+/// scope and propagates the error at once. A producer that does not end at cancellation, such
+/// as one that writes a future value the body never resolved, keeps the scope open. The live
+/// invocation is dropped when the last of them ends. An agent invocation that returns while the
+/// scope is still open fails.
 pub async fn[
   Request : @schema.IntoSchema,
   Response : @schema.IntoSchema + @schema.FromSchema,
@@ -118,23 +131,22 @@ pub async fn[
       install_task_context_hooks()
       let frame = @async_core.push_task_context_frame(capture_caller=true)
       invocation.enter()
-      let mut finished = false
       defer {
-        if !finished {
-          @async_core.protect_from_cancel(() => {
-            frame.settle(cancel_producers=true)
-          })
-        }
-        invocation.drop()
+        frame.release(close=() => invocation.drop())
         @async_core.pop_task_context_frame(frame)
       }
       let result = body()
-      frame.settle()
+      guard frame.running_tasks() == 0 else {
+        raise DurabilityError::TaskOutlivedScope(function_name)
+      }
+      frame.settle_producers()
+      guard frame.running_tasks() == 0 else {
+        raise DurabilityError::TaskOutlivedScope(function_name)
+      }
       let response = @model.typed_schema_value_to_wit(
         @schema.try_into_typed_schema_value(result),
       )
       invocation.finish_async(response, forced_commit)
-      finished = true
       result
     }
     Replayed(invocation) =>

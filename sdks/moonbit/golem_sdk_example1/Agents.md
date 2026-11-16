@@ -367,10 +367,14 @@ while a body waits, sibling tasks, their ordinary host calls, and other custom o
 same name and request are not attributed to it. A task spawned inside a body, including a stream or
 future producer, runs in that body's scope. Join every task spawned in a body before it returns,
 for example with a `@async_core.with_task_group` opened inside the body. A task spawned in a body
-that is still running when the body exits aborts the invocation. `durable_async` waits for the
-stream and future producers its body started, and cancels them when the body fails. `@api.durable`
-runs a synchronous body, and a task spawned in it aborts the invocation when the body returns.
-Agent invocations themselves still run one at a time.
+that is still running when the body returns is cancelled, and the combinator raises
+`@api.DurabilityError::TaskOutlivedScope`; `@api.durable` runs a synchronous body, so any task it
+spawns gives this error. On success, `durable_async` waits for the stream and future producers its
+body started. When the body fails or is cancelled, the combinator cancels the tasks and producers
+of the scope and propagates the error at once. A producer that does not end at cancellation, such
+as a future producer that waits for a value the body never supplied, keeps the scope open until it
+ends; an agent invocation that returns while a scope is still open fails. Agent invocations
+themselves still run one at a time.
 
 ## Environments and Build Presets
 

@@ -120,15 +120,95 @@ pub async fn CustomDurability::failures(self : Self) -> Array[String] {
 }
 
 ///|
-/// A scope whose body leaves a spawned task running.
-pub async fn CustomDurability::escaped(self : Self) -> String {
+/// A scope whose body leaves a spawned task running, and a root call after it.
+pub async fn CustomDurability::escaped(self : Self) -> Array[String] {
   ignore(self.name)
-  @asyncCore.with_task_group(async fn(group) {
+  let (never, _keep) : (@asyncCore.Stream[Byte], @asyncCore.Sink[Byte]) = @asyncCore.Stream::new(
+    capacity=1,
+  )
+  let escaped = @asyncCore.with_task_group(async fn(group) {
     @api.durable_async("golem-it", "test-escaped", @api.WriteRemote, (), async fn() {
-      group.spawn_bg(async fn() { ignore(callback("escaped")) })
+      group.spawn_bg(async fn() {
+        // The scope cancels the task while it waits, so the call never runs.
+        guard never.read(1) is Some(_) else { return }
+        ignore(callback("escaped"))
+      })
       "returned"
     })
-  })
+  }) catch {
+    @api.DurabilityError::TaskOutlivedScope(_) => "task-outlived-scope"
+    _ => "other-error"
+  }
+  [escaped, callback("after-escaped")]
+}
+
+///|
+/// A synchronous scope whose body spawns a task, and a root call after it.
+pub async fn CustomDurability::sync_spawn(self : Self) -> Array[String] {
+  ignore(self.name)
+  let (never, _keep) : (@asyncCore.Stream[Byte], @asyncCore.Sink[Byte]) = @asyncCore.Stream::new(
+    capacity=1,
+  )
+  let spawned = @asyncCore.with_task_group(async fn(group) {
+    @api.durable("golem-it", "test-sync-spawn", @api.WriteRemote, (), () => {
+      group.spawn_bg(async fn() {
+        guard never.read(1) is Some(_) else { return }
+        ignore(callback("sync-escaped"))
+      })
+      "returned"
+    })
+  }) catch {
+    @api.DurabilityError::TaskOutlivedScope(_) => "task-outlived-scope"
+    _ => "other-error"
+  }
+  [spawned, callback("after-sync-spawn")]
+}
+
+///|
+/// A scope whose body fails while the future producer of its request trailers
+/// still waits, and a root call after the producer has resolved.
+pub async fn CustomDurability::failed_future_producer(
+  self : Self,
+) -> Array[String] {
+  ignore(self.name)
+  let (resolve, resolved) : (@asyncCore.Stream[Byte], @asyncCore.Sink[Byte]) = @asyncCore.Stream::new(
+    capacity=1,
+  )
+  let failed = @api.durable_async(
+    "golem-it",
+    "test-failed-trailers",
+    @api.WriteRemote,
+    (),
+    async fn() -> String {
+      let (started, signal) : (@asyncCore.Stream[Byte], @asyncCore.Sink[Byte]) = @asyncCore.Stream::new(
+        capacity=1,
+      )
+      let trailers = @asyncCore.Future::from(async fn() -> Result[
+        @httpTypes.Fields?,
+        @httpTypes.ErrorCode,
+      ] {
+        ignore(signal.write_all_bytes(b"s"[:]))
+        ignore(resolve.read(1))
+        Ok(None)
+      })
+      let (request, transmitted) = @httpTypes.Request::new(
+        @httpTypes.Fields::fields(),
+        None,
+        trailers,
+        None,
+      )
+      ignore(started.read(1))
+      request.drop()
+      transmitted.drop()
+      ignore(callback("fail-trailers"))
+      fail("the body fails while the trailers are pending")
+    },
+  ) catch {
+    _ => "caught"
+  }
+  // The failed scope stays open until its producer resolves and terminates.
+  ignore(resolved.write_all_bytes(b"r"[:]))
+  [failed, callback("after-failed-trailers")]
 }
 
 ///|

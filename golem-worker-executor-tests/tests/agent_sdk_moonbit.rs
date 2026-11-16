@@ -603,10 +603,99 @@ async fn moonbit_custom_scopes_clean_up_after_failure_and_cancellation(
     Ok(())
 }
 
+/// A task that outlives the body of a scope fails the scope with a catchable error. The scope
+/// cancels the task, records no `End`, and the agent invocation continues at the root.
+async fn assert_outlived_scope_is_caught(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_sdk_moonbit: &PrecompiledComponent,
+    method: &str,
+    function_name: &str,
+    after: &str,
+) -> anyhow::Result<()> {
+    let history = History::default();
+    let fixture = fixture(
+        last_unique_id,
+        deps,
+        agent_sdk_moonbit,
+        method,
+        recording_route(&history),
+    )
+    .await?;
+
+    assert_eq!(
+        invoke_strings(&fixture, method).await?,
+        vec!["task-outlived-scope", after]
+    );
+    assert_eq!(
+        *history.lock().unwrap(),
+        vec![after],
+        "the scope cancels the task before it makes its call"
+    );
+    let oplog = fixture
+        .executor
+        .get_oplog(&fixture.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let anchor = anchor(&oplog, method);
+    let scope = custom_starts(&oplog, function_name, anchor);
+    assert_eq!(scope.len(), 1);
+    assert_eq!(
+        ends(&oplog, scope[0].0),
+        0,
+        "the failed scope is not finished"
+    );
+    assert_eq!(owned(&oplog, SEND, scope[0].0), 0);
+    assert_eq!(root(&oplog, SEND, anchor).len(), 1);
+
+    assert_replay_repeats_nothing(&fixture, &history).await?;
+    fixture.server.abort();
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn moonbit_custom_scope_rejects_escaped_tasks(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_moonbit")] agent_sdk_moonbit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_outlived_scope_is_caught(
+        last_unique_id,
+        deps,
+        agent_sdk_moonbit,
+        "escaped",
+        "golem-it::test-escaped",
+        "after-escaped",
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn moonbit_synchronous_custom_scope_rejects_spawned_tasks(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_moonbit")] agent_sdk_moonbit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_outlived_scope_is_caught(
+        last_unique_id,
+        deps,
+        agent_sdk_moonbit,
+        "sync_spawn",
+        "golem-it::test-sync-spawn",
+        "after-sync-spawn",
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn moonbit_failed_custom_scope_returns_before_its_future_producer(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_sdk_moonbit")] agent_sdk_moonbit: &PrecompiledComponent,
@@ -617,44 +706,36 @@ async fn moonbit_custom_scope_rejects_escaped_tasks(
         last_unique_id,
         deps,
         agent_sdk_moonbit,
-        "escaped",
+        "failed-future-producer",
         recording_route(&history),
     )
     .await?;
 
-    let result = fixture
-        .executor
-        .invoke_and_await_agent(
-            &fixture.component,
-            &fixture.agent_id,
-            "escaped",
-            data_value!(),
-        )
-        .await;
-    // Release MoonBit builds do not carry abort messages, so the abort shows as a trap.
-    let error = format!(
-        "{:?}",
-        result.expect_err("an escaped task fails the invocation")
+    assert_eq!(
+        invoke_strings(&fixture, "failed_future_producer").await?,
+        vec!["caught", "after-failed-trailers"],
+        "the failure reaches the caller while the trailers producer still waits"
     );
-    assert!(
-        error.contains("DeterministicTrap") && error.contains("unreachable"),
-        "unexpected error: {error}"
-    );
-    assert!(
-        history.lock().unwrap().is_empty(),
-        "the body exit aborts before the escaped task runs"
+    assert_eq!(
+        *history.lock().unwrap(),
+        vec!["fail-trailers", "after-failed-trailers"]
     );
     let oplog = fixture
         .executor
         .get_oplog(&fixture.worker_id, OplogIndex::INITIAL)
         .await?;
-    let escaped = custom_starts(&oplog, "golem-it::test-escaped", anchor(&oplog, "escaped"));
-    assert_eq!(escaped.len(), 1);
+    let anchor = anchor(&oplog, "failed_future_producer");
+    let scope = custom_starts(&oplog, "golem-it::test-failed-trailers", anchor);
+    assert_eq!(scope.len(), 1);
+    assert_eq!(ends(&oplog, scope[0].0), 0, "a failed body is not finished");
+    assert_eq!(owned(&oplog, SEND, scope[0].0), 1);
     assert_eq!(
-        ends(&oplog, escaped[0].0),
-        0,
-        "the escaping scope is not finished"
+        root(&oplog, SEND, anchor).len(),
+        1,
+        "the call after the failure belongs to no scope"
     );
+
+    assert_replay_repeats_nothing(&fixture, &history).await?;
     fixture.server.abort();
     Ok(())
 }
