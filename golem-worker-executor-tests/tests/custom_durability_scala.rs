@@ -236,7 +236,7 @@ async fn scala_custom_durability_siblings_complete_in_adverse_order(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    // The first sibling's request arrives first but is answered after the second one.
+    // The first sibling's request is answered only after the second one.
     let server = CallbackServer::start(&[("slow", "fast")]).await?;
     let component = executor
         .component_dep(&context.default_environment_id, component)
@@ -266,9 +266,13 @@ async fn scala_custom_durability_siblings_complete_in_adverse_order(
         .await?
         .into_typed::<String>()?;
     assert_eq!(after, "2-after");
+    // The siblings send concurrently, so their requests may arrive in either order; the server
+    // fixes only the order of the answers.
+    let mut history = server.history();
+    history.sort();
     assert_eq!(
-        server.history(),
-        vec!["slow", "fast", "after"],
+        history,
+        vec!["after", "fast", "slow"],
         "replay must not repeat completed custom operations"
     );
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
