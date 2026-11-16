@@ -1300,3 +1300,21 @@ async fn test_account_tree_cache_rejects_delayed_load(#[dimension(postgres_varia
 async fn test_account_tree_cache_eviction_and_lag(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::account_tree::test_account_tree_cache_eviction_and_lag(deps).await;
 }
+
+#[test]
+async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_tree::test_account_tree_cache_keeps_newer_install_over_delayed_load(deps)
+        .await;
+}
+
+#[test]
+async fn test_notifier_replays_after_listener_reconnect(db: &PostgresDb) {
+    crate::repo::notifier_reconnect::test_notifier_replays_after_listener_reconnect(db).await;
+}
+
+#[test]
+async fn test_notifier_resets_cache_after_journal_gap(db: &PostgresDb) {
+    crate::repo::notifier_reconnect::test_notifier_resets_cache_after_journal_gap(db).await;
+}

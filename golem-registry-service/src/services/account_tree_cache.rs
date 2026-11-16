@@ -25,13 +25,17 @@
 //! - Every committed tree change appends an `AccountChanged` journal event, and the registry
 //!   change notifier delivers it after the commit. [`AccountTreeCache::handle_event`] evicts the
 //!   node and its sibling-index entry.
-//! - A miss loads the whole chain in one database statement. The load notes the invalidation
-//!   epoch before it reads; if any invalidation happened before the result returns, the result
-//!   is returned to the caller but not installed. A delayed load therefore cannot reinstall a
-//!   value that an event has already replaced.
-//! - A lagged subscription or a closed notifier channel clears the cache, because events may
-//!   have been missed. The notifier replays the journal from its cursor after a database
-//!   reconnect, so a reconnect loses no event.
+//! - A miss loads the whole chain in one database statement. The cache has a generation that
+//!   every installation and every invalidation advances. A load notes the generation before it
+//!   reads and installs its result only if the generation has not moved; otherwise it returns
+//!   the result to its caller and installs nothing. A delayed load therefore cannot replace a
+//!   value that an event removed, nor nodes that a later-starting load installed, and the
+//!   sibling index always comes from the snapshot of one load. Concurrent cold loads of
+//!   overlapping chains may therefore skip installation and read again on the next miss.
+//! - A lagged subscription, a closed notifier channel or a notifier resync clears the cache,
+//!   because events may have been missed. The PostgreSQL notifier replays the journal from its
+//!   cursor after its listener reconnects and signals a resync when the journal no longer
+//!   holds every event after the cursor.
 //! - Capacity eviction removes the least recently used nodes; a later read reloads them.
 //!
 //! On a database error the cache returns the error and installs nothing. It has no time-based
@@ -44,7 +48,7 @@ use golem_common::model::account_path::AccountPath;
 use golem_service_base::repo::RepoError;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 type SiblingKey = (Option<Uuid>, String);
@@ -58,7 +62,7 @@ struct Entry {
 struct State {
     nodes: HashMap<Uuid, Entry>,
     children: HashMap<SiblingKey, Uuid>,
-    epoch: u64,
+    generation: u64,
     clock: u64,
 }
 
@@ -92,6 +96,7 @@ impl State {
     }
 
     fn install(&mut self, chain: &[AccountNode], capacity: usize) {
+        self.generation += 1;
         for node in chain {
             self.remove(node.account_id);
             self.clock += 1;
@@ -169,33 +174,33 @@ impl AccountTreeCache {
 
     /// The node and its ancestors, root first, or `None` when the account does not exist.
     pub async fn ancestry(&self, account_id: Uuid) -> Result<Option<Vec<AccountNode>>, RepoError> {
-        let epoch = {
+        let generation = {
             let mut state = self.state.lock().unwrap();
             if let Some(chain) = state.ancestry(account_id) {
                 return Ok(Some(chain));
             }
-            state.epoch
+            state.generation
         };
         let records = self.repo.get_ancestry(account_id).await?;
-        self.finish_load(epoch, records)
+        self.finish_load(generation, records)
     }
 
     /// The nodes along a path, root first, or `None` when no current account has the path.
     pub async fn resolve(&self, path: &AccountPath) -> Result<Option<Vec<AccountNode>>, RepoError> {
-        let epoch = {
+        let generation = {
             let mut state = self.state.lock().unwrap();
             if let Some(chain) = state.resolve(path) {
                 return Ok(Some(chain));
             }
-            state.epoch
+            state.generation
         };
         let records = self.repo.resolve_path(path).await?;
-        self.finish_load(epoch, records)
+        self.finish_load(generation, records)
     }
 
     fn finish_load(
         &self,
-        epoch: u64,
+        generation: u64,
         records: Vec<crate::repo::model::account_tree::AccountNodeRecord>,
     ) -> Result<Option<Vec<AccountNode>>, RepoError> {
         if records.is_empty() {
@@ -206,7 +211,7 @@ impl AccountTreeCache {
             .map(AccountNode::try_from)
             .collect::<Result<Vec<_>, _>>()?;
         let mut state = self.state.lock().unwrap();
-        if state.epoch == epoch {
+        if state.generation == generation {
             state.install(&chain, self.capacity);
         }
         Ok(Some(chain))
@@ -214,13 +219,13 @@ impl AccountTreeCache {
 
     pub fn invalidate(&self, account_id: Uuid) {
         let mut state = self.state.lock().unwrap();
-        state.epoch += 1;
+        state.generation += 1;
         state.remove(account_id);
     }
 
     pub fn clear(&self) {
         let mut state = self.state.lock().unwrap();
-        state.epoch += 1;
+        state.generation += 1;
         state.nodes.clear();
         state.children.clear();
     }
@@ -231,16 +236,38 @@ impl AccountTreeCache {
         }
     }
 
-    /// Applies journal events until the channel closes. Clears the cache whenever events may
-    /// have been missed.
-    pub async fn run_invalidation(&self, mut events: broadcast::Receiver<RegistryChangeEvent>) {
+    /// Applies journal events until the event channel closes. Clears the cache whenever events
+    /// may have been missed: when the subscription lags, when it closes, and whenever the
+    /// notifier signals a resync.
+    pub async fn run_invalidation(
+        &self,
+        mut events: broadcast::Receiver<RegistryChangeEvent>,
+        resyncs: watch::Receiver<u64>,
+    ) {
+        let mut resyncs = Some(resyncs);
         loop {
-            match events.recv().await {
-                Ok(event) => self.handle_event(&event),
-                Err(broadcast::error::RecvError::Lagged(_)) => self.clear(),
-                Err(broadcast::error::RecvError::Closed) => {
-                    self.clear();
-                    return;
+            let resync = async {
+                match resyncs.as_mut() {
+                    Some(resyncs) => resyncs.changed().await.is_ok(),
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                event = events.recv() => match event {
+                    Ok(event) => self.handle_event(&event),
+                    Err(broadcast::error::RecvError::Lagged(_)) => self.clear(),
+                    Err(broadcast::error::RecvError::Closed) => {
+                        self.clear();
+                        return;
+                    }
+                },
+                signalled = resync => {
+                    if signalled {
+                        self.clear();
+                    } else {
+                        // The notifier has no resync source.
+                        resyncs = None;
+                    }
                 }
             }
         }

@@ -704,7 +704,11 @@ pub async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
     }
     let invalidation = tokio::spawn({
         let cache = cache.clone();
-        async move { cache.run_invalidation(receiver).await }
+        async move {
+            cache
+                .run_invalidation(receiver, tokio::sync::watch::channel(0).1)
+                .await
+        }
     });
     let cleared = tokio::time::timeout(Duration::from_secs(10), async {
         while !cache.is_empty() {
@@ -717,4 +721,65 @@ pub async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
     assert!(AccountLocalState::effective(&fresh) == AccountLocalState::Suspended);
     drop(sender);
     invalidation.await.unwrap();
+}
+
+/// A load that read an older snapshot and finishes after a newer load has installed must not
+/// replace the newer nodes, even when no invalidation has been delivered in between.
+pub async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(deps: &Deps) {
+    let root = root(deps).await;
+    let top = unique_segment(20);
+    let acme = child(deps, root.account_id, &top).await;
+    let team = child(deps, acme.account_id, &segment("team")).await;
+    let leaf = child(deps, team.account_id, &segment("leaf")).await;
+    let sibling = child(deps, team.account_id, &segment("sibling")).await;
+
+    let repo = ObservedRepo::new(deps.account_tree_repo.clone());
+    let cache = Arc::new(AccountTreeCache::new(repo.clone(), 64));
+
+    // Load A reads the old ancestry of the leaf and stalls before it installs.
+    repo.hold.store(true, Ordering::SeqCst);
+    let entered = repo.entered.notified();
+    let load_a = tokio::spawn({
+        let cache = cache.clone();
+        async move { cache.ancestry(leaf.account_id).await.unwrap().unwrap() }
+    });
+    entered.await;
+
+    // A rename and a suspension commit; their events are not delivered to the cache.
+    update(
+        deps,
+        &team,
+        Some(segment("renamed")),
+        AccountLocalState::Active,
+    )
+    .await
+    .unwrap();
+    update(deps, &acme, None, AccountLocalState::Suspended)
+        .await
+        .unwrap();
+    let new_sibling_path = path(&format!("/{}/renamed/sibling", top.as_str()));
+    let old_sibling_path = path(&format!("/{}/team/sibling", top.as_str()));
+
+    // Load B reads the new state through the shared ancestors and installs it.
+    let newer = cache.ancestry(sibling.account_id).await.unwrap().unwrap();
+    assert!(chain_path(&newer) == new_sibling_path);
+    assert!(AccountLocalState::effective(&newer) == AccountLocalState::Suspended);
+
+    // Load A finishes. Its caller may see the snapshot it read.
+    repo.release.notify_one();
+    let delayed = load_a.await.unwrap();
+    assert!(AccountLocalState::effective(&delayed) == AccountLocalState::Active);
+
+    // Later reads served from the cache keep the newer state, by ID and by path.
+    let reads = repo.reads();
+    let warm = cache.ancestry(sibling.account_id).await.unwrap().unwrap();
+    assert!(chain_path(&warm) == new_sibling_path);
+    assert!(AccountLocalState::effective(&warm) == AccountLocalState::Suspended);
+    let by_path = cache.resolve(&new_sibling_path).await.unwrap().unwrap();
+    assert!(by_path == warm);
+    assert!(repo.reads() == reads);
+    assert!(cache.resolve(&old_sibling_path).await.unwrap().is_none());
+    let leaf_now = cache.ancestry(leaf.account_id).await.unwrap().unwrap();
+    assert!(chain_path(&leaf_now) == path(&format!("/{}/renamed/leaf", top.as_str())));
+    assert!(AccountLocalState::effective(&leaf_now) == AccountLocalState::Suspended);
 }
