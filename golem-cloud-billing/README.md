@@ -114,19 +114,24 @@ plan.
   redirects to it: the paid product, the Golem account ID as `external_customer_id`, the email and
   the name of the user, and the IP address of the browser for the local currency. After the
   payment Polar redirects to `/?checkout_id=...`, and the page shows that the plan is activating
-  until the webhook changes it.
+  until the webhook changes it. The page offers the checkout, and the route accepts it, only for
+  an account on the free plan whose latest subscription is not `past_due` (`canCheckOut` in
+  `src/Page.ts`). The route redirects any other request to `/`, also when the registry or the
+  database fails.
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Webhooks.** Polar delivers `subscription.*`, `order.created`, `order.updated` and `order.paid`
-  events to `POST /api/auth/polar/webhooks`. The handler verifies the Standard Webhooks signature
-  with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a `webhook-id` that it handled
-  before, and stores the subscription in `polar_subscriptions` or the order in `polar_orders`. A
-  state never replaces a state with a later `modified_at`, so a late delivery cannot undo a newer
-  one. Then it sets the [deletion hold](#deletion-hold) and the plan from the table above. A failed
-  payment (`subscription.past_due`) also logs `payment_failed`. An account on any other plan, for
-  example an internal plan that an administrator gave it, keeps it, and gets the deletion hold all
-  the same. An event of an account that the registry deleted is stored and answers 200, without a
-  change of the plan or the hold, so that deleted accounts do not make Polar disable the endpoint.
+  events to `POST /api/auth/polar/webhooks`. A request without the Standard Webhooks headers gets
+  403 before the app reads its body, and a body above 1 MiB gets 413. The handler verifies the
+  Standard Webhooks signature with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a
+  `webhook-id` that it handled before, and stores the subscription in `polar_subscriptions` or the
+  order in `polar_orders`. A state never replaces a state with a later `modified_at`, so a late
+  delivery cannot undo a newer one. Then it sets the [deletion hold](#deletion-hold) and the plan
+  from the table above. A failed payment (`subscription.past_due`) also logs `payment_failed`. An
+  account on any other plan, for example an internal plan that an administrator gave it, keeps it,
+  and gets the deletion hold all the same. An event of an account that the registry deleted is
+  stored and answers 200, without a change of the plan or the hold, so that deleted accounts do not
+  make Polar disable the endpoint.
 - **Metered prices.** An order item names its price. The subscription lists the prices of its
   product, so `polar_subscriptions` keeps the IDs of the metered prices, and the handler counts
   the items of these prices as overage.
@@ -368,6 +373,22 @@ until the cleanup has deleted the user of the deleted account (see
 | `GET /api/auth/callback/github` | The GitHub OAuth callback of Better Auth. The other Better Auth endpoints are not routed; the pages call them on the server. |
 | `GET /healthz` | Liveness. |
 | `GET /readyz` | Readiness: returns 503 when the database is unreachable. |
+
+The form targets answer 403 to a post whose `Origin` header is not the origin of `BETTER_AUTH_URL`,
+also to a post without `Origin`. The webhook route of Polar does not check `Origin`.
+
+Better Auth limits the requests to its handler for each client address, in the memory of each
+replica. `POST /sign-in/github` goes through the handler: a client address starts at most 3 GitHub
+sign-ins in 10 seconds, and the next one redirects to `/?error=too_many_requests`.
+
+The client address is the last address of `x-forwarded-for`, or the address of the connection
+when the request has no such header (`clientAddress` in `src/Http.ts`). The app assumes one proxy
+hop: the gateway appends the address that it sees, and every address to the left of it comes from
+the client. Before the app calls the handler of Better Auth, it sets `x-forwarded-for` to the
+client address alone, because Better Auth trusts the header only when it has one address. The
+checkout also sends this address to Polar, for the local currency. The gateway must see the address
+of the client: on golem-dev the NLB of the gateway has instance targets and
+`externalTrafficPolicy: Local`, and golem-prod must do the same.
 
 ## Development
 

@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
+import { webhookBodyLimit } from "../src/Http.ts"
 import * as Settlement from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
@@ -159,7 +160,8 @@ describe("Polar billing", () => {
 
       const response = await request(app.handler, jar, "POST", "/billing/checkout", {
         origin: baseUrl,
-        "x-forwarded-for": "203.0.113.7, 10.0.0.1"
+        // The client sent the first address; the gateway appended the second, which it saw.
+        "x-forwarded-for": "203.0.113.7, 198.51.100.7"
       })
 
       expect(response.status).toBe(303)
@@ -172,7 +174,7 @@ describe("Polar billing", () => {
         external_customer_id: accountId,
         customer_email: "octocat@example.com",
         customer_name: "Octo Cat",
-        customer_ip_address: "203.0.113.7",
+        customer_ip_address: "198.51.100.7",
         success_url: `${baseUrl}/?checkout_id={CHECKOUT_ID}`,
         return_url: `${baseUrl}/`,
         allow_discount_codes: true
@@ -194,6 +196,70 @@ describe("Polar billing", () => {
       expect(response.status).toBe(303)
       expect(response.headers.get("location")).toBe("/")
       expect(upstreams.polarRequests("/v1/checkouts/")).toEqual([])
+    })
+
+    const postCheckout = (jar: CookieJar) => request(app.handler, jar, "POST", "/billing/checkout", { origin: baseUrl })
+
+    /** The route sends a refused checkout back to the page, and Polar gets no request. */
+    const expectRefused = (response: Response) => {
+      expect(response.status).toBe(303)
+      expect(response.headers.get("location")).toBe("/")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toEqual([])
+    }
+
+    it.each([
+      ["the paid plan", paidPlanId],
+      ["the suspended plan", suspendedPlanId],
+      ["a custom plan", internalPlanId]
+    ])("refuses a checkout on %s, and the page does not offer one", async (_, planId) => {
+      const { jar, accountId } = await signedIn()
+      upstreams.planOf(accountId).planId = planId
+
+      expectRefused(await postCheckout(jar))
+      expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
+    })
+
+    it("refuses a checkout on the free plan while the subscription is past due", async () => {
+      const { jar, accountId } = await signedIn()
+      const failedAt = new Date(Date.now() - config.pastDueGraceMs - MINUTE)
+      await deliver(
+        "subscription.past_due",
+        subscription(accountId, { status: "past_due", past_due_at: failedAt.toISOString() })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+
+      expectRefused(await postCheckout(jar))
+      expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
+    })
+
+    it("refuses a checkout when the registry does not send the account", async () => {
+      const { jar } = await signedIn()
+      upstreams.accountReadStatus = 503
+
+      expectRefused(await postCheckout(jar))
+      expect(await page(jar)).toContain("Golem did not send the plan of the account.")
+    })
+
+    it("refuses a checkout when the database cannot read the subscription", async () => {
+      const { jar } = await signedIn()
+      const schema = config.db.schema
+      await pool.query(`ALTER TABLE "${schema}".polar_subscriptions RENAME TO polar_subscriptions_hidden`)
+      try {
+        expectRefused(await postCheckout(jar))
+      } finally {
+        await pool.query(`ALTER TABLE "${schema}".polar_subscriptions_hidden RENAME TO polar_subscriptions`)
+      }
+    })
+
+    it("refuses a checkout when the database cannot read the session", async () => {
+      const { jar } = await signedIn()
+      const schema = config.db.schema
+      await pool.query(`ALTER TABLE "${schema}"."session" RENAME TO session_hidden`)
+      try {
+        expectRefused(await postCheckout(jar))
+      } finally {
+        await pool.query(`ALTER TABLE "${schema}".session_hidden RENAME TO "session"`)
+      }
     })
 
     it("opens the customer portal of the Golem account", async () => {
@@ -348,7 +414,9 @@ describe("Polar billing", () => {
       const html = await page(jar)
 
       expect(html).toContain("Monthly usage")
-      expect(html).toContain("This month (UTC), against the monthly allowance of the plan.")
+      expect(html).toContain(
+        "This month, against the monthly allowance of the plan. The monthly allowance starts again on the 1st of each month (UTC)."
+      )
       expect(html).toContain("2.5M of 100M GCU included · 3%")
       expect(html).toContain("250 of 912.5 GB-hours included · 27%")
       expect(html).toContain(`max="100000000" value="2500000"`)
@@ -414,6 +482,35 @@ describe("Polar billing", () => {
     })
   })
 
+  describe("form posts", () => {
+    const routes = ["/sign-in/github", "/sign-out", "/billing/checkout", "/billing/portal", "/billing/overage"]
+    const origins: ReadonlyArray<readonly [string, Record<string, string>]> = [
+      ["without Origin", {}],
+      ["with Origin null", { origin: "null" }],
+      ["from another site", { origin: "https://evil.test" }]
+    ]
+
+    it.each(routes.flatMap((route) => origins.map(([name, headers]) => [route, name, headers] as const)))(
+      "refuses a post to %s %s",
+      async (route, _, headers) => {
+        const { jar } = await signedIn()
+        const before = upstreams.requests.length
+
+        const response = await request(
+          app.handler,
+          jar,
+          "POST",
+          route,
+          { "content-type": "application/x-www-form-urlencoded", ...headers },
+          "mode=allowOverage"
+        )
+
+        expect(response.status).toBe(403)
+        expect(upstreams.requests.slice(before)).toEqual([])
+      }
+    )
+  })
+
   describe("webhooks", () => {
     /** The `subscription.past_due` state of `sub_1` after a payment failed at `failedAt`. */
     const pastDue = (accountId: string, failedAt: Date) =>
@@ -443,6 +540,44 @@ describe("Polar billing", () => {
 
       expect(response.status).toBe(403)
       expect(upstreams.planChanges()).toEqual([])
+    })
+
+    it("rejects a delivery without the signature headers before it reads the body", async () => {
+      let read = false
+      // With a high-water mark of 0, the stream calls `pull` only when a reader asks for data.
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) => {
+            read = true
+            controller.enqueue(new TextEncoder().encode("{}"))
+            controller.close()
+          }
+        },
+        { highWaterMark: 0 }
+      )
+
+      const response = await app.handler(
+        new Request(new URL("/api/auth/polar/webhooks", baseUrl), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          duplex: "half"
+        } as RequestInit)
+      )
+
+      expect(response.status).toBe(403)
+      expect(read).toBe(false)
+    })
+
+    it("answers 413 to a signed delivery whose body is above the limit", async () => {
+      const accountId = randomUUID()
+      const padding = "x".repeat(Number(webhookBodyLimit))
+
+      const response = await deliver("subscription.active", subscription(accountId, { metadata: { padding } }))
+
+      expect(response.status).toBe(413)
+      expect(upstreams.planChanges()).toEqual([])
+      expect(upstreams.holdChanges()).toEqual([])
     })
 
     it("handles each webhook-id once", async () => {
