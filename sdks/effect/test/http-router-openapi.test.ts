@@ -14,10 +14,19 @@ import { STREAM_INTERNAL } from "../src/internal/schema-model/streamInternal.js"
 import { schemaValueToWitAsync } from "../src/internal/schema-model/wit.js"
 import { HttpServerResponse } from "effect/http"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import type { StreamOutcome } from "golem:core/types@2.0.0"
 
 const transport = vi.hoisted(() => ({
-  wrap: vi.fn(async (source: AsyncIterable<unknown>) => ({ source })),
-  unwrap: vi.fn(async (stream: { source: AsyncIterable<unknown> }) => stream.source),
+  wrap: vi.fn(async (source: AsyncIterable<unknown>, outcome: Promise<StreamOutcome>) => ({
+    source,
+    outcome,
+  })),
+  unwrap: vi.fn(
+    async (stream: { source: AsyncIterable<unknown>; outcome: Promise<StreamOutcome> }) => [
+      stream.source,
+      stream.outcome,
+    ],
+  ),
 }))
 vi.mock("golem:core/types@2.0.0", async (original) => ({
   ...(await original<object>()),
@@ -172,9 +181,8 @@ describe("real Effect HttpApi and generated provider", () => {
         expect(output.fields[0]!.value).toBe(200)
         const endpoint = output.fields[2]!.handle.take()!
         if (endpoint.kind !== "wrapped") throw new Error("expected wrapped output")
-        const source = (await transport.unwrap(endpoint.value as never)) as AsyncIterable<
-          import("golem:core/types@2.0.0").SchemaValueTree
-        >
+        const [rawSource] = await transport.unwrap(endpoint.value as never)
+        const source = rawSource as AsyncIterable<import("golem:core/types@2.0.0").SchemaValueTree>
         const iterator = source[Symbol.asyncIterator]()
         if (mode === "complete") {
           const first = schemaValueFromWit((await iterator.next()).value!)

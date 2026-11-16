@@ -105,6 +105,7 @@ sdks/moonbit/
 │   ├── logging/                       # Structured logging (named loggers, level filtering)
 │   ├── http/                          # HTTP types re-exported from WIT
 │   ├── webhook/                       # Webhook helper (create/await incoming POST via promise)
+│   ├── websocket/                     # Outbound WebSocket client with a reconstruction policy
 │   ├── api/                           # Golem host API re-exports (agents, idempotency, …)
 │   ├── quota/                         # Quota-token helpers
 │   ├── permissions/                   # Typed permission-card API (@permissions)

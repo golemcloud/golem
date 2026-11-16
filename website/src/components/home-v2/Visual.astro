@@ -1,0 +1,481 @@
+---
+import Icon from "./Icon.astro";
+interface Props {
+  kind: "durability" | "security" | "apps" | "deployment" | "journal";
+}
+const { kind } = Astro.props;
+---
+
+{
+  kind === "durability" && (
+    <div class="durability-demo" data-durability>
+      <div class="segmented" role="group" aria-label="Durability scenario">
+        <>
+          <button type="button" data-scenario="wait" aria-pressed="true">
+            Wait &amp; resume
+          </button>
+          <button type="button" data-scenario="recover" aria-pressed="false">
+            Node recovery
+          </button>
+        </>
+      </div>
+      <figure
+        class="lifecycle"
+        aria-label="While waiting, the running VM unloads. Memory, call stack and files remain durable. On approval, execution resumes mid-function."
+      >
+        <div class="lifecycle-nodes">
+          <>
+            <div class="life-node">
+              <>
+                <span class="node-status" data-life-start>
+                  Running
+                </span>
+                <Icon name="actor" size={30} />
+                <strong data-life-first>Wait for approval</strong>
+                <span class="code-line">await approval()</span>
+              </>
+            </div>
+            <span class="flow-arrow" aria-hidden="true">
+              →
+            </span>
+            <div class="life-node resting">
+              <>
+                <span class="node-status" data-life-middle>
+                  Suspended
+                </span>
+                <span class="zero-number" data-life-zero>
+                  0
+                </span>
+                <strong data-life-metric>CPU / RAM</strong>
+                <span data-life-store>Execution in durable storage</span>
+              </>
+            </div>
+            <span class="flow-arrow" aria-hidden="true">
+              →
+            </span>
+            <div class="life-node">
+              <>
+                <span class="node-status" data-life-last>
+                  Approval arrives
+                </span>
+                <Icon name="actor" size={30} />
+                <strong>Resume mid-function</strong>
+                <span data-life-end>Memory · stack · files</span>
+              </>
+            </div>
+          </>
+        </div>
+        <figcaption data-life-caption>Same execution. No running VM during the wait.</figcaption>
+      </figure>
+    </div>
+  )
+}
+
+{
+  kind === "security" && (
+    <figure
+      class="security-figure"
+      aria-label="Every attempt to access the outside world passes through Golem's runtime policy. Access to the granted project is allowed; access outside the grant is denied."
+    >
+      <div class="security-origin">
+        <>
+          <Icon name="function" size={25} />
+          <strong>Your code</strong>
+          <span>including agent-written code</span>
+        </>
+      </div>
+      <span class="down-arrow" aria-hidden="true">
+        ↓
+      </span>
+      <div class="policy-gate">
+        <>
+          <Icon name="shield" size={23} />
+          <strong>Runtime policy enforcement</strong>
+        </>
+      </div>
+      <div class="policy-outcomes">
+        <>
+          <div class="allowed">
+            <>
+              <span class="policy-line" aria-hidden="true" />
+              <b>✓ Allowed</b>
+              <span>Granted project</span>
+            </>
+          </div>
+          <div class="denied">
+            <>
+              <span class="policy-line" aria-hidden="true" />
+              <b>× Denied</b>
+              <span>Outside the grant</span>
+            </>
+          </div>
+        </>
+      </div>
+    </figure>
+  )
+}
+
+{
+  kind === "apps" && (
+    <div class="app-evolution" data-app-demo>
+      <div class="requests">
+        <>
+          <div class="micro">KEEP SHAPING IT</div>
+          <div class="request-options" role="group" aria-label="Evolve the spending app">
+            <>
+              <button type="button" aria-pressed="true" data-app-stage="0">
+                <span>01</span>Show my monthly spending
+                <Icon name="arrow" size={19} />
+              </button>
+              <button type="button" aria-pressed="false" data-app-stage="1">
+                <span>02</span>Break it down by category
+                <Icon name="arrow" size={19} />
+              </button>
+              <button type="button" aria-pressed="false" data-app-stage="2">
+                <span>03</span>Let me set category caps
+                <Icon name="arrow" size={19} />
+              </button>
+            </>
+          </div>
+          <p class="app-retained">
+            <Icon name="check" size={17} />
+            Same app. Same transactions.
+          </p>
+        </>
+      </div>
+      <figure
+        class="spending-app"
+        aria-label="An illustrative spending app evolves from a monthly total to categories to editable budgets, while retaining the same transactions."
+      >
+        <div class="window-bar">
+          <>
+            <span class="window-dots" aria-hidden="true">
+              <>
+                <i />
+                <i />
+                <i />
+              </>
+            </span>
+            <span>Spending tracker</span>
+            <span class="demo-tag">Interactive example</span>
+          </>
+        </div>
+        <div class="spending-body">
+          <div class="spending-top">
+            <>
+              <div>
+                <>
+                  <span class="micro">THIS MONTH</span>
+                  <strong>
+                    $1,240<span>.00</span>
+                  </strong>
+                </>
+              </div>
+              <span class="app-version" aria-live="polite">
+                Monthly overview
+              </span>
+            </>
+          </div>
+          <div class="spending-overview" data-app-overview>
+            <>
+              <div class="spark-bars" aria-hidden="true">
+                {[24, 42, 32, 67, 45, 83, 61, 94, 57, 72, 52, 38].map((height) => (
+                  <i style={`--bar:${height}%`} />
+                ))}
+              </div>
+              <p>12 sample transactions</p>
+            </>
+          </div>
+          <div class="spending-breakdown" data-app-breakdown hidden>
+            {[
+              { name: "Groceries", amount: 460, cap: 600 },
+              { name: "Transport", amount: 180, cap: 250 },
+              { name: "Other", amount: 600, cap: 800 },
+            ].map(({ name, amount, cap }) => (
+              <div class="budget-row" data-budget-row data-amount={amount}>
+                <div>
+                  <strong>{name}</strong>
+                  <span>${amount}</span>
+                </div>
+                <div class="budget-track">
+                  <span style={`--spent:${(amount / 1240) * 100}%`} />
+                </div>
+                <label data-cap-control hidden>
+                  Monthly cap{" "}
+                  <span>
+                    $
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={cap}
+                      aria-label={`${name} monthly cap`}
+                    />
+                  </span>
+                </label>
+                <span class="budget-status" data-budget-status hidden />
+              </div>
+            ))}
+          </div>
+        </div>
+        <figcaption class="app-foundation">
+          <>
+            <span>Browser UI</span>
+            <span aria-hidden="true">→</span>
+            <div>
+              <>
+                <span>Declared API</span>
+                <b>Actor + SQLite</b>
+                <small>Durable, permissioned VM</small>
+              </>
+            </div>
+          </>
+        </figcaption>
+      </figure>
+    </div>
+  )
+}
+
+{
+  kind === "deployment" && (
+    <figure
+      class="recursive-deployment"
+      aria-label="A builder actor with deployment authority can deploy a spending app. That app can deploy a report app when authorized. Each has its own identity and permissions, on the same Golem server."
+    >
+      <div class="deploy-chain">
+        <>
+          <div class="deploy-node">
+            <>
+              <span class="micro">CODING AGENT</span>
+              <Icon name="actor" size={32} />
+              <strong>Edit, build &amp; deploy</strong>
+              <div class="deploy-parts">Actor + coding tools</div>
+              <div class="deploy-identity">
+                <span class="identity-dot" />
+                Own identity + permissions
+              </div>
+            </>
+          </div>
+          <div class="deploy-arrow">
+            <>
+              <span>Build + deploy</span>
+              <span aria-hidden="true">→</span>
+            </>
+          </div>
+          <div class="deploy-node">
+            <>
+              <span class="micro">SPENDING APP</span>
+              <Icon name="apps" size={32} />
+              <strong>A complete application</strong>
+              <div class="deploy-parts">
+                UI + functions <span>Actor + files</span>
+              </div>
+              <div class="deploy-identity">
+                <span class="identity-dot" />
+                Own identity + permissions
+              </div>
+            </>
+          </div>
+          <div class="deploy-arrow">
+            <>
+              <span>Deploy</span>
+              <span aria-hidden="true">→</span>
+              <small>When authorized</small>
+            </>
+          </div>
+          <div class="deploy-node">
+            <>
+              <span class="micro">REPORT APP</span>
+              <Icon name="apps" size={32} />
+              <strong>More software</strong>
+              <div class="deploy-parts">
+                UI + functions <span>Actor + files</span>
+              </div>
+              <div class="deploy-identity">
+                <span class="identity-dot" />
+                Own identity + permissions
+              </div>
+            </>
+          </div>
+        </>
+      </div>
+      <figcaption class="deploy-boundary">
+        <>
+          <span>
+            <Icon name="shield" size={18} />
+            Entirely inside Golem · separate identities
+          </span>
+          <span>
+            <b>✓</b>Deploy in granted project
+          </span>
+          <span class="denied-text">× Blocked elsewhere</span>
+        </>
+      </figcaption>
+    </figure>
+  )
+}
+
+{
+  kind === "journal" && (
+    <div class="capability-visual" data-capability-visual>
+      <div class="visual-panel" data-cap-panel="journal">
+        <>
+          <div class="panel-title">
+            <>
+              <Icon name="journal" size={20} />
+              <strong>Execution journal</strong>
+              <span>spending-actor</span>
+            </>
+          </div>
+          <div class="journal-lines">
+            <>
+              <div>
+                <>
+                  <span>01</span>
+                  <b>Invocation</b>
+                  <code>monthlyReport()</code>
+                </>
+              </div>
+              <div>
+                <>
+                  <span>02</span>
+                  <b>File access</b>
+                  <code>/data/transactions.db</code>
+                  <i>✓ Allowed</i>
+                </>
+              </div>
+              <div>
+                <>
+                  <span>03</span>
+                  <b>Model reply</b>
+                  <code>Result recorded</code>
+                </>
+              </div>
+              <div>
+                <>
+                  <span>04</span>
+                  <b>Wait</b>
+                  <code>Approval requested</code>
+                </>
+              </div>
+              <div class="journal-idle">
+                <>
+                  <span>05</span>
+                  <b>Suspended</b>
+                  <code>0 CPU / RAM</code>
+                </>
+              </div>
+            </>
+          </div>
+          <div class="panel-foot">Calls, results and permission decisions</div>
+        </>
+      </div>
+      <div class="visual-panel" data-cap-panel="budget" hidden>
+        <>
+          <div class="panel-title">
+            <>
+              <Icon name="apps" size={20} />
+              <strong>Resource budget</strong>
+              <span>spending-actor</span>
+            </>
+          </div>
+          <div class="budget-visual">
+            <>
+              <div>
+                <>
+                  <span>Compute</span>
+                  <b>35% used</b>
+                </>
+              </div>
+              <progress value="35" max="100">
+                35%
+              </progress>
+              <div>
+                <>
+                  <span>Memory</span>
+                  <b>20% used</b>
+                </>
+              </div>
+              <progress value="20" max="100">
+                20%
+              </progress>
+              <div>
+                <>
+                  <span>Tool calls</span>
+                  <b>60% used</b>
+                </>
+              </div>
+              <progress value="60" max="100">
+                60%
+              </progress>
+            </>
+          </div>
+          <div class="panel-foot">Limits, quotas and usage accounting</div>
+        </>
+      </div>
+      <div class="visual-panel" data-cap-panel="coordinate" hidden>
+        <>
+          <div class="panel-title">
+            <>
+              <Icon name="function" size={20} />
+              <strong>Typed calls</strong>
+              <span>Across languages</span>
+            </>
+          </div>
+          <div class="typed-call">
+            <>
+              <div>
+                <>
+                  <b>TypeScript actor</b>
+                  <code>await account.balance()</code>
+                </>
+              </div>
+              <span aria-hidden="true">↓</span>
+              <div>
+                <>
+                  <b>Rust actor</b>
+                  <code>balance() → Amount</code>
+                </>
+              </div>
+            </>
+          </div>
+          <div class="panel-foot">Wait without holding a VM in memory</div>
+        </>
+      </div>
+      <div class="visual-panel" data-cap-panel="operate" hidden>
+        <>
+          <div class="panel-title">
+            <>
+              <Icon name="server" size={20} />
+              <strong>Running applications</strong>
+              <span>Inspect + manage</span>
+            </>
+          </div>
+          <div class="operations-list">
+            <>
+              <div>
+                <>
+                  <b>Spending app</b>
+                  <span>Suspended · 0 CPU / RAM</span>
+                </>
+              </div>
+              <div>
+                <>
+                  <b>Builder actor</b>
+                  <span>Running</span>
+                </>
+              </div>
+              <div>
+                <>
+                  <b>Report app</b>
+                  <span>Suspended · 0 CPU / RAM</span>
+                </>
+              </div>
+            </>
+          </div>
+          <div class="panel-foot">Deploy updates · inspect execution · snapshots</div>
+        </>
+      </div>
+    </div>
+  )
+}

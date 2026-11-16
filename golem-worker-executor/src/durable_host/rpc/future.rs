@@ -37,6 +37,7 @@ use crate::preview2::golem::agent::host::RpcError;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationRequestKey;
@@ -260,6 +261,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 env: Vec<(String, String)>,
                 config: Vec<AgentConfigEntryDto>,
                 deferred_activation: Option<RpcTargetActivation>,
+                expected_callee_fingerprint: Option<AgentFingerprint>,
                 span_id: SpanId,
                 cancel_token: tokio_util::sync::CancellationToken,
             },
@@ -312,6 +314,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     env,
                     config,
                     deferred_activation,
+                    expected_callee_fingerprint,
                     span_id,
                     cancel_token,
                 } => {
@@ -328,6 +331,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         env: env.clone(),
                         config: config.clone(),
                         deferred_activation: deferred_activation.clone(),
+                        expected_callee_fingerprint: *expected_callee_fingerprint,
                         span_id: span_id.clone(),
                         cancel_token: cancel_token.clone(),
                     }
@@ -347,6 +351,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 env,
                 config,
                 deferred_activation,
+                expected_callee_fingerprint,
                 span_id,
                 cancel_token,
             } => {
@@ -484,6 +489,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                         env.clone(),
                                         config.clone(),
                                         deferred_activation.clone(),
+                                        expected_callee_fingerprint,
                                         &span_id,
                                         retry_point,
                                         InvocationFreshnessDisposition::MayExist,

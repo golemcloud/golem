@@ -901,7 +901,7 @@ impl Drop for WorkerStatusMetric {
 #[derive(Debug)]
 enum WorkerInstance {
     Unresolved,
-    Initializing(Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>),
+    Initializing(Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>),
     /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
     /// admission returns it until the next start, which runs the agent again.
     Unloaded {
@@ -1034,7 +1034,7 @@ struct RunningAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesyst
 
 struct RunningAgentRuntime<Ctx: WorkerCtx> {
     instance: Instance,
-    store: ObservedPrimaryStore<async_lock::Mutex<Store<Ctx>>>,
+    store: ObservedPrimaryStore<async_lock::Mutex<instance::PrimaryStore<Ctx>>>,
 }
 
 pub(crate) struct ObservedPrimaryStore<T> {
@@ -1369,7 +1369,7 @@ enum StopResult {
 mod resource_release_tests;
 
 pub use acquisition::merge_agent_env_with_default_env;
-pub(crate) use ingress::require_expected_tool_deployment_revision;
+pub(crate) use ingress::{await_scalar_invocation, require_expected_tool_deployment_revision};
 use ingress::{
     inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
 };

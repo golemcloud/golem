@@ -148,7 +148,7 @@ pub fn[R] GuestQuotaTokenHandle::with_handle(Self, (@types.QuotaToken) -> R) -> 
 pub(all) struct GuestSchemaValueStreamHandle {
   // private fields
 }
-pub fn GuestSchemaValueStreamHandle::from_native(@async-core.Stream[@types.SchemaValueTree]) -> Self
+pub fn GuestSchemaValueStreamHandle::from_native(@async-core.Stream[@types.SchemaValueTree], outcome~ : @async-core.Future[Result[Unit, @types.StreamError]]) -> Self
 pub fn GuestSchemaValueStreamHandle::from_wrapped(@types.SchemaValueStream) -> Self
 pub fn GuestSchemaValueStreamHandle::is_present(Self) -> Bool
 pub async fn GuestSchemaValueStreamHandle::prepare_outgoing(Self) -> Unit

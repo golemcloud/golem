@@ -122,33 +122,41 @@ impl DurableStreamStore {
         authored_by: StreamTerminalAuthor,
         terminal: StreamTerminal,
     ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
-        let memory = terminal_retained_bytes(&terminal)?;
-        self.run_owned(context, memory, move |owner, context| async move {
-            owner
-                .end_authored(&context, stream_id, sequence, terminal, authored_by)
-                .await
-        })
+        self.end_with_origin(
+            context,
+            stream_id,
+            sequence,
+            authored_by,
+            StreamTerminalOrigin::Source,
+            terminal,
+        )
         .await
     }
 
-    async fn end_authored(
+    pub(crate) async fn end_with_origin(
         &self,
-        context: &StreamWriteContext,
+        context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         sequence: u64,
-        terminal: StreamTerminal,
         authored_by: StreamTerminalAuthor,
+        origin: StreamTerminalOrigin,
+        terminal: StreamTerminal,
     ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
-        let index = self.index_for_terminal([], stream_id).await?;
-        self.end_authored_locked(
-            context,
-            index,
-            stream_id,
-            sequence,
-            terminal,
-            authored_by,
-            StreamTerminalOrigin::Source,
-        )
+        let memory = terminal_retained_bytes(&terminal)?;
+        self.run_owned(context, memory, move |owner, context| async move {
+            let index = owner.index_for_terminal([], stream_id).await?;
+            owner
+                .end_authored_locked(
+                    &context,
+                    index,
+                    stream_id,
+                    sequence,
+                    terminal,
+                    authored_by,
+                    origin,
+                )
+                .await
+        })
         .await
     }
 

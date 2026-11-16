@@ -2167,3 +2167,184 @@ fn discovered_tool_wit_encoding_error_has_tool_and_source_context() {
     assert!(message.contains(&component_id.to_string()));
     assert!(message.contains("duplicate type id: duplicate"));
 }
+
+#[test]
+#[timeout("30s")]
+async fn streamed_tool_response_publishes_mappings_before_body_outcome() {
+    use crate::durable_host::durable_session::StreamSession;
+    use crate::durable_host::durable_stream::tests::{TestOplog, identity};
+    use crate::durable_host::durable_stream::{
+        CommittedProducerStreamEventPayload, DurableStreamStore,
+    };
+    use crate::durable_host::stream_outcome::ProducerOutcomeScope;
+    use crate::durable_host::stream_transport::accounted_output_stream_pair;
+    use crate::worker::tasks::{NativeReconstructionTasks, WorkerTasks};
+    use golem_common::model::durable_stream::{StreamError, StreamRegistrationInvocation};
+
+    for custom_error in [false, true] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let store = DurableStreamStore::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = StreamSession::new(
+            store.clone(),
+            oplog,
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+            [],
+        );
+        let tasks = WorkerTasks::default();
+        let mut outputs = NativeReconstructionTasks::new(&tasks).unwrap();
+        let mut producers = ProducerOutcomeScope::new(tasks);
+        let producer = producers.register();
+        let (_consumer, stream) = accounted_output_stream_pair(
+            1,
+            Arc::new(|| false),
+            None,
+            Box::pin(std::future::pending()),
+            Some(producer.clone()),
+        )
+        .unwrap();
+        let first = producer.publish_item(SchemaValue::U8(23));
+        let second = producer.publish_item(SchemaValue::U8(91));
+        let payload = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::u8()))),
+            SchemaValue::Stream(stream),
+        );
+        let response = if custom_error {
+            Err(SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                    name: "partial".into(),
+                    payload,
+                })),
+            )))
+        } else {
+            Ok(super::SerializableToolInvocationResult {
+                result: Some(Box::new(payload)),
+            })
+        };
+        let response = super::streams::materialize_response(
+            &streams,
+            ComponentRevision::INITIAL,
+            response,
+            &outputs.spawner(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.is_err(), custom_error);
+        let handle = streams.materialized_mappings()[0].handle.clone();
+        let terminal = if custom_error {
+            producers.settle(Err("body trapped".into()));
+            StreamTerminal::Failed(StreamError::Trapped("body trapped".into()))
+        } else {
+            producers.settle(Ok(()));
+            StreamTerminal::Failed(StreamError::Abandoned)
+        };
+        producers.release();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        outputs.seal_and_drain().await.unwrap();
+        let mut reader = store.catch_up(handle, None).await.unwrap();
+        for expected in [23, 91] {
+            assert_eq!(
+                reader.next().await.unwrap().unwrap().payload,
+                CommittedProducerStreamEventPayload::PackedU8(expected)
+            );
+        }
+        assert_eq!(
+            reader.next().await.unwrap().unwrap().payload,
+            CommittedProducerStreamEventPayload::Terminal(terminal)
+        );
+        assert!(reader.next().await.unwrap().is_none());
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn schema_output_fence_interrupts_a_parked_body_after_mapping_publication() {
+    use crate::durable_host::durable_session::StreamSession;
+    use crate::durable_host::durable_stream::DurableStreamStore;
+    use crate::durable_host::durable_stream::tests::{TestOplog, identity, test_fence};
+    use crate::durable_host::stream_outcome::ProducerOutcomeScope;
+    use crate::durable_host::stream_transport::accounted_output_stream_pair;
+    use crate::worker::tasks::{NativeReconstructionTasks, WorkerTasks};
+    use golem_common::model::durable_stream::StreamRegistrationInvocation;
+
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let durable = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let streams = StreamSession::new(
+        durable,
+        oplog.clone(),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    );
+    let tasks = WorkerTasks::default();
+    let mut outputs = NativeReconstructionTasks::new(&tasks).unwrap();
+    let mut producers = ProducerOutcomeScope::new(tasks);
+    let producer = producers.register();
+    let (_consumer, stream) = accounted_output_stream_pair(
+        1,
+        Arc::new(|| false),
+        None,
+        Box::pin(std::future::pending()),
+        Some(producer.clone()),
+    )
+    .unwrap();
+    super::streams::materialize_response(
+        &streams,
+        ComponentRevision::INITIAL,
+        Ok(super::SerializableToolInvocationResult {
+            result: Some(Box::new(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::u8()))),
+                SchemaValue::Stream(stream),
+            ))),
+        }),
+        &outputs.spawner(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(streams.materialized_mappings().len(), 1);
+
+    let engine =
+        Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())
+            .unwrap();
+    let mut store = Store::new(&engine, ());
+    let monitor = outputs.monitor();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let _stop = stop.clone().drop_guard();
+    oplog.refuse_adds(test_fence());
+    crate::durable_host::stream_outcome::supervise_schema_outputs(&mut store, monitor, None, stop)
+        .unwrap();
+    let error = store
+        .run_concurrent(async move |_accessor| {
+            let _receipt = producer.publish_item(SchemaValue::U8(73));
+            std::future::pending::<()>().await
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<WorkerExecutorError>(),
+        Some(WorkerExecutorError::OplogFenced { .. })
+    ));
+    assert!(matches!(
+        outputs.monitor().wait_for_failure().now_or_never(),
+        Some(WorkerExecutorError::OplogFenced { .. })
+    ));
+    outputs.abort_and_join().await;
+}

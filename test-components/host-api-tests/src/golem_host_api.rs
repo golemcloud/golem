@@ -1,6 +1,7 @@
 use crate::raw_http;
 use crate::raw_http::Method;
 use futures_concurrency::future::Join;
+use golem_rust::agentic::AgentStream;
 use golem_rust::bindings::golem::agent::host::{Datetime, WasmRpc};
 use golem_rust::bindings::golem::api::oplog::{GetOplog, OplogReadError, SearchOplog};
 use golem_rust::bindings::golem::tool::host as tool_host;
@@ -168,6 +169,27 @@ pub trait GolemHostApi {
         constructor: String,
         method: String,
     ) -> Result<(), String>;
+    /// Creates an RPC handle to the agent, calls `method` through it, and keeps the handle for
+    /// the `kept_agent_rpc_*` methods of later invocations.
+    fn keep_agent_rpc(
+        &mut self,
+        agent_type: String,
+        constructor: String,
+        method: String,
+    ) -> Result<(), String>;
+    fn kept_agent_rpc_invoke_and_await_result(&self, method: String) -> Result<(), String>;
+    async fn kept_agent_rpc_async_invoke_and_await_result(
+        &self,
+        method: String,
+    ) -> Result<(), String>;
+    fn kept_agent_rpc_invoke_result(&self, method: String) -> Result<(), String>;
+    /// Schedules `method` through the kept handle for a time that never comes due in a test.
+    fn kept_agent_rpc_schedule_result(&self, method: String) -> Result<(), String>;
+    /// Calls a method returning `AgentStream<u64>` through the kept handle and drains the stream.
+    async fn kept_agent_rpc_invoke_and_await_u64_stream_result(
+        &self,
+        method: String,
+    ) -> Result<Vec<u64>, String>;
     fn read_own_oplog_result(&self) -> Result<(), String>;
     fn search_own_oplog_result(&self, query: String) -> Result<(), String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
@@ -235,6 +257,15 @@ impl EphemeralPromise for EphemeralPromiseImpl {
 pub struct GolemHostApiImpl {
     _name: String,
     recorded_tools: Option<Vec<ToolSummary>>,
+    kept_rpc: Option<WasmRpc>,
+}
+
+impl GolemHostApiImpl {
+    fn kept_rpc(&self) -> &WasmRpc {
+        self.kept_rpc
+            .as_ref()
+            .expect("keep_agent_rpc must be called before a kept_agent_rpc method")
+    }
 }
 
 fn summarize_tool(tool: tool_host::RegisteredTool) -> ToolSummary {
@@ -287,6 +318,7 @@ impl GolemHostApi for GolemHostApiImpl {
         Self {
             _name: name,
             recorded_tools: None,
+            kept_rpc: None,
         }
     }
 
@@ -621,12 +653,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.invoke(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -638,12 +671,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.async_invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .future
             .get()
@@ -658,12 +692,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -675,12 +710,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.schedule_invocation(
             Datetime {
                 seconds: 0,
@@ -700,12 +736,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.schedule_cancelable_invocation(
             Datetime {
                 seconds: 0,
@@ -717,6 +754,85 @@ impl GolemHostApi for GolemHostApiImpl {
         )
         .map(|_| ())
         .map_err(|error| format!("{error:?}"))
+    }
+
+    fn keep_agent_rpc(
+        &mut self,
+        agent_type: String,
+        constructor: String,
+        method: String,
+    ) -> Result<(), String> {
+        let rpc = WasmRpc::new(
+            &agent_type,
+            encode_parameters(vec![SchemaValue::String(constructor)])?,
+            None,
+            Vec::new(),
+        );
+        rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map_err(|error| format!("{error:?}"))?;
+        self.kept_rpc = Some(rpc);
+        Ok(())
+    }
+
+    fn kept_agent_rpc_invoke_and_await_result(&self, method: String) -> Result<(), String> {
+        self.kept_rpc()
+            .invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn kept_agent_rpc_async_invoke_and_await_result(
+        &self,
+        method: String,
+    ) -> Result<(), String> {
+        self.kept_rpc()
+            .async_invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .future
+            .get()
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn kept_agent_rpc_invoke_result(&self, method: String) -> Result<(), String> {
+        self.kept_rpc()
+            .invoke(&method, encode_parameters(Vec::new())?, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn kept_agent_rpc_schedule_result(&self, method: String) -> Result<(), String> {
+        self.kept_rpc()
+            .schedule_invocation(
+                // 2100-01-01, so the scheduled call never comes due during a test.
+                Datetime {
+                    seconds: 4_102_444_800,
+                    nanoseconds: 0,
+                },
+                &method,
+                encode_parameters(Vec::new())?,
+                None,
+            )
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn kept_agent_rpc_invoke_and_await_u64_stream_result(
+        &self,
+        method: String,
+    ) -> Result<Vec<u64>, String> {
+        let result = self
+            .kept_rpc()
+            .invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map_err(|error| format!("{error:?}"))?
+            .result
+            .ok_or_else(|| format!("{method} returned no value"))?;
+        let value =
+            golem_rust::decode_schema_value(result).map_err(|error| format!("{error:?}"))?;
+        AgentStream::<u64>::from_value(&value)
+            .map_err(|error| format!("{error:?}"))?
+            .collect()
+            .await
     }
 
     fn read_own_oplog_result(&self) -> Result<(), String> {

@@ -137,6 +137,7 @@ impl CallAgentHandler {
                 proto_principal,
                 Some(resolved_route.route.environment_id),
                 None,
+                None,
             )
             .await?;
 
