@@ -81,7 +81,7 @@ export const cleanupDeletedAccounts: Effect.Effect<
   for (const accountId of deleted.filter((accountId) => !finished.has(accountId))) {
     const reasons = holdFor(
       yield* subscriptions.ofAccount(accountId, undefined),
-      yield* subscriptions.pendingOrders(accountId, undefined),
+      yield* subscriptions.unpaidOrders(accountId, undefined),
       yield* subscriptions.unbilledUsage(accountId)
     )
     if (reasons.length > 0) {

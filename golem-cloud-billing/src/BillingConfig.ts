@@ -76,6 +76,11 @@ export interface BillingConfigShape {
     readonly accessToken: Redacted.Redacted<string>
     /** The Polar product of the paid plan. */
     readonly productId: string
+    /**
+     * The private one-time Polar product of a settlement, which pays the paid overage of the
+     * orders that Polar no longer collects. Each checkout gives it an ad-hoc price.
+     */
+    readonly settlementProductId: string
     /** The secret that Polar signs the webhooks with (`whsec_...`). */
     readonly webhookSecret: Redacted.Redacted<string>
   }
@@ -168,6 +173,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     apiUrl: Config.URL("POLAR_API_URL"),
     accessToken: Config.Redacted("POLAR_ACCESS_TOKEN"),
     productId: Config.String("POLAR_PRODUCT_ID"),
+    settlementProductId: Config.String("POLAR_SETTLEMENT_PRODUCT_ID"),
     webhookSecret: Config.Redacted("POLAR_WEBHOOK_SECRET")
   }),
   db: postgresConfig
@@ -199,6 +205,9 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
       if (!decimal.test(value)) {
         return invalid(`${name} must be a decimal number of USD, such as 0.045, got ${value}`)
       }
+    }
+    if (config.polar.settlementProductId === config.polar.productId) {
+      return invalid("POLAR_SETTLEMENT_PRODUCT_ID and POLAR_PRODUCT_ID must differ")
     }
     if (!Redacted.value(config.polar.webhookSecret).startsWith("whsec_")) {
       return invalid("POLAR_WEBHOOK_SECRET must start with whsec_")

@@ -67,6 +67,31 @@ export interface CheckoutRequest {
   readonly returnUrl: string
 }
 
+/**
+ * The metadata key of a checkout of the settlement product, and of its order: the IDs of the
+ * orders that the settlement pays, separated by commas.
+ */
+export const SETTLED_ORDERS_METADATA_KEY = "golem_settled_order_ids"
+
+/**
+ * A checkout of the settlement product for a Golem account: an ad-hoc fixed price that the
+ * customer cannot change, with no discount codes. Polar adds the tax.
+ */
+export interface SettlementCheckoutRequest {
+  readonly productId: string
+  /** The Golem account ID: the external ID of the existing Polar customer. */
+  readonly externalCustomerId: string
+  readonly customerEmail: string
+  readonly customerName: string | undefined
+  readonly customerIpAddress: string | undefined
+  /** The price in USD cents. */
+  readonly amount: number
+  /** The orders that the settlement pays. */
+  readonly orderIds: ReadonlyArray<string>
+  readonly successUrl: string
+  readonly returnUrl: string
+}
+
 /** The SDK errors with an HTTP status: `PolarClientError` and `PolarServerError`. */
 const statusOf = (error: unknown): number | undefined =>
   typeof error === "object" && error !== null && "statusCode" in error && typeof error.statusCode === "number"
@@ -91,6 +116,8 @@ export interface PolarShape {
   readonly ingestEvents: (events: ReadonlyArray<PolarEvent>) => Effect.Effect<void, PolarError>
   /** Creates a checkout session and returns the URL of its checkout page. */
   readonly createCheckout: (request: CheckoutRequest) => Effect.Effect<string, PolarError>
+  /** Creates a checkout session of a settlement and returns the URL of its checkout page. */
+  readonly createSettlementCheckout: (request: SettlementCheckoutRequest) => Effect.Effect<string, PolarError>
   /**
    * Creates a customer session for the Polar customer with the external ID, and returns the
    * URL of its customer portal: payment method, invoices, cancellation.
@@ -151,6 +178,24 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
         })
       ).pipe(Effect.map((checkout) => checkout.url))
 
+    const createSettlementCheckout = (request: SettlementCheckoutRequest) =>
+      sdkCall("create_settlement_checkout", () =>
+        checkouts({
+          products: [request.productId],
+          prices: {
+            [request.productId]: [{ amount_type: "fixed", price_amount: request.amount, price_currency: "usd" }]
+          },
+          external_customer_id: request.externalCustomerId,
+          customer_email: request.customerEmail,
+          customer_name: request.customerName ?? null,
+          customer_ip_address: request.customerIpAddress ?? null,
+          success_url: request.successUrl,
+          return_url: request.returnUrl,
+          allow_discount_codes: false,
+          metadata: { [SETTLED_ORDERS_METADATA_KEY]: request.orderIds.join(",") }
+        })
+      ).pipe(Effect.map((checkout) => checkout.url))
+
     const createCustomerPortalUrl = (request: { readonly externalCustomerId: string; readonly returnUrl: string }) =>
       sdkCall("create_customer_session", () =>
         customerSessions({ external_customer_id: request.externalCustomerId, return_url: request.returnUrl })
@@ -171,6 +216,6 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
           Effect.mapError(toPolarError("delete_customer"))
         )
 
-    return { ingestEvents, createCheckout, createCustomerPortalUrl, deleteCustomer }
+    return { ingestEvents, createCheckout, createSettlementCheckout, createCustomerPortalUrl, deleteCustomer }
   })
 )

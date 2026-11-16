@@ -11,11 +11,14 @@ import {
   ORDER_PAYMENT_GRACE_MS,
   planFor,
   SETTLEMENT_MARGIN_MS,
+  SETTLEMENT_MAX_ORDERS,
+  SETTLEMENT_MINIMUM_CENTS,
   CONTACT_EMAIL,
+  settlementFor,
   sweeper
 } from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
-import type { PendingOrder, Subscription } from "../src/Subscriptions.ts"
+import type { Subscription, UnpaidOrder } from "../src/Subscriptions.ts"
 import { polarProductId, testConfig } from "./support.ts"
 
 const now = new Date("2026-11-20T12:00:00Z")
@@ -39,9 +42,10 @@ const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
 const endingIn = (milliseconds: number) =>
   subscription({ cancelAtPeriodEnd: true, currentPeriodEnd: new Date(now.getTime() + milliseconds) })
 
-const pending = (overrides: Partial<PendingOrder> = {}): PendingOrder => ({
+const pending = (overrides: Partial<UnpaidOrder> = {}): UnpaidOrder => ({
   orderId: "order_1",
   subscriptionId: "sub_1",
+  status: "pending",
   createdAt: new Date(now.getTime() - MINUTE),
   meteredAmount: 345,
   ...overrides
@@ -55,6 +59,8 @@ const pastDueAfterGrace = subscription({
 })
 const revokedUnpaid = subscription({ status: "canceled", pastDueAt: new Date(now.getTime() - MINUTE) })
 const overdue = pending({ createdAt: new Date(now.getTime() - ORDER_PAYMENT_GRACE_MS - MINUTE) })
+const ended = subscription({ status: "canceled", endedAt: new Date(now.getTime() - 2 * ORDER_PAYMENT_GRACE_MS) })
+const belowMinimum = { meteredAmount: SETTLEMENT_MINIMUM_CENTS - 1 }
 
 describe("planFor", () => {
   it.each([
@@ -74,6 +80,20 @@ describe("planFor", () => {
     ["a canceled subscription with overdue overage", "suspended", [subscription({ status: "canceled" })], [overdue]],
     ["a canceled subscription with an overdue price", "free", [subscription({ status: "canceled" })], [pending({ ...overdue, meteredAmount: 0 })]],
     ["a canceled subscription", "free", [subscription({ status: "canceled" })], []],
+    ["a revoked subscription whose unpaid order Polar voided", "suspended", [revokedUnpaid], [pending({ status: "void" })]],
+    ["an ended subscription with overdue overage below the settlement minimum", "free", [ended], [pending({ ...overdue, ...belowMinimum })]],
+    [
+      "an ended subscription with two overdue orders that reach the settlement minimum together",
+      "suspended",
+      [ended],
+      [pending({ ...overdue, meteredAmount: 25 }), pending({ ...overdue, orderId: "order_2", meteredAmount: 25 })]
+    ],
+    [
+      "a past_due subscription after the past-due grace, with overage below the settlement minimum",
+      "suspended",
+      [pastDueAfterGrace],
+      [pending(belowMinimum)]
+    ],
     ["a trialing subscription", "free", [subscription({ status: "trialing" })], []],
     ["a paused subscription", "free", [subscription({ status: "paused" })], []],
     ["an incomplete subscription", "free", [subscription({ status: "incomplete" })], []],
@@ -130,6 +150,8 @@ describe("holdFor", () => {
     ],
     ["an unpaid order with overage", ["unpaidOverage"], [subscription({ status: "canceled" })], [pending()], false],
     ["an unpaid order of the price alone", [], [subscription({ status: "canceled" })], [priceOnly], false],
+    ["a void order with overage", ["unpaidOverage"], [revokedUnpaid], [pending({ status: "void" })], false],
+    ["an order of an ended subscription with overage below the settlement minimum", [], [ended], [pending(belowMinimum)], false],
     [
       "an active subscription with every other reason",
       ["subscription", "unbilledUsage", "unpaidOverage"],
@@ -169,6 +191,51 @@ describe("holdFor", () => {
   })
 })
 
+describe("settlementFor", () => {
+  it("offers no settlement while Polar collects the order", () => {
+    expect(settlementFor([subscription()], [overdue])).toBeUndefined()
+    expect(settlementFor([pastDueAfterGrace], [pending()])).toBeUndefined()
+  })
+
+  it("settles the overage of an order of an ended subscription, without its price", () => {
+    expect(settlementFor([ended], [overdue])).toEqual({ orders: [{ orderId: "order_1", amount: 345 }], amount: 345 })
+    expect(settlementFor([ended], [priceOnly])).toBeUndefined()
+  })
+
+  it("settles a void order, also before the webhook of the revoke arrives", () => {
+    expect(settlementFor([subscription()], [pending({ status: "void" })])).toEqual({
+      orders: [{ orderId: "order_1", amount: 345 }],
+      amount: 345
+    })
+  })
+
+  it("offers no settlement below the settlement minimum", () => {
+    expect(settlementFor([ended], [pending(belowMinimum)])).toBeUndefined()
+  })
+
+  it("settles only the orders that Polar no longer collects", () => {
+    const orders = [pending({ subscriptionId: "sub_2" }), pending({ orderId: "order_2", status: "void", meteredAmount: 100 })]
+
+    expect(settlementFor([subscription({ subscriptionId: "sub_2" })], orders)).toEqual({
+      orders: [{ orderId: "order_2", amount: 100 }],
+      amount: 100
+    })
+  })
+
+  it("settles at most the oldest orders whose IDs fit in the metadata of Polar", () => {
+    const orders = Array.from({ length: SETTLEMENT_MAX_ORDERS + 2 }, (_, index) =>
+      pending({ orderId: `0b7a4b6e-8c2b-4f63-bb0e-6a4cf7c1b9${String(index).padStart(2, "0")}` })
+    )
+
+    const offer = settlementFor([ended], orders)
+
+    expect(offer?.orders).toHaveLength(SETTLEMENT_MAX_ORDERS)
+    expect(offer?.orders[0]?.orderId).toBe(orders[0]?.orderId)
+    expect(offer?.amount).toBe(SETTLEMENT_MAX_ORDERS * 345)
+    expect(offer!.orders.map((order) => order.orderId).join(",").length).toBeLessThanOrEqual(500)
+  })
+})
+
 describe("sweeper", () => {
   it("runs the sweep when the web app starts and then every minute", async () => {
     const sweeps: Array<string> = []
@@ -181,7 +248,9 @@ describe("sweeper", () => {
       forgetHold: () => Effect.die("unused"),
       record: () => Effect.die("unused"),
       recordOrder: () => Effect.die("unused"),
-      pendingOrders: () => Effect.die("unused"),
+      unpaidOrders: () => Effect.die("unused"),
+      recordSettlement: () => Effect.die("unused"),
+      settlementOrderOf: () => Effect.die("unused"),
       unbilledUsage: () => Effect.die("unused"),
       ofAccount: () => Effect.die("unused"),
       latest: () => Effect.die("unused"),

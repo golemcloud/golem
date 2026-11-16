@@ -4,10 +4,10 @@ import { type Account, Registry, type RegistryError } from "./Registry.ts"
 import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts.ts"
 import {
   billableStatuses,
-  type PendingOrder,
   type Subscription,
   Subscriptions,
-  type SubscriptionsError
+  type SubscriptionsError,
+  type UnpaidOrder
 } from "./Subscriptions.ts"
 
 /**
@@ -19,12 +19,12 @@ import {
  * subscription when Polar processes the event, and it skips the events that arrive later. It
  * bills no usage during a trial.
  *
- * - `suspended`: the account did not pay for paid overage. An order with an amount for a metered
- *   price is `pending`, its subscription is not in the past-due grace, and a payment of the
+ * - `suspended`: the account did not pay for paid overage. An order that the account owes
+ *   (`owedOrders`) is not in the past-due grace of its subscription, and a payment of the
  *   subscription failed (`past_due_at`, which stays after Polar revokes the subscription) or the
  *   order is older than `ORDER_PAYMENT_GRACE_MS`. The plan has no monthly amounts and no overage,
- *   so the agents of the account stop until the order is paid. A new subscription does not end the
- *   suspension.
+ *   so the agents of the account stop until the order is paid or settled. A new subscription does
+ *   not end the suspension.
  * - `paid`: a subscription is `active` and does not end within `SETTLEMENT_MARGIN_MS`, or a
  *   subscription is in the past-due grace. Only this plan has paid overage.
  * - `free`: otherwise. A declined payment of the price alone after the past-due grace, a
@@ -37,6 +37,15 @@ import {
  * so it uses its monthly amounts and its paid overage as before. Polar bills the usage of a
  * `past_due` subscription, so the paid overage of the past-due grace goes on the next invoice. A
  * subscription that Polar revokes is `canceled` and has no past-due grace.
+ *
+ * An unpaid order (`Subscriptions.UnpaidOrder`) is `pending`, or `void` with no settlement. Polar
+ * collects a `pending` order of a billable subscription: it retries the payment, and a new card in
+ * the customer portal pays it. Polar collects no other unpaid order. It does not retry an order of
+ * an ended subscription, and it voids the pending orders of a subscription that it revokes, also
+ * after the failed retries of a payment. A void collects nothing, so the app keeps its own record
+ * of what the account owes and never lets a void remove a debt. The person pays such orders with a
+ * settlement: a checkout of the settlement product (`POLAR_SETTLEMENT_PRODUCT_ID`) for their paid
+ * overage, whose `order.paid` records the settlement of each order (`settlementFor`).
  *
  * The registry sets an account on a plan without overage to hardLimit. Only the owner can turn
  * paid overage on again, also after the account is back on the paid plan.
@@ -63,6 +72,19 @@ export const SETTLEMENT_MARGIN_MS = 15 * 60 * 1000
  * subscription `past_due`: only the age of the order shows the failure.
  */
 export const ORDER_PAYMENT_GRACE_MS = 60 * 60 * 1000
+
+/**
+ * The smallest amount of a settlement, in cents: the smallest fixed price of Polar in USD. Polar
+ * refuses a checkout with a smaller price, so the app writes off the paid overage of the orders
+ * that Polar no longer collects when it is smaller together (see `owedOrders`).
+ */
+export const SETTLEMENT_MINIMUM_CENTS = 50
+
+/**
+ * The most orders that one settlement pays. Polar keeps a metadata value of at most 500
+ * characters, which holds 13 order IDs. A later settlement pays the remaining orders.
+ */
+export const SETTLEMENT_MAX_ORDERS = 13
 
 /**
  * How old a recorded deletion hold gets before the sweep reconciles the account again. A placement
@@ -98,17 +120,70 @@ const inPastDueGrace = (subscription: Subscription, now: Date, pastDueGraceMs: n
   return end !== undefined && now.getTime() < end.getTime()
 }
 
+/** Whether Polar collects the unpaid order: it is `pending`, and its subscription is billable. */
+const polarCollects = (order: UnpaidOrder, subscriptions: ReadonlyArray<Subscription>): boolean =>
+  order.status === "pending" &&
+  subscriptions.some(
+    (subscription) =>
+      subscription.subscriptionId === order.subscriptionId && billableStatuses.includes(subscription.status)
+  )
+
+const sumOf = (orders: ReadonlyArray<UnpaidOrder>): number =>
+  orders.reduce((sum, order) => sum + order.meteredAmount, 0)
+
+/** The unpaid orders with paid overage that Polar no longer collects, oldest first. */
+const uncollectedOrders = (
+  subscriptions: ReadonlyArray<Subscription>,
+  unpaidOrders: ReadonlyArray<UnpaidOrder>
+): ReadonlyArray<UnpaidOrder> =>
+  unpaidOrders.filter((order) => order.meteredAmount > 0 && !polarCollects(order, subscriptions))
+
+/**
+ * The unpaid orders with paid overage that the account owes: each one that Polar collects, and the
+ * ones that Polar no longer collects when their paid overage reaches `SETTLEMENT_MINIMUM_CENTS`
+ * together. A smaller amount cannot be settled, so the app writes it off.
+ */
+export const owedOrders = (
+  subscriptions: ReadonlyArray<Subscription>,
+  unpaidOrders: ReadonlyArray<UnpaidOrder>
+): ReadonlyArray<UnpaidOrder> => {
+  const writtenOff = sumOf(uncollectedOrders(subscriptions, unpaidOrders)) < SETTLEMENT_MINIMUM_CENTS
+  return unpaidOrders.filter(
+    (order) => order.meteredAmount > 0 && (polarCollects(order, subscriptions) || !writtenOff)
+  )
+}
+
+/** What a settlement pays: the paid overage of each order, in cents, and the sum. */
+export interface SettlementOffer {
+  readonly orders: ReadonlyArray<{ readonly orderId: string; readonly amount: number }>
+  readonly amount: number
+}
+
+/**
+ * The settlement that the account can pay: the paid overage of the oldest
+ * `SETTLEMENT_MAX_ORDERS` unpaid orders that Polar no longer collects. None when Polar collects
+ * every unpaid order, so that a settlement never pays an order that Polar can still charge, or when
+ * the amount is below `SETTLEMENT_MINIMUM_CENTS`.
+ */
+export const settlementFor = (
+  subscriptions: ReadonlyArray<Subscription>,
+  unpaidOrders: ReadonlyArray<UnpaidOrder>
+): SettlementOffer | undefined => {
+  const orders = uncollectedOrders(subscriptions, unpaidOrders).slice(0, SETTLEMENT_MAX_ORDERS)
+  const amount = sumOf(orders)
+  return amount >= SETTLEMENT_MINIMUM_CENTS
+    ? { orders: orders.map((order) => ({ orderId: order.orderId, amount: order.meteredAmount })), amount }
+    : undefined
+}
+
 /** Whether the account did not pay for paid overage at `now` (see the rules above). */
 export const owesOverage = (
   subscriptions: ReadonlyArray<Subscription>,
-  pendingOrders: ReadonlyArray<PendingOrder>,
+  unpaidOrders: ReadonlyArray<UnpaidOrder>,
   now: Date,
   pastDueGraceMs: number
 ): boolean =>
-  pendingOrders.some((order) => {
-    if (order.meteredAmount <= 0) {
-      return false
-    }
+  owedOrders(subscriptions, unpaidOrders).some((order) => {
     const subscription = subscriptions.find((candidate) => candidate.subscriptionId === order.subscriptionId)
     if (subscription !== undefined && inPastDueGrace(subscription, now, pastDueGraceMs)) {
       return false
@@ -118,14 +193,14 @@ export const owesOverage = (
     )
   })
 
-/** The plan for the subscriptions and the pending orders of an account at `now`. */
+/** The plan for the subscriptions and the unpaid orders of an account at `now`. */
 export const planFor = (
   subscriptions: ReadonlyArray<Subscription>,
-  pendingOrders: ReadonlyArray<PendingOrder>,
+  unpaidOrders: ReadonlyArray<UnpaidOrder>,
   now: Date,
   pastDueGraceMs: number
 ): ManagedPlan => {
-  if (owesOverage(subscriptions, pendingOrders, now, pastDueGraceMs)) {
+  if (owesOverage(subscriptions, unpaidOrders, now, pastDueGraceMs)) {
     return "suspended"
   }
   return subscriptions.some(
@@ -154,7 +229,7 @@ export type HoldReason =
    * event yet. Each clears within minutes. If it does not, an operator checks the account in Polar.
    */
   | "unsettledUsage"
-  /** A pending order has an amount for a metered price. */
+  /** The account owes the paid overage of an unpaid order (`owedOrders`). */
   | "unpaidOverage"
 
 /**
@@ -171,7 +246,7 @@ export type HoldReason =
  */
 export const holdFor = (
   subscriptions: ReadonlyArray<Subscription>,
-  pendingOrders: ReadonlyArray<PendingOrder>,
+  unpaidOrders: ReadonlyArray<UnpaidOrder>,
   unbilledUsage: boolean
 ): ReadonlyArray<HoldReason> => {
   const reasons: Array<HoldReason> = []
@@ -184,7 +259,7 @@ export const holdFor = (
   if (unbilledUsage) {
     reasons.push(billable.length > 0 ? "unbilledUsage" : "unsettledUsage")
   }
-  if (pendingOrders.some((order) => order.meteredAmount > 0)) {
+  if (owedOrders(subscriptions, unpaidOrders).length > 0) {
     reasons.push("unpaidOverage")
   }
   return reasons
@@ -195,7 +270,9 @@ export const CONTACT_EMAIL = "sales@golem.cloud"
 
 /**
  * The reason text of the deletion hold. The registry shows it to the person who tries to delete
- * the account, so each sentence says what to do. `billingUrl` is the page of the billing app.
+ * the account, so each sentence says what to do. `billingUrl` is the page of the billing app,
+ * which shows how to pay an unpaid order: the customer portal while Polar collects it, else a
+ * settlement.
  * Only a billable subscription has an invoice to come, so the text of `unsettledUsage` promises
  * none.
  */
@@ -207,7 +284,7 @@ export const holdReasonText = (reasons: ReadonlyArray<HoldReason>, billingUrl: s
     unbilledUsage:
       "The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid.",
     unsettledUsage: `The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`,
-    unpaidOverage: `An invoice for paid overage is not paid. Pay it in Manage billing at ${billingUrl}.`
+    unpaidOverage: `An invoice for paid overage is not paid. Pay it on the billing page at ${billingUrl}.`
   }
   return ["Golem Cloud billing:", ...reasons.map((reason) => sentences[reason])].join(" ")
 }
@@ -289,7 +366,7 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
     const reconcile = (accountId: string, now: Date) =>
       Effect.gen(function* () {
         const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
-        const pendingOrders = yield* subscriptions.pendingOrders(accountId, config.polar.productId)
+        const unpaidOrders = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
         const found = yield* getAccount(accountId)
         if (Option.isNone(found)) {
           yield* Effect.logInfo("The registry deleted the account; its plan and deletion hold stay").pipe(
@@ -299,7 +376,7 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
         }
         const account = found.value
 
-        const reasons = holdFor(accountSubscriptions, pendingOrders, yield* subscriptions.unbilledUsage(accountId))
+        const reasons = holdFor(accountSubscriptions, unpaidOrders, yield* subscriptions.unbilledUsage(accountId))
         const holderId = yield* holderAccountId
         // The hold goes on before the plan changes and comes off after it, so the account is never
         // on the paid plan without a hold.
@@ -308,7 +385,7 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
           yield* registry.placeDeletionHold(config.registryBillingToken, accountId, holderId, reason)
           yield* subscriptions.recordHold(accountId, reason)
         }
-        yield* changePlan(account, planFor(accountSubscriptions, pendingOrders, now, config.pastDueGraceMs))
+        yield* changePlan(account, planFor(accountSubscriptions, unpaidOrders, now, config.pastDueGraceMs))
         if (reasons.length === 0) {
           yield* registry.removeDeletionHold(config.registryBillingToken, accountId, holderId)
           yield* subscriptions.forgetHold(accountId)

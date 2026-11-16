@@ -32,6 +32,7 @@ export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
 export const polarApiUrl = "https://sandbox-api.polar.test"
 export const polarWebToken = "polar_oat_web_token_for_the_tests"
 export const polarProductId = "115e800a-2b62-42e0-97bf-9e8a5d6022b3"
+export const polarSettlementProductId = "7c1d9e2a-4b3f-4e8a-9d6c-2f5b8a1e3c47"
 export const webhookSecret = `whsec_${Buffer.from("a webhook secret of 32 bytes!!!!").toString("base64")}`
 
 const requireEnv = (name: string): string => {
@@ -69,6 +70,7 @@ export const testConfig = (): BillingConfigShape => {
       apiUrl: new URL(polarApiUrl),
       accessToken: Redacted.make(polarWebToken),
       productId: polarProductId,
+      settlementProductId: polarSettlementProductId,
       webhookSecret: Redacted.make(webhookSecret)
     },
     db: {

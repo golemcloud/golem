@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import type { OveragePrices } from "./BillingConfig.ts"
 import type { Account, AccountLimits, MonthlyLimit } from "./Registry.ts"
+import type { SettlementOffer } from "./Settlement.ts"
 import type { Subscription } from "./Subscriptions.ts"
 
 /** HTML that `html` inserts as it is. */
@@ -163,6 +164,14 @@ export const canCheckOut = (plan: PlanState, subscription: Subscription | undefi
   plan === "free" && subscription?.status !== "past_due"
 
 /**
+ * Whether the page offers a settlement, and `POST /billing/settle` accepts one: only on the
+ * suspended plan, and only when Polar no longer collects an unpaid order (`Settlement.settlementFor`).
+ * While Polar collects the orders, the customer pays them in the customer portal.
+ */
+export const canSettle = (plan: PlanState, settlement: SettlementOffer | undefined): boolean =>
+  plan === "suspended" && settlement !== undefined
+
+/**
  * The result of the last post of the overage form, from the redirect after it: paid overage is
  * now on or off, or the plan of the account has no paid overage.
  */
@@ -186,6 +195,10 @@ export interface SignedInPageOptions {
   readonly pastDueGraceEnd: Date | undefined
   /** Polar has redirected back after a payment, and the plan has not changed yet. */
   readonly checkoutPending: boolean
+  /** The settlement that the account can pay; `undefined` when there is none or the call failed. */
+  readonly settlement: SettlementOffer | undefined
+  /** Polar has redirected back after the payment of a settlement, and the plan has not changed yet. */
+  readonly settlementPending: boolean
   readonly cliCommand: string
   /** The monthly usage mode of a paid account; `undefined` on another plan or when the call failed. */
   readonly limits: AccountLimits | undefined
@@ -199,6 +212,10 @@ const longDateTime = new Intl.DateTimeFormat("en", { dateStyle: "long", timeStyl
 
 const checkoutForm = html`<form method="post" action="/billing/checkout">
             <button type="submit" class="btn btn-primary">Upgrade to Paid</button>
+          </form>`
+
+const settleForm = (amount: number) => html`<form method="post" action="/billing/settle">
+            <button type="submit" class="btn btn-primary">Settle ${usd.format(amount / 100)}</button>
           </form>`
 
 const portalForm = (label: string) => html`<form method="post" action="/billing/portal">
@@ -231,6 +248,20 @@ const planHero = (options: SignedInPageOptions) => {
           ${portalForm("Manage billing")}
         </div>`
     case "suspended":
+      if (options.settlementPending) {
+        return html`<span class="eyebrow">Your plan</span>
+        <h1>Polar has your payment</h1>
+        <p class="lead">Your plan changes to Free within one minute, and the agents of this account can run again. Reload the page to see the change.</p>`
+      }
+      if (options.settlement !== undefined && canSettle(options.plan, options.settlement)) {
+        return html`<span class="eyebrow">Your plan</span>
+        <h1>Suspended</h1>
+        <p class="alert" role="alert">Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account. The subscription has ended, so Polar does not charge the invoice again. Settle the paid overage of ${usd.format(options.settlement.amount / 100)} here; Polar adds the tax. After the payment, your plan is Free, and the agents can run again.</p>
+        <div class="actions">
+          ${settleForm(options.settlement.amount)}
+          ${portalForm("Billing history")}
+        </div>`
+      }
       return html`<span class="eyebrow">Your plan</span>
         <h1>Suspended</h1>
         <p class="alert" role="alert">Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account. Pay the invoice in the Polar customer portal. After the payment, the agents can run again.</p>

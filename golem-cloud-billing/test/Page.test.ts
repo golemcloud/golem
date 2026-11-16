@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest"
-import { breakAtHyphens, canCheckOut, cliBootstrapCommand, html, type PlanState, SafeHtml } from "../src/Page.ts"
+import { breakAtHyphens, canCheckOut, canSettle, cliBootstrapCommand, html, type PlanState, SafeHtml } from "../src/Page.ts"
 import type { Subscription } from "../src/Subscriptions.ts"
+
+describe("canSettle", () => {
+  const offer = { orders: [{ orderId: "order_1", amount: 345 }], amount: 345 }
+
+  it.each<[PlanState, boolean]>([
+    ["suspended", true],
+    ["free", false],
+    ["paid", false],
+    ["other", false],
+    ["unknown", false]
+  ])("on the plan %s with a settlement gives %s", (plan, expected) => {
+    expect(canSettle(plan, offer)).toBe(expected)
+  })
+
+  it("refuses without a settlement", () => {
+    expect(canSettle("suspended", undefined)).toBe(false)
+  })
+})
 
 describe("canCheckOut", () => {
   const subscription = (status: string): Subscription => ({

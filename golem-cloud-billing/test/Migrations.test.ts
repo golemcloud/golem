@@ -16,14 +16,15 @@ import { migrate, RegistryDatabase, type Workload } from "./registry.ts"
 import { dropSchema, queryPool, testConfig } from "./support.ts"
 
 /**
- * The tables of Better Auth, of the Polar subscriptions and orders, of the usage push, of the
- * cleanup, of the deletion holds, and of the usage settlements and their history, in the order of
- * their names.
+ * The tables of Better Auth, of the Polar subscriptions and orders, of the overage settlements, of
+ * the usage push, of the cleanup, of the deletion holds, and of the usage settlements and their
+ * history, in the order of their names.
  */
 const appTables = [
   "account",
   "deleted_account_cleanups",
   "deletion_holds",
+  "overage_settlements",
   "polar_orders",
   "polar_subscriptions",
   "polar_webhook_deliveries",

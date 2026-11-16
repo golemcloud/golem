@@ -1,6 +1,7 @@
 import { webhooks } from "@polar-sh/sdk/2026-10"
 import { Data, Effect, Redacted } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
+import { SETTLED_ORDERS_METADATA_KEY } from "./Polar.ts"
 import type { RegistryError } from "./Registry.ts"
 import type { RegistryAccountsError } from "./RegistryAccounts.ts"
 import * as Settlement from "./Settlement.ts"
@@ -73,7 +74,8 @@ const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["
  * for a `subscription.*` or `order.*` event of the paid product stores the subscription or the
  * order, sets the deletion hold of the account (`Settlement.holdFor`) and moves the account to the
  * plan of its subscriptions and orders (`Settlement.planFor`). An account on any other plan keeps
- * it. An event of a deleted account is stored and answers 200, so that the account does not make
+ * it. A paid order of the settlement product records a settlement of the orders in its metadata.
+ * An event of a deleted account is stored and answers 200, so that the account does not make
  * Polar disable the endpoint.
  * A failed registry or database call answers 500, so Polar delivers the webhook again. This
  * includes a 404 of the registry for an account that is not deleted: the permission share of the
@@ -128,6 +130,70 @@ export const makeHandler = Effect.gen(function* () {
     )
   }
 
+  /**
+   * A paid order of the settlement product settles each order in its metadata that the account
+   * owes, and reconciles the account. It settles nothing when its net amount is smaller than the
+   * paid overage of those orders. Polar delivers a paid order in several events (five in the
+   * sandbox), so an order that this settlement already settled is skipped. An order that the
+   * account does not owe logs a warning, for example an order that Polar charged after the
+   * checkout began: an operator refunds that part of the settlement.
+   */
+  const handleSettlementOrder = (
+    accountId: string,
+    data: OrderPayload["data"]
+  ): Effect.Effect<void, RegistryError | SubscriptionsError | RegistryAccountsError> => {
+    if (data.status !== "paid") {
+      return Effect.logInfo("A settlement order that is not paid").pipe(
+        Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, status: data.status })
+      )
+    }
+    const listed = String(data.metadata?.[SETTLED_ORDERS_METADATA_KEY] ?? "")
+      .split(",")
+      .filter((orderId) => orderId !== "")
+    return subscriptions.withAccountLock(
+      accountId,
+      Effect.gen(function* () {
+        const unpaid = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
+        const owed = unpaid.filter((order) => order.meteredAmount > 0 && listed.includes(order.orderId))
+        const notOwed: Array<string> = []
+        for (const orderId of listed.filter((orderId) => !owed.some((order) => order.orderId === orderId))) {
+          if ((yield* subscriptions.settlementOrderOf(orderId)) !== data.id) {
+            notOwed.push(orderId)
+          }
+        }
+        if (notOwed.length > 0) {
+          yield* Effect.logWarning("A settlement pays orders that the account does not owe").pipe(
+            Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, orderIds: notOwed.join(",") })
+          )
+        }
+        const amount = owed.reduce((sum, order) => sum + order.meteredAmount, 0)
+        const netAmount = typeof data.net_amount === "number" ? data.net_amount : 0
+        if (netAmount < amount) {
+          yield* Effect.logError("A settlement paid less than the paid overage of its orders").pipe(
+            Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, netAmount, amount })
+          )
+          return
+        }
+        if (owed.length > 0) {
+          yield* subscriptions.recordSettlement({
+            accountId,
+            settlementOrderId: data.id,
+            orders: owed.map((order) => ({ orderId: order.orderId, amount: order.meteredAmount }))
+          })
+          yield* Effect.logInfo("Recorded a settlement of paid overage").pipe(
+            Effect.annotateLogs({
+              golemAccountId: accountId,
+              settlementOrderId: data.id,
+              orderIds: owed.map((order) => order.orderId).join(","),
+              amount
+            })
+          )
+        }
+        yield* settlement.reconcile(accountId, new Date())
+      })
+    )
+  }
+
   const handleOrder = (payload: OrderPayload): Effect.Effect<void, RegistryError | SubscriptionsError | RegistryAccountsError> => {
     const data = payload.data
     const accountId = data.customer?.external_id ?? undefined
@@ -135,6 +201,9 @@ export const makeHandler = Effect.gen(function* () {
       return Effect.logWarning("An order of a Polar customer without a Golem account").pipe(
         Effect.annotateLogs({ orderId: data.id, customerId: data.customer_id })
       )
+    }
+    if (data.product_id === config.polar.settlementProductId) {
+      return handleSettlementOrder(accountId, data)
     }
     if (data.product_id !== config.polar.productId || data.subscription_id === null) {
       return Effect.logInfo("An order that is not of a subscription of the paid product").pipe(
@@ -146,6 +215,14 @@ export const makeHandler = Effect.gen(function* () {
       accountId,
       Effect.gen(function* () {
         yield* subscriptions.recordOrder(toOrder(accountId, subscriptionId, data))
+        if (data.status === "paid") {
+          const settlementOrderId = yield* subscriptions.settlementOrderOf(data.id)
+          if (settlementOrderId !== undefined) {
+            yield* Effect.logError("An order was paid after its settlement; refund the settlement order").pipe(
+              Effect.annotateLogs({ golemAccountId: accountId, orderId: data.id, settlementOrderId })
+            )
+          }
+        }
         yield* settlement.reconcile(accountId, new Date())
       })
     )

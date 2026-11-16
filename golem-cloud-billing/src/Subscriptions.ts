@@ -47,12 +47,30 @@ export interface Order {
   readonly items: ReadonlyArray<{ readonly productPriceId: string | null; readonly amount: number }>
 }
 
-/** An order that is not paid, with the amount of its items of metered prices, in cents. */
-export interface PendingOrder {
+/**
+ * An order that is not paid, with the amount of its items of metered prices, in cents: `pending`,
+ * or `void` and not settled. Polar voids the pending orders of a subscription that it revokes, also
+ * after the failed retries of a payment. A void collects nothing, so the account still owes the
+ * paid overage of the order until a settlement pays it (see `Settlement.ts`).
+ */
+export interface UnpaidOrder {
   readonly orderId: string
   readonly subscriptionId: string
+  /** `pending` or `void`. */
+  readonly status: string
   readonly createdAt: Date
   readonly meteredAmount: number
+}
+
+/**
+ * A payment of the paid overage of unpaid orders through an order of the settlement product (see
+ * `Settlement.ts`): the order of the settlement, and the metered amount of each order that it
+ * settles, in cents.
+ */
+export interface OverageSettlement {
+  readonly accountId: string
+  readonly settlementOrderId: string
+  readonly orders: ReadonlyArray<{ readonly orderId: string; readonly amount: number }>
 }
 
 /** A failed query of the subscription tables. */
@@ -81,13 +99,20 @@ export interface SubscriptionsShape {
     productId: string | undefined
   ) => Effect.Effect<ReadonlyArray<Subscription>, SubscriptionsError>
   /**
-   * The `pending` orders of the subscriptions of the product that the account has, or of every
-   * product when `productId` is undefined.
+   * The unpaid orders of the subscriptions of the product that the account has, or of every
+   * product when `productId` is undefined: `pending` or `void`, with no settlement.
    */
-  readonly pendingOrders: (
+  readonly unpaidOrders: (
     accountId: string,
     productId: string | undefined
-  ) => Effect.Effect<ReadonlyArray<PendingOrder>, SubscriptionsError>
+  ) => Effect.Effect<ReadonlyArray<UnpaidOrder>, SubscriptionsError>
+  /**
+   * Records that the settlement paid its orders. An order that has a settlement keeps it, so a
+   * second delivery of the same payment changes nothing.
+   */
+  readonly recordSettlement: (settlement: OverageSettlement) => Effect.Effect<void, SubscriptionsError>
+  /** The order of the settlement that paid the order, if one did. */
+  readonly settlementOrderOf: (orderId: string) => Effect.Effect<string | undefined, SubscriptionsError>
   /**
    * Whether the usage push recorded paid overage of the account that an order can still bill: a
    * usage event that is not held, and is not sent yet, or was sent after the newest order of the
@@ -163,9 +188,9 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
 
 /**
  * The tables of the app besides the tables of Better Auth: the subscriptions and their orders,
- * the usage events of the usage push, the deleted accounts that the cleanup has finished, the
- * deletion holds that the app placed in the registry, and the usage settlements of operators with
- * their history. `Migrations.migrate` creates them; the web app, the usage push and the cleanup
+ * the overage settlements that paid unpaid orders, the usage events of the usage push, the deleted
+ * accounts that the cleanup has finished, the deletion holds that the app placed in the registry,
+ * and the usage settlements of operators with their history. `Migrations.migrate` creates them; the web app, the usage push and the cleanup
  * only check that they exist.
  *
  * An operator script outside the app records a usage settlement with the admin database user: it
@@ -198,6 +223,13 @@ export const tables = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   );
   CREATE INDEX IF NOT EXISTS polar_orders_pending ON polar_orders (account_id, created_at) WHERE status = 'pending';
+  CREATE TABLE IF NOT EXISTS overage_settlements (
+    order_id TEXT PRIMARY KEY,
+    account_id UUID NOT NULL,
+    settlement_order_id TEXT NOT NULL,
+    amount BIGINT NOT NULL,
+    settled_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+  );
   CREATE TABLE IF NOT EXISTS polar_webhook_deliveries (
     webhook_id TEXT PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -246,6 +278,7 @@ export const tables = `
 export const tableNames: ReadonlyArray<string> = [
   "polar_subscriptions",
   "polar_orders",
+  "overage_settlements",
   "polar_webhook_deliveries",
   "usage_events",
   "deleted_account_cleanups",
@@ -271,7 +304,7 @@ export const tableNames: ReadonlyArray<string> = [
  *     billed is final. The app sets `sent_at` after Polar accepts an event, so an event that the
  *     last order billed can look newer than that order; the last order settles it.
  *
- * Whether an order is paid is a matter of `pendingOrders`. When the app cannot tell that Polar has
+ * Whether an order is paid is a matter of `unpaidOrders`. When the app cannot tell that Polar has
  * billed or dropped an event, for example when the last order of a subscription never comes, an
  * operator checks the account in Polar and records a usage settlement outside the app: an event
  * that the push recorded up to `settled_through` no longer counts.
@@ -401,26 +434,44 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
 
     // An order of a subscription that no webhook has reported yet has no metered prices to match;
     // the webhook of that subscription reconciles the plan again.
-    const pendingOrders = (accountId: string, productId: string | undefined) =>
-      query<{ order_id: string; subscription_id: string; created_at: Date; metered_amount: string }>(
-        `SELECT o.order_id, o.subscription_id, o.created_at,
+    const unpaidOrders = (accountId: string, productId: string | undefined) =>
+      query<{ order_id: string; subscription_id: string; status: string; created_at: Date; metered_amount: string }>(
+        `SELECT o.order_id, o.subscription_id, o.status, o.created_at,
                 coalesce((SELECT sum(i.amount)
                             FROM jsonb_to_recordset(o.items) AS i("productPriceId" text, amount bigint)
                            WHERE i."productPriceId" = ANY(s.metered_price_ids)), 0)::text AS metered_amount
            FROM polar_orders o
            JOIN polar_subscriptions s ON s.subscription_id = o.subscription_id
-          WHERE o.account_id = $1 AND ($2::text IS NULL OR s.product_id = $2) AND o.status = 'pending'`,
+          WHERE o.account_id = $1 AND ($2::text IS NULL OR s.product_id = $2) AND o.status IN ('pending', 'void')
+            AND NOT EXISTS (SELECT 1 FROM overage_settlements x WHERE x.order_id = o.order_id)
+          ORDER BY o.created_at, o.order_id`,
         [accountId, productId ?? null]
       ).pipe(
         Effect.map((result) =>
           result.rows.map((row) => ({
             orderId: row.order_id,
             subscriptionId: row.subscription_id,
+            status: row.status,
             createdAt: row.created_at,
             meteredAmount: Number(row.metered_amount)
           }))
         )
       )
+
+    const recordSettlement = (settlement: OverageSettlement) =>
+      query(
+        `INSERT INTO overage_settlements (order_id, account_id, settlement_order_id, amount)
+         SELECT o."orderId", $1, $2, o.amount
+           FROM jsonb_to_recordset($3::jsonb) AS o("orderId" text, amount bigint)
+         ON CONFLICT (order_id) DO NOTHING`,
+        [settlement.accountId, settlement.settlementOrderId, JSON.stringify(settlement.orders)]
+      ).pipe(Effect.asVoid)
+
+    const settlementOrderOf = (orderId: string) =>
+      query<{ settlement_order_id: string }>(
+        "SELECT settlement_order_id FROM overage_settlements WHERE order_id = $1",
+        [orderId]
+      ).pipe(Effect.map((result) => result.rows[0]?.settlement_order_id))
 
     const unbilledUsage = (accountId: string) =>
       query<{ unbilled: boolean }>(`SELECT EXISTS (SELECT 1 FROM ${unbilledUsageEvents}) AS unbilled`, [
@@ -538,7 +589,9 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
       record,
       recordOrder,
       ofAccount,
-      pendingOrders,
+      unpaidOrders,
+      recordSettlement,
+      settlementOrderOf,
       unbilledUsage,
       holdCandidates,
       recordHold,
