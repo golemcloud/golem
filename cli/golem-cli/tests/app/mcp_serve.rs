@@ -306,7 +306,17 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
         ),
         (
             "agent_oplog",
-            &["agent_id", "from", "omit_payloads", "query"],
+            &[
+                "agent_id",
+                "from",
+                "keep_error_text",
+                "keep_scalars",
+                "keep_shape",
+                "max_entry_bytes",
+                "obfuscate",
+                "omit_payloads",
+                "query",
+            ],
         ),
         (
             "agent_invoke",
@@ -428,6 +438,32 @@ async fn mcp_serve_reads_return_the_cli_json() {
             "`{path}` returns other JSON over MCP than on the CLI"
         );
     }
+
+    // An obfuscated export is one header, one document per entry and one coverage document. Its
+    // tokens come from a key that each process draws, so only the kinds and the count compare.
+    let kinds = |documents: &[Value]| {
+        documents
+            .iter()
+            .map(|document| document["$type"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    let exported = call(
+        &client,
+        "agent_oplog",
+        json!({"agent_id": agent, "obfuscate": true}),
+    )
+    .await;
+    let exported = kinds(structured(&exported)["items"].as_array().unwrap());
+    let printed = kinds(&cli_json(&ctx, &[cmd::AGENT, "oplog", agent, "--obfuscate"]).await);
+    assert_eq!(exported, printed);
+    assert_eq!(exported.first().unwrap(), "agent.oplog-export-header");
+    assert_eq!(exported.last().unwrap(), "agent.oplog-export-coverage");
+    assert!(
+        exported[1..exported.len() - 1]
+            .iter()
+            .all(|kind| kind == "agent.oplog-export-entry"),
+        "{exported:?}"
+    );
 
     // A destructive command needs `confirm` on the call; `--yes` at start confirms nothing.
     client.cancel().await.unwrap();
