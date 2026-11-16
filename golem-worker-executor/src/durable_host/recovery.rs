@@ -267,8 +267,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     && store.as_context().data().durable_ctx().is_live()
                                 {
                                     let worker = worker.clone();
+                                    let attribution = store.as_context().data().durable_ctx().attribution.clone();
+                                    let invocation_key = store.as_context().data().durable_ctx().invocation_key();
                                     let result = store.run_concurrent(async move |_accessor| {
-                                        worker.complete_durable_streaming_session(&idempotency_key).await
+                                        attribution.scoped(Some(invocation_key), worker.complete_durable_streaming_session(&idempotency_key)).await
                                     }).await;
                                     if let Err(error) = result.map_err(|error| WorkerExecutorError::runtime(error.to_string())).and_then(|result| result) {
                                         error!(%error, "Failed to complete durable streaming session");

@@ -1433,7 +1433,12 @@ where
             activity,
             false,
         );
-        store.spawn(async move |store| task.run(store).await)?;
+        let captured = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .attribution
+                .capture()
+        });
+        store.spawn(async move |store| captured.run(task.run(store)).await)?;
     }
     Ok(())
 }
@@ -1799,7 +1804,13 @@ pub(super) fn finish_transmission<Ctx: WorkerCtx, U: Send + 'static>(
                 activity,
                 true,
             );
-            store.spawn(async move |store| task.run(store).await)?;
+            let captured = {
+                let mut store_ctx = store.as_context_mut();
+                durable_worker_ctx::<Ctx, U>(store_ctx.data_mut())
+                    .attribution
+                    .capture()
+            };
+            store.spawn(async move |store| captured.run(task.run(store)).await)?;
         } else {
             let task = HttpRequestTransmissionPassthroughTask::<Ctx>::new(pending, activity);
             store.spawn(async move |store| task.run(store).await)?;

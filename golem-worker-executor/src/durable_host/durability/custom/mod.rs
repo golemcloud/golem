@@ -16,6 +16,7 @@ use super::{
     DurableCallTrapContext, GuestImportIdentity, OplogEntryVersion,
     PersistedDurableFunctionInvocation, is_write_side_effect,
 };
+use crate::durable_host::attribution::InvocationKey;
 use crate::durable_host::concurrent::{
     self, DropEvent, Resolution, ResolutionOutcome, finish_prepared_access_to_live,
 };
@@ -293,7 +294,7 @@ pub(crate) struct CustomInvocationContext {
 
 #[derive(Debug)]
 pub struct CustomInvocationContextSnapshot {
-    anchor: Option<OplogIndex>,
+    invocation: Option<InvocationKey>,
     context: Option<Arc<CustomInvocationContext>>,
 }
 
@@ -337,7 +338,7 @@ pub(crate) struct OpenCustomInvocationScope {
 pub struct LiveCustomDurableInvocation {
     scope_id: u64,
     start_index: Option<OplogIndex>,
-    anchor: Option<OplogIndex>,
+    invocation: Option<InvocationKey>,
     context: Arc<CustomInvocationContext>,
     finishing: bool,
 }
@@ -416,11 +417,11 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             owner_start_index: start_index,
         });
         let next = Arc::new(next);
-        let anchor = access.get().invocation_anchor();
+        let invocation = access.get().attributed_invocation();
         let resource = access.get().table().push(LiveCustomDurableInvocation {
             scope_id,
             start_index: Some(start_index),
-            anchor,
+            invocation,
             context: next.clone(),
             finishing: false,
         })?;
@@ -508,10 +509,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
         resource: Resource<LiveCustomDurableInvocation>,
     ) -> anyhow::Result<()> {
         let invocation = access.get().table().get(&resource)?;
-        let anchor = invocation.anchor;
+        let owner = invocation.invocation;
         let context = invocation.context.clone();
         anyhow::ensure!(
-            anchor == access.get().invocation_anchor(),
+            owner == access.get().attributed_invocation(),
             "custom invocation context belongs to another invocation"
         );
         for scope in &context.scopes {
@@ -734,11 +735,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             .as_context_mut()
             .guest_task_context::<CustomInvocationContext>()?;
         let ctx = access.get();
-        let anchor = ctx.invocation_anchor();
+        let invocation = ctx.attributed_invocation();
         let replacement = if let Some(resource) = &next {
             let snapshot = ctx.table().get(resource)?;
             anyhow::ensure!(
-                snapshot.anchor == anchor,
+                snapshot.invocation == invocation,
                 "custom invocation context belongs to another invocation"
             );
             let context = snapshot.context.clone();
@@ -778,7 +779,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             None
         };
         let previous = ctx.table().push(CustomInvocationContextSnapshot {
-            anchor,
+            invocation,
             context: current,
         })?;
         if let Some(resource) = next {

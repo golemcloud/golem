@@ -372,7 +372,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
             admission,
             activity,
         );
-        host.spawn(async move |host| task.run(host).await)?;
+        let captured = host.get().attribution.capture();
+        host.spawn(async move |host| captured.run(task.run(host)).await)?;
         Ok(Ok(StreamReader::new(
             &mut host,
             DeferredIncomingValueStreamProducer::new(result_rx),

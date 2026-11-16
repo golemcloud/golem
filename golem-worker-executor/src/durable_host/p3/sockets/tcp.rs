@@ -1987,7 +1987,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                             result_tx,
                             activity,
                         );
-                        store.spawn(async move |store| task.run(store).await)?;
+                        let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .attribution
+                            .capture();
+                        store.spawn(async move |store| captured.run(task.run(store)).await)?;
                         FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
                     })
                 } else {
@@ -2000,7 +2003,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                             .activity();
                         let task =
                             TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
-                        store.spawn(async move |store| task.run(store).await)?;
+                        let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .attribution
+                            .capture();
+                        store.spawn(async move |store| captured.run(task.run(store)).await)?;
                         FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
                     })
                 }?;
@@ -2075,7 +2081,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                         invocation_id,
                         activity,
                     );
-                    store.spawn(async move |store| task.run(store).await)?;
+                    let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                        .attribution
+                        .capture();
+                    store.spawn(async move |store| captured.run(task.run(store)).await)?;
                     Ok((stream, future))
                 })?;
                 wasmtime::error::Ok(handles)

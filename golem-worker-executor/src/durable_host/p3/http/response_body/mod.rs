@@ -340,7 +340,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             invocation_id,
             activity,
         );
-        if let Err(err) = store.spawn(async move |accessor| task.run(accessor).await) {
+        let captured = {
+            let mut store_ctx = store.as_context_mut();
+            durable_worker_ctx::<Ctx, U>(store_ctx.data_mut())
+                .attribution
+                .capture()
+        };
+        if let Err(err) = store.spawn(async move |accessor| captured.run(task.run(accessor)).await)
+        {
             let _ = trailers.close(store.as_context_mut());
             let _ = stream.close(store.as_context_mut());
             return Err(err);

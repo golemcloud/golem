@@ -50,7 +50,7 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
-use tracing::warn;
+use tracing::{error, warn};
 use wasmtime::component::{Component, Instance};
 use wasmtime::{AsContext, AsContextMut, CallHook, Store, StoreMemory, UpdateDeadline};
 
@@ -903,12 +903,20 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .as_context_mut()
             .set_runtime_observer(runtime)
             .map_err(anyhow::Error::from)?;
+        let attribution = store.data().durable_ctx().attribution.clone();
+        store.as_context_mut().task_group_hook(attribution.hook());
         let fuel_metering = store.data().fuel_metering_enabled();
         store.call_hook(move |mut store, boundary| {
             // Wasmtime reports the import's runtime activity right after `CallingHost`, before
             // the import's host code runs; see `GuestImportNumbering`.
             match boundary {
                 CallHook::CallingHost => {
+                    if attribution.resolve().is_none() {
+                        error!(
+                            agent_id = %store.data().agent_id(),
+                            "A guest host call has no attributed invocation"
+                        );
+                    }
                     let custom_invocation_scope = store
                         .as_context()
                         .guest_task_context::<CustomInvocationContext>()?
@@ -971,8 +979,13 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let instance_pre = linker
             .instantiate_pre(component)
             .map_err(|error| self.creation_error(error.into()))?;
-        let instance = instance_pre
-            .instantiate_async(&mut *store)
+        // Instantiation runs the core initializer, which is agent-level work.
+        let attribution = store.data().durable_ctx().attribution.clone();
+        let instance = attribution
+            .scoped(
+                Some(crate::durable_host::attribution::InvocationKey::AgentLevel),
+                instance_pre.instantiate_async(&mut *store),
+            )
             .await
             .map_err(|error| match instantiation_failure(&self.runtime, &error) {
                 Some(failure) => failure,

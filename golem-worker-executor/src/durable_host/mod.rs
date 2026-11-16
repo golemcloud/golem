@@ -15,6 +15,7 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
+pub(crate) mod attribution;
 pub(crate) mod authorization;
 pub mod blobstore;
 mod call_coordinator;
@@ -401,6 +402,11 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     pub(crate) guest_imports: Arc<durability::GuestImportNumbering>,
+    /// Which invocation each task group of this Store belongs to; see [`attribution`].
+    pub(crate) attribution: attribution::InvocationAttribution,
+    /// The invocation the invocation loop runs, or last ran, in this Store. The loop arms each
+    /// export call with it.
+    invocation_key: attribution::InvocationKey,
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,

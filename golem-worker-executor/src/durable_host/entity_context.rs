@@ -146,6 +146,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             });
     }
 
+    /// Records the invocation that the invocation loop runs next in this Store.
+    pub(crate) fn set_invocation_key(&mut self, key: attribution::InvocationKey) {
+        self.invocation_key = key;
+    }
+
+    /// The invocation that the invocation loop runs, or last ran, in this Store: the entity
+    /// invocation of an entity Store, otherwise the one set by [`Self::set_invocation_key`].
+    pub(crate) fn invocation_key(&self) -> attribution::InvocationKey {
+        match &self.entity_invocation_scope {
+            Some(scope) => attribution::InvocationKey::Invocation(*scope.idempotency_key()),
+            None => self.invocation_key,
+        }
+    }
+
+    /// The invocation that the running host code is attributed to; see [`attribution`].
+    pub(crate) fn attributed_invocation(&self) -> Option<attribution::InvocationKey> {
+        self.attribution.resolve()
+    }
+
     /// The ID of the agent invocation that runs the guest code of this Store. An entity Store
     /// answers with the invocation that encloses its entity invocation.
     pub(crate) fn current_invocation_id(&self) -> Option<golem_common::model::OwnedInvocationId> {

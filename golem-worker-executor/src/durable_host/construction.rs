@@ -375,6 +375,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owner_execution,
             runtime_suspension: None,
             guest_imports: Default::default(),
+            attribution: Default::default(),
+            invocation_key: attribution::InvocationKey::AgentLevel,
             _owner_resources: owner_resources,
             entity_reconstruction_claim_hook,
             replay_admission_hook,

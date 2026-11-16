@@ -345,7 +345,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostOutgoingValueWithStore<U>
             if live {
                 task.run(accessor).await?;
             } else {
-                accessor.spawn(async move |accessor| task.run(accessor).await)?;
+                let captured = accessor.with(|mut access| access.get().attribution.capture());
+                accessor.spawn(async move |accessor| captured.run(task.run(accessor)).await)?;
             }
         }
         Ok(())
@@ -481,7 +482,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
             invocation_id,
             activity,
         );
-        host.spawn(async move |host| task.run(host).await)?;
+        let captured = host.get().attribution.capture();
+        host.spawn(async move |host| captured.run(task.run(host)).await)?;
         Ok(Ok(StreamReader::new(
             &mut host,
             DeferredIncomingValueStreamProducer::new(result_rx),

@@ -423,7 +423,10 @@ where
         activity,
         _phantom: PhantomData,
     };
-    store.spawn(async move |store| task.run(store).await)?;
+    let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+        .attribution
+        .capture();
+    store.spawn(async move |store| captured.run(task.run(store)).await)?;
     let interrupt = durable_worker_ctx::<Ctx, U>(store.data_mut()).create_interrupt_signal();
     FutureReader::new(&mut store, wait_stdio_task_result(result_rx, interrupt))
 }
