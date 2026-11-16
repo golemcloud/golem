@@ -12,6 +12,7 @@ import {
   planFor,
   SETTLEMENT_MARGIN_MS,
   SETTLEMENT_MAX_ORDERS,
+  SETTLEMENT_MAXIMUM_CENTS,
   SETTLEMENT_MINIMUM_CENTS,
   CONTACT_EMAIL,
   settlementFor,
@@ -219,6 +220,21 @@ describe("settlementFor", () => {
   it("offers no settlement below the settlement minimum", () => {
     expect(settlementFor([ended], [pending(belowMinimum)])).toBeUndefined()
     expect(settlementFor([ended], [pending(belowMinimum), pending({ ...belowMinimum, orderId: "order_2" })])).toBeUndefined()
+  })
+
+  it("keeps a settlement within the maximum price of Polar, and skips an order that does not fit", () => {
+    const large = SETTLEMENT_MAXIMUM_CENTS - 100_000
+
+    expect(
+      settlementFor([ended], [pending({ meteredAmount: large }), pending({ orderId: "order_2", meteredAmount: large })])
+    ).toEqual({ orders: [{ orderId: "order_1", amount: large }], amount: large })
+    expect(
+      settlementFor([ended], [pending({ meteredAmount: SETTLEMENT_MAXIMUM_CENTS + 1 }), pending({ orderId: "order_2" })])
+    ).toEqual({ orders: [{ orderId: "order_2", amount: 345 }], amount: 345 })
+    expect(settlementFor([ended], [pending({ meteredAmount: SETTLEMENT_MAXIMUM_CENTS })])).toEqual({
+      orders: [{ orderId: "order_1", amount: SETTLEMENT_MAXIMUM_CENTS }],
+      amount: SETTLEMENT_MAXIMUM_CENTS
+    })
   })
 
   it("leaves out the orders below the settlement minimum, also when they would fill a batch before a payable order", () => {

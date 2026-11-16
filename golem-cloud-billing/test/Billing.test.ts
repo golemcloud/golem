@@ -1287,6 +1287,7 @@ describe("Polar billing", () => {
       expect(html).toContain("The subscription has ended, so Polar does not charge the invoice again.")
       expect(html).toContain(`action="/billing/settle"`)
       expect(html).toContain("Settle $3.45")
+      expect(html).toContain("When the account owes no more paid overage, your plan is Free")
       expect(html).not.toContain("Pay the invoice")
 
       const response = await postSettle(jar)
@@ -1297,7 +1298,9 @@ describe("Polar billing", () => {
       expect(checkout!.headers.get("authorization")).toBe(`Bearer ${polarWebToken}`)
       expect(checkout!.body).toEqual({
         products: [polarSettlementProductId],
-        prices: { [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 345, price_currency: "usd" }] },
+        prices: {
+          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 345, price_currency: "usd", tax_behavior: "exclusive" }]
+        },
         external_customer_id: accountId,
         customer_email: "octocat@example.com",
         customer_name: "Octo Cat",
@@ -1341,7 +1344,9 @@ describe("Polar billing", () => {
       await postSettle(jar)
       const [checkout] = upstreams.polarRequests("/v1/checkouts/")
       expect(checkout!.body).toMatchObject({
-        prices: { [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 4485, price_currency: "usd" }] },
+        prices: {
+          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 4485, price_currency: "usd", tax_behavior: "exclusive" }]
+        },
         success_url: `${baseUrl}/?settlement_orders=${batch.join("%2C")}`,
         metadata: { golem_settled_order_ids: batch.join(",") }
       })

@@ -75,7 +75,8 @@ export const SETTLED_ORDERS_METADATA_KEY = "golem_settled_order_ids"
 
 /**
  * A checkout of the settlement product for a Golem account: an ad-hoc fixed price that the
- * customer cannot change, with no discount codes. Polar adds the tax.
+ * customer cannot change, with no discount codes. The price excludes tax, whatever the default tax
+ * behavior of the organization: Polar adds the tax, and the net amount of the order is the price.
  */
 export interface SettlementCheckoutRequest extends CheckoutRequest {
   /** The price in USD cents. */
@@ -180,7 +181,9 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
         checkouts({
           products: [request.productId],
           prices: {
-            [request.productId]: [{ amount_type: "fixed", price_amount: request.amount, price_currency: "usd" }]
+            [request.productId]: [
+              { amount_type: "fixed", price_amount: request.amount, price_currency: "usd", tax_behavior: "exclusive" }
+            ]
           },
           ...customerFields(request),
           allow_discount_codes: false,

@@ -81,6 +81,13 @@ export const ORDER_PAYMENT_GRACE_MS = 60 * 60 * 1000
 export const SETTLEMENT_MINIMUM_CENTS = 50
 
 /**
+ * The largest amount of a settlement, in cents: the largest fixed price of Polar in USD. A
+ * settlement stays within it. A checkout cannot settle an order above it; an operator handles such
+ * an order.
+ */
+export const SETTLEMENT_MAXIMUM_CENTS = 99_999_999
+
+/**
  * The most orders that one settlement pays. Polar keeps a metadata value of at most 500
  * characters, which holds 13 order IDs. A later settlement pays the remaining orders. An account
  * rarely owes more than one, because a suspended account cannot subscribe again before it settles.
@@ -164,21 +171,24 @@ export interface SettlementOffer {
 }
 
 /**
- * The settlement that the account can pay: the paid overage of the oldest `SETTLEMENT_MAX_ORDERS`
- * orders that a settlement can pay. None when no such order exists, so that a settlement never
- * pays an order that Polar can still charge, or an order that the app wrote off.
+ * The settlement that the account can pay: the paid overage of the oldest orders that a settlement
+ * can pay, at most `SETTLEMENT_MAX_ORDERS` of them and at most `SETTLEMENT_MAXIMUM_CENTS` together.
+ * An order that does not fit waits for a later settlement. None when no such order exists, so that
+ * a settlement never pays an order that Polar can still charge, or an order that the app wrote off.
  */
 export const settlementFor = (
   subscriptions: ReadonlyArray<Subscription>,
   unpaidOrders: ReadonlyArray<UnpaidOrder>
 ): SettlementOffer | undefined => {
-  const orders = settleableOrders(subscriptions, unpaidOrders).slice(0, SETTLEMENT_MAX_ORDERS)
-  return orders.length > 0
-    ? {
-        orders: orders.map((order) => ({ orderId: order.orderId, amount: order.meteredAmount })),
-        amount: orders.reduce((sum, order) => sum + order.meteredAmount, 0)
-      }
-    : undefined
+  const orders: Array<{ readonly orderId: string; readonly amount: number }> = []
+  let amount = 0
+  for (const order of settleableOrders(subscriptions, unpaidOrders)) {
+    if (orders.length < SETTLEMENT_MAX_ORDERS && amount + order.meteredAmount <= SETTLEMENT_MAXIMUM_CENTS) {
+      orders.push({ orderId: order.orderId, amount: order.meteredAmount })
+      amount += order.meteredAmount
+    }
+  }
+  return orders.length > 0 ? { orders, amount } : undefined
 }
 
 /** Whether the account did not pay for paid overage at `now` (see the rules above). */

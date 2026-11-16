@@ -260,8 +260,10 @@ the page offers "Settle $X" in place of the customer portal, and `POST /billing/
 only then (`canSettle` in `src/Page.ts`, `settlementFor` in `src/Settlement.ts`). The route reads
 the orders and the amount from the database, and opens a checkout of the private one-time product
 `POLAR_SETTLEMENT_PRODUCT_ID` with an ad-hoc fixed price of that amount, discount codes off, and
-the order IDs in the metadata `golem_settled_order_ids`. Polar adds the tax. One settlement pays
-the oldest 13 orders, the most IDs that fit in a metadata value.
+the order IDs in the metadata `golem_settled_order_ids`. The price excludes tax (`tax_behavior`
+`exclusive`), whatever the default of the organization: Polar adds the tax, and the net amount of
+the order is the price. One settlement pays the oldest orders that fit: at most 13, the most IDs
+that fit in a metadata value, and at most $999,999.99, the largest price of Polar.
 
 A paid order of the settlement product records a settlement for each order in its metadata that
 the account still owes, and the account moves to the free plan. It settles nothing when its net
