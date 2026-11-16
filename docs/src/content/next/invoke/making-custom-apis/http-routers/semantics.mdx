@@ -233,7 +233,8 @@ Both upload and download apply backpressure: a slow consumer limits how far its
 producer can advance, with bounded transport buffering rather than whole-body buffering.
 Do not collect a body simply to forward it or calculate its length. A handler can
 return a response before upload EOF. Dropping unused input stops its delivery without
-cancelling the response. A body that delivers no bytes for
+cancelling the response; a client that disconnects afterwards still cancels the
+invocation. A body that delivers no bytes for
 [`request_body_idle_timeout`](/next/operate/http-gateway#setting-timeouts-and-resource-budgets)
 fails with an `Interrupted` stream error, which the handler can catch.
 

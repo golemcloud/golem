@@ -40,6 +40,7 @@ async fn rejected_invocation_identity_conflict_returns_422_before_response_heade
         Arc::new(AtomicBool::new(false)),
         HttpSessionLimits::default().request_body_idle_timeout,
         false,
+        HttpVersion::Http1,
     )
     .await
     .unwrap_err();
@@ -92,6 +93,7 @@ async fn opening_size_error_returns_413_with_the_original_message() {
             Arc::new(AtomicBool::new(false)),
             HttpSessionLimits::default().request_body_idle_timeout,
             false,
+            HttpVersion::Http1,
         )
         .await
         .unwrap_err();
@@ -127,6 +129,7 @@ async fn late_upload_overflow_cancels_the_session_without_buffering_the_body() {
         done.clone(),
         HttpSessionLimits::default().request_body_idle_timeout,
         true,
+        HttpVersion::Http1,
     )
     .await
     .unwrap();

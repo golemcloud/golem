@@ -37,6 +37,8 @@ use http::StatusCode;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 const BODY_STREAM_ID: u64 = 1;
@@ -96,6 +98,7 @@ impl RawHandler {
             upload_done.clone(),
             self.limits.request_body_idle_timeout,
             has_request_body,
+            version,
         )
         .await?;
         let (status, headers, output_id) = parse_response(response_value)?;
@@ -209,10 +212,11 @@ impl RawHandler {
 pub(super) async fn receive_response_head(
     session: &mut HttpSession,
     body: poem::Body,
-    upload: &mut Option<AbortOnDropHandle<()>>,
+    upload: &mut Option<Upload>,
     upload_done: Arc<AtomicBool>,
     idle_timeout: std::time::Duration,
     has_request_body: bool,
+    version: HttpVersion,
 ) -> Result<ProtoValue, RequestHandlerError> {
     let mut body = Some(body);
     // Before acceptance nothing polls the body, so the HTTP server does not notice a client
@@ -236,6 +240,7 @@ pub(super) async fn receive_response_head(
                         session.cancellation.clone(),
                         upload_done.clone(),
                         idle_timeout,
+                        version,
                     ));
                 }
             }
@@ -246,7 +251,7 @@ pub(super) async fn receive_response_head(
                 };
             }
             HttpSessionEvent::StreamEnd(end) if end.direction() == StreamDirection::Input => {
-                stop_upload(session, upload).await;
+                dispose_input(session, upload).await;
             }
             HttpSessionEvent::Error(error) => return Err(map_session_error(error)),
             _ => return Err(RequestHandlerError::RawBadGateway),
@@ -256,7 +261,7 @@ pub(super) async fn receive_response_head(
 
 async fn finish_bodyless_response(
     session: &mut HttpSession,
-    upload: &mut Option<AbortOnDropHandle<()>>,
+    upload: &mut Option<Upload>,
     output_id: u64,
 ) -> Result<(), RequestHandlerError> {
     session
@@ -277,11 +282,11 @@ async fn finish_bodyless_response(
                     Some(invocation_session_completion::Outcome::Success(_))
                 ) =>
             {
-                stop_upload(session, upload).await;
+                dispose_input(session, upload).await;
                 return Ok(());
             }
             HttpSessionEvent::StreamEnd(end) if end.direction() == StreamDirection::Input => {
-                stop_upload(session, upload).await;
+                dispose_input(session, upload).await;
             }
             HttpSessionEvent::OutputItem(_) | HttpSessionEvent::StreamEnd(_) => {}
             HttpSessionEvent::Error(error) => return Err(map_session_error(error)),
@@ -414,60 +419,123 @@ fn decode_bytes(value: &ProtoValue) -> Result<Vec<u8>, RequestHandlerError> {
     Vec::<u8>::from_value(&value).map_err(|_| RequestHandlerError::RawBadGateway)
 }
 
+/// The request-body reader of a raw HTTP session. It delivers the body to the session input
+/// until EOF, a read failure, the idle timeout, the close of the session input or
+/// `stop_delivery`. When delivery stops with the body still open, an HTTP/1 upload reads and
+/// discards the rest of the body: an HTTP/1 server notices a client that disconnects in the
+/// middle of an unread body only while the body is read.
+pub(super) struct Upload {
+    stop: CancellationToken,
+    delivering: Option<oneshot::Receiver<std::convert::Infallible>>,
+    _task: AbortOnDropHandle<()>,
+}
+
+impl Upload {
+    /// Returns once the upload sends nothing more to the session input.
+    async fn stop_delivery(&mut self) {
+        self.stop.cancel();
+        self.delivery_stopped().await;
+    }
+
+    /// Returns once delivery has ended by itself or by `stop_delivery`.
+    pub(super) async fn delivery_stopped(&mut self) {
+        if let Some(delivering) = self.delivering.take() {
+            let _ = delivering.await;
+        }
+    }
+}
+
+enum Delivery {
+    BodyClosed,
+    BodyOpen,
+}
+
 pub(super) fn start_upload(
     body: poem::Body,
     input: super::http_session::HttpSessionInput,
     cancellation: super::http_session::HttpSessionCancellation,
     done: Arc<AtomicBool>,
     idle_timeout: std::time::Duration,
-) -> AbortOnDropHandle<()> {
-    AbortOnDropHandle::new(tokio::spawn(async move {
+    version: HttpVersion,
+) -> Upload {
+    let stop = CancellationToken::new();
+    let (delivery_guard, delivering) = oneshot::channel();
+    let stopped = stop.clone();
+    let task = AbortOnDropHandle::new(tokio::spawn(async move {
         let mut stream = body.into_bytes_stream();
-        loop {
-            // Empty chunks are discarded and do not reset the idle interval. Only time spent
-            // waiting for body bytes counts, not time waiting for the session to accept a chunk.
-            let next = async {
-                loop {
-                    match stream.next().await {
-                        Some(Ok(chunk)) if chunk.is_empty() => continue,
-                        chunk => return chunk,
+        let delivery = async {
+            loop {
+                // Empty chunks are discarded and do not reset the idle interval. Only time spent
+                // waiting for body bytes counts, not time waiting for the session to accept a chunk.
+                let next = async {
+                    loop {
+                        match stream.next().await {
+                            Some(Ok(chunk)) if chunk.is_empty() => continue,
+                            chunk => return chunk,
+                        }
                     }
+                };
+                let chunk = match tokio::time::timeout(idle_timeout, next).await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => {
+                        let _ = input.finish().await;
+                        done.store(true, Ordering::Release);
+                        return Delivery::BodyClosed;
+                    }
+                    Err(_) => {
+                        let _ = input.fail_idle_timeout().await;
+                        return Delivery::BodyOpen;
+                    }
+                };
+                let Ok(chunk) = chunk else {
+                    cancellation.cancel();
+                    return Delivery::BodyClosed;
+                };
+                if input.send_chunk(chunk.to_vec()).await.is_err() {
+                    return Delivery::BodyOpen;
                 }
-            };
-            let chunk = match tokio::time::timeout(idle_timeout, next).await {
-                Ok(Some(chunk)) => chunk,
-                Ok(None) => {
-                    let _ = input.finish().await;
+            }
+        };
+        let delivery = tokio::select! {
+            biased;
+            _ = stopped.cancelled() => Delivery::BodyOpen,
+            delivery = delivery => delivery,
+        };
+        drop((input, delivery_guard));
+        if matches!(delivery, Delivery::BodyClosed) || version != HttpVersion::Http1 {
+            return;
+        }
+        loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(_)) => {
+                    cancellation.cancel();
+                    return;
+                }
+                None => {
                     done.store(true, Ordering::Release);
                     return;
                 }
-                Err(_) => {
-                    let _ = input.fail_idle_timeout().await;
-                    return;
-                }
-            };
-            let Ok(chunk) = chunk else {
-                cancellation.cancel();
-                return;
-            };
-            if input.send_chunk(chunk.to_vec()).await.is_err() {
-                return;
             }
         }
-    }))
+    }));
+    Upload {
+        stop,
+        delivering: Some(delivering),
+        _task: task,
+    }
 }
 
-async fn stop_upload(session: &HttpSession, upload: &mut Option<AbortOnDropHandle<()>>) {
-    if let Some(upload) = upload.take() {
-        upload.abort();
-        let _ = upload.await;
+async fn dispose_input(session: &HttpSession, upload: &mut Option<Upload>) {
+    if let Some(upload) = upload {
+        upload.stop_delivery().await;
     }
     let _ = session.input.dispose().await;
 }
 
 struct OutputState {
     session: HttpSession,
-    upload: Option<AbortOnDropHandle<()>>,
+    upload: Option<Upload>,
     guard: Option<super::http_session::HttpSessionDropGuard>,
     gate: BodyGate,
     output_id: u64,
@@ -514,14 +582,14 @@ async fn output_step(mut state: OutputState) -> Option<(Result<Bytes, io::Error>
                     Some(invocation_session_completion::Outcome::Success(_))
                 ) =>
             {
-                stop_upload(&state.session, &mut state.upload).await;
+                dispose_input(&state.session, &mut state.upload).await;
                 state.gate.session_success()
             }
             HttpSessionEvent::Finished(_) | HttpSessionEvent::Error(_) => {
                 state.gate.session_failure()
             }
             HttpSessionEvent::StreamEnd(end) if end.direction() == StreamDirection::Input => {
-                stop_upload(&state.session, &mut state.upload).await;
+                dispose_input(&state.session, &mut state.upload).await;
                 continue;
             }
             _ => continue,

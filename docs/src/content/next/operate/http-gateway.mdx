@@ -227,6 +227,16 @@ disconnects in the middle of a body does not hold the request for the whole
 outage. A request without a body keeps waiting for acceptance. Raise the limit
 for agents whose instances take longer than that to load.
 
+When the handler drops its input, or after the idle timeout, an HTTP/1 gateway
+keeps reading the rest of the request body and discards it. While part of a
+request body is unread, an HTTP/1 server notices a disconnect only when it reads
+the body, so this lets the gateway cancel the invocation when the client
+disconnects, with no deadline for a client that stays connected. The discarded
+bytes count toward the request body limit: an overflow returns 413 before the
+response head, and later cancels the invocation like any other request-body read
+failure. HTTP/2 detects disconnects without reading, so in the same cases the
+gateway stops reading an HTTP/2 body.
+
 `file_lookup_timeout` separately bounds a live-file exchange: lookup, response
 preparation and response-body delivery. There is no separate executor file-read
 deadline. Expiry returns 504 before response commitment or aborts a started

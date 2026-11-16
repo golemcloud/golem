@@ -2175,12 +2175,13 @@ fn request_body_idle_timeout_fails_only_the_input_stream() {
                 let _ = event(&mut session).await;
                 let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
                 let done = Arc::new(AtomicBool::new(false));
-                let upload = crate::custom_api::raw_handler::start_upload(
+                let mut upload = crate::custom_api::raw_handler::start_upload(
                     poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
                     session.input.clone(),
                     session.cancellation.clone(),
                     done.clone(),
                     Duration::from_secs(1),
+                    crate::custom_api::http_envelope::HttpVersion::Http2,
                 );
                 if send_prefix {
                     tx.send(Ok(bytes::Bytes::from_static(b"a"))).await.unwrap();
@@ -2197,11 +2198,16 @@ fn request_body_idle_timeout_fails_only_the_input_stream() {
                 tokio::task::yield_now().await;
                 tokio::time::advance(Duration::from_millis(400)).await;
                 let expiry = tokio::time::Instant::now();
-                upload.await.unwrap();
+                upload.delivery_stopped().await;
                 assert_eq!(
                     tokio::time::Instant::now(),
                     expiry,
                     "empty chunks extended the idle interval"
+                );
+                tokio::task::yield_now().await;
+                assert!(
+                    tx.is_closed(),
+                    "an HTTP/2 upload kept polling the request body after the idle timeout"
                 );
                 let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
                 else {
@@ -2253,7 +2259,7 @@ fn unread_request_body_bounds_only_the_wait_for_acceptance() {
             async fn receive(
                 session: &mut HttpSession,
                 body_rx: mpsc::Receiver<Result<bytes::Bytes, std::io::Error>>,
-                upload: &mut Option<tokio_util::task::AbortOnDropHandle<()>>,
+                upload: &mut Option<crate::custom_api::raw_handler::Upload>,
                 has_request_body: bool,
             ) -> Result<(), crate::custom_api::error::RequestHandlerError> {
                 crate::custom_api::raw_handler::receive_response_head(
@@ -2265,6 +2271,7 @@ fn unread_request_body_bounds_only_the_wait_for_acceptance() {
                     Arc::new(AtomicBool::new(false)),
                     IDLE,
                     has_request_body,
+                    crate::custom_api::http_envelope::HttpVersion::Http1,
                 )
                 .await
                 .map(|_| ())
@@ -2346,30 +2353,209 @@ fn unread_request_body_bounds_only_the_wait_for_acceptance() {
             receive(&mut session, rx, &mut upload, true)
                 .await
                 .expect("dropping the input brought back the acceptance bound");
-            assert!(upload.is_none());
         });
 }
 
 #[test]
 #[test_timeout("10s")]
 fn guest_input_disposal_stops_the_upload_without_a_late_idle_failure() {
+    use crate::custom_api::http_envelope::HttpVersion;
+
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .start_paused(true)
         .build()
         .unwrap()
         .block_on(async {
-            let mut h = harness(1);
-            let mut session = h.start_session();
-            let Call::Start(_, mut tail) = call(&mut h.calls).await else {
-                panic!()
+            for version in [HttpVersion::Http2, HttpVersion::Http1] {
+                let mut h = harness(1);
+                let mut session = h.start_session();
+                let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                    panic!()
+                };
+                send(&h.response_txs[0], accepted(1, None)).await;
+                send(
+                    &h.response_txs[0],
+                    response(invocation_response::Response::StreamEnd(StreamEnd {
+                        transport_stream_id: INPUT_STREAM_ID,
+                        producer_sequence: 0,
+                        direction: StreamDirection::Input as i32,
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(
+                            StreamTerminal::ConsumerCancelled { details: None }
+                                .try_into()
+                                .unwrap(),
+                        ),
+                        durable_stream_id: Some(uuid(101)),
+                        durable_offset: offset(0),
+                        epoch: 1,
+                    })),
+                )
+                .await;
+                send(&h.response_txs[0], scalar_result()).await;
+                let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(1);
+                let done = Arc::new(AtomicBool::new(false));
+                let mut upload = None;
+                crate::custom_api::raw_handler::receive_response_head(
+                    &mut session,
+                    poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                    &mut upload,
+                    done.clone(),
+                    Duration::from_secs(1),
+                    true,
+                    version,
+                )
+                .await
+                .unwrap();
+                if version == HttpVersion::Http2 {
+                    assert!(
+                        tx.is_closed(),
+                        "a stopped HTTP/2 upload kept polling the request body"
+                    );
+                } else {
+                    // The rest of an HTTP/1 body is read and discarded, so a disconnect is seen.
+                    for _ in 0..2 {
+                        tx.send(Ok(bytes::Bytes::from_static(b"late")))
+                            .await
+                            .unwrap();
+                    }
+                }
+                tokio::time::advance(Duration::from_secs(10)).await;
+                send(&h.response_txs[0], finished()).await;
+                assert!(matches!(
+                    event(&mut session).await,
+                    HttpSessionEvent::Finished(_)
+                ));
+                assert!(
+                    tail.next().await.is_none(),
+                    "a stopped upload sent late input"
+                );
+                assert!(!done.load(Ordering::Acquire));
+                assert!(!session.cancellation.token.is_cancelled());
+                assert!(h.cleanups.try_recv().is_err());
+                if version == HttpVersion::Http1 {
+                    tx.send(Err(std::io::Error::other("client disconnected")))
+                        .await
+                        .unwrap();
+                    timeout(
+                        Duration::from_secs(1),
+                        session.cancellation.token.cancelled(),
+                    )
+                    .await
+                    .expect("a read failure after disposal did not cancel the session");
+                }
+            }
+        });
+}
+
+#[test]
+#[test_timeout("30s")]
+async fn disconnect_cancels_the_session_after_the_upload_stops() {
+    use crate::custom_api::http_envelope::HttpVersion;
+    use tokio::io::AsyncWriteExt;
+
+    enum Client {
+        Http1(tokio::net::TcpStream),
+        Http2 {
+            body: h2::SendStream<bytes::Bytes>,
+            _client: h2::client::SendRequest<bytes::Bytes>,
+            _response: h2::client::ResponseFuture,
+            _connection: tokio_util::task::AbortOnDropHandle<Result<(), h2::Error>>,
+        },
+    }
+
+    for (version, idle_failure) in [
+        (HttpVersion::Http1, false),
+        (HttpVersion::Http1, true),
+        (HttpVersion::Http2, false),
+        (HttpVersion::Http2, true),
+    ] {
+        let mut h = harness(1);
+        let session = h.start_session();
+        let cancellation = session.cancellation.clone();
+        let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+            panic!()
+        };
+        send(&h.response_txs[0], accepted(1, None)).await;
+        let idle = if idle_failure {
+            Duration::from_millis(200)
+        } else {
+            Duration::from_secs(60)
+        };
+        let (head_tx, head_rx) = tokio::sync::oneshot::channel();
+        let session = Arc::new(Mutex::new(Some((session, head_tx))));
+        let endpoint = poem::endpoint::make({
+            move |mut request: poem::Request| {
+                let session = session.clone();
+                async move {
+                    let (mut session, head_tx) = session.lock().await.take().unwrap();
+                    let _guard = session.drop_guard();
+                    let mut upload = None;
+                    let head = crate::custom_api::raw_handler::receive_response_head(
+                        &mut session,
+                        request.take_body(),
+                        &mut upload,
+                        Arc::new(AtomicBool::new(false)),
+                        idle,
+                        true,
+                        version,
+                    )
+                    .await;
+                    let _ = head_tx.send(head.map(|_| ()));
+                    // The response body would keep the session and the upload alive.
+                    std::future::pending::<()>().await;
+                    poem::Response::default()
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let acceptor = poem::listener::TcpAcceptor::from_tokio(listener).unwrap();
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+            golem_service_base::http_server::run(acceptor, endpoint, Default::default()),
+        ));
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut client = if version == HttpVersion::Http1 {
+            socket
+                .write_all(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100\r\n\r\nx")
+                .await
+                .unwrap();
+            Client::Http1(socket)
+        } else {
+            let (mut client, connection) = h2::client::handshake(socket).await.unwrap();
+            let connection = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(connection));
+            let request = http::Request::builder()
+                .method("POST")
+                .uri(format!("http://{address}/"))
+                .body(())
+                .unwrap();
+            let (response, mut body) = client.send_request(request, false).unwrap();
+            body.send_data(bytes::Bytes::from_static(b"x"), false)
+                .unwrap();
+            Client::Http2 {
+                body,
+                _client: client,
+                _response: response,
+                _connection: connection,
+            }
+        };
+        assert!(matches!(
+            input(tail.next().await.unwrap()),
+            invocation_request::Request::InputItem(_)
+        ));
+        send(&h.response_txs[0], ack(0, 1)).await;
+        if idle_failure {
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!("missing input failure")
             };
-            send(&h.response_txs[0], accepted(1, None)).await;
+            assert_eq!(end.authored_by(), StreamTerminalAuthor::Host);
+        } else {
             send(
                 &h.response_txs[0],
                 response(invocation_response::Response::StreamEnd(StreamEnd {
                     transport_stream_id: INPUT_STREAM_ID,
-                    producer_sequence: 0,
+                    producer_sequence: 1,
                     direction: StreamDirection::Input as i32,
                     authored_by: StreamTerminalAuthor::Guest as i32,
                     outcome: Some(
@@ -2378,44 +2564,37 @@ fn guest_input_disposal_stops_the_upload_without_a_late_idle_failure() {
                             .unwrap(),
                     ),
                     durable_stream_id: Some(uuid(101)),
-                    durable_offset: offset(0),
+                    durable_offset: offset(1),
                     epoch: 1,
                 })),
             )
             .await;
-            send(&h.response_txs[0], scalar_result()).await;
-            let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(1);
-            let done = Arc::new(AtomicBool::new(false));
-            let mut upload = None;
-            crate::custom_api::raw_handler::receive_response_head(
-                &mut session,
-                poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
-                &mut upload,
-                done.clone(),
-                Duration::from_secs(1),
-                true,
-            )
+            send(&h.response_txs[0], stream_result()).await;
+            head_rx.await.unwrap().expect("the response head failed");
+        }
+        // A client that is still connected keeps its session; its late bytes are discarded.
+        match &mut client {
+            Client::Http1(socket) => socket.write_all(b"late").await.unwrap(),
+            Client::Http2 { body, .. } => body
+                .send_data(bytes::Bytes::from_static(b"late"), false)
+                .unwrap(),
+        }
+        assert!(
+            timeout(Duration::from_millis(300), tail.next())
+                .await
+                .is_err(),
+            "a stopped upload delivered late bytes"
+        );
+        assert!(!cancellation.token.is_cancelled());
+        drop(client);
+        timeout(Duration::from_secs(5), cancellation.token.cancelled())
             .await
-            .unwrap();
-            assert!(upload.is_none());
-            assert!(
-                tx.is_closed(),
-                "a stopped upload kept polling the request body"
-            );
-            tokio::time::advance(Duration::from_secs(10)).await;
-            send(&h.response_txs[0], finished()).await;
-            assert!(matches!(
-                event(&mut session).await,
-                HttpSessionEvent::Finished(_)
-            ));
-            assert!(
-                tail.next().await.is_none(),
-                "a stopped upload sent a late input terminal"
-            );
-            assert!(!done.load(Ordering::Acquire));
-            assert!(!session.cancellation.token.is_cancelled());
-            assert!(h.cleanups.try_recv().is_err());
-        });
+            .unwrap_or_else(|_| {
+                panic!(
+                    "a disconnected {version:?} client kept its session after the upload stopped"
+                )
+            });
+    }
 }
 
 #[test]
@@ -2442,12 +2621,13 @@ fn steady_upload_and_long_response_are_not_bounded_by_session_duration() {
             let mut response_bytes = Vec::new();
             let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(1);
             let done = Arc::new(AtomicBool::new(false));
-            let upload = crate::custom_api::raw_handler::start_upload(
+            let mut upload = crate::custom_api::raw_handler::start_upload(
                 poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
                 session.input.clone(),
                 session.cancellation.clone(),
                 done.clone(),
                 Duration::from_secs(60),
+                crate::custom_api::http_envelope::HttpVersion::Http1,
             );
             for sequence in 0..7 {
                 tokio::time::advance(Duration::from_secs(48)).await;
@@ -2482,7 +2662,7 @@ fn steady_upload_and_long_response_are_not_bounded_by_session_duration() {
                 response_bytes.extend(event_bytes(event(&mut session).await).unwrap());
             }
             drop(tx);
-            upload.await.unwrap();
+            upload.delivery_stopped().await;
             let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
             else {
                 panic!("missing EOF")
@@ -2541,12 +2721,13 @@ fn invocation_backpressure_is_not_request_body_idle_time() {
             let _ = event(&mut session).await;
             let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
             let done = Arc::new(AtomicBool::new(false));
-            let upload = crate::custom_api::raw_handler::start_upload(
+            let mut upload = crate::custom_api::raw_handler::start_upload(
                 poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
                 session.input.clone(),
                 session.cancellation.clone(),
                 done.clone(),
                 Duration::from_secs(1),
+                crate::custom_api::http_envelope::HttpVersion::Http2,
             );
             tx.send(Ok(bytes::Bytes::from_static(b"ab"))).await.unwrap();
             assert!(matches!(
@@ -2562,7 +2743,7 @@ fn invocation_backpressure_is_not_request_body_idle_time() {
             assert_eq!(item.sequence, 1);
             send(&h.response_txs[0], ack(1, 1)).await;
             drop(tx);
-            upload.await.unwrap();
+            upload.delivery_stopped().await;
             let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
             else {
                 panic!("missing EOF")
@@ -2960,12 +3141,13 @@ fn idle_failure_waits_for_input_credits_without_stopping_output() {
             let _ = event(&mut session).await;
             let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
             let done = Arc::new(AtomicBool::new(false));
-            let upload = crate::custom_api::raw_handler::start_upload(
+            let mut upload = crate::custom_api::raw_handler::start_upload(
                 poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
                 session.input.clone(),
                 session.cancellation.clone(),
                 done.clone(),
                 Duration::from_secs(1),
+                crate::custom_api::http_envelope::HttpVersion::Http2,
             );
             tx.send(Ok(bytes::Bytes::from_static(b"a"))).await.unwrap();
             assert!(matches!(
@@ -2990,7 +3172,7 @@ fn idle_failure_waits_for_input_credits_without_stopping_output() {
             assert_eq!(event_bytes(event(&mut session).await).unwrap(), b"before");
             assert!(!session.cancellation.token.is_cancelled());
             send(&h.response_txs[0], ack(0, 1)).await;
-            upload.await.unwrap();
+            upload.delivery_stopped().await;
             let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
             else {
                 panic!()
