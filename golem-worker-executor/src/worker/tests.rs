@@ -49,6 +49,160 @@ fn instantiating_accounting_tracker(saved: u64, current: u64) -> LinearMemoryTra
 }
 
 #[test]
+async fn accounting_finalization_joins_baseline_and_survives_cancellation() {
+    use tokio::sync::oneshot;
+
+    for saved in [40, 80] {
+        for later in [0, 20] {
+            let accounting = residency::MemoryAccounting::default();
+            let tracker = instantiating_accounting_tracker(saved, 40);
+            let entries = StdMutex::new(Vec::new());
+            let (baseline_done, baseline_receipt) = oneshot::channel();
+            let mut baseline = Box::pin(accounting.reconcile(&tracker, false, |bytes| {
+                entries.lock().unwrap().push((true, bytes));
+                baseline_receipt
+            }));
+            assert_eq!(futures::poll!(&mut baseline).is_pending(), saved != 40);
+            drop(baseline);
+            tracker.grow_and_record(later, Instant::now(), |_| panic!("initializer hint"));
+            let (final_done, final_receipt) = oneshot::channel();
+            let mut finalize =
+                Box::pin(
+                    accounting.finalize_instantiation(&tracker, 40 + later, |delta| {
+                        entries.lock().unwrap().push((false, delta));
+                        final_receipt
+                    }),
+                );
+            if saved != 40 {
+                assert!(futures::poll!(&mut finalize).is_pending());
+                assert_eq!(*entries.lock().unwrap(), vec![(true, 40)]);
+                baseline_done.send(Ok(())).unwrap();
+            }
+            assert_eq!(futures::poll!(&mut finalize).is_pending(), later > 0);
+            drop(finalize);
+            let expected = if later == 0 {
+                vec![]
+            } else {
+                vec![(false, later)]
+            };
+            assert_eq!(
+                entries
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .filter(|(absolute, _)| !absolute)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let mut retry = Box::pin(accounting.finalize_instantiation(
+                &tracker,
+                40 + later,
+                |_| panic!("initializer delta recorded twice"),
+            ));
+            if later > 0 {
+                assert!(futures::poll!(&mut retry).is_pending());
+                drop(retry);
+                let mut reset = Box::pin(accounting.reconcile(&tracker, true, |bytes| {
+                    assert_eq!(bytes, 40 + later);
+                    entries.lock().unwrap().push((true, bytes));
+                    let (done, receipt) = oneshot::channel();
+                    done.send(Ok(())).unwrap();
+                    receipt
+                }));
+                assert!(futures::poll!(&mut reset).is_pending());
+                final_done.send(Ok(())).unwrap();
+                reset.await.unwrap();
+                accounting
+                    .finalize_instantiation(&tracker, 40 + later, |_| {
+                        panic!("reset repeated initializer delta")
+                    })
+                    .await
+                    .unwrap();
+            } else {
+                retry.await.unwrap();
+            }
+            tracker.switch_to_live();
+            tracker.grow_and_record(7, Instant::now(), |delta| {
+                entries.lock().unwrap().push((false, delta));
+            });
+            let persisted =
+                entries
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .fold(
+                        saved,
+                        |total, &(absolute, bytes)| {
+                            if absolute { bytes } else { total + bytes }
+                        },
+                    );
+            assert_eq!(persisted, 47 + later);
+            assert_eq!(tracker.current_bytes(), persisted);
+        }
+    }
+}
+
+#[test]
+async fn accounting_finalization_failure_remains_authoritative() {
+    use tokio::sync::oneshot;
+
+    for fail_baseline in [false, true] {
+        for dropped in [false, true] {
+            let accounting = residency::MemoryAccounting::default();
+            let tracker = instantiating_accounting_tracker(80, 40);
+            let (done, receipt) = oneshot::channel();
+            if fail_baseline {
+                let mut baseline = Box::pin(accounting.reconcile(&tracker, false, |_| receipt));
+                assert!(futures::poll!(&mut baseline).is_pending());
+                drop(baseline);
+            } else {
+                accounting
+                    .reconcile(&tracker, false, |_| {
+                        let (done, receipt) = oneshot::channel();
+                        done.send(Ok(())).unwrap();
+                        receipt
+                    })
+                    .await
+                    .unwrap();
+                let mut finalize =
+                    Box::pin(accounting.finalize_instantiation(&tracker, 60, |_| receipt));
+                assert!(futures::poll!(&mut finalize).is_pending());
+                drop(finalize);
+            }
+            if dropped {
+                drop(done);
+            } else {
+                done.send(Err(WorkerExecutorError::runtime(
+                    "refused accounting commit",
+                )))
+                .unwrap();
+            }
+            let error = accounting
+                .finalize_instantiation(&tracker, 60, |_| panic!("lost failed receipt"))
+                .await
+                .unwrap_err();
+            for reset in [false, true] {
+                assert_eq!(
+                    accounting
+                        .reconcile(&tracker, reset, |_| panic!("lost failed receipt"))
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    error.to_string()
+                );
+            }
+            let replacement = instantiating_accounting_tracker(80, 30);
+            accounting
+                .finalize_instantiation(&replacement, 30, |_| panic!("pure replay delta"))
+                .await
+                .unwrap();
+            assert_eq!(replacement.current_bytes(), 30);
+        }
+    }
+}
+
+#[test]
 async fn accounting_initializer_baseline_survives_cancellation_and_reset() {
     use tokio::sync::oneshot;
 

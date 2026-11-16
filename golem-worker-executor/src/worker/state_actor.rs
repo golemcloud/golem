@@ -289,6 +289,12 @@ enum LifecycleJob<Ctx: WorkerCtx> {
         bytes: u64,
         done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
+    FinalizeInstantiationMemory {
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        delta: u64,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
+    },
     OrderedOplogEntry {
         worker: Arc<Worker<Ctx>>,
         entry: Box<OplogEntry>,
@@ -667,6 +673,23 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             .map_err(WorkerExecutorError::from);
                         let _ = done.send(result);
                     }
+                    LifecycleJob::FinalizeInstantiationMemory {
+                        worker,
+                        bytes,
+                        delta,
+                        done,
+                    } => {
+                        let result = worker
+                            .add_and_commit_oplog(OplogEntry::grow_memory(delta))
+                            .await
+                            .map(|_| {
+                                worker
+                                    .startup_linear_memory_bytes
+                                    .store(bytes, Ordering::Release);
+                            })
+                            .map_err(WorkerExecutorError::from);
+                        let _ = done.send(result);
+                    }
                     LifecycleJob::OrderedOplogEntry {
                         worker,
                         entry,
@@ -993,6 +1016,28 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .is_err()
         {
             panic!("worker lifecycle actor stopped during memory reconciliation");
+        }
+        result
+    }
+
+    pub fn finalize_instantiation_memory(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        delta: u64,
+    ) -> oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let (done, result) = oneshot::channel();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::FinalizeInstantiationMemory {
+                worker,
+                bytes,
+                delta,
+                done,
+            })
+            .is_err()
+        {
+            panic!("worker lifecycle actor stopped during instantiation finalization");
         }
         result
     }

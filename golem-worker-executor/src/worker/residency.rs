@@ -35,6 +35,27 @@ impl MemoryAccounting {
         reset: bool,
         enqueue: impl FnOnce(u64) -> tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>,
     ) -> Result<(), WorkerExecutorError> {
+        self.transition(tracker, || tracker.start_memory_accounting(reset, enqueue))
+            .await
+    }
+
+    pub(super) async fn finalize_instantiation(
+        &self,
+        tracker: &LinearMemoryTracker,
+        bytes: u64,
+        enqueue: impl FnOnce(u64) -> tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.transition(tracker, || {
+            tracker.finalize_instantiation(bytes, Instant::now(), enqueue)
+        })
+        .await
+    }
+
+    async fn transition(
+        &self,
+        tracker: &LinearMemoryTracker,
+        apply: impl FnOnce() -> Option<tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>>,
+    ) -> Result<(), WorkerExecutorError> {
         let owner = Arc::downgrade(&tracker.resource_transition());
         let commit = {
             let mut generations = self.generations.lock().unwrap();
@@ -58,7 +79,7 @@ impl MemoryAccounting {
         if let Some(previous) = commit.as_ref() {
             previous.clone().await?;
         }
-        if let Some(receipt) = tracker.start_memory_accounting(reset, enqueue) {
+        if let Some(receipt) = apply() {
             // Install before the first await so cancellation cannot lose the commit or its error.
             *commit = Some(
                 async move {
@@ -665,6 +686,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let mut growth = self.memory_growth.lock().unwrap();
                 *growth = Arc::new(PendingMemoryGrowth::default());
                 self.state_actor.reconcile_memory(self.clone(), bytes)
+            })
+            .await
+    }
+
+    pub(crate) async fn finalize_instantiation_memory(
+        self: &Arc<Self>,
+        tracker: &LinearMemoryTracker,
+        bytes: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        self.memory_accounting
+            .finalize_instantiation(tracker, bytes, |delta| {
+                self.state_actor
+                    .finalize_instantiation_memory(self.clone(), bytes, delta)
             })
             .await
     }

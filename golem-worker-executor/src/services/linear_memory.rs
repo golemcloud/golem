@@ -291,12 +291,6 @@ impl LinearMemoryTracker {
         result
     }
 
-    /// The initially-live primary has already persisted its instantiation growth.
-    pub(crate) fn start_live_memory_accounting(&self) {
-        let _transition = self.inner.transitions.lock().unwrap();
-        self.inner.state.lock().unwrap().accounting_started = true;
-    }
-
     pub(crate) fn usage_is_live(&self) -> bool {
         self.inner.usage_live.load(Ordering::Acquire)
     }
@@ -468,25 +462,43 @@ impl LinearMemoryTracker {
     }
 
     pub fn reconcile(&self, bytes: u64, now: Instant) -> u64 {
+        let _transition = self.inner.transitions.lock().unwrap();
         self.reconcile_inner(bytes, Some(now))
     }
 
     #[cfg(test)]
     pub(crate) fn reconcile_at(&self, bytes: u64, now: Instant) -> u64 {
-        self.reconcile_inner(bytes, Some(now))
+        self.reconcile(bytes, now)
+    }
+
+    /// Ends primary instantiation once and enqueues its residual before another accounting sample.
+    /// The caller retains and joins the enqueue receipt, including after cancellation.
+    pub(crate) fn finalize_instantiation<R>(
+        &self,
+        bytes: u64,
+        now: Instant,
+        enqueue: impl FnOnce(u64) -> R,
+    ) -> Option<R> {
+        let _transition = self.inner.transitions.lock().unwrap();
+        if !self.inner.state.lock().unwrap().reconciling {
+            return None;
+        }
+        let delta = self.reconcile_inner(bytes, Some(now));
+        let result = (delta > 0).then(|| enqueue(delta));
+        let mut state = self.inner.state.lock().unwrap();
+        if !state.replaying {
+            // A fresh live primary needs no absolute reset after its initializer delta.
+            state.accounting_started = true;
+        }
+        result
     }
 
     fn reconcile_inner(&self, bytes: u64, now: Option<Instant>) -> u64 {
-        let _transition = self.inner.transitions.lock().unwrap();
         let state = self.inner.state.lock().unwrap();
-        let live_growth = if state.replaying {
-            0
-        } else {
-            bytes.saturating_sub(
-                state
-                    .instantiation_accounting_baseline
-                    .unwrap_or(self.inner.persisted_startup_bytes),
-            )
+        let live_growth = match state.instantiation_accounting_baseline {
+            Some(baseline) => bytes.saturating_sub(baseline),
+            None if state.replaying => 0,
+            None => bytes.saturating_sub(self.inner.persisted_startup_bytes),
         };
         let protected =
             state.reconciliation_grant_bytes(bytes, self.inner.initially_reserved_bytes);
@@ -747,7 +759,7 @@ mod tests {
     fn initializer_cutover_counts_only_growth_after_its_baseline() {
         const PAGE: u64 = 65536;
         for saved_pages in [1, 2, 4] {
-            for later_pages in [0, 1] {
+            for (later_pages, publish_first) in [(0, false), (1, false), (0, true), (1, true)] {
                 let now = Instant::now();
                 let saved = saved_pages * PAGE;
                 let tracker = LinearMemoryTracker::new(
@@ -767,7 +779,9 @@ mod tests {
                 let baseline = tracker
                     .start_memory_accounting(false, |bytes| bytes)
                     .unwrap_or(saved);
-                tracker.switch_to_live();
+                if publish_first {
+                    tracker.switch_to_live();
+                }
                 let later = later_pages * PAGE;
                 if later > 0 {
                     tracker
@@ -785,6 +799,7 @@ mod tests {
                 let growth = tracker.reconcile(actual, now);
                 assert_eq!(growth, later, "saved={saved}, actual={actual}");
                 assert_eq!(baseline + growth, actual);
+                tracker.switch_to_live();
                 let recorded = std::cell::Cell::new(0);
                 tracker.grow_and_record(PAGE, now, |delta| {
                     recorded.set(recorded.get() + delta);

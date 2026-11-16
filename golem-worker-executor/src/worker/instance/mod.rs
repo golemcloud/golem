@@ -37,7 +37,7 @@ use golem_common::model::entity::{
     EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
     InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::regions::DeletedRegions;
 #[cfg(any(test, feature = "test-utils"))]
 use golem_service_base::error::worker_executor::InterruptKind;
@@ -982,8 +982,14 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 .store(false, Ordering::Release);
         }
 
-        let live_instantiation_growth =
+        if self.runtime == OwnerRuntime::Agent {
+            // Join any earlier baseline and commit the residual before exposing the instance.
+            owner
+                .finalize_instantiation_memory(&tracker, allocated_bytes)
+                .await?;
+        } else {
             tracker.reconcile(allocated_bytes, std::time::Instant::now());
+        }
         // Preparation keeps the replay reservation floor and shrinks after reconciliation's
         // quota callbacks and grant merge. Preserve the pre-merge tracked decision: merging
         // can adopt a controller, while shrinking an inert grant changes its historical bytes.
@@ -994,19 +1000,6 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 .shrink_to(required_grant_bytes);
         }
         crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
-        if self.runtime == OwnerRuntime::Agent && live_instantiation_growth > 0 {
-            // Commit the growth oplog entry before publishing the primary instance. Otherwise a
-            // process crash can replay and persist the same instantiation growth again.
-            owner
-                .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
-                .await?;
-            owner
-                .startup_linear_memory_bytes
-                .store(allocated_bytes, Ordering::Release);
-        }
-        if self.runtime == OwnerRuntime::Agent && hosted.store.data().durable_ctx().is_live() {
-            tracker.start_live_memory_accounting();
-        }
 
         Ok(())
     }

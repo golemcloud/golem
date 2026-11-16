@@ -1520,6 +1520,188 @@ async fn held_completed_reconstruction() -> (
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn initializer_enumeration_preserves_growth_before_native_publication() -> anyhow::Result<()>
+{
+    use crate::services::active_agents::MemoryGrant;
+    use crate::services::linear_memory::LinearMemoryTracker;
+    use crate::services::resource_limits::AtomicResourceEntry;
+    use golem_common::model::agent::AgentMode;
+    use std::sync::Mutex;
+    use std::time::Instant;
+    use wasmtime::{Engine, MemoryKind, Module, ResourceLimiterAsync, Store};
+
+    struct Allocation {
+        tracker: LinearMemoryTracker,
+        oplog: Arc<InMemoryOplog>,
+    }
+
+    #[async_trait]
+    impl ResourceLimiterAsync for Allocation {
+        async fn memory_growing(
+            &mut self,
+            current: usize,
+            desired: usize,
+            _maximum: Option<usize>,
+            _kind: MemoryKind,
+        ) -> wasmtime::Result<bool> {
+            let growth = self
+                .tracker
+                .prepare_unshared_growth(current, desired)
+                .unwrap();
+            self.tracker
+                .retain_growth_grant(MemoryGrant::inert(growth.admission_delta));
+            Ok(true)
+        }
+
+        fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {
+            self.tracker
+                .grow_and_record((desired - current) as u64, Instant::now(), |delta| {
+                    self.oplog
+                        .entries
+                        .lock()
+                        .unwrap()
+                        .push(OplogEntry::grow_memory(delta));
+                });
+        }
+
+        async fn table_growing(
+            &mut self,
+            _current: usize,
+            _desired: usize,
+            _maximum: Option<usize>,
+        ) -> wasmtime::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    const PAGE: u64 = 65536;
+    let engine =
+        Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+    let module = Module::new(
+        &engine,
+        r#"
+        (module
+          (import "test" "begin-native-publication" (func $begin))
+          (memory (export "memory") 40 100)
+          (func $init
+            (call $begin)
+            (if (i32.eq (memory.grow (i32.const 20)) (i32.const -1)) (then unreachable)))
+          (func (export "grow-later")
+            (if (i32.eq (memory.grow (i32.const 1)) (i32.const -1)) (then unreachable)))
+          (start $init))
+    "#,
+    )?;
+    for saved_pages in [20, 40, 80] {
+        let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
+        drop(reconstruction);
+        let entered = Arc::new(tokio::sync::Barrier::new(2));
+        let release = Arc::new(tokio::sync::Barrier::new(2));
+        *replay.cursor.primary_publication_gate.lock().unwrap() =
+            Some((entered.clone(), release.clone()));
+        let tracker = LinearMemoryTracker::new(
+            saved_pages * PAGE,
+            saved_pages * PAGE,
+            AgentMode::Durable,
+            true,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 100 * PAGE as usize, 0, 0, 0)),
+            Arc::new(Mutex::new(MemoryGrant::inert(saved_pages * PAGE))),
+            Instant::now(),
+        );
+        let mut store = Store::new(
+            &engine,
+            Allocation {
+                tracker: tracker.clone(),
+                oplog: oplog.clone(),
+            },
+        );
+        store.limiter_async(|state| state);
+        store.set_fuel(u64::MAX)?;
+        store.set_epoch_deadline(u64::MAX);
+        let task = Arc::new(Mutex::new(None));
+        let mut linker = wasmtime::Linker::new(&engine);
+        linker.func_wrap_async("test", "begin-native-publication", {
+            let replay = replay.clone();
+            let task = task.clone();
+            move |caller: wasmtime::Caller<'_, Allocation>, (): ()| {
+                let tracker = caller.data().tracker.clone();
+                let oplog = caller.data().oplog.clone();
+                let replay = replay.clone();
+                let entered = entered.clone();
+                let task = task.clone();
+                Box::new(async move {
+                    // Orchestrate the native transition; this is not a tool-host substitute.
+                    *task.lock().unwrap() = Some(tokio::spawn(async move {
+                        tracker.start_memory_accounting(false, |bytes| {
+                            oplog
+                                .entries
+                                .lock()
+                                .unwrap()
+                                .push(OplogEntry::memory_size_reconciled(bytes));
+                        });
+                        replay.publish_primary_live(&tracker).await
+                    }));
+                    entered.wait().await;
+                    Ok(())
+                })
+            }
+        })?;
+        let instance = linker.instantiate_async(&mut store, &module).await?;
+        let memory = instance.get_memory(&mut store, "memory").unwrap();
+        let actual = memory.data_size(&store) as u64;
+        assert_eq!(actual, 60 * PAGE);
+        assert!(!replay.is_live_published());
+        let delta = tracker.reconcile(actual, Instant::now());
+        assert_eq!(delta, 20 * PAGE);
+        oplog
+            .entries
+            .lock()
+            .unwrap()
+            .push(OplogEntry::grow_memory(delta));
+        assert_eq!(tracker.current_bytes(), actual);
+        let history = || {
+            oplog
+                .entries
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|entry| match entry {
+                    OplogEntry::MemorySizeReconciled { bytes, .. } => Some((true, *bytes)),
+                    OplogEntry::GrowMemory { delta, .. } => Some((false, *delta)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut expected = Vec::new();
+        if saved_pages != 40 {
+            expected.push((true, 40 * PAGE));
+        }
+        expected.push((false, 20 * PAGE));
+        assert_eq!(history(), expected);
+        release.wait().await;
+        let task = task.lock().unwrap().take().unwrap();
+        task.await??;
+        assert!(replay.is_live_published());
+        instance
+            .get_typed_func::<(), ()>(&mut store, "grow-later")?
+            .call_async(&mut store, ())
+            .await?;
+        expected.push((false, PAGE));
+        assert_eq!(history(), expected);
+        let persisted = history()
+            .iter()
+            .fold(saved_pages * PAGE, |total, &(absolute, bytes)| {
+                if absolute { bytes } else { total + bytes }
+            });
+        assert_eq!(persisted, memory.data_size(&store) as u64);
+        assert_eq!(persisted, tracker.current_bytes());
+        assert_eq!(persisted, tracker.reserved_bytes());
+    }
+    Ok(())
+}
+
+#[test]
 async fn primary_publication_requires_completed_reconstruction_validation() {
     let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
     let target = replay.exhaust_cursor_replay_prefix().await.unwrap();
