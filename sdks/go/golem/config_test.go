@@ -42,7 +42,7 @@ type demoDBConfig struct {
 }
 type demoAppConfig struct {
 	Greeting string
-	Db       demoDBConfig
+	Db       demoDBConfig `golemConfig:"nested"`
 }
 
 // cfgConfiguredAgent registers the "Cfg" agent's definition (with config type Cfg
@@ -100,8 +100,8 @@ func TestConfigDeclarationsInMetadata(t *testing.T) {
 func TestConfigDefaultsInMetadata(t *testing.T) {
 	type cfg struct {
 		Unset    *string
-		Null     *string
-		Greeting string
+		Null     *string `golemDefault:"null"`
+		Greeting string  `golemDefault:"\"hello\""`
 		Password Secret[string]
 	}
 	withDefs(t, func(d *definitions) {
@@ -112,11 +112,6 @@ func TestConfigDefaultsInMetadata(t *testing.T) {
 			"greeting": witTypes.Some(`"hello"`),
 			"password": witTypes.None[string](),
 		}
-		for i := range d.agents["Cfg"].configs {
-			cd := &d.agents["Cfg"].configs[i]
-			cd.defaultValue = want[strings.Join(cd.path, "/")]
-		}
-
 		out, errs := d.discover()
 		if len(errs) != 0 {
 			t.Fatalf("unexpected definition errors: %v", errs)

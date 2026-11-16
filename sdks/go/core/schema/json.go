@@ -939,11 +939,12 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 
 	case UnionType:
 		// The tag is not carried in the JSON, so branches are tried in
-		// declaration order and the first that fits wins. A failed attempt
+		// declaration order and the first whose body and discriminator fit
+		// wins. A failed attempt
 		// leaves nothing behind, since building returns a value rather than
 		// appending to a pool.
 		for _, branch := range b.Branches {
-			if built, err := p.build(branch.Body, value, child(path, branch.Tag)); err == nil {
+			if built, err := p.build(branch.Body, value, child(path, branch.Tag)); err == nil && p.ref.discriminates(branch, built) {
 				return UnionValue{Tag: branch.Tag, Body: built}, nil
 			}
 		}

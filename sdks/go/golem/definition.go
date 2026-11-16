@@ -124,6 +124,11 @@ func (d *definitions) discover() ([]common.AgentType, []engine.DefError) {
 			// platform-dependent width; …").
 			errs = append(errs, engine.DefError{Agent: name, Detail: reason})
 		}
+		if len(invalids) == 0 {
+			if err := prepareConfigMetadata(&at); err != nil {
+				errs = append(errs, engine.DefError{Agent: name, Detail: err.Error()})
+			}
+		}
 
 		// HTTP mount/endpoints: validate and compile, patching the built type
 		// with the metadata the platform routes on.
