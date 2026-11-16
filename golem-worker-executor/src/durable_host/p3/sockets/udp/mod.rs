@@ -198,13 +198,14 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         types::HostUdpSocket::get_address_family(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
-    fn get_unicast_hop_limit(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u8> {
+    async fn get_unicast_hop_limit(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u8> {
         observe_function_call(
             &*self.0,
             "sockets::types::udp-socket",
             "get-unicast-hop-limit",
         );
         types::HostUdpSocket::get_unicast_hop_limit(&mut WasiSocketsView::sockets(self.0), socket)
+            .await
     }
 
     fn set_unicast_hop_limit(
@@ -224,13 +225,14 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_receive_buffer_size(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u64> {
+    async fn get_receive_buffer_size(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u64> {
         observe_function_call(
             &*self.0,
             "sockets::types::udp-socket",
             "get-receive-buffer-size",
         );
         types::HostUdpSocket::get_receive_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
+            .await
     }
 
     fn set_receive_buffer_size(
@@ -250,13 +252,14 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_send_buffer_size(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u64> {
+    async fn get_send_buffer_size(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u64> {
         observe_function_call(
             &*self.0,
             "sockets::types::udp-socket",
             "get-send-buffer-size",
         );
         types::HostUdpSocket::get_send_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
+            .await
     }
 
     fn set_send_buffer_size(
