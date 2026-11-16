@@ -817,13 +817,17 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     }
 }
 
-fn success(tool: &ManagementTool, stdout: &[u8]) -> CallToolResult {
-    let documents = String::from_utf8_lossy(stdout)
+/// The JSON documents that a command printed, one per line.
+fn json_documents(stdout: &[u8]) -> serde_json::Result<Vec<Value>> {
+    String::from_utf8_lossy(stdout)
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(serde_json::from_str::<Value>)
-        .collect::<Result<Vec<_>, _>>();
-    let mut documents = match documents {
+        .collect()
+}
+
+fn success(tool: &ManagementTool, stdout: &[u8]) -> CallToolResult {
+    let mut documents = match json_documents(stdout) {
         Ok(documents) => documents,
         Err(error) => {
             return error_result(
@@ -855,7 +859,6 @@ fn failure(
     tool: &ManagementTool,
 ) -> CallToolResult {
     set_log_output(Output::Stderr);
-    let tool_error = classify(&error, tool);
     // A hint error and a context error are explained by the messages that their handlers log, as
     // on the CLI; the log is the message.
     let logged = if let Some(hint) = error.downcast_ref::<HintError>() {
@@ -865,16 +868,45 @@ fn failure(
         let _ = ErrorHandler::handle_context_init_hint_errors(global_flags, hint);
         true
     } else {
-        error.is::<NonSuccessfulExit>() || error.is::<PipedExitCode>()
+        false
     };
-    let (_, stderr) = capture.take();
+    let (stdout, stderr) = capture.take();
+    failure_envelope(&error, tool, logged, &stdout, &stderr)
+}
+
+/// The error result of a failed call. A command that only ends with an exit status has already
+/// reported its failure: on stdout, such as the failure of a native tool, and in its log. The
+/// documents that it printed are the payload's `output`; they are not the tool's result.
+fn failure_envelope(
+    error: &anyhow::Error,
+    tool: &ManagementTool,
+    logged: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> CallToolResult {
+    let mut tool_error = classify(error, tool);
+    let status_only = error.is::<NonSuccessfulExit>() || error.is::<PipedExitCode>();
+    let output = json_documents(stdout)
+        .ok()
+        .filter(|documents| status_only && !documents.is_empty());
+    let log = message_for_output(String::from_utf8_lossy(stderr))
+        .trim()
+        .to_string();
     let message = match tool_error.message {
         Some(message) => message,
-        None if logged => message_for_output(String::from_utf8_lossy(&stderr))
-            .trim()
-            .to_string(),
-        None => error_message_for_output(&error),
+        None => match find_cause::<InvocationFailure>(error) {
+            Some(failure) if status_only => message_for_output(failure).trim().to_string(),
+            _ if (logged || status_only) && !log.is_empty() => log,
+            _ if output.is_some() => "The command failed; `output` has what it printed".to_string(),
+            _ if status_only => "The command failed without a message".to_string(),
+            _ => error_message_for_output(error),
+        },
     };
+    if let Some(output) = output {
+        tool_error
+            .details
+            .insert("output".to_string(), Value::Array(output));
+    }
     error_envelope(&tool_error.code, message, tool_error.details)
 }
 
@@ -882,14 +914,16 @@ fn failure(
 mod tests {
     use super::{
         ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, ResultShape, classify, error_envelope,
-        management_tools, success, tool_call_argv,
+        failure_envelope, management_tools, success, tool_call_argv,
     };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
     use crate::command_handler::agent::invocation_session::InvocationFailure;
     use crate::command_handler::interactive::{self, Ask, InteractiveHandler, refuse_prompts};
     use crate::command_table::CommandRow;
     use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
-    use crate::error::{LoginRequired, ProfileMissing, PromptAnswer};
+    use crate::error::{
+        LoginRequired, NonSuccessfulExit, PipedExitCode, ProfileMissing, PromptAnswer,
+    };
     use crate::model::format::Format;
     use golem_common::model::invocation_session_public::PublicErrorCode;
     use inquire::{Select, Text};
@@ -1103,6 +1137,70 @@ mod tests {
             reported(anyhow::anyhow!("anything else"), "agent_get")["error"],
             "command-failed"
         );
+    }
+
+    #[test]
+    fn a_failure_that_only_ends_with_a_status_keeps_what_the_command_printed() {
+        let tool_invoke = tool("tool_invoke");
+        // As `tool invoke` reports a native tool's failure on stdout, then ends with status 1.
+        let report = json!({"$type": "tool.invoke", "response": {"result": {"failure": {
+            "error": {"customError": {"code": "disk-full", "message": "the disk is full"}}}}}});
+        let printed = format!("{report}\n");
+        let quiet = envelope(&failure_envelope(
+            &anyhow::Error::new(PipedExitCode(1)),
+            &tool_invoke,
+            false,
+            printed.as_bytes(),
+            b"",
+        ));
+        assert_eq!(quiet["error"], "command-failed");
+        assert_eq!(quiet["payload"]["output"], json!([report]));
+        assert!(
+            !quiet["payload"]["message"].as_str().unwrap().is_empty(),
+            "{quiet}"
+        );
+
+        let logged = envelope(&failure_envelope(
+            &anyhow::Error::new(NonSuccessfulExit),
+            &tool_invoke,
+            false,
+            printed.as_bytes(),
+            b"Invoking bash\n",
+        ));
+        assert_eq!(logged["payload"]["message"], "Invoking bash");
+        assert_eq!(logged["payload"]["output"], json!([report]));
+
+        // An error with its own message is not a report on stdout.
+        let failed = envelope(&failure_envelope(
+            &anyhow::anyhow!("connection refused"),
+            &tool_invoke,
+            false,
+            printed.as_bytes(),
+            b"",
+        ));
+        assert_eq!(failed["payload"]["message"], "connection refused");
+        assert!(failed["payload"].get("output").is_none(), "{failed}");
+
+        // As a streaming invocation reports its failure in its events, then ends with a status.
+        let event = json!({"$type": "agent.invoke-session-event", "kind": "finished",
+            "outcome": "invocation-failed"});
+        let streamed = envelope(&failure_envelope(
+            &anyhow::Error::new(InvocationFailure {
+                code: PublicErrorCode::InvocationFailed,
+                message: "intentional failure".to_string(),
+                stderr: Some("failure stderr".to_string()),
+            })
+            .context(NonSuccessfulExit),
+            &tool("agent_invoke"),
+            false,
+            format!("{event}\n").as_bytes(),
+            b"",
+        ));
+        assert_eq!(streamed["error"], "invocation-failed");
+        assert_eq!(streamed["payload"]["stderr"], "failure stderr");
+        assert_eq!(streamed["payload"]["output"], json!([event]));
+        let message = streamed["payload"]["message"].as_str().unwrap();
+        assert!(message.contains("intentional failure"), "{message}");
     }
 
     #[test]

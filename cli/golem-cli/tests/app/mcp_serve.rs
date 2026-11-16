@@ -828,6 +828,17 @@ async fn mcp_serve_reports_a_failed_streaming_invocation_with_its_code() {
             .is_some_and(|stderr| stderr.contains("intentional stream stderr")),
         "{payload}"
     );
+    assert!(
+        error_message(&failed).contains("intentional stream failure"),
+        "{payload}"
+    );
+    // The session's events, which report the failure on the CLI, stay in the payload.
+    assert!(
+        payload["output"].as_array().is_some_and(|events| events
+            .iter()
+            .any(|event| event["outcome"] == "invocation-failed")),
+        "{payload}"
+    );
     client.cancel().await.unwrap();
 }
 
