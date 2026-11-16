@@ -22,8 +22,8 @@ use golem_cli::{fs, versions};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::environment::{EnvironmentName, EnvironmentUpdate};
 use indoc::{formatdoc, indoc};
-use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
-use rmcp::service::RunningService;
+use rmcp::model::{CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, Tool};
+use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService};
 use rmcp::transport::TokioChildProcess;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Map, Value, json};
@@ -148,6 +148,26 @@ async fn call(
     };
     client
         .call_tool(CallToolRequestParams::new(tool.to_string()).with_arguments(arguments))
+        .await
+        .unwrap()
+}
+
+/// Sends a tool call that the test can cancel.
+async fn send_call(
+    client: &RunningService<RoleClient, ()>,
+    tool: &str,
+    arguments: Value,
+) -> RequestHandle<RoleClient> {
+    let Value::Object(arguments) = arguments else {
+        panic!("tool arguments must be an object");
+    };
+    client
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(CallToolRequest::new(
+                CallToolRequestParams::new(tool.to_string()).with_arguments(arguments),
+            )),
+            PeerRequestOptions::no_options(),
+        )
         .await
         .unwrap()
 }
@@ -508,6 +528,65 @@ async fn mcp_serve_works_on_the_current_deployment() {
 
 #[test]
 #[timeout("10 minutes")]
+async fn mcp_serve_drops_the_calls_that_the_client_cancels() {
+    let ctx = counters_context(&["local"]).await;
+    let kept = r#"Counter("mcp-cancel-kept")"#;
+    invoke(&ctx, "local", kept).await;
+    let client = mcp_client(&ctx, &["-E", "local"]).await;
+
+    // An invocation of ten minutes runs, and a confirmed delete waits for it. The server takes
+    // concurrent requests in any order, so the delete is sent once the invocation runs.
+    let busy = r#"Counter("mcp-cancel-busy")"#;
+    let running = send_call(
+        &client,
+        "agent_invoke",
+        json!({"agent_id": busy, "function_name": "sleep_and_increment",
+            "arguments": ["600000"]}),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let outputs = ctx
+                .cli(["-E", "local", cmd::AGENT, "get", busy, flag::FORMAT, "json"])
+                .await;
+            if outputs.success()
+                && let Some(get) = outputs.stdout_json::<Value>().first()
+                && matches!(
+                    get["metadata"]["status"].as_str(),
+                    Some("Running" | "Suspended")
+                )
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("the invocation did not start");
+    let queued = send_call(
+        &client,
+        "agent_delete",
+        json!({"agent_id": kept, "confirm": true}),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    queued.cancel(None).await.unwrap();
+    running.cancel(None).await.unwrap();
+
+    // The next call runs once the cancelled invocation stops, and the cancelled delete never ran.
+    let get = tokio::time::timeout(
+        Duration::from_secs(120),
+        call(&client, "agent_get", json!({"agent_id": kept})),
+    )
+    .await
+    .expect("the cancelled invocation still blocks the server");
+    let get = structured(&get).to_string();
+    assert!(get.contains("mcp-cancel-kept"), "{get}");
+    client.cancel().await.unwrap();
+}
+
+#[test]
+#[timeout("10 minutes")]
 async fn mcp_serve_stdout_carries_only_json_rpc() {
     let ctx = counters_context(&["local"]).await;
     let mut child = server_command(&ctx, &["-E", "local"])
@@ -574,6 +653,69 @@ async fn mcp_serve_stdout_carries_only_json_rpc() {
         stderr.contains("Invoking"),
         "the call's progress is not on stderr:\n{stderr}"
     );
+
+    #[cfg(target_os = "linux")]
+    a_client_that_does_not_read_stdout_does_not_keep_the_server(&ctx).await;
+}
+
+/// A client that closes stdin and does not read stdout. The response of the call that runs at the
+/// end of stdin becomes ready only after it, when the pipe of stdout is full: rmcp gives up the
+/// write of that response, but the write stays blocked. The server still exits.
+#[cfg(target_os = "linux")]
+async fn a_client_that_does_not_read_stdout_does_not_keep_the_server(ctx: &TestContext) {
+    use std::io::{BufRead, Write};
+
+    let (stdout_reader, stdout_writer) = std::io::pipe().unwrap();
+    let pipe_size = rustix::pipe::fcntl_setpipe_size(&stdout_writer, 4096).unwrap();
+    let mut filler = stdout_writer.try_clone().unwrap();
+    let mut child = server_command(ctx, &["-E", "local"])
+        .stdin(Stdio::piped())
+        .stdout(stdout_writer)
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = std::io::BufReader::new(stdout_reader);
+
+    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-03-26", "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0"}}});
+    stdin
+        .write_all(format!("{initialize}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    assert!(line.contains(r#""id":1"#), "{line}");
+    // The server answers no request now, so nothing else writes to the pipe while it is filled.
+    // The response of the call that follows finds no room.
+    assert_eq!(rustix::io::ioctl_fionread(stdout.get_ref()).unwrap(), 0);
+    filler.write_all(&vec![b' '; pipe_size]).unwrap();
+
+    let requests = [
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "agent_invoke",
+            "arguments": {
+                "agent_id": r#"Counter("mcp-unread")"#,
+                "function_name": "sleep_and_increment",
+                "arguments": ["4000"]}}}),
+    ];
+    for request in requests {
+        stdin
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+    // The call runs; its response is ready only after the end of stdin.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    drop(stdin);
+
+    let status = tokio::time::timeout(Duration::from_secs(60), child.wait())
+        .await
+        .expect("the server exits when its client does not read stdout")
+        .unwrap();
+    assert!(status.success(), "{status}");
 }
 
 #[test]
@@ -765,7 +907,7 @@ async fn mcp_serve_reports_a_failed_invocation_with_the_platform_error() {
 
 #[test]
 #[timeout("20 minutes")]
-async fn mcp_serve_reports_a_failed_streaming_invocation_with_its_code() {
+async fn mcp_serve_reports_and_cancels_streaming_invocations() {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
     let outputs = ctx
@@ -777,7 +919,7 @@ async fn mcp_serve_reports_a_failed_streaming_invocation_with_its_code() {
         ctx.cwd_path_join("src/counter-agent.ts"),
         indoc! { r#"
             import { z } from 'zod';
-            import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
+            import { AgentStream, defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
 
             export const CounterAgent = defineAgent({
               name: 'CounterAgent',
@@ -785,6 +927,8 @@ async fn mcp_serve_reports_a_failed_streaming_invocation_with_its_code() {
               http: http.mount('/counters/{name}'),
               methods: {
                 explode: method({ input: {}, returns: s.stream(z.number()) }),
+                endless: method({ input: {}, returns: s.stream(z.number()) }),
+                value: method({ input: {}, returns: z.number() }),
               },
             });
 
@@ -794,6 +938,18 @@ async fn mcp_serve_reports_a_failed_streaming_invocation_with_its_code() {
                 explode() {
                   console.error('intentional stream stderr');
                   throw new Error('intentional stream failure');
+                },
+                endless() {
+                  return AgentStream.from(
+                    (async function* () {
+                      for (let i = 0; ; i++) {
+                        yield i;
+                      }
+                    })(),
+                  );
+                },
+                value() {
+                  return 1;
                 },
               },
             });
@@ -838,6 +994,81 @@ async fn mcp_serve_reports_a_failed_streaming_invocation_with_its_code() {
             .iter()
             .any(|event| event["outcome"] == "invocation-failed")),
         "{payload}"
+    );
+
+    // A cancelled call cancels the streams of its invocation on the server, also while it writes
+    // their output, so the agent stops producing and takes the next invocation.
+    let endless = r#"CounterAgent("mcp-endless")"#;
+    let running = send_call(
+        &client,
+        "agent_invoke",
+        json!({"agent_id": endless, "function_name": "endless"}),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    running.cancel(None).await.unwrap();
+    let after = tokio::time::timeout(
+        Duration::from_secs(120),
+        call(
+            &client,
+            "agent_invoke",
+            json!({"agent_id": endless, "function_name": "value"}),
+        ),
+    )
+    .await
+    .expect("the agent still runs the cancelled invocation");
+    assert_eq!(structured(&after)["items"][0]["result"], "1", "{after:?}");
+
+    // A client that goes away during a streaming invocation: the server cancels the streams of
+    // the invocation on the server before it exits, so the agent takes the next invocation.
+    let disconnected = r#"CounterAgent("mcp-disconnect")"#;
+    let mut server = server_command(&ctx, &[])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut stdin = server.stdin.take().unwrap();
+    let requests = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-03-26", "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"}}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "agent_invoke",
+            "arguments": {"agent_id": disconnected, "function_name": "endless"}}}),
+    ];
+    for request in requests {
+        stdin
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    drop(stdin);
+    let status = tokio::time::timeout(Duration::from_secs(60), server.wait())
+        .await
+        .expect("the server exits after its client went away")
+        .unwrap();
+    assert!(status.success(), "{status}");
+    let after = tokio::time::timeout(
+        Duration::from_secs(120),
+        call(
+            &client,
+            "agent_invoke",
+            json!({"agent_id": disconnected, "function_name": "value"}),
+        ),
+    )
+    .await
+    .expect("the agent still runs the invocation of the client that went away");
+    assert_eq!(structured(&after)["items"][0]["result"], "1", "{after:?}");
+    // The stream has its terminal: it was ended, not left detached and producing.
+    let oplog = cli_json(&ctx, &[cmd::AGENT, "oplog", disconnected]).await;
+    assert!(
+        oplog
+            .iter()
+            .any(|entry| entry["entry"]["type"] == "StreamTerminal"),
+        "{oplog:?}"
     );
     client.cancel().await.unwrap();
 }

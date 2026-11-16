@@ -517,6 +517,8 @@ impl StandardStream {
 
 #[derive(Default)]
 struct CapturedOutput {
+    /// The number of the call that the capture keeps output for.
+    call: u64,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
 }
@@ -536,16 +538,35 @@ impl OutputCapture {
     }
 
     /// The stdout and stderr bytes kept since the capture started or since the last call.
+    /// The call stays the same: a writer of this call still writes into the capture.
     pub fn take(&self) -> (Vec<u8>, Vec<u8>) {
-        let captured = std::mem::take(
-            OUTPUT_CAPTURE
-                .lock()
-                .unwrap()
-                .as_mut()
-                .expect("output capture is active"),
-        );
-        (captured.stdout, captured.stderr)
+        let mut capture = OUTPUT_CAPTURE.lock().unwrap();
+        let captured = capture.as_mut().expect("output capture is active");
+        (
+            std::mem::take(&mut captured.stdout),
+            std::mem::take(&mut captured.stderr),
+        )
     }
+
+    /// Starts to keep the output of a new call: drops what is kept, and drops what a writer of an
+    /// earlier call writes from now on.
+    pub fn start_call(&self) {
+        let mut capture = OUTPUT_CAPTURE.lock().unwrap();
+        let captured = capture.as_mut().expect("output capture is active");
+        *captured = CapturedOutput {
+            call: captured.call + 1,
+            ..CapturedOutput::default()
+        };
+    }
+}
+
+/// The call that the active [`OutputCapture`] keeps output for, for a writer that can outlive
+/// the command that started it.
+#[derive(Clone, Copy)]
+pub(crate) struct StdoutCaptureTicket(Option<u64>);
+
+pub(crate) fn stdout_capture_ticket() -> StdoutCaptureTicket {
+    StdoutCaptureTicket(OUTPUT_CAPTURE.lock().unwrap().as_ref().map(|c| c.call))
 }
 
 impl Default for OutputCapture {
@@ -561,9 +582,18 @@ impl Drop for OutputCapture {
 }
 
 /// Keeps bytes for stdout in the active [`OutputCapture`], for a writer that does not go through
-/// this module. Returns `true` when they are kept and must not be written.
-pub(crate) fn capture_stdout(bytes: &[u8]) -> bool {
-    capture(StandardStream::Stdout, bytes)
+/// this module and that took `ticket` when it started. Returns `true` when they must not be
+/// written: they are kept, or they are dropped because the ticket's call has ended.
+pub(crate) fn capture_stdout(ticket: StdoutCaptureTicket, bytes: &[u8]) -> bool {
+    let Some(call) = ticket.0 else {
+        return capture(StandardStream::Stdout, bytes);
+    };
+    if let Some(captured) = OUTPUT_CAPTURE.lock().unwrap().as_mut()
+        && captured.call == call
+    {
+        captured.stdout.extend_from_slice(bytes);
+    }
+    true
 }
 
 /// Keeps the bytes in the active [`OutputCapture`]. Returns `true` when they must not be written.

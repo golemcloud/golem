@@ -24,7 +24,8 @@
 //! The server works in the one environment that it resolves at start. Every tool call gets a new
 //! [`Context`], made from the server's context, that is bound to that environment. A destructive
 //! tool runs only when the call passes `confirm: true`. Calls run one at a time, because the CLI's
-//! log state and output are global.
+//! log state and output are global. A call that the client cancels does not run when it waits,
+//! and stops when it runs.
 
 use super::agent::invocation_session::InvocationFailure;
 use super::partial_match::ErrorHandler;
@@ -32,7 +33,7 @@ use super::{CommandHandler, CommandHandlerHooks, Handlers, LazyContext};
 use crate::command::{GolemCliCommand, GolemCliCommandParseResult, GolemCliGlobalFlags};
 use crate::command_name;
 use crate::command_table::{COMMAND_TABLE, CommandClass, CommandRow};
-use crate::context::Context;
+use crate::context::{Cancellation, Context};
 use crate::error::service::{ServiceError, ServiceErrorKind};
 use crate::error::{
     ContextInitHintError, HintError, InputRequired, LoginRequired, NonSuccessfulExit,
@@ -40,7 +41,7 @@ use crate::error::{
 };
 use crate::log::{
     LogColorize, Output, OutputCapture, discard_held_log, error_message_for_output, log_action,
-    message_for_output, set_log_output,
+    log_error, log_warn, message_for_output, set_log_output,
 };
 use crate::model::cli_output::{
     command_output_schema_value, command_output_types, focused_command_output_schema,
@@ -58,8 +59,13 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Map, Value, json};
 use std::any::TypeId;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Poll;
+use std::time::Duration;
+use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 /// The tool argument that confirms a destructive command, as `--yes` does on the CLI.
 pub const CONFIRM_ARGUMENT: &str = "confirm";
@@ -222,9 +228,13 @@ fn management_tool(
         .or(command.get_about())
         .map(|about| about.to_string())
         .unwrap_or_default();
+    let description = match tool_note(&path) {
+        Some(note) => format!("`golem {path}`: {about}\n\n{note}"),
+        None => format!("`golem {path}`: {about}"),
+    };
     let tool = Tool::new_with_raw(
         tool_name(row.path),
-        Some(format!("`golem {path}`: {about}").into()),
+        Some(description.into()),
         Arc::new(as_object(input_schema)),
     )
     .with_raw_output_schema(Arc::new(as_object(output_schema)))
@@ -241,6 +251,21 @@ fn management_tool(
         tool,
         arguments,
     })
+}
+
+/// What a tool's description adds to the command's help about the tool's own behaviour.
+fn tool_note(path: &str) -> Option<&'static str> {
+    match path {
+        // The platform cancels only an invocation that waits in the agent's queue; the
+        // invocation session has no message that stops one that has started.
+        "agent invoke" => Some(
+            "Cancelling the call of a method without streams only stops the wait: the agent keeps \
+             running the invocation, and the call returns no result. Cancelling the call of a \
+             method with streams also cancels its streams. To run an invocation at most once \
+             across retries, pass the same `idempotency_key` on each try.",
+        ),
+        _ => None,
+    }
 }
 
 fn tool_argument(arg: &Arg) -> anyhow::Result<ToolArgument> {
@@ -629,7 +654,40 @@ fn confirmed(tool: &ManagementTool, arguments: &JsonObject) -> bool {
 struct ToolCall {
     tool: usize,
     argv: Vec<String>,
+    /// The request's token: the client cancels it, and the server cancels it once it answered.
+    cancellation: CancellationToken,
     reply: oneshot::Sender<CallToolResult>,
+}
+
+/// How long a cancelled call that holds a [`CancellationCleanup`] has to end its remote work,
+/// such as to cancel the streams of an invocation on the server, before the server drops it.
+///
+/// [`CancellationCleanup`]: crate::context::CancellationCleanup
+const CANCELLED_CALL_GRACE: Duration = Duration::from_secs(5);
+
+/// How long the server waits, when its service ends, for its active call to take its
+/// cancellation path, which [`CANCELLED_CALL_GRACE`] already bounds.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(CANCELLED_CALL_GRACE.as_secs() + 1);
+
+/// How long the server waits, once its client went away and its calls ended, for rmcp to end the
+/// service. rmcp drains the responses for up to five seconds and then closes stdout; a client that
+/// closes stdin but does not read stdout blocks that close forever.
+const SERVICE_END_GRACE: Duration = Duration::from_secs(10);
+
+/// Runs `run` until it ends or `cancellation` is cancelled. A cancelled run is dropped at once,
+/// so a command starts no more work, such as the request that its reads prepared. Only a run that
+/// holds a cleanup goes on, for at most [`CANCELLED_CALL_GRACE`], to end its remote work.
+async fn run_until_cancelled<F: Future>(run: F, cancellation: &Cancellation) -> Option<F::Output> {
+    tokio::pin!(run);
+    tokio::select! {
+        biased;
+        () = cancellation.token().cancelled() => {}
+        result = &mut run => return Some(result),
+    }
+    if !cancellation.has_cleanup() {
+        return None;
+    }
+    tokio::time::timeout(CANCELLED_CALL_GRACE, run).await.ok()
 }
 
 #[derive(Clone)]
@@ -663,7 +721,7 @@ impl ServerHandler for ManagementMcpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let Some(index) = self
             .tools
@@ -693,18 +751,29 @@ impl ServerHandler for ManagementMcpServer {
             .into());
         }
         let (reply, result) = oneshot::channel();
-        self.calls
-            .send(ToolCall {
-                tool: index,
-                argv,
-                reply,
-            })
-            .await
-            .map_err(|_| ErrorData::internal_error("The server is stopping", None))?;
-        result
-            .await
-            .map(Into::into)
-            .map_err(|_| ErrorData::internal_error("The tool call did not finish", None))
+        let call = ToolCall {
+            tool: index,
+            argv,
+            cancellation: context.ct.clone(),
+            reply,
+        };
+        // The server sends no answer to a cancelled request; returning drops the reply, so that
+        // a queued call does not run.
+        tokio::select! {
+            () = context.ct.cancelled() => {
+                Err(ErrorData::internal_error("The tool call was cancelled", None))
+            }
+            result = async {
+                self.calls
+                    .send(call)
+                    .await
+                    .map_err(|_| ErrorData::internal_error("The server is stopping", None))?;
+                result
+                    .await
+                    .map(Into::into)
+                    .map_err(|_| ErrorData::internal_error("The tool call did not finish", None))
+            } => result,
+        }
     }
 }
 
@@ -740,38 +809,146 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
         environment: environment_name,
         calls,
     };
+    let disconnected = CancellationToken::new();
+    let (stdin, stdout) = rmcp::transport::stdio();
+    let stdin = ClientInput {
+        inner: stdin,
+        closed: disconnected.clone(),
+    };
     let service = server
-        .serve(rmcp::transport::stdio())
+        .serve((stdin, stdout))
         .await
         .map_err(|error| anyhow!("Failed to start the MCP server: {error}"))?;
 
-    let global_flags = lazy.global_flags.clone();
-    let hooks = lazy.hooks.clone();
-    let executor = async {
-        while let Some(call) = call_receiver.recv().await {
-            let result = run_call(
+    let global_flags = &lazy.global_flags.clone();
+    let hooks = &lazy.hooks.clone();
+    let (ctx, environment, capture, tools) = (&ctx, &environment, &capture, &tools);
+    let quit = execute_calls(
+        &mut call_receiver,
+        disconnected,
+        service.waiting(),
+        SERVICE_END_GRACE,
+        |call, cancellation| async move {
+            let run = run_call(
                 hooks.clone(),
-                &global_flags,
-                &ctx,
-                &environment,
-                &capture,
+                global_flags,
+                ctx,
+                environment,
+                capture,
                 &tools[call.tool],
                 call.argv,
-            )
-            .await;
-            let _ = call.reply.send(result);
+                cancellation.clone(),
+            );
+            match run_until_cancelled(run, &cancellation).await {
+                Some(result) => {
+                    let _ = call.reply.send(result);
+                }
+                // The next call's capture drops what the dropped call printed, also later.
+                None => discard_held_log(),
+            }
+        },
+    )
+    .await;
+    // The server ends the process here. A client that closed stdin but does not read stdout
+    // keeps a response write blocked in Tokio's blocking pool, also after rmcp gave the write up
+    // and ended the service, and the runtime would wait for that write forever when it shuts
+    // down. Nobody is left to read a response.
+    std::process::exit(match quit {
+        Some(Ok(_)) => 0,
+        Some(Err(error)) => {
+            log_error(format!("The MCP server failed: {error}"));
+            1
+        }
+        None => {
+            log_warn("The MCP client went away without reading the responses; exiting");
+            0
+        }
+    })
+}
+
+/// Runs the queued calls one at a time with `execute` and returns the output of `quit`, the end
+/// of the service, or `None` when the service does not end within `service_end_grace` after the
+/// calls ended. The client goes away, which cancels `disconnected`, before the service ends:
+/// rmcp first drains the responses of the calls that run, for up to five seconds. From then on no
+/// queued call runs, and the active call is cancelled, as the client would cancel it, and has
+/// [`SHUTDOWN_GRACE`] to end its remote work, such as the streams of an invocation, before the
+/// server exits. Dropping it would only detach those streams, and the agent would keep producing
+/// them. A service that ends for another reason stops the calls in the same way.
+async fn execute_calls<Q, Run: Future<Output = ()>>(
+    calls: &mut mpsc::Receiver<ToolCall>,
+    disconnected: CancellationToken,
+    quit: impl Future<Output = Q>,
+    service_end_grace: Duration,
+    mut execute: impl FnMut(ToolCall, Cancellation) -> Run,
+) -> Option<Q> {
+    let executor = async {
+        loop {
+            let call = tokio::select! {
+                biased;
+                () = disconnected.cancelled() => break,
+                call = calls.recv() => match call {
+                    Some(call) => call,
+                    None => break,
+                },
+            };
+            // The client cancelled the call while it waited for the one before it.
+            if call.cancellation.is_cancelled() || call.reply.is_closed() {
+                continue;
+            }
+            // The call's own token: the client cancels it with the request.
+            let cancellation = Cancellation::new(call.cancellation.child_token());
+            let run = execute(call, cancellation.clone());
+            tokio::pin!(run);
+            tokio::select! {
+                () = &mut run => {}
+                () = disconnected.cancelled() => {
+                    cancellation.token().cancel();
+                    run.await;
+                }
+            }
         }
     };
+    tokio::pin!(executor);
+    tokio::pin!(quit);
     tokio::select! {
-        quit = service.waiting() => {
-            quit.map_err(|error| anyhow!("The MCP server failed: {error}"))?;
+        quit = &mut quit => {
+            disconnected.cancel();
+            let _ = tokio::time::timeout(SHUTDOWN_GRACE, &mut executor).await;
+            Some(quit)
         }
-        () = executor => {}
+        () = &mut executor => tokio::time::timeout(service_end_grace, quit).await.ok(),
     }
-    Ok(())
+}
+
+/// The server's stdin. It cancels `closed` when the client closes it or it fails: the client went
+/// away. rmcp sees the same end, but ends its service only after it drained the responses of the
+/// calls that run.
+struct ClientInput<R> {
+    inner: R,
+    closed: CancellationToken,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for ClientInput<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let wants_bytes = buf.remaining() > 0;
+        let filled = buf.filled().len();
+        let poll = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if let Poll::Ready(result) = &poll
+            && wants_bytes
+            && (result.is_err() || buf.filled().len() == filled)
+        {
+            self.closed.cancel();
+        }
+        poll
+    }
 }
 
 /// Runs one tool call through the CLI's parser and handler, as `argv` would on the CLI.
+#[allow(clippy::too_many_arguments)]
 async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     hooks: Arc<Hooks>,
     global_flags: &GolemCliGlobalFlags,
@@ -780,6 +957,7 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     capture: &OutputCapture,
     tool: &ManagementTool,
     argv: Vec<String>,
+    cancellation: Cancellation,
 ) -> CallToolResult {
     let command = match GolemCliCommand::try_parse_from_lenient(&argv, false) {
         GolemCliCommandParseResult::FullMatch(command) => command,
@@ -793,9 +971,10 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     };
     let confirmed = command.global_flags.yes;
 
-    // Drops what was printed between calls, such as a late log line of the previous call.
-    let _ = capture.take();
-    let ctx = match server_ctx.for_tool_call(confirmed, environment.clone()) {
+    // Drops what was printed between calls, such as a late log line or a late document of a
+    // cancelled call.
+    capture.start_call();
+    let ctx = match server_ctx.for_tool_call(confirmed, environment.clone(), cancellation) {
         Ok(ctx) => Arc::new(ctx),
         Err(error) => {
             let tool_error = classify(&error, tool);
@@ -913,13 +1092,15 @@ fn failure_envelope(
 #[cfg(test)]
 mod tests {
     use super::{
-        ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, ResultShape, classify, error_envelope,
-        failure_envelope, management_tools, success, tool_call_argv,
+        ArgumentKind, CONFIRM_ARGUMENT, ClientInput, ManagementTool, ResultShape,
+        SERVICE_END_GRACE, ToolCall, classify, error_envelope, execute_calls, failure_envelope,
+        management_tools, run_until_cancelled, success, tool_call_argv,
     };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
     use crate::command_handler::agent::invocation_session::InvocationFailure;
     use crate::command_handler::interactive::{self, Ask, InteractiveHandler, refuse_prompts};
     use crate::command_table::CommandRow;
+    use crate::context::Cancellation;
     use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
     use crate::error::{
         LoginRequired, NonSuccessfulExit, PipedExitCode, ProfileMissing, PromptAnswer,
@@ -928,6 +1109,8 @@ mod tests {
     use golem_common::model::invocation_session_public::PublicErrorCode;
     use inquire::{Select, Text};
     use serde_json::{Value, json};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
     use test_r::test;
 
     fn tool(name: &str) -> ManagementTool {
@@ -1308,6 +1491,185 @@ mod tests {
                 .remove("help"),
         };
         assert!(!validator.is_valid(&without_help));
+    }
+
+    /// Two queued calls, as `execute_calls` receives them, and the receivers of their replies,
+    /// which the client holds while it waits.
+    async fn two_queued_calls() -> (
+        tokio::sync::mpsc::Receiver<ToolCall>,
+        Vec<tokio::sync::oneshot::Receiver<rmcp::model::CallToolResult>>,
+    ) {
+        let (calls, receiver) = tokio::sync::mpsc::channel(2);
+        let mut replies = Vec::new();
+        for tool in 0..2 {
+            let (reply, waiting) = tokio::sync::oneshot::channel();
+            replies.push(waiting);
+            calls
+                .send(ToolCall {
+                    tool,
+                    argv: Vec::new(),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                    reply,
+                })
+                .await
+                .unwrap();
+        }
+        (receiver, replies)
+    }
+
+    #[test]
+    async fn a_client_that_goes_away_lets_its_active_call_end_its_held_work() {
+        let (mut calls, _replies) = two_queued_calls().await;
+        // The service drains the responses after the client went away; it ends once the active
+        // call ended its held work, so only the client going away can have cancelled the call.
+        let disconnected = tokio_util::sync::CancellationToken::new();
+        let (held_work_ended, service_end) = tokio::sync::oneshot::channel::<()>();
+        let mut held_work_ended = Some(held_work_ended);
+        let queued_call_ran = AtomicBool::new(false);
+
+        let quit = execute_calls(
+            &mut calls,
+            disconnected.clone(),
+            async { service_end.await.is_ok() },
+            SERVICE_END_GRACE,
+            |call, cancellation| {
+                let held_work_ended = held_work_ended.take();
+                let (disconnected, queued_call_ran) = (&disconnected, &queued_call_ran);
+                async move {
+                    if call.tool == 1 {
+                        queued_call_ran.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    // An invocation whose streams are open when the client goes away.
+                    let command = async {
+                        let _cleanup = cancellation.hold_cleanup();
+                        disconnected.cancel();
+                        cancellation.token().cancelled().await;
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        held_work_ended.unwrap().send(()).unwrap();
+                    };
+                    run_until_cancelled(command, &cancellation).await;
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            quit,
+            Some(true),
+            "the active call did not end its held work"
+        );
+        assert!(!queued_call_ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    async fn no_queued_call_runs_after_the_client_went_away() {
+        let (mut calls, _replies) = two_queued_calls().await;
+        let disconnected = tokio_util::sync::CancellationToken::new();
+        let first_call_ran = AtomicBool::new(false);
+        let queued_call_ran = AtomicBool::new(false);
+
+        // The active call ends by itself after the client went away, while the service still
+        // drains its responses.
+        execute_calls(
+            &mut calls,
+            disconnected.clone(),
+            tokio::time::sleep(Duration::from_millis(200)),
+            SERVICE_END_GRACE,
+            |call, _| {
+                let (disconnected, first_call_ran, queued_call_ran) =
+                    (&disconnected, &first_call_ran, &queued_call_ran);
+                async move {
+                    if call.tool == 1 {
+                        queued_call_ran.store(true, Ordering::SeqCst);
+                    } else {
+                        first_call_ran.store(true, Ordering::SeqCst);
+                        disconnected.cancel();
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert!(first_call_ran.load(Ordering::SeqCst));
+        assert!(!queued_call_ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    async fn a_service_that_does_not_end_after_the_client_went_away_is_given_up() {
+        let (mut calls, _replies) = two_queued_calls().await;
+        let disconnected = tokio_util::sync::CancellationToken::new();
+        let grace = Duration::from_millis(100);
+        let started = std::time::Instant::now();
+        // A blocked write of a response keeps rmcp from ending the service.
+        let quit = execute_calls(
+            &mut calls,
+            disconnected.clone(),
+            std::future::pending::<()>(),
+            grace,
+            |_, _| {
+                disconnected.cancel();
+                std::future::ready(())
+            },
+        )
+        .await;
+        assert_eq!(quit, None);
+        assert!(started.elapsed() >= grace);
+    }
+
+    #[test]
+    async fn the_client_input_reports_when_the_client_closes_it() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut client, server) = tokio::io::duplex(64);
+        let closed = tokio_util::sync::CancellationToken::new();
+        let mut input = ClientInput {
+            inner: server,
+            closed: closed.clone(),
+        };
+        let mut buffer = [0u8; 16];
+        client.write_all(b"{}\n").await.unwrap();
+        assert_eq!(input.read(&mut buffer).await.unwrap(), 3);
+        assert!(!closed.is_cancelled());
+        drop(client);
+        assert_eq!(input.read(&mut buffer).await.unwrap(), 0);
+        assert!(closed.is_cancelled());
+    }
+
+    #[test]
+    async fn a_cancelled_call_starts_no_more_work_unless_it_ends_held_work() {
+        // A command whose read is still running when its call is cancelled.
+        let cancellation = Cancellation::default();
+        let (read_done, read) = tokio::sync::oneshot::channel::<()>();
+        let mutated = AtomicBool::new(false);
+        let command = async {
+            read.await.unwrap();
+            mutated.store(true, Ordering::SeqCst);
+        };
+        let client = async {
+            tokio::task::yield_now().await;
+            cancellation.token().cancel();
+            read_done.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(run_until_cancelled(command, &cancellation), client);
+        assert!(result.is_none());
+        assert!(!mutated.load(Ordering::SeqCst));
+
+        // A command that holds a cleanup ends its held work after the cancellation.
+        let cancellation = Cancellation::default();
+        let cleaned = AtomicBool::new(false);
+        let command = async {
+            let _cleanup = cancellation.hold_cleanup();
+            cancellation.token().cancelled().await;
+            tokio::task::yield_now().await;
+            cleaned.store(true, Ordering::SeqCst);
+        };
+        let client = async {
+            tokio::task::yield_now().await;
+            cancellation.token().cancel();
+        };
+        let (result, ()) = tokio::join!(run_until_cancelled(command, &cancellation), client);
+        assert!(result.is_some());
+        assert!(cleaned.load(Ordering::SeqCst));
     }
 
     #[test]

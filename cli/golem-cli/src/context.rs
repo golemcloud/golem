@@ -56,7 +56,9 @@ use golem_common::model::http_api_deployment::{
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tracing::{Level, debug, enabled};
 use url::Url;
 
@@ -96,6 +98,7 @@ pub struct Context {
     dev_mode: bool,
     server_no_limit_change: bool,
     should_colorize: bool,
+    cancellation: Cancellation,
 
     file_download_client: reqwest::Client,
 
@@ -106,6 +109,47 @@ pub struct Context {
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
     caches: Caches,
+}
+
+/// The cancellation of a command: the MCP client cancels its tool call. A cancelled command is
+/// dropped at once, so it starts no more work, unless it holds a [`CancellationCleanup`]: then it
+/// ends the remote work that it holds, such as the streams of an invocation, and returns.
+#[derive(Clone, Default)]
+pub struct Cancellation {
+    token: CancellationToken,
+    cleanups: Arc<AtomicUsize>,
+}
+
+impl Cancellation {
+    pub fn new(token: CancellationToken) -> Self {
+        Self {
+            token,
+            cleanups: Arc::default(),
+        }
+    }
+
+    pub fn token(&self) -> &CancellationToken {
+        &self.token
+    }
+
+    /// Marks, while the hold lives, that the command ends its remote work itself when it is
+    /// cancelled, and that it starts no new work after the cancellation.
+    pub fn hold_cleanup(&self) -> CancellationCleanup {
+        self.cleanups.fetch_add(1, Ordering::SeqCst);
+        CancellationCleanup(self.cleanups.clone())
+    }
+
+    pub fn has_cleanup(&self) -> bool {
+        self.cleanups.load(Ordering::SeqCst) > 0
+    }
+}
+
+pub struct CancellationCleanup(Arc<AtomicUsize>);
+
+impl Drop for CancellationCleanup {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Context {
@@ -388,6 +432,7 @@ impl Context {
             )),
             app_source_mode,
             caches: Caches::new(),
+            cancellation: Cancellation::default(),
         })
     }
 
@@ -398,10 +443,12 @@ impl Context {
     /// `environment`, the server's environment. It confirms a command only when the call
     /// confirms, so neither `--yes` nor the manifest's `cli.autoConfirm` confirms a command. The
     /// questions about the manifest itself keep the answer that the server got at start.
+    /// `cancellation` is the call's: the client cancels it.
     pub fn for_tool_call(
         &self,
         confirmed: bool,
         environment: ResolvedEnvironmentIdentity,
+        cancellation: Cancellation,
     ) -> anyhow::Result<Self> {
         let mut profile = self.profile.clone();
         // The built-in profiles are always in the config; a custom one can be gone.
@@ -448,6 +495,7 @@ impl Context {
                 self.app_source_mode.clone(),
             )),
             caches: Caches::new(),
+            cancellation,
         })
     }
 
@@ -479,6 +527,13 @@ impl Context {
 
     pub fn yes(&self) -> bool {
         self.yes
+    }
+
+    /// Cancelled when the result of the command is no longer wanted: the MCP client cancelled
+    /// the tool call. A command that holds work on the server, such as a streaming invocation,
+    /// ends it as on Ctrl+C.
+    pub fn cancellation(&self) -> &Cancellation {
+        &self.cancellation
     }
 
     pub fn dev_mode(&self) -> bool {

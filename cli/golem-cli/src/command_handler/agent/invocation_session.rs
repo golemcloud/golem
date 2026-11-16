@@ -57,7 +57,7 @@ use golem_common::schema::{
     TypedSchemaValue,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -66,6 +66,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 const PIPELINE_CAPACITY: usize = 16;
 const RAW_CHUNK_SIZE: usize = 64 * 1024;
@@ -408,13 +409,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     } else {
         None
     };
-    let interrupt = CancellationToken::new();
-    let signal_interrupt = interrupt.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            signal_interrupt.cancel();
-        }
-    });
+    let interrupt = ctx.cancellation().token().child_token();
+    let _ctrl_c = cancel_on_signal(tokio::signal::ctrl_c(), interrupt.clone());
 
     let initial_state = InvocationSessionStateSnapshot {
         delivered_output_cursors: checkpoint
@@ -510,10 +506,13 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         input_failed: input_failed.clone(),
     };
     let (output_result_tx, mut output_result_rx) = oneshot::channel();
+    let (writer_done_tx, writer_done) = oneshot::channel::<()>();
     let colorize = ctx.should_colorize();
     let writer_goal = args.invocation_goal.clone();
+    let capture_ticket = crate::log::stdout_capture_ticket();
     std::thread::spawn(move || {
-        let result = write_output(output_rx, format, colorize);
+        let _done = writer_done_tx;
+        let result = write_output(output_rx, format, colorize, capture_ticket);
         // The writer ends after the invocation returns, on success and on failure, so the
         // target's finish is shown after the last value.
         if let Some(goal) = writer_goal {
@@ -522,6 +521,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         let _ = output_result_tx.send(result);
     });
 
+    // The session holds streams on the server from here on; a cancellation of the command ends
+    // them in the interrupt branch below.
+    let _cleanup = ctx.cancellation().hold_cleanup();
+    // Every exit of the session drops the output channel; waiting for the writer then keeps what
+    // it still writes in the output of this command.
+    let result: anyhow::Result<()> = async {
     let mut output_streams = HashMap::<u32, OutputStream>::new();
     let bindings = session.delivery_tracker();
     let mut failed = false;
@@ -559,7 +564,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     &output_streams,
                     "invocation interrupted".to_string(),
                 );
-                cancel_before_close(&mut session, requests).await;
+                cancel_before_close(
+                    &mut session,
+                    requests,
+                    "invocation interrupted",
+                    has_input.then_some(&input_buffer),
+                ).await;
                 bail!(PipedExitCode(130));
             }
             failure = &mut input_failure_rx, if input_failure_open => {
@@ -583,7 +593,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     &output_streams,
                     "output consumer dropped".to_string(),
                 );
-                cancel_before_close(&mut session, requests).await;
+                cancel_before_close(
+                    &mut session,
+                    requests,
+                    "output consumer dropped",
+                    has_input.then_some(&input_buffer),
+                ).await;
                 bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE));
             }
             result = &mut output_result_rx => {
@@ -601,7 +616,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                             &output_streams,
                             "output consumer dropped".to_string(),
                         );
-                        cancel_before_close(&mut session, requests).await;
+                        cancel_before_close(
+                            &mut session,
+                            requests,
+                            "output consumer dropped",
+                            has_input.then_some(&input_buffer),
+                        ).await;
                         return Err(error);
                     }
                     Ok(Err(error)) => return Err(error),
@@ -765,6 +785,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                         end_for_closed_output();
                         continue 'session;
                     }
+                    // An interrupt stopped a write of the output; the interrupt branch cancels
+                    // the streams before the command ends.
+                    Err(_) if interrupt.is_cancelled() => continue 'session,
                     Err(error) => return Err(error),
                 }
                 frame.mark_delivered()?;
@@ -836,6 +859,24 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         bail!(NonSuccessfulExit);
     }
     Ok(())
+    }
+    .await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), writer_done).await;
+    result
+}
+
+/// Cancels `interrupt` when `signal` resolves, for as long as the returned handle lives. An
+/// invocation holds the handle until it returns or is dropped, so its waiter ends with it on every
+/// path; a long-lived process such as `golem mcp serve` keeps no waiter per finished invocation.
+fn cancel_on_signal(
+    signal: impl Future<Output = std::io::Result<()>> + Send + 'static,
+    interrupt: CancellationToken,
+) -> AbortOnDropHandle<()> {
+    AbortOnDropHandle::new(tokio::spawn(async move {
+        if signal.await.is_ok() {
+            interrupt.cancel();
+        }
+    }))
 }
 
 fn invocation_selector(
@@ -1744,17 +1785,7 @@ fn cancel_open_streams(
 ) -> Vec<PublicClientMessage> {
     let mut requests = Vec::new();
     if let Some((channel, sequence)) = input {
-        requests.push(PublicClientMessage::StreamEnd {
-            channel,
-            sequence: DecimalU64(sequence),
-            direction: PublicStreamDirection::Input,
-            outcome: PublicStreamOutcome::Failed {
-                error: PublicStreamError::Interrupted {
-                    message: message.clone(),
-                },
-            },
-            version: INVOCATION_SESSION_VERSION,
-        });
+        requests.push(cancel_input(channel, sequence, &message));
     }
 
     let mut open_outputs = output_streams
@@ -1763,17 +1794,60 @@ fn cancel_open_streams(
         .collect::<Vec<_>>();
     open_outputs.sort_unstable();
     for channel in open_outputs {
-        requests.push(PublicClientMessage::StreamEnd {
-            channel,
-            sequence: DecimalU64(0),
-            direction: PublicStreamDirection::Output,
-            outcome: PublicStreamOutcome::ConsumerCancelled {
-                details: Some(message.clone()),
-            },
-            version: INVOCATION_SESSION_VERSION,
-        });
+        requests.push(cancel_output(channel, &message));
     }
     requests
+}
+
+fn cancel_input(channel: u32, sequence: u64, message: &str) -> PublicClientMessage {
+    PublicClientMessage::StreamEnd {
+        channel,
+        sequence: DecimalU64(sequence),
+        direction: PublicStreamDirection::Input,
+        outcome: PublicStreamOutcome::Failed {
+            error: PublicStreamError::Interrupted {
+                message: message.to_string(),
+            },
+        },
+        version: INVOCATION_SESSION_VERSION,
+    }
+}
+
+fn cancel_output(channel: u32, message: &str) -> PublicClientMessage {
+    PublicClientMessage::StreamEnd {
+        channel,
+        sequence: DecimalU64(0),
+        direction: PublicStreamDirection::Output,
+        outcome: PublicStreamOutcome::ConsumerCancelled {
+            details: Some(message.to_string()),
+        },
+        version: INVOCATION_SESSION_VERSION,
+    }
+}
+
+/// The cancellations of the output streams that `frame` announces and that the drain of a
+/// cancelled session has not ended yet: a result or an item that the server sent before it saw
+/// the cancellation can bind new output channels, and closing the session only detaches them.
+fn cancel_announced_outputs(
+    frame: &ServerFrame,
+    ended: &mut BTreeSet<u32>,
+    message: &str,
+) -> Vec<PublicClientMessage> {
+    let ServerFrame::Message(
+        PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationResult { mappings, .. }
+        | PublicServerMessage::OutputStreamItem { mappings, .. }
+        | PublicServerMessage::InputStreamAck { mappings, .. },
+    ) = frame
+    else {
+        return Vec::new();
+    };
+    mappings
+        .iter()
+        .filter(|mapping| mapping.direction == PublicStreamDirection::Output)
+        .filter(|mapping| ended.insert(mapping.channel))
+        .map(|mapping| cancel_output(mapping.channel, message))
+        .collect()
 }
 
 async fn send_request(
@@ -1788,10 +1862,35 @@ async fn send_request(
     }
 }
 
-async fn cancel_before_close(session: &mut InvocationSession, requests: Vec<PublicClientMessage>) {
+/// Sends `requests`, which end the streams that the session knew of when it was cancelled, and
+/// drains the session until the invocation ends. A frame that the server sent before it saw the
+/// cancellation can still bind streams: the drain ends each new output stream, and the stdin
+/// stream of `input` once the session binds it, because closing the session only detaches them.
+async fn cancel_before_close(
+    session: &mut InvocationSession,
+    requests: Vec<PublicClientMessage>,
+    message: &str,
+    input: Option<&InputReplayBuffer>,
+) {
     let _ = tokio::time::timeout(Duration::from_secs(3), async {
         let sender = session.sender();
+        let mut ended = BTreeSet::new();
+        let mut input_ended = false;
         for request in requests {
+            match &request {
+                PublicClientMessage::StreamEnd {
+                    channel,
+                    direction: PublicStreamDirection::Output,
+                    ..
+                } => {
+                    ended.insert(*channel);
+                }
+                PublicClientMessage::StreamEnd {
+                    direction: PublicStreamDirection::Input,
+                    ..
+                } => input_ended = true,
+                _ => {}
+            }
             if sender.send_message(&request).await.is_err() {
                 return;
             }
@@ -1800,6 +1899,23 @@ async fn cancel_before_close(session: &mut InvocationSession, requests: Vec<Publ
             let Ok(mut frame) = session.receive().await else {
                 return;
             };
+            let mut requests = cancel_announced_outputs(frame.frame(), &mut ended, message);
+            if let Some(input) = input
+                && !input_ended
+                && !input.is_terminal()
+                && let Some((channel, _)) = session.input_binding(input)
+            {
+                input_ended = true;
+                let Ok(sequence) = input.next_sequence() else {
+                    return;
+                };
+                requests.push(cancel_input(channel, sequence, message));
+            }
+            for request in requests {
+                if sender.send_message(&request).await.is_err() {
+                    return;
+                }
+            }
             let terminal = matches!(
                 frame.frame(),
                 ServerFrame::Message(
@@ -2335,6 +2451,7 @@ fn write_output(
     mut rx: mpsc::Receiver<QueuedOutput>,
     format: Format,
     colorize: bool,
+    capture_ticket: crate::log::StdoutCaptureTicket,
 ) -> anyhow::Result<()> {
     while let Some(QueuedOutput { job, written }) = rx.blocking_recv() {
         let bytes = match render_output_job(job, format, colorize) {
@@ -2344,7 +2461,7 @@ fn write_output(
                 return Err(error);
             }
         };
-        if crate::log::capture_stdout(&bytes) {
+        if crate::log::capture_stdout(capture_ticket, &bytes) {
             let _ = written.send(Ok(()));
             continue;
         }
@@ -3339,6 +3456,51 @@ mod public_tests {
     }
 
     #[test]
+    fn a_cancelled_session_cancels_the_outputs_announced_while_it_drains() {
+        let mapping = |channel, direction| PublicStreamMapping {
+            channel,
+            direction,
+            byte_role: None,
+            input_high_water: None,
+            provisional_ref: None,
+            stream_token: format!("stream-{channel}"),
+        };
+        // Channel 1 was open when the session was cancelled, so its end was sent already.
+        let mut ended = BTreeSet::from([1]);
+        let result = ServerFrame::Message(PublicServerMessage::InvocationResult {
+            mappings: vec![
+                mapping(1, PublicStreamDirection::Output),
+                mapping(2, PublicStreamDirection::Output),
+                mapping(3, PublicStreamDirection::Input),
+            ],
+            result: Box::new(PublicInvocationResult::None),
+            version: INVOCATION_SESSION_VERSION,
+        });
+        assert_eq!(
+            cancel_announced_outputs(&result, &mut ended, "invocation interrupted"),
+            vec![cancel_output(2, "invocation interrupted")]
+        );
+        // A nested stream that an item of channel 2 announces is cancelled too, and a channel is
+        // cancelled once.
+        let item = ServerFrame::Message(PublicServerMessage::OutputStreamItem {
+            channel: 2,
+            cursor_token: "cursor".to_string(),
+            mappings: vec![
+                mapping(2, PublicStreamDirection::Output),
+                mapping(4, PublicStreamDirection::Output),
+            ],
+            sequence: DecimalU64(0),
+            value: serde_json::Value::Null,
+            version: INVOCATION_SESSION_VERSION,
+        });
+        assert_eq!(
+            cancel_announced_outputs(&item, &mut ended, "invocation interrupted"),
+            vec![cancel_output(4, "invocation interrupted")]
+        );
+        assert!(cancel_announced_outputs(&result, &mut ended, "invocation interrupted").is_empty());
+    }
+
+    #[test]
     fn public_mapping_rebinding_is_rejected() {
         let bindings = DeliveryTracker::default();
         let mapping = PublicStreamMapping {
@@ -3426,5 +3588,143 @@ mod public_tests {
             CLOSED_OUTPUT_EXIT_CODE
         );
         assert!(completed.blocking_recv().is_err());
+    }
+
+    #[test]
+    fn a_writer_of_an_ended_call_writes_nothing_into_the_next_call() {
+        fn write(tx: &mpsc::Sender<QueuedOutput>, text: &str) {
+            let (written, completed) = oneshot::channel();
+            tx.blocking_send(QueuedOutput {
+                job: OutputJob::Text(text.to_string()),
+                written,
+            })
+            .unwrap();
+            completed.blocking_recv().unwrap().unwrap();
+        }
+        fn print(text: &str) {
+            assert!(crate::log::capture_stdout(
+                crate::log::stdout_capture_ticket(),
+                format!("{text}\n").as_bytes()
+            ));
+        }
+        fn stdout(capture: &crate::log::OutputCapture) -> String {
+            String::from_utf8(capture.take().0).unwrap()
+        }
+
+        let capture = crate::log::OutputCapture::new();
+        capture.start_call();
+        let (tx, rx) = mpsc::channel(1);
+        let ticket = crate::log::stdout_capture_ticket();
+        let writer = std::thread::spawn(move || write_output(rx, Format::Json, false, ticket));
+        write(&tx, "previous 1");
+        // The cancelled call ends with an error report, which takes what it printed.
+        assert_eq!(stdout(&capture), "previous 1\n");
+
+        // The server starts the next call while the writer of the cancelled call still runs.
+        capture.start_call();
+        print("next 1");
+        write(&tx, "previous 2");
+        assert_eq!(stdout(&capture), "next 1\n");
+
+        // The call after it, once the next call took its result.
+        capture.start_call();
+        print("next 2");
+        write(&tx, "previous 3");
+        drop(tx);
+        writer.join().unwrap().unwrap();
+        assert_eq!(stdout(&capture), "next 2\n");
+    }
+
+    /// A signal that the test sends. The signal stays pending while its sender lives.
+    fn test_signal() -> (
+        oneshot::Sender<()>,
+        impl Future<Output = std::io::Result<()>> + Send + 'static,
+    ) {
+        let (sender, receiver) = oneshot::channel::<()>();
+        let signal = async move { receiver.await.map_err(std::io::Error::other) };
+        (sender, signal)
+    }
+
+    /// Holds the waiter as `invoke` does, then returns or fails.
+    async fn invocation(
+        parent: &CancellationToken,
+        signal: impl Future<Output = std::io::Result<()>> + Send + 'static,
+        fails: bool,
+    ) -> anyhow::Result<()> {
+        let interrupt = parent.child_token();
+        let _ctrl_c = cancel_on_signal(signal, interrupt.clone());
+        tokio::task::yield_now().await;
+        if fails {
+            bail!("failed to connect to the agent invocation session");
+        }
+        Ok(())
+    }
+
+    /// The tasks alive on the test's own runtime, once the runtime has released the aborted ones.
+    async fn alive_tasks() -> usize {
+        let metrics = tokio::runtime::Handle::current().metrics();
+        for _ in 0..100 {
+            if metrics.num_alive_tasks() == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        metrics.num_alive_tasks()
+    }
+
+    #[test]
+    fn the_signal_waiter_ends_with_its_invocation() {
+        // A runtime of its own, so that it counts only the waiters of this test.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let parent = CancellationToken::new();
+            // The signals stay pending, so that only the end of an invocation ends its waiter.
+            let mut signals = Vec::new();
+            for _ in 0..100 {
+                let (sender, signal) = test_signal();
+                signals.push(sender);
+                invocation(&parent, signal, false).await.unwrap();
+            }
+            assert_eq!(alive_tasks().await, 0, "after finished invocations");
+
+            let (sender, signal) = test_signal();
+            signals.push(sender);
+            assert!(invocation(&parent, signal, true).await.is_err());
+            assert_eq!(alive_tasks().await, 0, "after a failed invocation");
+
+            // A cancelled tool call drops the invocation while it waits.
+            let (sender, signal) = test_signal();
+            signals.push(sender);
+            let interrupt = parent.child_token();
+            let mut running = Box::pin(async move {
+                let _ctrl_c = cancel_on_signal(signal, interrupt);
+                std::future::pending::<()>().await
+            });
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), &mut running)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(alive_tasks().await, 1, "while the invocation runs");
+            drop(running);
+            assert_eq!(alive_tasks().await, 0, "after a dropped invocation");
+            assert!(!parent.is_cancelled());
+        });
+    }
+
+    #[test]
+    async fn the_signal_interrupts_a_running_invocation() {
+        let parent = CancellationToken::new();
+        let interrupt = parent.child_token();
+        let (sender, signal) = test_signal();
+        let _ctrl_c = cancel_on_signal(signal, interrupt.clone());
+        sender.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), interrupt.cancelled())
+            .await
+            .expect("the signal did not interrupt the invocation");
+        assert!(!parent.is_cancelled());
     }
 }

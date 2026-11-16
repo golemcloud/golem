@@ -147,6 +147,9 @@ rustix = { workspace = true, features = ["event", "termios"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true, features = ["pipe"] }
+
 [dev-dependencies]
 axum = { workspace = true }
 expectrl = { workspace = true }
