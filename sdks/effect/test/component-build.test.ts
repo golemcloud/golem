@@ -77,7 +77,11 @@ const build = async (fixture: string, execute = true) => {
   const options = await componentConfiguration(rollup, () => ({
     input: existsSync(`${source}.ts`) ? `${source}.ts` : `${source}.mjs`,
     external: (id) =>
-      id === "effect" || id === "node:sqlite" || id.startsWith("golem:") || id.startsWith("wasi:"),
+      id === "effect" ||
+      id === "node:sqlite" ||
+      id.startsWith("golem:") ||
+      id.startsWith("wasi:") ||
+      id.startsWith("wasm-rquickjs:"),
     plugins: [sourcePlugin(), nodeResolve()],
     onwarn: (warning) => {
       if (warning.code !== "CIRCULAR_DEPENDENCY" && warning.code !== "EMPTY_BUNDLE")

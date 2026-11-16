@@ -432,7 +432,10 @@ function validateHttpConsistency(
         if (
           idNames.has(selectorName) ||
           httpMount.pathPrefix.filter(
-            (s) => s.tag === 'path-variable' && s.val.variableName === selectorName,
+            (s) =>
+              s.tag === 'segment' &&
+              s.val.tag === 'path-variable' &&
+              s.val.val.variableName === selectorName,
           ).length !== 1
         ) {
           throw new Error(
@@ -610,20 +613,25 @@ function assembleAgentType(
   }
   if (httpMount?.filesystemBindings.length) {
     const captures = httpMount.pathPrefix.flatMap((segment) =>
-      segment.tag === 'path-variable' ? [segment.val.variableName] : [],
+      segment.tag === 'segment' && segment.val.tag === 'path-variable'
+        ? [segment.val.val.variableName]
+        : [],
     );
     if (
       router ||
       metadata.mode === 'ephemeral' ||
       httpMount.phantomAgent ||
-      httpMount.pathPrefix.some((segment) => segment.tag === 'remaining-path-variable') ||
+      httpMount.pathPrefix.some(
+        (segment) => segment.tag === 'segment' && segment.val.tag === 'remaining-path-variable',
+      ) ||
       httpMount.pathPrefix.some(
         (segment) =>
-          segment.tag === 'literal' &&
-          (!segment.val ||
-            segment.val === '.' ||
-            segment.val === '..' ||
-            /[\x00-\x1f\x7f/\\]/.test(segment.val)),
+          segment.tag === 'segment' &&
+          segment.val.tag === 'literal' &&
+          (!segment.val.val ||
+            segment.val.val === '.' ||
+            segment.val.val === '..' ||
+            /[\x00-\x1f\x7f/\\]/.test(segment.val.val)),
       ) ||
       captures.length !== idCodecs.length ||
       idCodecs.some(

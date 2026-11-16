@@ -28,7 +28,6 @@ use golem_api_grpc::proto::golem::account::PlanId;
 use golem_api_grpc::proto::golem::auth::{AuthCtx, AuthEffectiveSurface, UserAuthCtx, auth_ctx};
 use golem_api_grpc::proto::golem::common::AccountId;
 use golem_api_grpc::proto::golem::worker::{InvocationRejectionReason, InvocationStart};
-use golem_common::base_model::Empty;
 use golem_common::base_model::agent::Snapshotting;
 use golem_common::base_model::component::{ComponentId, ComponentRevision};
 use golem_common::base_model::component_metadata::{ComponentMetadata, KnownExports};
@@ -47,6 +46,7 @@ use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
     OutputSchema,
 };
+use golem_schema::Empty;
 use golem_schema::proto::golem::common::Uuid;
 use golem_schema::proto::golem::schema::{
     BinaryValue, SchemaValue as ProtoSchemaValue, schema_value as proto_schema_value,

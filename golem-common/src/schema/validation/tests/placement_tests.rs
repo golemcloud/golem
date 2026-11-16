@@ -239,7 +239,6 @@ fn futures_are_rejected_in_every_scope() {
 
 mod agent {
     use super::*;
-    use crate::base_model::Empty;
     use crate::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use crate::schema::agent::{
         AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
@@ -249,6 +248,7 @@ mod agent {
     use crate::schema::validation::placement::{
         validate_agent_dependency_placement, validate_agent_type_placement,
     };
+    use golem_schema::Empty;
     use test_r::test;
 
     fn empty_agent(name: &str) -> AgentTypeSchema {

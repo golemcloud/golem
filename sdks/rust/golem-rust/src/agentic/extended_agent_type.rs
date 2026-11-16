@@ -350,9 +350,8 @@ fn encode_output_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::golem_agentic::golem::agent::common::{
-        AuthDetails, CorsOptions, ExactFileMapping, FileMapping, HttpMethod, SubtreeFileMapping,
-    };
+    use crate::golem_agentic::golem::agent::common::{AuthDetails, CorsOptions, HttpMethod};
+    use golem_schema::http::wit::wire::{ExactFileMapping, FileMapping, SubtreeFileMapping};
     use test_r::test;
 
     #[test]

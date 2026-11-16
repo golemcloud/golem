@@ -194,9 +194,9 @@ fn output_resource_mime_type(graph: &SchemaGraph, output: &OutputSchema) -> Opti
 mod tests {
     use super::*;
     use golem_common::base_model::agent::{CachePolicy, ReadOnlyConfig};
-    use golem_common::model::Empty;
     use golem_common::schema::agent::{InputSchema, NamedField};
     use golem_common::schema::schema_type::SchemaType;
+    use golem_schema::Empty;
     use test_r::test;
 
     fn constructor() -> AgentConstructorSchema {

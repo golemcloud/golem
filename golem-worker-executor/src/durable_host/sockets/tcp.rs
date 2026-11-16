@@ -82,9 +82,9 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::start_bind(&mut view.sockets(), self_, network, local_address).await
     }
 
-    fn finish_bind(&mut self, self_: Resource<TcpSocket>) -> Result<(), SocketError> {
+    async fn finish_bind(&mut self, self_: Resource<TcpSocket>) -> Result<(), SocketError> {
         self.observe_function_call("sockets::tcp", "finish_bind");
-        HostTcpSocket::finish_bind(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::finish_bind(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     async fn start_connect(
@@ -102,13 +102,13 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    fn finish_connect(
+    async fn finish_connect(
         &mut self,
         self_: Resource<TcpSocket>,
     ) -> Result<(Resource<InputStream>, Resource<OutputStream>), SocketError> {
         self.observe_function_call("sockets::tcp", "finish_connect");
         let rep = self_.rep();
-        let result = HostTcpSocket::finish_connect(&mut self.as_wasi_view().sockets(), self_);
+        let result = HostTcpSocket::finish_connect(&mut self.as_wasi_view().sockets(), self_).await;
         if !matches!(&result, Err(error) if error.downcast_ref() == Some(&ErrorCode::WouldBlock)) {
             self.state.tcp_connect_replay.finished(rep);
         }
@@ -182,9 +182,12 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::set_listen_backlog_size(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn keep_alive_enabled(&mut self, self_: Resource<TcpSocket>) -> Result<bool, SocketError> {
+    async fn keep_alive_enabled(
+        &mut self,
+        self_: Resource<TcpSocket>,
+    ) -> Result<bool, SocketError> {
         self.observe_function_call("sockets::tcp", "keep_alive_enabled");
-        HostTcpSocket::keep_alive_enabled(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::keep_alive_enabled(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_keep_alive_enabled(
@@ -196,12 +199,12 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::set_keep_alive_enabled(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn keep_alive_idle_time(
+    async fn keep_alive_idle_time(
         &mut self,
         self_: Resource<TcpSocket>,
     ) -> Result<Duration, SocketError> {
         self.observe_function_call("sockets::tcp", "keep_alive_idle_time");
-        HostTcpSocket::keep_alive_idle_time(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::keep_alive_idle_time(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_keep_alive_idle_time(
@@ -213,9 +216,12 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::set_keep_alive_idle_time(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn keep_alive_interval(&mut self, self_: Resource<TcpSocket>) -> Result<Duration, SocketError> {
+    async fn keep_alive_interval(
+        &mut self,
+        self_: Resource<TcpSocket>,
+    ) -> Result<Duration, SocketError> {
         self.observe_function_call("sockets::tcp", "keep_alive_interval");
-        HostTcpSocket::keep_alive_interval(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::keep_alive_interval(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_keep_alive_interval(
@@ -227,9 +233,9 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::set_keep_alive_interval(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn keep_alive_count(&mut self, self_: Resource<TcpSocket>) -> Result<u32, SocketError> {
+    async fn keep_alive_count(&mut self, self_: Resource<TcpSocket>) -> Result<u32, SocketError> {
         self.observe_function_call("sockets::tcp", "keep_alive_count");
-        HostTcpSocket::keep_alive_count(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::keep_alive_count(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_keep_alive_count(
@@ -241,9 +247,9 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::set_keep_alive_count(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn hop_limit(&mut self, self_: Resource<TcpSocket>) -> Result<u8, SocketError> {
+    async fn hop_limit(&mut self, self_: Resource<TcpSocket>) -> Result<u8, SocketError> {
         self.observe_function_call("sockets::tcp", "hop_limit");
-        HostTcpSocket::hop_limit(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::hop_limit(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_hop_limit(&mut self, self_: Resource<TcpSocket>, value: u8) -> Result<(), SocketError> {
@@ -251,9 +257,12 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::set_hop_limit(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn receive_buffer_size(&mut self, self_: Resource<TcpSocket>) -> Result<u64, SocketError> {
+    async fn receive_buffer_size(
+        &mut self,
+        self_: Resource<TcpSocket>,
+    ) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::tcp", "receive_buffer_size");
-        HostTcpSocket::receive_buffer_size(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::receive_buffer_size(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_receive_buffer_size(
@@ -265,9 +274,9 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::set_receive_buffer_size(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn send_buffer_size(&mut self, self_: Resource<TcpSocket>) -> Result<u64, SocketError> {
+    async fn send_buffer_size(&mut self, self_: Resource<TcpSocket>) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::tcp", "send_buffer_size");
-        HostTcpSocket::send_buffer_size(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::send_buffer_size(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_send_buffer_size(
@@ -289,13 +298,13 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         Ok(pollable)
     }
 
-    fn shutdown(
+    async fn shutdown(
         &mut self,
         self_: Resource<TcpSocket>,
         shutdown_type: ShutdownType,
     ) -> Result<(), SocketError> {
         self.observe_function_call("sockets::tcp", "shutdown");
-        HostTcpSocket::shutdown(&mut self.as_wasi_view().sockets(), self_, shutdown_type)
+        HostTcpSocket::shutdown(&mut self.as_wasi_view().sockets(), self_, shutdown_type).await
     }
 
     fn drop(&mut self, rep: Resource<TcpSocket>) -> wasmtime::Result<()> {

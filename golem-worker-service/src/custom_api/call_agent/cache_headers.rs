@@ -248,9 +248,9 @@ pub fn add_vary_header(headers: &mut http::HeaderMap, header_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::CachePolicyTtl;
     use golem_common::model::component::ComponentId;
+    use golem_schema::Empty;
     use test_r::test;
     use uuid::uuid;
 

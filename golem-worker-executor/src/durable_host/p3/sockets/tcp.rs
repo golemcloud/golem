@@ -545,13 +545,14 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_keep_alive_enabled(&mut self, socket: Resource<TcpSocket>) -> SocketResult<bool> {
+    async fn get_keep_alive_enabled(&mut self, socket: Resource<TcpSocket>) -> SocketResult<bool> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-keep-alive-enabled",
         );
         types::HostTcpSocket::get_keep_alive_enabled(&mut WasiSocketsView::sockets(self.0), socket)
+            .await
     }
 
     fn set_keep_alive_enabled(
@@ -571,7 +572,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_keep_alive_idle_time(
+    async fn get_keep_alive_idle_time(
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::Duration> {
@@ -584,6 +585,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             &mut WasiSocketsView::sockets(self.0),
             socket,
         )
+        .await
     }
 
     fn set_keep_alive_idle_time(
@@ -603,7 +605,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_keep_alive_interval(
+    async fn get_keep_alive_interval(
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::Duration> {
@@ -613,6 +615,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "get-keep-alive-interval",
         );
         types::HostTcpSocket::get_keep_alive_interval(&mut WasiSocketsView::sockets(self.0), socket)
+            .await
     }
 
     fn set_keep_alive_interval(
@@ -632,13 +635,14 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_keep_alive_count(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u32> {
+    async fn get_keep_alive_count(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u32> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-keep-alive-count",
         );
         types::HostTcpSocket::get_keep_alive_count(&mut WasiSocketsView::sockets(self.0), socket)
+            .await
     }
 
     fn set_keep_alive_count(
@@ -658,9 +662,9 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_hop_limit(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u8> {
+    async fn get_hop_limit(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u8> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-hop-limit");
-        types::HostTcpSocket::get_hop_limit(&mut WasiSocketsView::sockets(self.0), socket)
+        types::HostTcpSocket::get_hop_limit(&mut WasiSocketsView::sockets(self.0), socket).await
     }
 
     fn set_hop_limit(&mut self, socket: Resource<TcpSocket>, value: u8) -> SocketResult<()> {
@@ -668,13 +672,14 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         types::HostTcpSocket::set_hop_limit(&mut WasiSocketsView::sockets(self.0), socket, value)
     }
 
-    fn get_receive_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
+    async fn get_receive_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-receive-buffer-size",
         );
         types::HostTcpSocket::get_receive_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
+            .await
     }
 
     fn set_receive_buffer_size(
@@ -694,13 +699,14 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_send_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
+    async fn get_send_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-send-buffer-size",
         );
         types::HostTcpSocket::get_send_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
+            .await
     }
 
     fn set_send_buffer_size(

@@ -185,7 +185,7 @@ pub fn get_route_response_schema(
         RichRouteBehaviour::OidcPkceAuthorize(_) | RichRouteBehaviour::OidcPkceToken(_) => {
             responses.insert(501, ResponseBodyOpenApiSchema::NoBody);
         }
-        RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
+        RichRouteBehaviour::Mount(_) => {
             responses.insert(501, ResponseBodyOpenApiSchema::NoBody);
         }
     }
@@ -366,17 +366,20 @@ fn resolve_top_ref<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> &'a Schema
 }
 
 fn http_method_name(method: &HttpMethod) -> String {
+    use golem_schema::http as schema_http;
     match method {
-        HttpMethod::Get(_) => "GET".to_string(),
-        HttpMethod::Head(_) => "HEAD".to_string(),
-        HttpMethod::Post(_) => "POST".to_string(),
-        HttpMethod::Put(_) => "PUT".to_string(),
-        HttpMethod::Delete(_) => "DELETE".to_string(),
-        HttpMethod::Connect(_) => "CONNECT".to_string(),
-        HttpMethod::Options(_) => "OPTIONS".to_string(),
-        HttpMethod::Trace(_) => "TRACE".to_string(),
-        HttpMethod::Patch(_) => "PATCH".to_string(),
-        HttpMethod::Custom(custom) => custom.value.to_uppercase(),
+        HttpMethod::Method(method) => match method {
+            schema_http::HttpMethod::Get(_) => "GET".to_string(),
+            schema_http::HttpMethod::Head(_) => "HEAD".to_string(),
+            schema_http::HttpMethod::Post(_) => "POST".to_string(),
+            schema_http::HttpMethod::Put(_) => "PUT".to_string(),
+            schema_http::HttpMethod::Delete(_) => "DELETE".to_string(),
+            schema_http::HttpMethod::Connect(_) => "CONNECT".to_string(),
+            schema_http::HttpMethod::Options(_) => "OPTIONS".to_string(),
+            schema_http::HttpMethod::Trace(_) => "TRACE".to_string(),
+            schema_http::HttpMethod::Patch(_) => "PATCH".to_string(),
+            schema_http::HttpMethod::Custom(custom) => custom.value.to_uppercase(),
+        },
         HttpMethod::Any(_) => "<any>".to_string(),
     }
 }

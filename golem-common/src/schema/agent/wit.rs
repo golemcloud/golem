@@ -23,20 +23,15 @@
 //! [`SchemaType`] roots into (and out of) that single flat pool.
 //!
 //! Non-schema structural fields (HTTP mount / endpoints, snapshotting,
-//! principals, …) are byte-identical to the legacy `golem:agent@1.5.0` form;
-//! they are converted between the `base_model` representation and the new wire
-//! bindings by the `From` impls below, mirroring
-//! [`crate::model::agent::conversions`].
+//! principals, …) are converted between the `base_model` representation and
+//! the wire bindings by the `From` impls below.
 
-use crate::base_model::Empty;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::agent::{
     AgentConfigSource, AgentHttpAuthDetails, AgentMode, CachePolicy, CachePolicyTtl, CorsOptions,
-    CustomHttpMethod, ExactFileMapping, FileMapping, FileResponseHeader, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, PathVariable,
-    PhantomIdBinding, PhantomIdBindingDetails, QueryVariable, ReadOnlyConfig, Snapshotting,
-    SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic, SubtreeFileMapping,
-    SystemVariable, SystemVariableSegment,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding,
+    PhantomIdBindingDetails, ReadOnlyConfig, Snapshotting, SnapshottingConfig,
+    SnapshottingEveryNInvocation, SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
 use crate::base_model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, GolemSubject, Pair,
@@ -50,6 +45,7 @@ use crate::schema::agent::{
     RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
+use golem_schema::Empty;
 use golem_schema::schema::wit::{
     DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_metadata, decode_typed,
     encode_metadata, encode_typed,
@@ -681,15 +677,6 @@ impl From<PhantomIdBinding> for wire::PhantomIdBinding {
     }
 }
 
-impl From<FileResponseHeader> for wire::FileResponseHeader {
-    fn from(value: FileResponseHeader) -> Self {
-        Self {
-            name: value.name,
-            value: value.value,
-        }
-    }
-}
-
 impl From<wire::PhantomIdBinding> for PhantomIdBinding {
     fn from(value: wire::PhantomIdBinding) -> Self {
         match value {
@@ -700,45 +687,6 @@ impl From<wire::PhantomIdBinding> for PhantomIdBinding {
             wire::PhantomIdBinding::Query(value) => Self::Query(PhantomIdBindingDetails {
                 name: value.name,
                 optional: value.optional,
-            }),
-        }
-    }
-}
-
-impl From<wire::FileResponseHeader> for FileResponseHeader {
-    fn from(value: wire::FileResponseHeader) -> Self {
-        Self {
-            name: value.name,
-            value: value.value,
-        }
-    }
-}
-
-impl From<FileMapping> for wire::FileMapping {
-    fn from(value: FileMapping) -> Self {
-        match value {
-            FileMapping::Exact(mapping) => Self::Exact(wire::ExactFileMapping {
-                public_path: mapping.public_path,
-                file_path: mapping.file_path,
-            }),
-            FileMapping::Subtree(mapping) => Self::Subtree(wire::SubtreeFileMapping {
-                public_prefix: mapping.public_prefix,
-                filesystem_root: mapping.filesystem_root,
-            }),
-        }
-    }
-}
-
-impl From<wire::FileMapping> for FileMapping {
-    fn from(value: wire::FileMapping) -> Self {
-        match value {
-            wire::FileMapping::Exact(mapping) => Self::Exact(ExactFileMapping {
-                public_path: mapping.public_path,
-                file_path: mapping.file_path,
-            }),
-            wire::FileMapping::Subtree(mapping) => Self::Subtree(SubtreeFileMapping {
-                public_prefix: mapping.public_prefix,
-                filesystem_root: mapping.filesystem_root,
             }),
         }
     }
@@ -777,16 +725,7 @@ impl From<wire::HttpEndpointDetails> for HttpEndpointDetails {
 impl From<HttpMethod> for wire::HttpMethod {
     fn from(value: HttpMethod) -> Self {
         match value {
-            HttpMethod::Get(_) => Self::Get,
-            HttpMethod::Head(_) => Self::Head,
-            HttpMethod::Post(_) => Self::Post,
-            HttpMethod::Put(_) => Self::Put,
-            HttpMethod::Delete(_) => Self::Delete,
-            HttpMethod::Connect(_) => Self::Connect,
-            HttpMethod::Options(_) => Self::Options,
-            HttpMethod::Trace(_) => Self::Trace,
-            HttpMethod::Patch(_) => Self::Patch,
-            HttpMethod::Custom(c) => Self::Custom(c.value),
+            HttpMethod::Method(value) => Self::Method(value.into()),
             HttpMethod::Any(_) => Self::Any,
         }
     }
@@ -795,16 +734,7 @@ impl From<HttpMethod> for wire::HttpMethod {
 impl From<wire::HttpMethod> for HttpMethod {
     fn from(value: wire::HttpMethod) -> Self {
         match value {
-            wire::HttpMethod::Get => Self::Get(Empty {}),
-            wire::HttpMethod::Head => Self::Head(Empty {}),
-            wire::HttpMethod::Post => Self::Post(Empty {}),
-            wire::HttpMethod::Put => Self::Put(Empty {}),
-            wire::HttpMethod::Delete => Self::Delete(Empty {}),
-            wire::HttpMethod::Connect => Self::Connect(Empty {}),
-            wire::HttpMethod::Options => Self::Options(Empty {}),
-            wire::HttpMethod::Trace => Self::Trace(Empty {}),
-            wire::HttpMethod::Patch => Self::Patch(Empty {}),
-            wire::HttpMethod::Custom(value) => Self::Custom(CustomHttpMethod { value }),
+            wire::HttpMethod::Method(value) => Self::Method(value.into()),
             wire::HttpMethod::Any => Self::Any(Empty {}),
         }
     }
@@ -829,10 +759,8 @@ impl From<wire::CorsOptions> for CorsOptions {
 impl From<PathSegment> for wire::PathSegment {
     fn from(value: PathSegment) -> Self {
         match value {
-            PathSegment::Literal(v) => Self::Literal(v.value),
+            PathSegment::Segment(v) => Self::Segment(v.into()),
             PathSegment::SystemVariable(v) => Self::SystemVariable(v.value.into()),
-            PathSegment::PathVariable(v) => Self::PathVariable(v.into()),
-            PathSegment::RemainingPathVariable(v) => Self::RemainingPathVariable(v.into()),
         }
     }
 }
@@ -840,14 +768,12 @@ impl From<PathSegment> for wire::PathSegment {
 impl From<wire::PathSegment> for PathSegment {
     fn from(value: wire::PathSegment) -> Self {
         match value {
-            wire::PathSegment::Literal(value) => Self::Literal(LiteralSegment { value }),
+            wire::PathSegment::Segment(value) => Self::Segment(value.into()),
             wire::PathSegment::SystemVariable(value) => {
                 Self::SystemVariable(SystemVariableSegment {
                     value: value.into(),
                 })
             }
-            wire::PathSegment::PathVariable(v) => Self::PathVariable(v.into()),
-            wire::PathSegment::RemainingPathVariable(v) => Self::RemainingPathVariable(v.into()),
         }
     }
 }
@@ -866,58 +792,6 @@ impl From<wire::SystemVariable> for SystemVariable {
         match value {
             wire::SystemVariable::AgentType => Self::AgentType,
             wire::SystemVariable::AgentVersion => Self::AgentVersion,
-        }
-    }
-}
-
-impl From<PathVariable> for wire::PathVariable {
-    fn from(value: PathVariable) -> Self {
-        Self {
-            variable_name: value.variable_name,
-        }
-    }
-}
-
-impl From<wire::PathVariable> for PathVariable {
-    fn from(value: wire::PathVariable) -> Self {
-        Self {
-            variable_name: value.variable_name,
-        }
-    }
-}
-
-impl From<HeaderVariable> for wire::HeaderVariable {
-    fn from(value: HeaderVariable) -> Self {
-        Self {
-            header_name: value.header_name,
-            variable_name: value.variable_name,
-        }
-    }
-}
-
-impl From<wire::HeaderVariable> for HeaderVariable {
-    fn from(value: wire::HeaderVariable) -> Self {
-        Self {
-            header_name: value.header_name,
-            variable_name: value.variable_name,
-        }
-    }
-}
-
-impl From<QueryVariable> for wire::QueryVariable {
-    fn from(value: QueryVariable) -> Self {
-        Self {
-            query_param_name: value.query_param_name,
-            variable_name: value.variable_name,
-        }
-    }
-}
-
-impl From<wire::QueryVariable> for QueryVariable {
-    fn from(value: wire::QueryVariable) -> Self {
-        Self {
-            query_param_name: value.query_param_name,
-            variable_name: value.variable_name,
         }
     }
 }
@@ -1219,10 +1093,14 @@ impl From<AgentConfigSource> for wire::AgentConfigSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base_model::Empty;
     use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
     use crate::schema::metadata::{MetadataEnvelope, TypeId};
     use crate::schema::schema_type::{NamedFieldType, SchemaType};
+    use golem_schema::Empty;
+    use golem_schema::http::{
+        CustomHttpMethod, ExactFileMapping, FileMapping, FileResponseHeader, LiteralSegment,
+        SubtreeFileMapping,
+    };
     use golem_schema::http::{
         DurableStreamInputSlotSource, DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions,
         DurableStreamRouteOptions, DurableStreamSlotOptions, DurableStreamSlotSource,
@@ -1280,7 +1158,9 @@ mod tests {
             )]),
             output_schema: OutputSchema::Single(Box::new(point_ref())),
             http_endpoint: vec![HttpEndpointDetails {
-                http_method: HttpMethod::Post(Empty {}),
+                http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(
+                    Default::default(),
+                )),
                 path_suffix: vec![],
                 header_vars: vec![],
                 query_vars: vec![],
@@ -1388,9 +1268,11 @@ mod tests {
             let mut original = sample_agent_type();
             original.kind = kind;
             original.http_mount = Some(HttpMountDetails {
-                path_prefix: vec![PathSegment::Literal(LiteralSegment {
-                    value: "site".into(),
-                })],
+                path_prefix: vec![PathSegment::Segment(
+                    golem_schema::http::PathSegment::Literal(LiteralSegment {
+                        value: "site".into(),
+                    }),
+                )],
                 auth_details: Some(AgentHttpAuthDetails { required: true }),
                 phantom_agent: false,
                 phantom_id_binding: None,
@@ -1526,9 +1408,9 @@ mod tests {
     #[test]
     fn any_matcher_is_not_a_concrete_extension_method() {
         let any = HttpMethod::Any(Empty {});
-        let custom = HttpMethod::Custom(CustomHttpMethod {
+        let custom = HttpMethod::Method(golem_schema::http::HttpMethod::Custom(CustomHttpMethod {
             value: "ANY".into(),
-        });
+        }));
         assert!(http::Method::try_from(any.clone()).is_err());
         assert_eq!(
             http::Method::try_from(custom.clone()).unwrap().as_str(),
@@ -1548,10 +1430,8 @@ mod tests {
             );
         }
         assert!(
-            FileMapping::try_from(golem_api_grpc::proto::golem::component::FileMapping {
-                value: None
-            })
-            .is_err()
+            FileMapping::try_from(golem_schema::proto::golem::http::FileMapping { value: None })
+                .is_err()
         );
     }
 

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::Empty;
 use crate::base_model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
@@ -26,6 +25,7 @@ use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, Variant
 use crate::schema::schema_value::{SchemaValue, SecretValuePayload, VariantValuePayload};
 use crate::schema::stream::SchemaValueStream;
 use crate::schema::validation::validate_value;
+use golem_schema::Empty;
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;

@@ -17,7 +17,9 @@ use super::{DeployValidationError, DeploymentWriteError};
 use crate::model::api_definition::UnboundCompiledRoute;
 use anyhow::{Context, anyhow};
 use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
-use golem_service_base::custom_api::{RouteBehaviour, RouterFileIndexEntry};
+use golem_service_base::custom_api::{
+    MountBehaviour, MountFileSource, RouteBehaviour, RouterFileIndexEntry,
+};
 use std::collections::HashSet;
 
 /// Indexes the selected revision's read-only provisioning metadata without reading blobs.
@@ -28,24 +30,27 @@ pub(super) fn prepare_router_file_indexes(
     routes: &mut [UnboundCompiledRoute],
 ) -> Result<(), DeploymentWriteError> {
     for route in routes {
-        let RouteBehaviour::HttpRouter(router) = &mut route.behaviour else {
+        let RouteBehaviour::Mount(MountBehaviour {
+            files: MountFileSource::Router { agent, file_index },
+            ..
+        }) = &mut route.behaviour
+        else {
             continue;
         };
         let component = context
             .components
             .values()
             .find(|component| {
-                component.id == router.component_id
-                    && component.revision == router.component_revision
+                component.id == agent.component_id && component.revision == agent.component_revision
             })
             .ok_or_else(|| anyhow!("Router component missing from selected deployment"))?;
         let files = component
             .metadata
             .agent_type_provision_configs()
-            .get(&router.agent_type)
+            .get(&agent.agent_type)
             .map(|config| config.files.as_slice())
             .context("Router provisioning missing from selected component")?;
-        router.file_index = build(files)?;
+        *file_index = build(files)?;
         route
             .route_match
             .validate(&route.path, &route.behaviour)

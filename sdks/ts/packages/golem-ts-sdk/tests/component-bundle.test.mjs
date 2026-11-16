@@ -153,7 +153,9 @@ describe('Node HTTP automatic registration', () => {
     const exports = await instantiate(output.code, {}, 'es');
     const [agent] = exports.guest.discoverAgentTypes();
     expect(agent.typeName).toBe('AutoWeb');
-    expect(agent.httpMount.pathPrefix).toEqual([{ tag: 'literal', val: 'auto' }]);
+    expect(agent.httpMount.pathPrefix).toEqual([
+      { tag: 'segment', val: { tag: 'literal', val: 'auto' } },
+    ]);
     expect(agent.httpMount.authDetails.required).toBe(true);
     expect(agent.httpMount.corsOptions.allowedPatterns).toEqual(['https://example.test']);
     expect(globalThis.__golemAutoServer.listening).toBe(true);

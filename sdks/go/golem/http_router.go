@@ -21,6 +21,7 @@ import (
 	"reflect"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -322,7 +323,7 @@ func buildRouterHTTP(e *agentEntry, mp parsedPath, rec func(method, format strin
 		WebhookSuffix: []common.PathSegment{},
 
 		StaticBindings:        files,
-		FilesystemBindings:    []common.FileMapping{},
+		FilesystemBindings:    []coreHTTP.FileMapping{},
 		FileResponseHeaders:   fileHeaders,
 		OpenapiProviderMethod: provider,
 	}
@@ -333,8 +334,8 @@ func buildRouterHTTP(e *agentEntry, mp parsedPath, rec func(method, format strin
 		endpoints[routerHandleMethod] = []common.HttpEndpointDetails{{
 			HttpMethod:     common.MakeHttpMethodAny(),
 			PathSuffix:     []common.PathSegment{},
-			HeaderVars:     []common.HeaderVariable{},
-			QueryVars:      []common.QueryVariable{},
+			HeaderVars:     []coreHTTP.HeaderVariable{},
+			QueryVars:      []coreHTTP.QueryVariable{},
 			AuthDetails:    witTypes.None[common.AuthDetails](),
 			CorsOptions:    common.CorsOptions{AllowedPatterns: []string{}},
 			DurableStreams: witTypes.None[common.DurableStreamRouteOptions](),

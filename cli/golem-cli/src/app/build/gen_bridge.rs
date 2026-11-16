@@ -2010,7 +2010,6 @@ mod tests {
     use super::*;
     use crate::model::app::{Application, ApplicationPreload, ComponentPresetSelector};
     use crate::model::app_raw;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::component::ComponentName;
     use golem_common::schema::agent::AgentConfigDeclarationSchema;
@@ -2021,6 +2020,7 @@ mod tests {
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
         OutputSchema, SchemaGraph, SchemaType,
     };
+    use golem_schema::Empty;
     use indoc::indoc;
     use strum::IntoEnumIterator;
     use tempfile::{TempDir, tempdir};

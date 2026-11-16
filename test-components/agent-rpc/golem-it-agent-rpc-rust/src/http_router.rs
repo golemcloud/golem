@@ -100,6 +100,27 @@ impl HttpRouter for RawHttpRouterImpl {
         ];
         let local_path = request.path.strip_prefix("/raw").unwrap_or(&request.path);
         let (status, body) = match local_path {
+            "/catch-input" => {
+                headers.push(header(
+                    "x-echo-agent",
+                    golem_rust::agentic::get_agent_id().agent_id.as_bytes(),
+                ));
+                let mut input = request.body;
+                let mut bytes = Vec::new();
+                let mut status = 200;
+                while let Some(chunk) = input.next().await {
+                    match chunk {
+                        Ok(chunk) => bytes.extend(chunk),
+                        Err(golem_rust::schema::StreamError::Interrupted(details)) => {
+                            bytes.extend(format!("|{details}|handled").as_bytes());
+                            status = 422;
+                            break;
+                        }
+                        Err(error) => panic!("unexpected request body failure: {error}"),
+                    }
+                }
+                (status, stream(vec![bytes]))
+            }
             "/empty" => (200, stream(vec![])),
             "/known-one" => {
                 headers.push(header("content-length", b"1"));

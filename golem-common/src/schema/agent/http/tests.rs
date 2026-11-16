@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use super::*;
-use crate::base_model::Empty;
 use crate::base_model::agent::{
-    AgentHttpAuthDetails, AgentTypeName, CorsOptions, FileResponseHeader, HttpEndpointDetails,
-    LiteralSegment, PathVariable, SnapshottingConfig,
+    AgentHttpAuthDetails, AgentTypeName, CorsOptions, HttpEndpointDetails, SnapshottingConfig,
 };
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, InputSchema,
     NamedField, OutputSchema,
 };
 use crate::schema::{NamedFieldType, SchemaTypeDef, TypeId};
+use golem_schema::Empty;
+use golem_schema::http::{FileResponseHeader, LiteralSegment, PathVariable};
 use serde_json::Value;
 use test_r::test;
 
@@ -121,13 +121,15 @@ fn path(value: &str) -> Vec<PathSegment> {
                 .strip_prefix('{')
                 .and_then(|segment| segment.strip_suffix('}'))
             {
-                PathSegment::PathVariable(PathVariable {
-                    variable_name: name.into(),
-                })
+                PathSegment::Segment(golem_schema::http::PathSegment::PathVariable(
+                    PathVariable {
+                        variable_name: name.into(),
+                    },
+                ))
             } else {
-                PathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(golem_schema::http::PathSegment::Literal(LiteralSegment {
                     value: segment.into(),
-                })
+                }))
             }
         })
         .collect()
@@ -196,7 +198,9 @@ fn agent(input: &Value) -> AgentTypeSchema {
                     .map(|binding| HttpEndpointDetails {
                         http_method: match binding[0].as_str().unwrap() {
                             "Any" => HttpMethod::Any(Empty {}),
-                            "GET" => HttpMethod::Get(Empty {}),
+                            "GET" => HttpMethod::Method(golem_schema::http::HttpMethod::Get(
+                                Default::default(),
+                            )),
                             other => panic!("unsupported fixture verb {other}"),
                         },
                         path_suffix: path(binding[1].as_str().unwrap()),
@@ -298,7 +302,8 @@ fn corpus_category(error: &HttpAgentValidationError) -> &'static str {
 
 #[test]
 fn phantom_selector_metadata_validation() {
-    use crate::base_model::agent::{PhantomIdBindingDetails, QueryVariable};
+    use crate::base_model::agent::PhantomIdBindingDetails;
+    use golem_schema::http::QueryVariable;
     let mut original = from_case("metadata-live-typed-overlap");
     let mount = original.http_mount.as_mut().unwrap();
     mount.filesystem_bindings.clear();
@@ -311,16 +316,22 @@ fn phantom_selector_metadata_validation() {
     for replacement in [
         path("/users/{id}"),
         path("/users/{id}/{instance}/{instance}"),
-        vec![PathSegment::RemainingPathVariable(PathVariable {
-            variable_name: "instance".into(),
-        })],
+        vec![PathSegment::Segment(
+            golem_schema::http::PathSegment::RemainingPathVariable(PathVariable {
+                variable_name: "instance".into(),
+            }),
+        )],
         vec![
-            PathSegment::PathVariable(PathVariable {
-                variable_name: "instance".into(),
-            }),
-            PathSegment::RemainingPathVariable(PathVariable {
-                variable_name: "instance".into(),
-            }),
+            PathSegment::Segment(golem_schema::http::PathSegment::PathVariable(
+                PathVariable {
+                    variable_name: "instance".into(),
+                },
+            )),
+            PathSegment::Segment(golem_schema::http::PathSegment::RemainingPathVariable(
+                PathVariable {
+                    variable_name: "instance".into(),
+                },
+            )),
         ],
     ] {
         let mut invalid = original.clone();

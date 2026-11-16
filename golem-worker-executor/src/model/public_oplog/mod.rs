@@ -92,13 +92,14 @@ use golem_common::model::oplog::{
     SpanAttributes, SpanFinished, SpanKind, SpanOutcome, SpanStarted,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
+    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,
 };
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::{
     InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
     SchemaValue, TypedSchemaValue,
 };
+use golem_schema::Empty;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

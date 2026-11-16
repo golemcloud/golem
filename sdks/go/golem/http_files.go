@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 )
 
 // FileMapping serves a file, or a directory tree, from the agent's filesystem
@@ -55,14 +56,14 @@ type FileResponseHeader struct {
 
 // compileFileResponseHeaders turns headers into their WIT form. Headers
 // without any file mapping to apply to are a definition error.
-func compileFileResponseHeaders(headers []FileResponseHeader, hasMappings bool) ([]common.FileResponseHeader, []string) {
-	out := make([]common.FileResponseHeader, 0, len(headers))
+func compileFileResponseHeaders(headers []FileResponseHeader, hasMappings bool) ([]coreHTTP.FileResponseHeader, []string) {
+	out := make([]coreHTTP.FileResponseHeader, 0, len(headers))
 	var errs []string
 	if len(headers) > 0 && !hasMappings {
 		errs = append(errs, "file response headers need file mappings to apply to")
 	}
 	for _, h := range headers {
-		out = append(out, common.FileResponseHeader{Name: h.Name, Value: h.Value})
+		out = append(out, coreHTTP.FileResponseHeader{Name: h.Name, Value: h.Value})
 	}
 	return out, errs
 }
@@ -71,8 +72,8 @@ func compileFileResponseHeaders(headers []FileResponseHeader, hasMappings bool) 
 // compile yields an error naming it and one of the shared contract's categories
 // (source-path, source-wildcard, target-placeholder, target-path,
 // duplicate-mapping), which every SDK reports alike.
-func compileFileMappings(mappings []FileMapping) ([]common.FileMapping, []string) {
-	out := make([]common.FileMapping, 0, len(mappings))
+func compileFileMappings(mappings []FileMapping) ([]coreHTTP.FileMapping, []string) {
+	out := make([]coreHTTP.FileMapping, 0, len(mappings))
 	var errs []string
 	seen := map[string]bool{}
 	for i, m := range mappings {
@@ -90,7 +91,7 @@ func compileFileMappings(mappings []FileMapping) ([]common.FileMapping, []string
 	return out, errs
 }
 
-func compileFileMapping(m FileMapping) (common.FileMapping, string, string) {
+func compileFileMapping(m FileMapping) (coreHTTP.FileMapping, string, string) {
 	subtree := strings.HasSuffix(m.Route, "/*")
 	source := m.Route
 	if subtree {
@@ -100,22 +101,22 @@ func compileFileMapping(m FileMapping) (common.FileMapping, string, string) {
 		}
 	}
 	if strings.Contains(source, "*") {
-		return common.FileMapping{}, "", "source-wildcard"
+		return coreHTTP.FileMapping{}, "", "source-wildcard"
 	}
 	if subtree && source != "/" && strings.HasSuffix(source, "/") {
-		return common.FileMapping{}, "", "source-path"
+		return coreHTTP.FileMapping{}, "", "source-path"
 	}
 	// "//*" is not how the root subtree is spelled.
 	if subtree && m.Route != "/*" && source == "/" {
-		return common.FileMapping{}, "", "source-path"
+		return coreHTTP.FileMapping{}, "", "source-path"
 	}
 	segments, ok := publicSegments(source)
 	if !ok {
-		return common.FileMapping{}, "", "source-path"
+		return coreHTTP.FileMapping{}, "", "source-path"
 	}
 
 	if subtree && !strings.HasSuffix(m.Path, "/$1") {
-		return common.FileMapping{}, "", "target-placeholder"
+		return coreHTTP.FileMapping{}, "", "target-placeholder"
 	}
 	target := m.Path
 	if subtree {
@@ -125,17 +126,17 @@ func compileFileMapping(m FileMapping) (common.FileMapping, string, string) {
 		}
 	}
 	if strings.Contains(target, "$") {
-		return common.FileMapping{}, "", "target-placeholder"
+		return coreHTTP.FileMapping{}, "", "target-placeholder"
 	}
 	if !validTarget(target, subtree) || (subtree && m.Path != "/$1" && target == "/") {
-		return common.FileMapping{}, "", "target-path"
+		return coreHTTP.FileMapping{}, "", "target-path"
 	}
 
 	key := fmt.Sprintf("%t\x00%s\x00%s", subtree, strings.Join(segments, "\x00"), target)
 	if subtree {
-		return common.MakeFileMappingSubtree(common.SubtreeFileMapping{PublicPrefix: segments, FilesystemRoot: target}), key, ""
+		return coreHTTP.MakeFileMappingSubtree(coreHTTP.SubtreeFileMapping{PublicPrefix: segments, FilesystemRoot: target}), key, ""
 	}
-	return common.MakeFileMappingExact(common.ExactFileMapping{PublicPath: segments, FilePath: target}), key, ""
+	return coreHTTP.MakeFileMappingExact(coreHTTP.ExactFileMapping{PublicPath: segments, FilePath: target}), key, ""
 }
 
 // publicSegments splits a route into its decoded segments. A route is percent-

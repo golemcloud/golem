@@ -3,11 +3,13 @@ import type * as UnderlyingWit from "golem:tool/underlying@0.1.0"
 import type * as StreamsWit from "golem:tool/streams@0.1.0"
 import type { Caller } from "../../InvocationContext.js"
 import { Cause, Context, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
+import { CustomInvocationContextLive } from "../../host/CustomInvocationContextClient.js"
 import { AbortableStreamIterable } from "../abortableStreamIterable.js"
 import {
   currentInvocationContext,
   InvocationContextLive,
 } from "../../host/InvocationContextClient.js"
+import { withCustomScopes } from "../customScope.js"
 import { schemaShapesMatch } from "../schema-model/model.js"
 import { schemaGraphFromWit } from "../schema-model/wit.js"
 import { type CompiledWitCodec, compile } from "../../WitCodec.js"
@@ -842,7 +844,15 @@ export const toolMiddlewareGuest = {
         underlying,
       )
     })
-    const closeLayer = () => Effect.runPromise(Scope.close(invocationScope, Exit.void))
+    // Layer acquisition, the handler and layer release each run with the scope hook.
+    const runInScopes = <A, E>(effect: Effect.Effect<A, E>) =>
+      Effect.runPromise(
+        Effect.provide(withCustomScopes(effect), CustomInvocationContextLive) as Effect.Effect<
+          A,
+          E
+        >,
+      )
+    const closeLayer = () => runInScopes(Scope.close(invocationScope, Exit.void))
     let cleanupPromise: Promise<void> | undefined
     const cleanup = (primary?: unknown): Promise<void> =>
       (cleanupPromise ??= (async () => {
@@ -859,8 +869,8 @@ export const toolMiddlewareGuest = {
     let context = Context.empty()
     try {
       if (entry.layer)
-        context = await Effect.runPromise(Layer.buildWithScope(entry.layer, invocationScope))
-      const result = await Effect.runPromise(
+        context = await runInScopes(Layer.buildWithScope(entry.layer, invocationScope))
+      const result = await runInScopes(
         Effect.provide(effect as Effect.Effect<Common.InvocationResult, MiddlewareError>, context),
       )
       active = false

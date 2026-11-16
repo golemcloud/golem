@@ -26,7 +26,6 @@
 //! ```
 
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
-use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::schema::agent::{
     json_input_schema_value_to_typed_schema_value, typed_schema_value_with_projected_defs,
@@ -38,6 +37,7 @@ use golem_common::schema::{
     MetadataEnvelope, NamedField, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
     SchemaTypeDef, SchemaValue, TypeId, TypedSchemaValue,
 };
+use golem_schema::Empty;
 
 // ── Builders ────────────────────────────────────────────────────────────────
 

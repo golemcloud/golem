@@ -1821,7 +1821,28 @@ the body. This reproduces outward completion order, not the skipped body's polls
 entries. A completed sibling therefore cannot return early and change a later root call's ordinal
 while another sibling remains incomplete. Sync combinators retain the direct begin/finish path.
 
-**Non-Rust SDK limitation:** TypeScript, Effect, Scala, MoonBit, and Go custom combinators support
+**TypeScript scope integration:** `durableAsync` follows the Rust order: async begin, then
+`enterLive` from wasm-rquickjs's `wasm-rquickjs:custom-invocation-context` in the parent's scope,
+then the body, `finish-async` and the drop under the child token, then `close`. The runtime's
+promise hook, timer and callback wrappers and import-bridge wrappers capture the scope at
+registration or initiation, install it around each job, poll, sleep and drop, restore the previous
+scope afterwards, and restore the root before control returns to the host. A parent finishes only
+after the operations that started inside it have settled; an operation that begins after that wait
+ended begins in the nearest enclosing scope that still waits, or at the root. A closed token
+resolves to its nearest open ancestor, or to the root, and never installs its stale snapshot.
+`durable` is sync-only.
+
+**Effect scope integration:** each fiber carries its custom scope token in `CurrentCustomScope`
+(`sdks/effect/src/internal/customScope.ts`). A composed `Tracer.context` hook swaps the
+`wasm-rquickjs:custom-invocation-context` token for each run segment, and the runtime carries it
+across the Promise jobs, timers and import calls that the segment creates. Concurrent fibers are
+supported. A parent finishes or drops only after its registered children close; escaped work runs
+in the nearest open ancestor or the invocation root. Agent, tool and middleware entries install a
+scheduler that yields through Promise jobs. The default `setImmediate` yield is a root
+`monotonic-clock::wait-for` call, which replay of a completed operation does not repeat, so its
+unclaimed `Start` stopped recovery (`tests/durability_effect.rs`).
+
+**Non-Rust SDK limitation:** MoonBit and Go custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1830,7 +1851,15 @@ invocation failure. Misuse is not reliably detected. Await nested operations; do
 Stop and join outstanding work before the body exits, including on failure or cancellation. A
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
-durability outside custom operations or to the Rust poll/drop scope integration.
+durability outside custom operations, to the Rust poll/drop scope integration, to TypeScript's or
+Scala's `durableAsync`, or to Effect's fiber-local scopes. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
+`wasm-rquickjs:custom-invocation-context` module, and its `GolemExecutionContext` captures the
+scope when a `Future` callback is registered (`ExecutionContext.prepare`), not when its source
+completes. A Scala parent finishes only after its nested operations close and no task that
+`GolemExecutionContext` submitted in its scope waits to run; it is then sealed (`DurableScope`),
+and an operation started in a sealed scope begins and enters in the nearest admitting ancestor,
+so host and SDK agree on its parent. Callbacks run by
+other execution contexts, and work escaping an outermost operation, are not attributed to it.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
@@ -3278,7 +3307,7 @@ handle goes through `ensure_websocket_connection_live_access` in
 `durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
-still sees its own gate in the entry applies the policy. With the default
+still sees its own gate in the entry applies the policy. With an explicit
 `reconnect-automatically`, it proceeds to take one pool permit, run the handshake, and
 publish `Live` in a single store window re-verified against the current entry. A queued peer
 therefore re-reads the entry instead of independently reconnecting: a `Live` entry published by
@@ -3306,8 +3335,9 @@ interruption. Tests:
 `websocket_closed_connection_stays_terminal_after_replay`.
 
 The third optional WIT `connect` parameter is `option<reconstruction-policy>`. Absence selects
-`reconnect-automatically`; `report-connection-loss` publishes terminal `SessionLost` at the first
-live access to a reconstructed successful handle, without a pool permit or handshake. Recorded
+`report-connection-loss`, which publishes terminal `SessionLost` at the first live access to a
+reconstructed successful handle, without a pool permit or handshake. Only an explicit
+`reconnect-automatically` opens a replacement connection. Recorded
 send, receive, timeout, error, and close outcomes replay unchanged under either policy. Suspension,
 restart, and crash all use this reconstruction path; the option does not change ordinary live
 disconnect retry behavior. Live `close` on the lost handle reports loss without reconnecting;

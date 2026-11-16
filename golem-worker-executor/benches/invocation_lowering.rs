@@ -24,7 +24,6 @@
 //! ```
 
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
-use golem_common::base_model::Empty;
 use golem_common::base_model::InvocationId;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
@@ -38,6 +37,7 @@ use golem_common::schema::{
     NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId,
     TypedSchemaValue,
 };
+use golem_schema::Empty;
 use golem_worker_executor::worker::invocation::lower_invocation;
 use std::collections::BTreeMap;
 

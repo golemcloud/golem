@@ -3,7 +3,9 @@ package golem:agent@2.0.0;
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
     metadata-envelope, agent-id, account-id, component-id, environment-id, uuid, datetime};
-  use golem:core/http@2.0.0.{http-route-mode, durable-stream-route-options};
+  use golem:core/http@2.0.0.{http-route-mode, durable-stream-route-options,
+    http-method as concrete-http-method, path-segment as neutral-path-segment,
+    header-variable, query-variable, file-mapping, file-response-header};
   use wasi:clocks/types@0.3.0.{duration};
 
   enum agent-mode {
@@ -122,26 +124,6 @@ interface common {
     optional: bool,
   }
 
-  record file-response-header {
-    name: string,
-    value: string,
-  }
-
-  variant file-mapping {
-    exact(exact-file-mapping),
-    subtree(subtree-file-mapping),
-  }
-
-  record exact-file-mapping {
-    public-path: list<string>,
-    file-path: string,
-  }
-
-  record subtree-file-mapping {
-    public-prefix: list<string>,
-    filesystem-root: string,
-  }
-
   record cors-options {
     allowed-patterns: list<string>,
   }
@@ -158,44 +140,18 @@ interface common {
   }
 
   variant http-method {
-    get,
-    head,
-    post,
-    put,
-    delete,
-    connect,
-    options,
-    trace,
-    patch,
-    custom(string),
+    method(concrete-http-method),
     any,
   }
 
   variant path-segment {
-    literal(string),
+    segment(neutral-path-segment),
     system-variable(system-variable),
-    path-variable(path-variable),
-    // only allowed as the last segment
-    remaining-path-variable(path-variable)
   }
 
   enum system-variable {
     agent-type,
     agent-version
-  }
-
-  record path-variable {
-    variable-name: string,
-  }
-
-  record header-variable {
-    header-name: string,
-    variable-name: string,
-  }
-
-  record query-variable {
-    query-param-name: string,
-    variable-name: string,
   }
 
   record auth-details {

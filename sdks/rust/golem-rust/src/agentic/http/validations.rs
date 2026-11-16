@@ -16,6 +16,7 @@ use crate::agentic::{EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgent
 use crate::golem_agentic::golem::agent::common::{
     HttpEndpointDetails, HttpMountDetails, PathSegment, PhantomIdBinding,
 };
+use golem_schema::http::wit::wire as http;
 use std::collections::HashSet;
 
 #[doc(hidden)]
@@ -308,8 +309,10 @@ fn validate_endpoint_variables(
 
     for segment in &endpoint.path_suffix {
         match segment {
-            PathSegment::RemainingPathVariable(path_variable)
-            | PathSegment::PathVariable(path_variable) => {
+            PathSegment::Segment(
+                http::PathSegment::RemainingPathVariable(path_variable)
+                | http::PathSegment::PathVariable(path_variable),
+            ) => {
                 let name = &path_variable.variable_name;
                 validate_variable(
                     name,
@@ -332,7 +335,7 @@ fn validate_endpoint_variables(
                     ),
                 )?;
             }
-            PathSegment::Literal(_) => {}
+            PathSegment::Segment(http::PathSegment::Literal(_)) => {}
             PathSegment::SystemVariable(_) => {}
         }
     }
@@ -380,7 +383,9 @@ fn validate_no_catch_all_in_http_mount(
             .path_prefix
             .iter()
             .find_map(|segment| match segment {
-                PathSegment::RemainingPathVariable(variable) => Some(&variable.variable_name),
+                PathSegment::Segment(http::PathSegment::RemainingPathVariable(variable)) => {
+                    Some(&variable.variable_name)
+                }
                 _ => None,
             })
     {
@@ -397,7 +402,7 @@ fn collect_http_mount_variables(agent_mount: &HttpMountDetails) -> HashSet<Strin
     let mut vars = HashSet::new();
 
     for segment in &agent_mount.path_prefix {
-        if let PathSegment::PathVariable(path_variable) = segment {
+        if let PathSegment::Segment(http::PathSegment::PathVariable(path_variable)) = segment {
             vars.insert(path_variable.variable_name.clone());
         }
     }
@@ -451,7 +456,7 @@ fn validate_mount_variables_exist_in_constructor(
     constructor_vars: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
     for (segment_index, segment) in agent_mount.path_prefix.iter().enumerate() {
-        if let PathSegment::PathVariable(path_variable) = segment {
+        if let PathSegment::Segment(http::PathSegment::PathVariable(path_variable)) = segment {
             let variable_name = &path_variable.variable_name;
 
             if matches!(&agent_mount.phantom_id_binding, Some(PhantomIdBinding::Path(binding)) if &binding.name == variable_name)
@@ -482,7 +487,7 @@ fn validate_phantom_selector(
         return Err("Phantom selectors require a nonempty name and no filesystem exposure".into());
     }
     if matches!(selector, PhantomIdBinding::Path(_)) &&
-        (constructor_vars.contains(&binding.name) || mount.path_prefix.iter().filter(|s| matches!(s, PathSegment::PathVariable(v) if v.variable_name == binding.name)).count() != 1) {
+        (constructor_vars.contains(&binding.name) || mount.path_prefix.iter().filter(|s| matches!(s, PathSegment::Segment(http::PathSegment::PathVariable(v)) if v.variable_name == binding.name)).count() != 1) {
         return Err("Phantom path selector must name exactly one mount capture, not a constructor parameter".into());
     }
     Ok(())
@@ -493,7 +498,7 @@ fn validate_phantom_endpoint(
     endpoint: &HttpEndpointDetails,
 ) -> Result<(), String> {
     let conflict = match &mount.phantom_id_binding {
-        Some(PhantomIdBinding::Path(binding)) => endpoint.path_suffix.iter().any(|s| matches!(s, PathSegment::PathVariable(v) | PathSegment::RemainingPathVariable(v) if v.variable_name == binding.name)),
+        Some(PhantomIdBinding::Path(binding)) => endpoint.path_suffix.iter().any(|s| matches!(s, PathSegment::Segment(http::PathSegment::PathVariable(v) | http::PathSegment::RemainingPathVariable(v)) if v.variable_name == binding.name)),
         Some(PhantomIdBinding::Query(binding)) => endpoint.query_vars.iter().any(|q| q.query_param_name == binding.name) || (endpoint.durable_streams.is_some() && ["offset", "cursor", "live"].contains(&binding.name.as_str())),
         None => false,
     };
@@ -530,10 +535,11 @@ mod tests {
 
     use super::*;
     use crate::agentic::{Schema, StructuredSchema, UnstructuredBinary, UnstructuredText};
-    use crate::golem_agentic::golem::agent::common::{
-        AuthDetails, CorsOptions, HeaderVariable, HttpMethod, PathVariable, QueryVariable,
-    };
+    use crate::golem_agentic::golem::agent::common::{AuthDetails, CorsOptions, HttpMethod};
     use golem_rust_macro::{AllowedLanguages, AllowedMimeTypes};
+    use golem_schema::http::wit::wire::{
+        self as http, HeaderVariable, PathVariable, QueryVariable,
+    };
 
     fn constructor_with_params(params: Vec<(&str, StructuredSchema)>) -> ExtendedAgentConstructor {
         let input_schema = params
@@ -571,19 +577,19 @@ mod tests {
     }
 
     fn path_var(name: &str) -> PathSegment {
-        PathSegment::PathVariable(PathVariable {
+        PathSegment::Segment(http::PathSegment::PathVariable(PathVariable {
             variable_name: name.to_string(),
-        })
+        }))
     }
 
     fn catch_all(name: &str) -> PathSegment {
-        PathSegment::RemainingPathVariable(PathVariable {
+        PathSegment::Segment(http::PathSegment::RemainingPathVariable(PathVariable {
             variable_name: name.to_string(),
-        })
+        }))
     }
 
     fn literal() -> PathSegment {
-        PathSegment::Literal("literal".to_string())
+        PathSegment::Segment(http::PathSegment::Literal("literal".to_string()))
     }
 
     #[test]
@@ -764,9 +770,9 @@ mod tests {
             path_suffix: path_vars
                 .into_iter()
                 .map(|name| {
-                    PathSegment::PathVariable(PathVariable {
+                    PathSegment::Segment(http::PathSegment::PathVariable(PathVariable {
                         variable_name: name.to_string(),
-                    })
+                    }))
                 })
                 .collect(),
             header_vars: header_vars
@@ -817,7 +823,7 @@ mod tests {
     #[test]
     fn test_http_endpoint_without_mount() {
         let endpoint = make_endpoint(
-            HttpMethod::Get,
+            HttpMethod::Method(http::HttpMethod::Get),
             vec!["x"],
             vec![],
             vec![],
@@ -832,7 +838,7 @@ mod tests {
     #[test]
     fn test_valid_endpoint() {
         let endpoint = make_endpoint(
-            HttpMethod::Get,
+            HttpMethod::Method(http::HttpMethod::Get),
             vec!["x"],
             vec![("X-Test", "x")],
             vec!["x"],
@@ -847,7 +853,7 @@ mod tests {
     #[test]
     fn test_header_unstructured_binary_error() {
         let endpoint = make_endpoint(
-            HttpMethod::Get,
+            HttpMethod::Method(http::HttpMethod::Get),
             vec![],
             vec![("X-Test", "b")],
             vec![],
@@ -863,7 +869,7 @@ mod tests {
     #[test]
     fn test_path_variable_not_in_method_params() {
         let endpoint = make_endpoint(
-            HttpMethod::Get,
+            HttpMethod::Method(http::HttpMethod::Get),
             vec!["y"],
             vec![],
             vec![],
@@ -902,7 +908,7 @@ mod tests {
     #[test]
     fn test_header_unstructured_text_error() {
         let endpoint = make_endpoint(
-            HttpMethod::Get,
+            HttpMethod::Method(http::HttpMethod::Get),
             vec![],
             vec![("X-Test", "t")],
             vec![],
@@ -922,7 +928,7 @@ mod tests {
     #[test]
     fn test_query_unstructured_text_error() {
         let endpoint = make_endpoint(
-            HttpMethod::Get,
+            HttpMethod::Method(http::HttpMethod::Get),
             vec![],
             vec![],
             vec!["t"],
@@ -942,7 +948,7 @@ mod tests {
     #[test]
     fn test_path_unstructured_text_error() {
         let endpoint = make_endpoint(
-            HttpMethod::Get,
+            HttpMethod::Method(http::HttpMethod::Get),
             vec!["t"],
             vec![],
             vec![],

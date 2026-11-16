@@ -37,6 +37,174 @@ import (
 )
 
 const (
+	HttpMethodGet     uint8 = 0
+	HttpMethodHead    uint8 = 1
+	HttpMethodPost    uint8 = 2
+	HttpMethodPut     uint8 = 3
+	HttpMethodDelete  uint8 = 4
+	HttpMethodConnect uint8 = 5
+	HttpMethodOptions uint8 = 6
+	HttpMethodTrace   uint8 = 7
+	HttpMethodPatch   uint8 = 8
+	HttpMethodCustom  uint8 = 9
+)
+
+type HttpMethod struct {
+	tag   uint8
+	value any
+}
+
+func (self HttpMethod) Tag() uint8 {
+	return self.tag
+}
+
+func (self HttpMethod) Custom() string {
+	if self.tag != HttpMethodCustom {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+
+func MakeHttpMethodGet() HttpMethod {
+	return HttpMethod{HttpMethodGet, nil}
+}
+func MakeHttpMethodHead() HttpMethod {
+	return HttpMethod{HttpMethodHead, nil}
+}
+func MakeHttpMethodPost() HttpMethod {
+	return HttpMethod{HttpMethodPost, nil}
+}
+func MakeHttpMethodPut() HttpMethod {
+	return HttpMethod{HttpMethodPut, nil}
+}
+func MakeHttpMethodDelete() HttpMethod {
+	return HttpMethod{HttpMethodDelete, nil}
+}
+func MakeHttpMethodConnect() HttpMethod {
+	return HttpMethod{HttpMethodConnect, nil}
+}
+func MakeHttpMethodOptions() HttpMethod {
+	return HttpMethod{HttpMethodOptions, nil}
+}
+func MakeHttpMethodTrace() HttpMethod {
+	return HttpMethod{HttpMethodTrace, nil}
+}
+func MakeHttpMethodPatch() HttpMethod {
+	return HttpMethod{HttpMethodPatch, nil}
+}
+func MakeHttpMethodCustom(value string) HttpMethod {
+	return HttpMethod{HttpMethodCustom, value}
+}
+
+type PathVariable struct {
+	VariableName string
+}
+
+const (
+	PathSegmentLiteral      uint8 = 0
+	PathSegmentPathVariable uint8 = 1
+	// only allowed as the last segment
+	PathSegmentRemainingPathVariable uint8 = 2
+)
+
+type PathSegment struct {
+	tag   uint8
+	value any
+}
+
+func (self PathSegment) Tag() uint8 {
+	return self.tag
+}
+
+func (self PathSegment) Literal() string {
+	if self.tag != PathSegmentLiteral {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self PathSegment) PathVariable() PathVariable {
+	if self.tag != PathSegmentPathVariable {
+		panic("tag mismatch")
+	}
+	return self.value.(PathVariable)
+}
+func (self PathSegment) RemainingPathVariable() PathVariable {
+	if self.tag != PathSegmentRemainingPathVariable {
+		panic("tag mismatch")
+	}
+	return self.value.(PathVariable)
+}
+
+func MakePathSegmentLiteral(value string) PathSegment {
+	return PathSegment{PathSegmentLiteral, value}
+}
+func MakePathSegmentPathVariable(value PathVariable) PathSegment {
+	return PathSegment{PathSegmentPathVariable, value}
+}
+func MakePathSegmentRemainingPathVariable(value PathVariable) PathSegment {
+	return PathSegment{PathSegmentRemainingPathVariable, value}
+}
+
+type HeaderVariable struct {
+	HeaderName   string
+	VariableName string
+}
+
+type QueryVariable struct {
+	QueryParamName string
+	VariableName   string
+}
+
+type ExactFileMapping struct {
+	PublicPath []string
+	FilePath   string
+}
+
+type SubtreeFileMapping struct {
+	PublicPrefix   []string
+	FilesystemRoot string
+}
+
+const (
+	FileMappingExact   uint8 = 0
+	FileMappingSubtree uint8 = 1
+)
+
+type FileMapping struct {
+	tag   uint8
+	value any
+}
+
+func (self FileMapping) Tag() uint8 {
+	return self.tag
+}
+
+func (self FileMapping) Exact() ExactFileMapping {
+	if self.tag != FileMappingExact {
+		panic("tag mismatch")
+	}
+	return self.value.(ExactFileMapping)
+}
+func (self FileMapping) Subtree() SubtreeFileMapping {
+	if self.tag != FileMappingSubtree {
+		panic("tag mismatch")
+	}
+	return self.value.(SubtreeFileMapping)
+}
+
+func MakeFileMappingExact(value ExactFileMapping) FileMapping {
+	return FileMapping{FileMappingExact, value}
+}
+func MakeFileMappingSubtree(value SubtreeFileMapping) FileMapping {
+	return FileMapping{FileMappingSubtree, value}
+}
+
+type FileResponseHeader struct {
+	Name  string
+	Value string
+}
+
+const (
 	HttpRouteModeDurableStreams uint8 = 0
 	HttpRouteModePlain          uint8 = 1
 	HttpRouteModeSse            uint8 = 2

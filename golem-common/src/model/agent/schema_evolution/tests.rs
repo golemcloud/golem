@@ -14,10 +14,10 @@
 
 use super::*;
 use crate::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
-use crate::model::Empty;
 use crate::schema::agent::{AgentConstructorSchema, AgentTypeSchema, InputSchema, NamedField};
 use crate::schema::graph::SchemaGraph;
 use crate::schema::schema_type::{ResultSpec, SchemaType, VariantCaseType};
+use golem_schema::Empty;
 use test_r::test;
 
 fn field(name: &str, schema: SchemaType) -> NamedField {

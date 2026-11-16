@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::Empty;
 use crate::base_model::IdempotencyKey;
 use crate::base_model::agent::{
     AgentMode, AgentTypeName, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
@@ -22,6 +21,7 @@ use crate::model::agent::{
     AgentTypeSchemaResolver, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey,
     ResolvedOwnerContext, ephemeral_invocation_phantom_id,
 };
+use golem_schema::Empty;
 
 #[test]
 fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
@@ -1095,8 +1095,8 @@ fn ephemeral_invocation_identity_preserves_agent_id_length_validation() {
 }
 
 mod read_only_config_roundtrip {
-    use crate::base_model::Empty;
     use crate::base_model::agent::{CachePolicy, CachePolicyTtl, ReadOnlyConfig};
+    use golem_schema::Empty;
     use pretty_assertions::assert_eq;
     use test_r::test;
 

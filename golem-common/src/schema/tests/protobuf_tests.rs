@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::Empty;
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::{
     AgentMode, AgentTypeName, CorsOptions, DurableStreamInputSlotSource,
@@ -31,6 +30,7 @@ use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::{PermissionCardSpec, SchemaType};
 use crate::schema::schema_value::{PermissionCardValuePayload, SchemaValue};
+use golem_schema::Empty;
 use proptest::prelude::*;
 use strategies::{
     schema_graph_strategy, schema_value_strategy, schema_values_eq, typed_schema_value_strategy,
@@ -120,7 +120,9 @@ fn sample_agent_type_schema() -> AgentTypeSchema {
                 },
             ))),
             http_endpoint: vec![HttpEndpointDetails {
-                http_method: HttpMethod::Post(Empty {}),
+                http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(
+                    Default::default(),
+                )),
                 path_suffix: vec![],
                 header_vars: vec![],
                 query_vars: vec![],

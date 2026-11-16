@@ -5,26 +5,24 @@ use super::{
 };
 use super::{
     AgentConfigSource, AgentHttpAuthDetails, AgentInvocationMode, AgentMode, CachePolicy,
-    CachePolicyTtl, CorsOptions, CustomHttpMethod, FileResponseHeader, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, PathVariable,
-    PhantomIdBinding, PhantomIdBindingDetails, QueryVariable, ReadOnlyConfig, RegisteredAgentType,
+    CachePolicyTtl, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
+    PhantomIdBinding, PhantomIdBindingDetails, ReadOnlyConfig, RegisteredAgentType,
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
 use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use crate::base_model::AgentFingerprint;
 use crate::base_model::agent::AgentTypeName;
-use crate::base_model::agent::{ExactFileMapping, FileMapping, SubtreeFileMapping};
 use crate::base_model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, Pair, Principal,
     PrincipalRef, TokenProvenance, ToolPrincipal, UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::tool::ToolName;
-use crate::model::Empty;
 use crate::model::oplog::{AgentResourceId, OplogErrorKind};
 use crate::model::regions::OplogRegion;
 use crate::model::{AgentResourceDescription, OplogIndex};
+use golem_schema::Empty;
 use std::collections::HashSet;
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
@@ -319,62 +317,6 @@ impl From<PhantomIdBinding> for golem_api_grpc::proto::golem::component::Phantom
     }
 }
 
-impl From<golem_api_grpc::proto::golem::component::FileResponseHeader> for FileResponseHeader {
-    fn from(value: golem_api_grpc::proto::golem::component::FileResponseHeader) -> Self {
-        Self {
-            name: value.name,
-            value: value.value,
-        }
-    }
-}
-
-impl From<FileResponseHeader> for golem_api_grpc::proto::golem::component::FileResponseHeader {
-    fn from(value: FileResponseHeader) -> Self {
-        Self {
-            name: value.name,
-            value: value.value,
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::FileMapping> for FileMapping {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::FileMapping,
-    ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::file_mapping::Value;
-        match value.value.ok_or("Missing FileMapping.value")? {
-            Value::Exact(mapping) => Ok(Self::Exact(ExactFileMapping {
-                public_path: mapping.public_path,
-                file_path: mapping.file_path,
-            })),
-            Value::Subtree(mapping) => Ok(Self::Subtree(SubtreeFileMapping {
-                public_prefix: mapping.public_prefix,
-                filesystem_root: mapping.filesystem_root,
-            })),
-        }
-    }
-}
-
-impl From<FileMapping> for golem_api_grpc::proto::golem::component::FileMapping {
-    fn from(value: FileMapping) -> Self {
-        use golem_api_grpc::proto::golem::component::{self as proto, file_mapping::Value};
-        Self {
-            value: Some(match value {
-                FileMapping::Exact(mapping) => Value::Exact(proto::ExactFileMapping {
-                    public_path: mapping.public_path,
-                    file_path: mapping.file_path,
-                }),
-                FileMapping::Subtree(mapping) => Value::Subtree(proto::SubtreeFileMapping {
-                    public_prefix: mapping.public_prefix,
-                    filesystem_root: mapping.filesystem_root,
-                }),
-            }),
-        }
-    }
-}
-
 impl TryFrom<golem_api_grpc::proto::golem::component::HttpEndpointDetails> for HttpEndpointDetails {
     type Error = String;
 
@@ -391,16 +333,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpEndpointDetails> for H
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
-            header_vars: value
-                .header_vars
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            query_vars: value
-                .query_vars
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+            query_vars: value.query_vars.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(TryInto::try_into).transpose()?,
             cors_options: value
                 .cors_options
@@ -435,33 +369,13 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
     fn try_from(
         value: golem_api_grpc::proto::golem::component::HttpMethod,
     ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::StandardHttpMethod;
         use golem_api_grpc::proto::golem::component::http_method::Value;
 
         match value
             .value
             .ok_or_else(|| "Missing oneof: value".to_string())?
         {
-            Value::Standard(inner) => {
-                let typed =
-                    golem_api_grpc::proto::golem::component::StandardHttpMethod::try_from(inner)
-                        .unwrap_or_default();
-                match typed {
-                    StandardHttpMethod::Get => Ok(Self::Get(Empty {})),
-                    StandardHttpMethod::Head => Ok(Self::Head(Empty {})),
-                    StandardHttpMethod::Post => Ok(Self::Post(Empty {})),
-                    StandardHttpMethod::Put => Ok(Self::Put(Empty {})),
-                    StandardHttpMethod::Delete => Ok(Self::Delete(Empty {})),
-                    StandardHttpMethod::Connect => Ok(Self::Connect(Empty {})),
-                    StandardHttpMethod::Options => Ok(Self::Options(Empty {})),
-                    StandardHttpMethod::Trace => Ok(Self::Trace(Empty {})),
-                    StandardHttpMethod::Patch => Ok(Self::Patch(Empty {})),
-                    StandardHttpMethod::Unspecified => {
-                        Err("Unknown http method variant".to_string())
-                    }
-                }
-            }
-            Value::Custom(c) => Ok(HttpMethod::Custom(CustomHttpMethod { value: c })),
+            Value::Method(method) => Ok(Self::Method(method.try_into()?)),
             Value::Any(_) => Ok(HttpMethod::Any(Empty {})),
         }
     }
@@ -469,21 +383,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
 
 impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
     fn from(value: HttpMethod) -> Self {
-        use golem_api_grpc::proto::golem::component::StandardHttpMethod;
         use golem_api_grpc::proto::golem::component::http_method::Value;
 
         Self {
             value: Some(match value {
-                HttpMethod::Get(_) => Value::Standard(StandardHttpMethod::Get.into()),
-                HttpMethod::Head(_) => Value::Standard(StandardHttpMethod::Head.into()),
-                HttpMethod::Post(_) => Value::Standard(StandardHttpMethod::Post.into()),
-                HttpMethod::Put(_) => Value::Standard(StandardHttpMethod::Put.into()),
-                HttpMethod::Delete(_) => Value::Standard(StandardHttpMethod::Delete.into()),
-                HttpMethod::Connect(_) => Value::Standard(StandardHttpMethod::Connect.into()),
-                HttpMethod::Options(_) => Value::Standard(StandardHttpMethod::Options.into()),
-                HttpMethod::Trace(_) => Value::Standard(StandardHttpMethod::Trace.into()),
-                HttpMethod::Patch(_) => Value::Standard(StandardHttpMethod::Patch.into()),
-                HttpMethod::Custom(c) => Value::Custom(c.value),
+                HttpMethod::Method(method) => Value::Method(method.into()),
                 HttpMethod::Any(_) => Value::Any(golem_schema::proto::golem::common::Empty {}),
             }),
         }
@@ -522,10 +426,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PathSegment> for PathSegme
             .value
             .ok_or_else(|| "Missing field: value".to_string())?
         {
-            Value::Literal(v) => Ok(Self::Literal(v.try_into()?)),
+            Value::Segment(v) => Ok(Self::Segment(v.try_into()?)),
             Value::SystemVariable(v) => Ok(Self::SystemVariable(v.try_into()?)),
-            Value::PathVariable(v) => Ok(Self::PathVariable(v.try_into()?)),
-            Value::RemainingPathVariable(v) => Ok(Self::RemainingPathVariable(v.try_into()?)),
         }
     }
 }
@@ -536,28 +438,10 @@ impl From<PathSegment> for golem_api_grpc::proto::golem::component::PathSegment 
 
         Self {
             value: Some(match value {
-                PathSegment::Literal(v) => Value::Literal(v.into()),
+                PathSegment::Segment(v) => Value::Segment(v.into()),
                 PathSegment::SystemVariable(v) => Value::SystemVariable(v.into()),
-                PathSegment::PathVariable(v) => Value::PathVariable(v.into()),
-                PathSegment::RemainingPathVariable(v) => Value::RemainingPathVariable(v.into()),
             }),
         }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::LiteralSegment> for LiteralSegment {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::LiteralSegment,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self { value: value.value })
-    }
-}
-
-impl From<LiteralSegment> for golem_api_grpc::proto::golem::component::LiteralSegment {
-    fn from(value: LiteralSegment) -> Self {
-        Self { value: value.value }
     }
 }
 
@@ -611,70 +495,6 @@ impl From<SystemVariable> for golem_api_grpc::proto::golem::component::SystemVar
         match value {
             SystemVariable::AgentType => Self::AgentType,
             SystemVariable::AgentVersion => Self::AgentVersion,
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::PathVariable> for PathVariable {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::PathVariable,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            variable_name: value.variable_name,
-        })
-    }
-}
-
-impl From<PathVariable> for golem_api_grpc::proto::golem::component::PathVariable {
-    fn from(value: PathVariable) -> Self {
-        Self {
-            variable_name: value.variable_name,
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::HeaderVariable> for HeaderVariable {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::HeaderVariable,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            header_name: value.header_name,
-            variable_name: value.variable_name,
-        })
-    }
-}
-
-impl From<HeaderVariable> for golem_api_grpc::proto::golem::component::HeaderVariable {
-    fn from(value: HeaderVariable) -> Self {
-        Self {
-            header_name: value.header_name,
-            variable_name: value.variable_name,
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::QueryVariable> for QueryVariable {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::QueryVariable,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            query_param_name: value.query_param_name,
-            variable_name: value.variable_name,
-        })
-    }
-}
-
-impl From<QueryVariable> for golem_api_grpc::proto::golem::component::QueryVariable {
-    fn from(value: QueryVariable) -> Self {
-        Self {
-            query_param_name: value.query_param_name,
-            variable_name: value.variable_name,
         }
     }
 }
