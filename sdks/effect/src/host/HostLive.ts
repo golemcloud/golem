@@ -14,6 +14,10 @@ import { Layer } from "effect"
 import { AgentHostClient, AgentHostLive } from "./AgentHostClient.js"
 import { BlobstoreClient, BlobstoreLive } from "./BlobstoreClient.js"
 import { ConfigClient, ConfigLive } from "./ConfigClient.js"
+import {
+  CustomInvocationContextClient,
+  CustomInvocationContextLive,
+} from "./CustomInvocationContextClient.js"
 import { DurabilityClient, DurabilityLive } from "./DurabilityClient.js"
 import { DurabilityModeClient, DurabilityModeLive } from "./DurabilityModeClient.js"
 import { DurableStreamsClient, DurableStreamsLive } from "./DurableStreamsClient.js"
@@ -41,6 +45,7 @@ export {
   AgentHostClient,
   BlobstoreClient,
   ConfigClient,
+  CustomInvocationContextClient,
   DurabilityClient,
   DurabilityModeClient,
   DurableStreamsClient,
@@ -79,6 +84,7 @@ export type HostServices =
   | InvocationContextClient
   | PromiseClient
   | DurabilityClient
+  | CustomInvocationContextClient
   | DurabilityModeClient
   | DurableStreamsClient
   | OplogClient
@@ -106,6 +112,7 @@ export const HostLive: Layer.Layer<HostServices> = Layer.mergeAll(
   InvocationContextLive,
   PromiseLive,
   DurabilityLive,
+  CustomInvocationContextLive,
   DurabilityModeLive,
   DurableStreamsLive,
   OplogLive,

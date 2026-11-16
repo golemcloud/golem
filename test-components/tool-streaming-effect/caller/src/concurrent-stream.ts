@@ -43,6 +43,8 @@ defineAgent({
                 Effect.gen(function* () {
                   yield* Effect.logInfo("Input handler entered")
                   yield* write(new TextEncoder().encode(text))
+                  // A timer records a wait-for whose internal clock read precedes the crash.
+                  yield* Effect.sleep("1 millis")
                   return text
                 }),
               ),

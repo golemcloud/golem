@@ -1841,7 +1841,17 @@ ended begins in the nearest enclosing scope that still waits, or at the root. A 
 resolves to its nearest open ancestor, or to the root, and never installs its stale snapshot.
 `durable` is sync-only.
 
-**Non-Rust SDK limitation:** Effect, Scala, MoonBit, and Go custom combinators support
+**Effect scope integration:** each fiber carries its custom scope token in `CurrentCustomScope`
+(`sdks/effect/src/internal/customScope.ts`). A composed `Tracer.context` hook swaps the
+`wasm-rquickjs:custom-invocation-context` token for each run segment, and the runtime carries it
+across the Promise jobs, timers and import calls that the segment creates. Concurrent fibers are
+supported. A parent finishes or drops only after its registered children close; escaped work runs
+in the nearest open ancestor or the invocation root. Agent, tool and middleware entries install a
+scheduler that yields through Promise jobs. The default `setImmediate` yield is a root
+`monotonic-clock::wait-for` call, which replay of a completed operation does not repeat, so its
+unclaimed `Start` stopped recovery (`tests/durability_effect.rs`).
+
+**Non-Rust SDK limitation:** Scala, MoonBit, and Go custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1850,8 +1860,8 @@ invocation failure. Misuse is not reliably detected. Await nested operations; do
 Stop and join outstanding work before the body exits, including on failure or cancellation. A
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
-durability outside custom operations, to the Rust poll/drop scope integration, or to TypeScript's
-`durableAsync`.
+durability outside custom operations, to the Rust poll/drop scope integration, to TypeScript's
+`durableAsync`, or to Effect's fiber-local scopes.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
