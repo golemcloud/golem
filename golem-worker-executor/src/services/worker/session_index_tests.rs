@@ -3545,7 +3545,7 @@ async fn warm_durable_identity_resolution_reads_only_the_hinted_create() {
             KeyValueStorageNamespace::Worker {
                 agent_id: Arc::new(id.agent_id()),
             },
-            &DefaultWorkerService::agent_mode_key(&id.agent_id),
+            &DefaultWorkerService::agent_mode_key(id),
             &[],
         )
         .await

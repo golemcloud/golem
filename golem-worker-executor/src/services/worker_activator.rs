@@ -623,7 +623,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                 }
                 self.all
                     .promise_service()
-                    .complete_without_wakeup(promise_id, vec![])
+                    .complete_without_wakeup(owned_agent_id.environment_id, promise_id, vec![])
                     .await?;
                 drop(lifecycle);
             }

@@ -2712,16 +2712,16 @@ impl OplogArchiveService for Miscounting {
         self.inner.exists(owned_agent_id, agent_mode).await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: golem_common::model::ScanCursor,
         count: u64,
     ) -> Result<(golem_common::model::ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
             .await
     }
 

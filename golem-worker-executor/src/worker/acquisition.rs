@@ -1326,18 +1326,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let component_id = initial_worker_metadata.component_id;
-        // This consistency check applies while IDs still encode the component and type.
-        debug_assert_eq!(component_id, owned_agent_id.component_id());
-        if let Some(agent_type_name) = &initial_worker_metadata.agent_type_name {
-            debug_assert_eq!(
-                ParsedAgentKey::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).as_ref(),
-                Ok(agent_type_name),
-            );
-        }
-        initial_worker_metadata
-            .owner_kind
-            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-            .map_err(WorkerExecutorError::runtime)?;
         let persisted_status = last_known_status.clone();
         let agent_mode = initial_worker_metadata.agent_mode;
         let current_status = calculate_last_known_status_with_checkpoint(
@@ -1448,9 +1436,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_id = owned_agent_id.component_id();
 
         let owner_kind = creation_mode.owner_kind();
-        owner_kind
-            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-            .map_err(WorkerExecutorError::invalid_request)?;
 
         // KnownFresh has already been validated against the ephemeral agent type, phantom ID, and
         // idempotency key at invocation ingress. All other paths retain the checked lookup.

@@ -110,6 +110,7 @@ impl WorkerService for DefaultWorkerService {
                     component_id,
                     agent_type_name,
                     canonical_key,
+                    constructor_parameters,
                     owner_kind,
                     agent_mode: persisted_agent_mode,
                     component_revision,
@@ -121,15 +122,9 @@ impl WorkerService for DefaultWorkerService {
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     local_agent_config,
-                    original_phantom_id,
                     instance_id,
                     create_request,
                 } = *parameters;
-                owner_kind
-                    .validate_instance_name(&agent_id.agent_id)
-                    .unwrap_or_else(|error| {
-                        panic!("invalid authoritative owner metadata for {owned_agent_id}: {error}")
-                    });
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 debug_assert_eq!(AgentFingerprint(instance_id), resolved_fingerprint);
                 let agent_mode = persisted_agent_mode;
@@ -169,6 +164,7 @@ impl WorkerService for DefaultWorkerService {
                     component_id,
                     agent_type_name,
                     canonical_key,
+                    constructor_parameters,
                     owner_kind,
                     env,
                     config,
@@ -191,7 +187,6 @@ impl WorkerService for DefaultWorkerService {
                         agent_mode,
                         ..AgentStatusRecord::default()
                     },
-                    original_phantom_id,
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
                     create_request,
@@ -348,7 +343,7 @@ impl WorkerService for DefaultWorkerService {
             .await?;
         self.remove_all_fields(
             owned_agent_id,
-            Self::invocation_result_index_namespace(&owned_agent_id.agent_id, fingerprint),
+            Self::invocation_result_index_namespace(owned_agent_id, fingerprint),
             "invocation-result index",
         )
         .await?;
@@ -359,7 +354,7 @@ impl WorkerService for DefaultWorkerService {
         self.key_value_storage
             .with("worker", "remove_rejected_periodic_snapshot")
             .del(
-                Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
+                Self::rejected_periodic_snapshots_namespace(owned_agent_id),
                 &Self::rejected_periodic_snapshots_field(fingerprint),
             )
             .await
@@ -381,7 +376,7 @@ impl WorkerService for DefaultWorkerService {
         // holds (`run_excluding_removal`), so no completion on this executor adds a row after it.
         self.remove_all_fields(
             owned_agent_id,
-            crate::services::promise::promise_namespace_of(&owned_agent_id.agent_id, fingerprint),
+            crate::services::promise::promise_namespace_of(owned_agent_id, fingerprint),
             "promises",
         )
         .await?;
@@ -421,12 +416,12 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("remove_cached_status");
         self.remove_split_status(
             owned_agent_id,
-            Self::status_namespace(&owned_agent_id.agent_id, fingerprint),
+            Self::status_namespace(owned_agent_id, fingerprint),
         )
         .await?;
         self.remove_split_status(
             owned_agent_id,
-            Self::checkpoint_namespace(&owned_agent_id.agent_id, fingerprint),
+            Self::checkpoint_namespace(owned_agent_id, fingerprint),
         )
         .await?;
         self.remove_cached_agent_mode_if_fingerprint(owned_agent_id, fingerprint)
@@ -442,7 +437,7 @@ impl WorkerService for DefaultWorkerService {
             .key_value_storage
             .with_entity("worker", "get_rejected_periodic_snapshots", "oplog_indexes")
             .get_attempt_deserialize(
-                Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
+                Self::rejected_periodic_snapshots_namespace(owned_agent_id),
                 &Self::rejected_periodic_snapshots_field(fingerprint),
             )
             .await
@@ -460,7 +455,7 @@ impl WorkerService for DefaultWorkerService {
         status: &AgentStatusRecord,
         oplog_indexes: &HashSet<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
-        let namespace = Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id);
+        let namespace = Self::rejected_periodic_snapshots_namespace(owned_agent_id);
         let field = Self::rejected_periodic_snapshots_field(fingerprint);
         loop {
             let current = self
@@ -560,7 +555,7 @@ impl WorkerService for DefaultWorkerService {
         let _guard = lock.inner.lock().await;
         async {
             let namespace =
-                Self::invocation_result_index_namespace(&owned_agent_id.agent_id, fingerprint);
+                Self::invocation_result_index_namespace(owned_agent_id, fingerprint);
             let status_generation = status.invocation_results.revert_generation();
             'reload: loop {
                 let observed_metadata = self
@@ -768,7 +763,7 @@ impl WorkerService for DefaultWorkerService {
                 "invocation_result",
             )
             .get_many_raw(
-                Self::invocation_result_index_namespace(&owned_agent_id.agent_id, fingerprint),
+                Self::invocation_result_index_namespace(owned_agent_id, fingerprint),
                 vec![
                     INVOCATION_RESULT_INDEX_METADATA_FIELD.to_string(),
                     invocation_result_index_field(idempotency_key),
@@ -897,7 +892,7 @@ impl WorkerService for DefaultWorkerService {
         .await?;
         self.write_split_status(
             owned_agent_id,
-            Self::status_namespace(&owned_agent_id.agent_id, fingerprint),
+            Self::status_namespace(owned_agent_id, fingerprint),
             previous_status,
             status_value,
         )
@@ -916,7 +911,7 @@ impl WorkerService for DefaultWorkerService {
         let status = self
             .read_split_status(
                 owned_agent_id,
-                Self::checkpoint_namespace(&owned_agent_id.agent_id, fingerprint),
+                Self::checkpoint_namespace(owned_agent_id, fingerprint),
             )
             .await?;
         // `agent_mode` is transient (not part of `core`); restore the authoritative value.
@@ -953,7 +948,7 @@ impl WorkerService for DefaultWorkerService {
         }
         self.write_split_status(
             owned_agent_id,
-            Self::checkpoint_namespace(&owned_agent_id.agent_id, fingerprint),
+            Self::checkpoint_namespace(owned_agent_id, fingerprint),
             previous_checkpoint,
             checkpoint,
         )

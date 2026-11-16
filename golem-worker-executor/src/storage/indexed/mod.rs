@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::{AgentId, ShardEpoch};
+use golem_common::model::{OwnedAgentId, ShardEpoch};
 use golem_common::serialization::{DecodeError, decode, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 
@@ -1047,22 +1047,22 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
     OpLog {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
     },
     StagedOpLog {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
     },
     CompressedOpLog {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         level: usize,
     },
     /// The chunks a blob archive level holds for an agent: the chunk bytes live in blob storage,
     /// and only the chunks listed here are part of the oplog.
     BlobOplogManifest {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         level: usize,
     },

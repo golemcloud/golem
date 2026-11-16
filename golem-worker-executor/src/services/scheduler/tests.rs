@@ -166,13 +166,13 @@ impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
 
     async fn enqueue_exact_existing(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
         if let ExactExistingDelivery::CompletePromise(id) = delivery {
             self.promise_service
-                .complete_without_wakeup(id, vec![])
+                .complete_without_wakeup(owned_agent_id.environment_id, id, vec![])
                 .await?;
         }
         Ok(true)
@@ -365,7 +365,7 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
 
     async fn enqueue_exact_existing(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        owned_agent_id: &OwnedAgentId,
         target_worker_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
@@ -385,7 +385,7 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
             ExactExistingDelivery::Resume => "resume",
             ExactExistingDelivery::CompletePromise(id) => {
                 self.promise_service
-                    .complete_without_wakeup(id, vec![])
+                    .complete_without_wakeup(owned_agent_id.environment_id, id, vec![])
                     .await?;
                 "complete_promise"
             }
@@ -446,13 +446,13 @@ impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
 
     async fn enqueue_exact_existing(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
         if let ExactExistingDelivery::CompletePromise(id) = delivery {
             self.promise_service
-                .complete_without_wakeup(id, vec![])
+                .complete_without_wakeup(owned_agent_id.environment_id, id, vec![])
                 .await?;
         }
         self.attempts.fetch_add(1, Ordering::SeqCst);

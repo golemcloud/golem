@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use super::{
-    AgentFilter, AgentMetadata, ComponentId, Cursor, EnvironmentId,
-    GetRunningWorkersMetadataRequest, GetWorkersMetadataRequest, HasAll,
-    HasRunningWorkerEnumerationService, HasWorkerEnumerationService, HashMap, Instrument,
-    LastError, OplogErrorKind, ScanCursor, UpdateMode, UsesAllDeps, Worker, WorkerCtx,
-    WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id, golem, info_span,
-    to_protobuf_resource_description,
+    AgentFilter, AgentMetadata, Cursor, EnvironmentId, GetRunningWorkersMetadataRequest,
+    GetWorkersMetadataRequest, HasAll, HasRunningWorkerEnumerationService,
+    HasWorkerEnumerationService, HashMap, Instrument, LastError, OplogErrorKind, ScanCursor,
+    UpdateMode, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
+    extract_owned_agent_id, golem, info_span, to_protobuf_resource_description,
 };
+use golem_common::model::type_id::TypeId;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -54,16 +54,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: GetRunningWorkersMetadataRequest,
     ) -> Result<Vec<golem::worker::AgentMetadata>, WorkerExecutorError> {
-        let component_id: ComponentId = request
-            .component_id
+        let type_id = TypeId::try_from(request.type_id)
+            .map_err(|_| WorkerExecutorError::invalid_request("Invalid type id"))?;
+        let environment_id: EnvironmentId = request
+            .environment_id
             .and_then(|t| t.try_into().ok())
-            .ok_or(WorkerExecutorError::invalid_request("Invalid component id"))?;
+            .ok_or(WorkerExecutorError::invalid_request(
+                "Invalid environment id",
+            ))?;
 
         let filter = request.filter.map(validated_filter).transpose()?;
 
         let workers = self
             .running_worker_enumeration_service()
-            .get(&component_id, filter)
+            .get(&environment_id, type_id, filter)
             .await?;
 
         let result: Vec<golem::worker::AgentMetadata> = workers
@@ -78,10 +82,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: GetWorkersMetadataRequest,
     ) -> Result<(Option<Cursor>, Vec<golem::worker::AgentMetadata>), WorkerExecutorError> {
-        let component_id: ComponentId = request
-            .component_id
-            .and_then(|t| t.try_into().ok())
-            .ok_or(WorkerExecutorError::invalid_request("Invalid component id"))?;
+        let type_id = TypeId::try_from(request.type_id)
+            .map_err(|_| WorkerExecutorError::invalid_request("Invalid type id"))?;
 
         let environment_id: EnvironmentId = request
             .environment_id
@@ -94,7 +96,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .worker_enumeration_service()
             .get(
                 &environment_id,
-                &component_id,
+                type_id,
                 filter,
                 request.cursor.map(ScanCursor::from).unwrap_or_default(),
                 request.count,

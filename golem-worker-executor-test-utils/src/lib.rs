@@ -2934,10 +2934,10 @@ pub async fn take_agent_oplog_over_at_epoch(
             "oplog",
             "test_take_over",
             IndexedStorageNamespace::OpLog {
-                agent_id: owned_agent_id.agent_id(),
+                owned_agent_id: owned_agent_id.clone(),
                 agent_mode: AgentMode::Durable,
             },
-            &owned_agent_id.agent_id.to_redis_key(),
+            &owned_agent_id.storage_key(),
             ShardEpoch(epoch),
         )
         .await?;
@@ -2973,11 +2973,11 @@ pub async fn archived_oplog_chunks(
             "test_read",
             "compressed_entry",
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id: owned_agent_id.agent_id(),
+                owned_agent_id: owned_agent_id.clone(),
                 agent_mode: AgentMode::Durable,
                 level,
             },
-            &owned_agent_id.agent_id.to_redis_key(),
+            &owned_agent_id.storage_key(),
             0,
             i64::MAX as u64,
         )
@@ -3016,11 +3016,11 @@ pub async fn truncate_archived_oplog_chunk(
 
     let storage = sqlite_indexed_storage(deps, context).await?;
     let namespace = IndexedStorageNamespace::CompressedOpLog {
-        agent_id: owned_agent_id.agent_id(),
+        owned_agent_id: owned_agent_id.clone(),
         agent_mode: AgentMode::Durable,
         level,
     };
-    let key = owned_agent_id.agent_id.to_redis_key();
+    let key = owned_agent_id.storage_key();
     let (last_id, _) = chunks.last().expect("the chunks are not empty");
     storage
         .drop_prefix(
@@ -3072,10 +3072,10 @@ pub async fn agent_oplog_length(
             "oplog",
             "test_length",
             IndexedStorageNamespace::OpLog {
-                agent_id: owned_agent_id.agent_id(),
+                owned_agent_id: owned_agent_id.clone(),
                 agent_mode: AgentMode::Durable,
             },
-            &owned_agent_id.agent_id.to_redis_key(),
+            &owned_agent_id.storage_key(),
         )
         .await?)
 }

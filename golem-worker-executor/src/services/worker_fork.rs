@@ -533,9 +533,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(OwnedAgentId, OwnedAgentId), WorkerExecutorError> {
-        OwnerKind::ComponentAgent
-            .validate_instance_name(&target_agent_id.agent_id)
-            .map_err(WorkerExecutorError::invalid_request)?;
         let second_index = OplogIndex::INITIAL.next();
 
         if oplog_index_cut_off < second_index {
@@ -551,9 +548,12 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 target_agent_id.clone(),
             ));
         }
-        if source_agent_id.component_id != target_agent_id.component_id {
+        OwnerKind::ComponentAgent
+            .validate_agent_id(target_agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if source_agent_id.type_id() != target_agent_id.type_id() {
             return Err(WorkerExecutorError::invalid_request(
-                "Source and target must belong to the same component",
+                "Source and target must have the same agent type",
             ));
         }
 
@@ -673,6 +673,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             component_id: initial_source_worker_metadata.component_id,
             agent_type_name: initial_source_worker_metadata.agent_type_name.clone(),
             canonical_key: None,
+            constructor_parameters: initial_source_worker_metadata.constructor_parameters,
             owner_kind: initial_source_worker_metadata.owner_kind,
             created_by: initial_source_worker_metadata.created_by,
             created_by_email: initial_source_worker_metadata.created_by_email,
@@ -682,7 +683,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
-            original_phantom_id: initial_source_worker_metadata.original_phantom_id,
             fingerprint: AgentFingerprint(instance_id),
             agent_mode,
             create_request: fork_request.clone(),
@@ -829,8 +829,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         for oplog_index in oplog_range {
             let mut entry = rewrite_forked_oplog_entry(
                 read_source(oplog_index).await?,
-                &owned_source_agent_id.agent_id,
-                &owned_target_agent_id.agent_id,
+                &owned_source_agent_id,
+                &owned_target_agent_id,
             );
             copied_bytes = copied_bytes.saturating_add(
                 golem_common::serialization::serialize(&entry)
@@ -1265,25 +1265,30 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
 fn rewrite_forked_agent_holder(
     holder: &mut CardHolder,
-    source_agent_id: &AgentId,
-    target_agent_id: &AgentId,
+    source_agent_id: &OwnedAgentId,
+    target_agent_id: &OwnedAgentId,
 ) {
-    if matches!(holder, CardHolder::Agent(holder) if holder.agent_id == *source_agent_id) {
+    if matches!(holder, CardHolder::Agent(holder)
+        if holder.environment_id == source_agent_id.environment_id
+            && holder.agent_id == source_agent_id.agent_id)
+    {
         *holder = CardHolder::Agent(AgentCardHolder {
-            agent_id: target_agent_id.clone(),
+            environment_id: target_agent_id.environment_id,
+            agent_id: target_agent_id.agent_id.clone(),
         });
     }
 }
 
 fn rewrite_forked_oplog_entry(
     mut entry: OplogEntry,
-    source_agent_id: &AgentId,
-    target_agent_id: &AgentId,
+    source_agent_id: &OwnedAgentId,
+    target_agent_id: &OwnedAgentId,
 ) -> OplogEntry {
     match &mut entry {
         OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
             wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
-                agent_id: target_agent_id.clone(),
+                environment_id: target_agent_id.environment_id,
+                agent_id: target_agent_id.agent_id.clone(),
             })
             .wallet_id_hash();
         }

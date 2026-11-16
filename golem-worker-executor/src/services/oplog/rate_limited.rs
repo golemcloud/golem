@@ -26,9 +26,9 @@ use async_trait::async_trait;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -668,16 +668,16 @@ impl OplogService for RateLimitedOplogService {
         self.inner.try_exists(owned_agent_id, agent_mode).await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<ScanPage, WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
             .await
     }
 

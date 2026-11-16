@@ -145,7 +145,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let completed = self.promise_service().complete(promise_id, data).await?;
+        let completed = self
+            .promise_service()
+            .complete(owned_agent_id.environment_id, promise_id, data)
+            .await?;
 
         let success = golem::workerexecutor::v1::CompletePromiseSuccess { completed };
 

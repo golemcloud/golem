@@ -44,7 +44,6 @@ use axum::routing::put;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::widen_infallible;
@@ -3376,13 +3375,12 @@ async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
     );
 }
 
-/// The environment, the component, the agent and the incarnation of the namespaces of the layout
-/// tests. The agent name holds a `..` segment, which the rules of a key refuse.
-fn layout_ids() -> (EnvironmentId, ComponentId, AgentId, AgentFingerprint) {
-    let component_id = ComponentId(Uuid::from_u128(2));
+/// The environment, the type tag, the agent and the incarnation of the namespaces of the layout
+/// tests.
+fn layout_ids() -> (EnvironmentId, u32, AgentId, AgentFingerprint) {
     (
         EnvironmentId(Uuid::from_u128(1)),
-        component_id,
+        7,
         golem_common::model::AgentId::from_parts(7, 2),
         AgentFingerprint(Uuid::from_u128(3)),
     )
@@ -3392,7 +3390,7 @@ fn layout_ids() -> (EnvironmentId, ComponentId, AgentId, AgentFingerprint) {
 /// mode or in the level, all in one environment. Without namespace prefixes, the levels of a
 /// compressed oplog share a key prefix, and the namespaces of an environment id share it too.
 fn layout_namespaces() -> Vec<BlobStorageNamespace> {
-    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let (environment_id, type_tag, agent_id, fingerprint) = layout_ids();
     let mut namespaces = vec![
         BlobStorageNamespace::CompilationCache { environment_id },
         BlobStorageNamespace::CustomStorage { environment_id },
@@ -3413,7 +3411,7 @@ fn layout_namespaces() -> Vec<BlobStorageNamespace> {
         for level in [0, 1] {
             namespaces.push(BlobStorageNamespace::CompressedOplog {
                 environment_id,
-                component_id,
+                type_tag,
                 agent_mode,
                 level,
             });
@@ -3465,7 +3463,7 @@ fn one_bucket_with_namespace_prefixes(config: &mut S3BlobStorageConfig) {
 
 #[test]
 async fn without_namespace_prefixes_each_namespace_has_the_keys_of_its_own_bucket() {
-    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let (environment_id, _, agent_id, fingerprint) = layout_ids();
     let fingerprint = fingerprint.0;
     let agent = agent_path_segment(&agent_id);
     let expected = |prefix: &str| {
@@ -3476,11 +3474,11 @@ async fn without_namespace_prefixes_each_namespace_has_the_keys_of_its_own_bucke
             format!("/component-store/{prefix}{environment_id}/blob"),
             format!("/filesystem-snapshots/{prefix}{environment_id}/{agent}/{fingerprint}/blob"),
             format!("/oplog-payload/{prefix}durable/{environment_id}/{agent}/blob"),
-            format!("/oplog-archive-1/{prefix}durable/{environment_id}/{component_id}/blob"),
-            format!("/oplog-archive-2/{prefix}durable/{environment_id}/{component_id}/blob"),
+            format!("/oplog-archive-1/{prefix}durable/{environment_id}/00000007/blob"),
+            format!("/oplog-archive-2/{prefix}durable/{environment_id}/00000007/blob"),
             format!("/oplog-payload/{prefix}ephemeral/{environment_id}/{agent}/blob"),
-            format!("/oplog-archive-1/{prefix}ephemeral/{environment_id}/{component_id}/blob"),
-            format!("/oplog-archive-2/{prefix}ephemeral/{environment_id}/{component_id}/blob"),
+            format!("/oplog-archive-1/{prefix}ephemeral/{environment_id}/00000007/blob"),
+            format!("/oplog-archive-2/{prefix}ephemeral/{environment_id}/00000007/blob"),
         ];
         expected.to_vec()
     };
@@ -3493,7 +3491,7 @@ async fn without_namespace_prefixes_each_namespace_has_the_keys_of_its_own_bucke
 
 #[test]
 async fn with_namespace_prefixes_each_namespace_is_below_the_segment_of_its_kind() {
-    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let (environment_id, _, agent_id, fingerprint) = layout_ids();
     let fingerprint = fingerprint.0;
     let agent = agent_path_segment(&agent_id);
     let expected = |prefix: &str| {
@@ -3506,19 +3504,11 @@ async fn with_namespace_prefixes_each_namespace_is_below_the_segment_of_its_kind
                 "/golem/{prefix}filesystem_snapshots/{environment_id}/{agent}/{fingerprint}/blob"
             ),
             format!("/golem/{prefix}oplog_payload/durable/{environment_id}/{agent}/blob"),
-            format!(
-                "/golem/{prefix}compressed_oplog/durable/{environment_id}/{component_id}/0/blob"
-            ),
-            format!(
-                "/golem/{prefix}compressed_oplog/durable/{environment_id}/{component_id}/1/blob"
-            ),
+            format!("/golem/{prefix}compressed_oplog/durable/{environment_id}/00000007/0/blob"),
+            format!("/golem/{prefix}compressed_oplog/durable/{environment_id}/00000007/1/blob"),
             format!("/golem/{prefix}oplog_payload/ephemeral/{environment_id}/{agent}/blob"),
-            format!(
-                "/golem/{prefix}compressed_oplog/ephemeral/{environment_id}/{component_id}/0/blob"
-            ),
-            format!(
-                "/golem/{prefix}compressed_oplog/ephemeral/{environment_id}/{component_id}/1/blob"
-            ),
+            format!("/golem/{prefix}compressed_oplog/ephemeral/{environment_id}/00000007/0/blob"),
+            format!("/golem/{prefix}compressed_oplog/ephemeral/{environment_id}/00000007/1/blob"),
         ];
         expected.to_vec()
     };

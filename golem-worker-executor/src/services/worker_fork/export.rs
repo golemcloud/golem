@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRejection, ForkStreamSlotRequest, ForkStreamSlotResponse, ForkStreamSlotSuccess,
     fork_stream_slot_rejection::Reason, fork_stream_slot_response,
 };
-use golem_common::model::agent::{AgentMode, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, StreamExportFork, StreamExportForkInitializedRecord,
     StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionExpiryPolicy,
@@ -137,7 +137,12 @@ async fn execute<Ctx: WorkerCtx>(
     let target = OwnedAgentId::new(environment_id, &target_id);
     golem_common::model::durable_stream::validate_durable_stream_route_scope(&request.route_scope)
         .map_err(WorkerExecutorError::invalid_request)?;
-    if source_id.component_id != target_id.component_id || source == target {
+    if OwnerKind::ComponentAgent
+        .validate_agent_id(&target_id)
+        .is_err()
+        || source_id.type_id() != target_id.type_id()
+        || source == target
+    {
         return Err(reject(Reason::Conflict));
     }
     service.shard_service.check_worker(&source_id)?;

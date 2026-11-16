@@ -20,7 +20,6 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
@@ -1227,9 +1226,11 @@ pub enum BlobStorageNamespace {
         agent_id: AgentId,
         agent_mode: AgentMode,
     },
+    /// The archived oplogs of the agents of one type: `type_tag` is the type tag of their agent
+    /// IDs.
     CompressedOplog {
         environment_id: EnvironmentId,
-        component_id: ComponentId,
+        type_tag: u32,
         agent_mode: AgentMode,
         level: usize,
     },
@@ -1288,20 +1289,18 @@ pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String
             "oplog_payload".to_string(),
             agent_mode_prefix(*agent_mode).to_string(),
             environment_id.to_string(),
-            // A bounded segment of the agent, because an agent id can be longer than a file
-            // name, and it can hold `/`, `\` and `.` segments.
             agent_path_segment(agent_id),
         ],
         BlobStorageNamespace::CompressedOplog {
             environment_id,
-            component_id,
+            type_tag,
             agent_mode,
             level,
         } => vec![
             "compressed_oplog".to_string(),
             agent_mode_prefix(*agent_mode).to_string(),
             environment_id.to_string(),
-            component_id.to_string(),
+            format!("{type_tag:08x}"),
             level.to_string(),
         ],
         BlobStorageNamespace::InitialAgentFiles { environment_id } => {

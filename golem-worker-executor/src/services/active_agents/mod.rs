@@ -369,9 +369,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        OwnerKind::ComponentAgent
-            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-            .map_err(WorkerExecutorError::invalid_request)?;
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         let worker = active_agent.primary.clone();
         worker
@@ -400,9 +397,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        OwnerKind::OplogProcessor
-            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-            .map_err(WorkerExecutorError::invalid_request)?;
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         active_agent
             .primary

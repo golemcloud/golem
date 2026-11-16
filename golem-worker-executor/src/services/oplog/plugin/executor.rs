@@ -175,7 +175,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             initial_oplog_index.range_end(entries.len() as u64)
         };
         let idempotency_key = oplog_processor_idempotency_key(
-            &worker_metadata.owned_agent_id().agent_id,
+            worker_metadata.environment_id,
+            &worker_metadata.agent_id,
             &plugin.environment_plugin_grant_id,
             initial_oplog_index,
             batch_last_index,

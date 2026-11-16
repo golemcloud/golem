@@ -155,14 +155,14 @@ return 1
     fn epoch_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:oplog-epoch:{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {
@@ -170,7 +170,7 @@ return 1
                 format!("worker:{mode}:c{level}-oplog-epoch:{key}")
             }
             IndexedStorageNamespace::BlobOplogManifest {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {
@@ -180,7 +180,7 @@ return 1
             // A stage is hidden and has one writer, so it never asserts an epoch; the key exists
             // only to keep this total.
             IndexedStorageNamespace::StagedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
@@ -262,21 +262,21 @@ return 1
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:oplog:{key}")
             }
             IndexedStorageNamespace::StagedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:staged-oplog:{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {
@@ -284,7 +284,7 @@ return 1
                 format!("worker:{mode}:c{level}-oplog:{key}")
             }
             IndexedStorageNamespace::BlobOplogManifest {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {

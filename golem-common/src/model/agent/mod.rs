@@ -409,6 +409,27 @@ impl OwnedAgentId {
         format!("{}/{}", self.environment_id, self.agent_id)
     }
 
+    /// Reads a key that [`Self::storage_key`] wrote. Any other text, such as an upper-case or
+    /// braced UUID, gives `None`.
+    pub fn from_storage_key(key: &str) -> Option<Self> {
+        let (environment_id, agent_id) = key.split_once('/')?;
+        let owned_agent_id = Self {
+            environment_id: environment_id.parse().ok()?,
+            agent_id: agent_id.parse().ok()?,
+        };
+        (owned_agent_id.storage_key() == key).then_some(owned_agent_id)
+    }
+
+    /// The prefix that the storage keys of the agents of one type in the environment share, and
+    /// no other key has: the environment, then the type tag, which is the first 8 hex digits of
+    /// the agent ID.
+    pub fn type_storage_key_prefix(
+        environment_id: EnvironmentId,
+        type_id: crate::model::type_id::TypeId,
+    ) -> String {
+        format!("{environment_id}/{:08x}-", type_id.get())
+    }
+
     pub fn owner_id(&self) -> &OwnedAgentId {
         self
     }

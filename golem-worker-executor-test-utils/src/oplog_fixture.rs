@@ -264,7 +264,7 @@ impl OplogService for OplogFixtureService {
         self.inner.try_exists(id, mode).await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment: &EnvironmentId,
         component: &ComponentId,

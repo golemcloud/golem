@@ -221,7 +221,7 @@ async fn append_worker(
 async fn drain(
     service: &BlobOplogArchiveService,
     environment_id: &EnvironmentId,
-    component_id: &ComponentId,
+    type_id: TypeId,
     modes: Option<AgentMode>,
     page_size: u64,
 ) -> Vec<OwnedAgentId> {
@@ -229,7 +229,7 @@ async fn drain(
     let mut acc: Vec<OwnedAgentId> = Vec::new();
     loop {
         let (next_cursor, ids) = service
-            .scan_for_component(environment_id, component_id, modes, cursor, page_size)
+            .scan_for_type(environment_id, type_id, modes, cursor, page_size)
             .await
             .unwrap();
         assert!(ids.len() as u64 <= page_size);

@@ -225,7 +225,7 @@ impl OplogService for IndexTestOplogService {
         Ok(true)
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         _environment_id: &EnvironmentId,
         _component_id: &ComponentId,
@@ -619,7 +619,7 @@ async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() 
     service
         .remove_split_status(
             &owned_agent_id,
-            DefaultWorkerService::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
+            DefaultWorkerService::rejected_periodic_snapshots_namespace(&owned_agent_id),
         )
         .await
         .unwrap();
@@ -757,8 +757,8 @@ async fn cold_status_publication_removes_orphan_transfers_without_a_core() {
     source.received_card_transfers = ReceivedCardTransferIndex::default();
 
     for namespace in [
-        DefaultWorkerService::status_namespace(&owned_agent_id.agent_id, fingerprint),
-        DefaultWorkerService::checkpoint_namespace(&owned_agent_id.agent_id, fingerprint),
+        DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint),
+        DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint),
     ] {
         storage
             .with_entity("test", "seed_orphan_transfer", "transfer")
@@ -839,7 +839,7 @@ async fn invocation_index_metadata(
         .with_entity("test", "read_invocation_result_index", "metadata")
         .get_attempt_deserialize(
             DefaultWorkerService::invocation_result_index_namespace(
-                &owned_agent_id.agent_id,
+                &owned_agent_id,
                 invocation_index_fingerprint(),
             ),
             INVOCATION_RESULT_INDEX_METADATA_FIELD,
@@ -1295,7 +1295,7 @@ async fn invocation_result_index_restarts_from_beginning_after_hash_loss() {
     oplog.read_started.notified().await;
 
     let namespace = DefaultWorkerService::invocation_result_index_namespace(
-        &owned_agent_id.agent_id,
+        &owned_agent_id,
         invocation_index_fingerprint(),
     );
     let fields = service
@@ -1765,7 +1765,7 @@ async fn concurrent_generation_catch_up_clears_reverted_results() {
         .key_value_storage
         .with("test", "list_invocation_result_index")
         .keys(DefaultWorkerService::invocation_result_index_namespace(
-            &owned_agent_id.agent_id,
+            &owned_agent_id,
             invocation_index_fingerprint(),
         ))
         .await
@@ -1876,7 +1876,7 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
         service
             .write_split_status(
                 &owned_agent_id,
-                DefaultWorkerService::status_namespace(&owned_agent_id.agent_id, fingerprint),
+                DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint),
                 None,
                 status.clone(),
             )
@@ -1899,7 +1899,7 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
             .with_entity("test", "seed_invocation_index", "entry")
             .set_raw(
                 DefaultWorkerService::invocation_result_index_namespace(
-                    &owned_agent_id.agent_id,
+                    &owned_agent_id,
                     fingerprint,
                 ),
                 "entry",
@@ -1975,10 +1975,7 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
         storage
             .with_entity("test", "read_invocation_index", "entry")
             .get_raw(
-                DefaultWorkerService::invocation_result_index_namespace(
-                    &owned_agent_id.agent_id,
-                    first,
-                ),
+                DefaultWorkerService::invocation_result_index_namespace(&owned_agent_id, first,),
                 "entry",
             )
             .await
@@ -2328,7 +2325,7 @@ impl OplogService for FakeOplogService {
         Ok(self.existing.contains(owned_agent_id))
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         _environment_id: &EnvironmentId,
         _component_id: &ComponentId,

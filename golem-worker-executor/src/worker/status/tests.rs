@@ -5746,7 +5746,7 @@ impl OplogService for TestCase {
         unreachable!()
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         _environment_id: &EnvironmentId,
         _component_id: &ComponentId,

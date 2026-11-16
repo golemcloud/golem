@@ -1138,7 +1138,6 @@ async fn create_worker_executor_impl<
         indexed_storage.clone(),
         &sweep_archives,
         shard_service.clone(),
-        component_service.clone(),
         Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
     );
     shutdown.spawn({

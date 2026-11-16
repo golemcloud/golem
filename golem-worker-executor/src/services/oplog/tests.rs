@@ -209,16 +209,16 @@ impl OplogArchiveService for RecordingArchiveService {
         self.calls.exists.fetch_add(1, Ordering::Relaxed);
         self.inner.exists(id, mode).await
     }
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
             .await
     }
     async fn get_last_index(
@@ -420,16 +420,16 @@ impl OplogArchiveService for BlockingArchiveService {
         self.inner.exists(owned_agent_id, agent_mode).await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
             .await
     }
 
@@ -8709,11 +8709,11 @@ async fn store_truncated_compressed_chunk(
     )
     .append(
         IndexedStorageNamespace::CompressedOpLog {
-            agent_id: owned_agent_id.agent_id(),
+            owned_agent_id: owned_agent_id.clone(),
             agent_mode: AgentMode::Durable,
             level,
         },
-        &owned_agent_id.agent_id().to_redis_key(),
+        &owned_agent_id.storage_key(),
         last_idx.into(),
         &chunk,
         None,
@@ -8837,11 +8837,11 @@ async fn invalid_archive_serialization_versions_are_corruption(_tracing: &Tracin
                 .with_entity("test", "append", "compressed_entry")
                 .append_raw(
                     IndexedStorageNamespace::CompressedOpLog {
-                        agent_id: owned_agent_id.agent_id(),
+                        owned_agent_id: owned_agent_id.clone(),
                         agent_mode: AgentMode::Durable,
                         level: 1,
                     },
-                    &owned_agent_id.agent_id().to_redis_key(),
+                    &owned_agent_id.storage_key(),
                     2,
                     raw,
                     None,
@@ -8885,11 +8885,11 @@ async fn invalid_blob_manifest_versions_are_corruption(_tracing: &Tracing) {
             },
         );
         let namespace = IndexedStorageNamespace::BlobOplogManifest {
-            agent_id: owned_agent_id.agent_id(),
+            owned_agent_id: owned_agent_id.clone(),
             agent_mode: AgentMode::Durable,
             level: 1,
         };
-        let key = owned_agent_id.agent_id().to_redis_key();
+        let key = owned_agent_id.storage_key();
         storage
             .with_entity("test", "append", "manifest_entry")
             .append_raw(namespace.clone(), &key, 2, bytes.clone(), None)

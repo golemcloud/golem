@@ -261,7 +261,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         == Some(golem_common::model::oplog::OplogErrorKind::Recovery)
                     {
                         Err(WorkerExecutorError::failed_to_resume_worker(
-                            owned_agent_id.agent_id.clone(),
+                            owned_agent_id.agent_id,
                             WorkerExecutorError::runtime(
                                 last_error.error.to_string(&last_error.stderr),
                             ),
@@ -350,7 +350,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && let Some(target_agent_type) = target_component_metadata
                 .metadata
                 .find_agent_type_by_name_ref(agent_type_name)
-            && ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, target_agent_type).is_ok()
+            && let Some(constructor_parameters) = &metadata.constructor_parameters
+            && ParsedAgentKey::parse_parameters(
+                agent_type_name,
+                constructor_parameters,
+                target_agent_type,
+            )
+            .is_ok()
         {
             let persisted_mode = metadata.agent_mode;
             if target_agent_type.mode != persisted_mode {

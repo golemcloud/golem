@@ -199,7 +199,7 @@ impl OplogArchiveService for SingletonArchiveService {
     async fn exists(&self, _: &OwnedAgentId, _: AgentMode) -> OplogArchiveResult<bool> {
         Ok(self.0.length().await? != 0)
     }
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         _: &EnvironmentId,
         _: &ComponentId,

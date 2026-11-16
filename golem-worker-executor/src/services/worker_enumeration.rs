@@ -12,8 +12,8 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::worker_filter::{AgentAndFilter, AgentModeFilter, FilterComparator};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -102,7 +102,8 @@ pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMod
 pub trait RunningWorkerEnumerationService: Send + Sync {
     async fn get(
         &self,
-        component_id: &ComponentId,
+        environment_id: &EnvironmentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
     ) -> Result<Vec<AgentMetadata>, WorkerExecutorError>;
 }
@@ -118,7 +119,8 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 {
     async fn get(
         &self,
-        component_id: &ComponentId,
+        environment_id: &EnvironmentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
     ) -> Result<Vec<AgentMetadata>, WorkerExecutorError> {
         info!(
@@ -140,7 +142,8 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
             else {
                 continue;
             };
-            if metadata.component_id == *component_id
+            if metadata.environment_id == *environment_id
+                && metadata.agent_id.type_id() == Some(type_id)
                 && (metadata.last_known_status.status == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
             {
@@ -163,7 +166,7 @@ pub trait WorkerEnumerationService: Send + Sync {
     async fn get(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -208,7 +211,7 @@ impl DefaultWorkerEnumerationService {
     async fn get_internal(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -219,8 +222,8 @@ impl DefaultWorkerEnumerationService {
         let modes = modes_from_filter(&filter);
         let page = self
             .oplog_service
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
-            .instrument(tracing::info_span!("scan_for_component"))
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
+            .instrument(tracing::info_span!("scan_for_type"))
             .await?;
 
         for owned_agent_id in page.agent_ids {
@@ -320,7 +323,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
     async fn get(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -330,7 +333,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
         info!(
             environment_id = %environment_id,
-            component_id = %component_id,
+            type_id = type_id.get(),
             filter = filter
                 .clone()
                 .map(|f| f.to_string())
@@ -355,7 +358,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
             let (next_cursor, workers_page, batch_scanned) = self
                 .get_internal(
                     environment_id,
-                    component_id,
+                    type_id,
                     filter.clone(),
                     new_cursor,
                     batch,

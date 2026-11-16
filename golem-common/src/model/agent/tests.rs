@@ -1076,3 +1076,45 @@ fn type_id_kinds_round_trip_through_protobuf() {
     assert!(TypeIdKind::try_from(Proto::Unspecified).is_err());
     assert_eq!(Proto::default(), Proto::Unspecified);
 }
+
+#[test]
+fn storage_keys_round_trip_and_share_a_prefix_per_type() {
+    use crate::model::OwnedAgentId;
+    use crate::model::environment::EnvironmentId;
+    use crate::model::type_id::TypeId;
+    use uuid::Uuid;
+
+    let environment_id = EnvironmentId(Uuid::from_u128(0xabcd));
+    let agent = OwnedAgentId::new(environment_id, &AgentId::from_parts(0x0000_01a2, 5));
+    let key = agent.storage_key();
+    assert_eq!(
+        key,
+        format!("00000000-0000-0000-0000-00000000abcd/{}", agent.agent_id)
+    );
+    assert_eq!(OwnedAgentId::from_storage_key(&key), Some(agent.clone()));
+
+    let prefix = OwnedAgentId::type_storage_key_prefix(
+        environment_id,
+        TypeId::try_from(0x0000_01a2_u32).unwrap(),
+    );
+    assert_eq!(prefix, "00000000-0000-0000-0000-00000000abcd/000001a2-");
+    assert!(key.starts_with(&prefix));
+    let other_type = OwnedAgentId::new(environment_id, &AgentId::from_parts(0x0000_01a3, 5));
+    assert!(!other_type.storage_key().starts_with(&prefix));
+    let other_environment = OwnedAgentId::new(EnvironmentId(Uuid::from_u128(1)), &agent.agent_id);
+    assert!(!other_environment.storage_key().starts_with(&prefix));
+
+    for not_a_key in [
+        key.to_uppercase(),
+        format!("{}/{{{}}}", environment_id, agent.agent_id),
+        format!("{environment_id}:{}", agent.agent_id),
+        format!("{key}#stage"),
+        agent.agent_id.to_string(),
+    ] {
+        assert_eq!(
+            OwnedAgentId::from_storage_key(&not_a_key),
+            None,
+            "{not_a_key}"
+        );
+    }
+}

@@ -37,16 +37,13 @@ use test_r::test;
 
 #[test]
 fn deterministic_idempotency_key_same_inputs_produce_same_key() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "TestPlugin(test-worker)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let plugin_id = EnvironmentPluginGrantId::new();
     let first = OplogIndex::from_u64(10);
     let last = OplogIndex::from_u64(20);
 
-    let key1 = oplog_processor_idempotency_key(&agent_id, &plugin_id, first, last);
-    let key2 = oplog_processor_idempotency_key(&agent_id, &plugin_id, first, last);
+    let key1 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id, first, last);
+    let key2 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id, first, last);
 
     assert_eq!(
         key1, key2,
@@ -56,19 +53,18 @@ fn deterministic_idempotency_key_same_inputs_produce_same_key() {
 
 #[test]
 fn deterministic_idempotency_key_different_batch_range_produces_different_key() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "TestPlugin(test-worker)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let plugin_id = EnvironmentPluginGrantId::new();
 
     let key1 = oplog_processor_idempotency_key(
+        env(1),
         &agent_id,
         &plugin_id,
         OplogIndex::from_u64(10),
         OplogIndex::from_u64(20),
     );
     let key2 = oplog_processor_idempotency_key(
+        env(1),
         &agent_id,
         &plugin_id,
         OplogIndex::from_u64(21),
@@ -83,40 +79,50 @@ fn deterministic_idempotency_key_different_batch_range_produces_different_key() 
 
 #[test]
 fn deterministic_idempotency_key_different_worker_produces_different_key() {
-    let component_id = ComponentId::new();
-    let agent_id1 = AgentId {
-        component_id,
-        agent_id: "worker-a".to_string(),
-    };
-    let agent_id2 = AgentId {
-        component_id,
-        agent_id: "worker-b".to_string(),
-    };
+    let agent_id1 = AgentId::from_parts(7, 1);
+    let agent_id2 = AgentId::from_parts(7, 2);
     let plugin_id = EnvironmentPluginGrantId::new();
     let first = OplogIndex::from_u64(1);
     let last = OplogIndex::from_u64(5);
 
-    let key1 = oplog_processor_idempotency_key(&agent_id1, &plugin_id, first, last);
-    let key2 = oplog_processor_idempotency_key(&agent_id2, &plugin_id, first, last);
+    let key1 = oplog_processor_idempotency_key(env(1), &agent_id1, &plugin_id, first, last);
+    let key2 = oplog_processor_idempotency_key(env(1), &agent_id2, &plugin_id, first, last);
 
     assert_ne!(key1, key2, "Different workers must produce different keys");
 }
 
 #[test]
 fn deterministic_idempotency_key_different_plugin_produces_different_key() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "TestPlugin(test-worker)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let plugin_id1 = EnvironmentPluginGrantId::new();
     let plugin_id2 = EnvironmentPluginGrantId::new();
     let first = OplogIndex::from_u64(1);
     let last = OplogIndex::from_u64(5);
 
-    let key1 = oplog_processor_idempotency_key(&agent_id, &plugin_id1, first, last);
-    let key2 = oplog_processor_idempotency_key(&agent_id, &plugin_id2, first, last);
+    let key1 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id1, first, last);
+    let key2 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id2, first, last);
 
     assert_ne!(key1, key2, "Different plugins must produce different keys");
+}
+
+#[test]
+fn deterministic_idempotency_key_different_environment_produces_different_key() {
+    let agent_id = AgentId::from_parts(7, 1);
+    let plugin_id = EnvironmentPluginGrantId::new();
+    let first = OplogIndex::from_u64(1);
+    let last = OplogIndex::from_u64(5);
+
+    let key1 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id, first, last);
+    let key2 = oplog_processor_idempotency_key(env(2), &agent_id, &plugin_id, first, last);
+
+    assert_ne!(
+        key1, key2,
+        "The same agent ID in two environments must produce different keys"
+    );
+}
+
+fn env(n: u128) -> EnvironmentId {
+    EnvironmentId(uuid::Uuid::from_u128(n))
 }
 
 // --------------------------------------------------------------------------
@@ -858,10 +864,7 @@ fn test_worker_metadata(
     AgentMetadata,
     read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
 ) {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "TestPlugin(test-worker)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let environment_id = EnvironmentId::new();
     let account_id = AccountId::new();
     let status = AgentStatusRecord {

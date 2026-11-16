@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use test_r::test;
 use tokio::sync::oneshot;
 
@@ -1899,4 +1901,53 @@ async fn deletion_dirty_listing_is_stable_for_resume_and_refreshes_next_walk() {
         .unwrap();
     assert!(resume.is_none());
     assert!(keys.is_empty());
+}
+
+#[test]
+fn every_database_file_maps_to_the_listing_of_its_namespace() {
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId::from_parts(0x0000_0007, 0x2d_0000_0000_0000_0000_0000),
+    );
+    for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let pairs = [
+            (
+                IndexedStorageNamespace::OpLog {
+                    owned_agent_id: owned_agent_id.clone(),
+                    agent_mode,
+                },
+                IndexedStorageMetaNamespace::Oplog { agent_mode },
+            ),
+            (
+                IndexedStorageNamespace::CompressedOpLog {
+                    owned_agent_id: owned_agent_id.clone(),
+                    agent_mode,
+                    level: 2,
+                },
+                IndexedStorageMetaNamespace::CompressedOplog {
+                    agent_mode,
+                    level: 2,
+                },
+            ),
+            (
+                IndexedStorageNamespace::BlobOplogManifest {
+                    owned_agent_id: owned_agent_id.clone(),
+                    agent_mode,
+                    level: 3,
+                },
+                IndexedStorageMetaNamespace::BlobOplogManifest {
+                    agent_mode,
+                    level: 3,
+                },
+            ),
+        ];
+        for (namespace, meta) in pairs {
+            let db = MultiSqliteIndexedStorage::namespace_to_db(&namespace);
+            assert_eq!(
+                DatabaseRoot::listing_prefix(&db),
+                Some(MultiSqliteIndexedStorage::db_prefix(&meta).as_str()),
+                "{db}"
+            );
+        }
+    }
 }

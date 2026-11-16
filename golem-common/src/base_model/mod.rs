@@ -236,8 +236,13 @@ pub struct PromiseId {
 }
 
 impl PromiseId {
-    pub fn to_redis_key(&self) -> String {
-        format!("{}:{}:{}", self.agent_id, self.fingerprint, self.oplog_idx)
+    /// The storage key of the promise of an agent in the environment:
+    /// `{env-uuid}/{agent-uuid}:{fingerprint}:{oplog-index}`.
+    pub fn storage_key(&self, environment_id: environment::EnvironmentId) -> String {
+        format!(
+            "{environment_id}/{}:{}:{}",
+            self.agent_id, self.fingerprint, self.oplog_idx
+        )
     }
 }
 

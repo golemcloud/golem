@@ -178,8 +178,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem_api_1_x::host::PromiseId,
     ) -> anyhow::Result<Resource<GetPromiseResultEntry>> {
-        let entry =
-            GetPromiseResultEntry::new(promise_id.into(), self.state.promise_service.clone());
+        let entry = GetPromiseResultEntry::new(
+            self.owned_agent_id().environment_id,
+            promise_id.into(),
+            self.state.promise_service.clone(),
+        );
         Ok(self.table().push(entry)?)
     }
 
@@ -246,7 +249,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 match self
                     .public_state
                     .promise_service
-                    .complete(promise_id.clone(), data)
+                    .complete(
+                        self.owned_agent_id().environment_id,
+                        promise_id.clone(),
+                        data,
+                    )
                     .await
                 {
                     Ok(completed) => completed,
