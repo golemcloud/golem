@@ -149,11 +149,9 @@ fn catalog_revision(
 }
 ```
 
-Use `@api.durable` and `durable_async` sequentially; do not overlap them with other tasks. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+For an async adapter, use `@api.durable_async`. Its execution scope follows the task that runs the body, so concurrent tasks of the same invocation, their ordinary host calls, and other custom operations are not attributed to it while it waits. Nested operations keep their parent.
 
-Sequential and properly nested custom operations are supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
-
-Do not leave detached tasks running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Joining at the end does not make concurrent custom scopes supported.
+A task spawned inside a body, including a stream or future producer, runs in the body's scope. Join every such task before the body returns, for example with a task group opened inside the body. A task that is still running when the body returns is cancelled, and the combinator raises `@api.DurabilityError::TaskOutlivedScope`; `@api.durable` runs a synchronous body, so any task it spawns gives this error. On success, `durable_async` waits for the stream and future producers its body started. When the body fails or is cancelled, the combinator cancels the tasks and producers of the scope and propagates the error at once. A producer that does not end at cancellation, such as a future producer that waits for a value the body never supplied, keeps the scope open until it ends; an agent invocation that returns while a scope is still open fails.
 </Tabs.Tab>
 <Tabs.Tab>
 ```go

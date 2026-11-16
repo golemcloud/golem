@@ -7,7 +7,7 @@ rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" 
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe" "fault-matrix-ts")
 effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect" "http-update-effect" "fault-matrix-effect")
 scala_test_apps=("tool-streaming-scala" "fault-matrix-scala")
-moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40" "fault-matrix-moonbit")
+moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40" "agent-sdk-moonbit" "fault-matrix-moonbit")
 go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go" "fault-matrix-go")
 benchmark_apps=("benchmarks")
 
@@ -376,6 +376,9 @@ build_sdk_apps() {
           ;;
         tool-streaming-moonbit-lifecycle-gol40)
           test -s ../golem_it_tool_streaming_moonbit_lifecycle_gol40.wasm
+          ;;
+        agent-sdk-moonbit)
+          test -s ../golem_it_agent_sdk_moonbit.wasm
           ;;
         fault-matrix-moonbit)
           test -s ../golem_it_fault_matrix_moonbit.wasm
