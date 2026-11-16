@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "proofs": [
+    {
+      "name": "agent",
+      "input": {
+        "issuer": "https://id.golem.acme.example",
+        "kind": "agent",
+        "environmentId": "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+        "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+        "audience": "https://vault.acme.example",
+        "awsRoleAssumption": false,
+        "issuedAt": 1794230000,
+        "jti": "6b0c2d4e-8f1a-4b3c-9d5e-7f8a9b0c1d2e",
+        "kid": "golem-issuer-key-1",
+        "agentId": "0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10",
+        "fingerprint": "9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f",
+        "agentType": "Analyst"
+      },
+      "header": {
+        "alg": "ES256",
+        "kid": "golem-issuer-key-1",
+        "typ": "JWT"
+      },
+      "claims": {
+        "iss": "https://id.golem.acme.example",
+        "sub": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f",
+        "aud": "https://vault.acme.example",
+        "iat": 1794230000,
+        "exp": 1794230300,
+        "jti": "6b0c2d4e-8f1a-4b3c-9d5e-7f8a9b0c1d2e",
+        "golem": {
+          "kind": "agent",
+          "environment": "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+          "account": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+          "agentType": "Analyst"
+        }
+      }
+    },
+    {
+      "name": "tool",
+      "input": {
+        "issuer": "https://id.golem.acme.example",
+        "kind": "tool",
+        "environmentId": "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+        "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+        "audience": "https://api.partner.example",
+        "awsRoleAssumption": false,
+        "issuedAt": 1794230060,
+        "jti": "7c1d3e5f-9a2b-4c4d-8e6f-8a9b0c1d2e3f",
+        "kid": "golem-issuer-key-1",
+        "toolName": "report"
+      },
+      "header": {
+        "alg": "ES256",
+        "kid": "golem-issuer-key-1",
+        "typ": "JWT"
+      },
+      "claims": {
+        "iss": "https://id.golem.acme.example",
+        "sub": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/report",
+        "aud": "https://api.partner.example",
+        "iat": 1794230060,
+        "exp": 1794230360,
+        "jti": "7c1d3e5f-9a2b-4c4d-8e6f-8a9b0c1d2e3f",
+        "golem": {
+          "kind": "tool",
+          "environment": "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+          "account": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+          "tool": "report"
+        }
+      }
+    },
+    {
+      "name": "agent to AWS STS",
+      "input": {
+        "issuer": "https://id.golem.acme.example",
+        "kind": "agent",
+        "environmentId": "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+        "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+        "audience": "sts.amazonaws.com",
+        "awsRoleAssumption": true,
+        "issuedAt": 1794230120,
+        "jti": "8d2e4f6a-0b3c-4d5e-9f7a-9b0c1d2e3f4a",
+        "kid": "golem-issuer-key-1",
+        "agentId": "0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10",
+        "fingerprint": "9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f",
+        "agentType": "Analyst"
+      },
+      "header": {
+        "alg": "ES256",
+        "kid": "golem-issuer-key-1",
+        "typ": "JWT"
+      },
+      "claims": {
+        "iss": "https://id.golem.acme.example",
+        "sub": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f",
+        "aud": "sts.amazonaws.com",
+        "iat": 1794230120,
+        "exp": 1794230420,
+        "jti": "8d2e4f6a-0b3c-4d5e-9f7a-9b0c1d2e3f4a",
+        "golem": {
+          "kind": "agent",
+          "environment": "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+          "account": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+          "agentType": "Analyst"
+        },
+        "https://aws.amazon.com/tags": {
+          "principal_tags": {
+            "golem:environment": [
+              "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b"
+            ],
+            "golem:account": [
+              "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+            ],
+            "golem:kind": [
+              "agent"
+            ],
+            "golem:agent-type": [
+              "Analyst"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

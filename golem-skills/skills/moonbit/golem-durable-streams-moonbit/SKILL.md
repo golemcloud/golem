@@ -22,9 +22,6 @@ fn Pipe::new(name : String) -> Pipe { { name } }
 #derive.durable_stream_slot(input="input", name="inbox")
 #derive.durable_stream_slot(output="$result", name="outbox")
 #derive.durable_streams(
-  allow_external_writes=true,
-  allow_stream_delete=true,
-  allow_invocation_delete=true,
   max_concurrent_readers_per_stream=8,
   max_append_requests_per_second_per_stream=25,
 )

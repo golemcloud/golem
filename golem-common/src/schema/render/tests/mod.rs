@@ -18,5 +18,5 @@ mod json_schema_props;
 mod json_schema_tests;
 mod json_value_tests;
 mod openapi_tests;
-mod paired_strategy;
+pub(crate) mod paired_strategy;
 mod walker_tests;

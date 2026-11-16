@@ -74,8 +74,9 @@ chain ordering.
   register only a provider, both roles, or neither role.
 * `FileOwner`: an ordinary durable `#derive.agent` with
   `#derive.expose_files("/value", "/value.txt")`. Its mount binds the complete
-  constructor identity. GET initializes the owner and reads its current file;
-  the typed PUT endpoint updates that same owner's file. The same repeated
+  constructor identity. GET reads an existing owner's current file, and an
+  owner that was never created answers 404; the typed PUT endpoint updates
+  that same owner's file. The same repeated
   `#derive.file_response_header("name", "value")` annotation configures live file
   responses. Omitting it produces an empty header list.
 

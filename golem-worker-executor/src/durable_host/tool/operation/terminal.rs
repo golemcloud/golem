@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::state::TerminalSelection;
 use super::{
     Arc, CancellationEffect, EntityInvocationId, LaneOwnership, Ordering, OwnerFailureCleanupOwner,
-    OwnerFailureCleanupState, OwnerFailureCleanupToken, OwnerFailureWinner, OwnerToolOperation,
-    OwnerToolOperationContext, ProvisionalOwnerToolOperation, SerializableToolOperationTerminal,
+    OwnerFailureCleanupToken, OwnerFailureWinner, OwnerToolOperation, OwnerToolOperationContext,
+    ProvisionalOwnerToolOperation, SerializableToolOperationTerminal, TerminalResolution,
     ToolOperationWinner, TrapType, WorkerExecutorError, drain_lane_ownerships, watch,
 };
 
@@ -46,7 +47,11 @@ impl Drop for ProvisionalOwnerToolOperation {
             return;
         };
         let mut state = operation.owner.state.lock().unwrap();
-        if state.operations[&operation.id].invocation_id.is_none() {
+        if state
+            .operations
+            .get(&operation.id)
+            .is_some_and(|operation| operation.invocation_id.is_none())
+        {
             state.operations.remove(&operation.id);
             drop(state);
             #[cfg(test)]
@@ -82,14 +87,13 @@ impl Clone for OwnerToolOperation {
 impl Drop for OwnerToolOperation {
     fn drop(&mut self) {
         let previous_handles = self.lease.handles.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(previous_handles > 0, "tool operation lease underflow");
         if previous_handles != 1 {
             return;
         }
         let mut state = self.owner.state.lock().unwrap();
         let removable = state.operations.get(&self.id).is_some_and(|operation| {
-            operation.winner.is_terminal()
-                && matches!(operation.lane, LaneOwnership::None)
+            operation.state.winner().is_terminal()
+                && matches!(operation.state.lane(), LaneOwnership::None)
                 && operation.lease.handles.load(Ordering::Acquire) == 0
         });
         if removable {
@@ -108,17 +112,18 @@ impl OwnerToolOperation {
     pub(in crate::durable_host::tool) fn set_cancellation_effect(
         &self,
         effect: Box<CancellationEffect>,
-    ) {
-        assert!(self.cancellation_effect.set(effect).is_ok());
+    ) -> Result<(), WorkerExecutorError> {
+        self.cancellation_effect.set(effect).map_err(|_| {
+            WorkerExecutorError::runtime("tool operation cancellation effect is already installed")
+        })
     }
 
     pub(super) fn accept(&self, invocation_id: EntityInvocationId) -> bool {
         let mut state = self.owner.state.lock().unwrap();
-        let operation = state
-            .operations
-            .get_mut(&self.id)
-            .expect("owner tool operation must remain registered");
-        if operation.winner.is_terminal() || operation.invocation_id.is_some() {
+        let Some(operation) = state.operations.get_mut(&self.id) else {
+            return false;
+        };
+        if operation.state.winner().is_terminal() || operation.invocation_id.is_some() {
             return false;
         }
         let start_index = invocation_id.start_index();
@@ -144,22 +149,15 @@ impl OwnerToolOperation {
     pub(crate) fn begin_cancel(&self) -> bool {
         let attachments = {
             let mut state = self.owner.state.lock().unwrap();
-            if state.admission_closed || self.admission_refusal.lock().unwrap().historical_observed
+            if !state.phase.is_open() || self.admission_refusal.lock().unwrap().historical_observed
             {
                 return false;
             }
             let Some(operation) = state.operations.get_mut(&self.id) else {
                 return false;
             };
-            match operation.winner {
-                ToolOperationWinner::Open => {
-                    operation.winner = ToolOperationWinner::SelectingCancelled;
-                    operation
-                        .winner_tx
-                        .send_replace(ToolOperationWinner::SelectingCancelled);
-                }
-                ToolOperationWinner::SelectingCancelled => {}
-                _ => return false,
+            if !operation.state.begin_cancel() {
+                return false;
             }
             operation
                 .stdin
@@ -185,7 +183,14 @@ impl OwnerToolOperation {
     }
 
     pub(crate) fn begin_ordinary(&self) -> bool {
-        self.begin_selection(ToolOperationWinner::SelectingOrdinary)
+        let mut state = self.owner.state.lock().unwrap();
+        if !state.phase.is_open() {
+            return false;
+        }
+        state
+            .operations
+            .get_mut(&self.id)
+            .is_some_and(|operation| operation.state.begin_ordinary())
     }
 
     pub(crate) fn cancellation_selected_if_active(&self) -> bool {
@@ -210,41 +215,37 @@ impl OwnerToolOperation {
             let wait = self.owner.changed.notified();
             let selected = {
                 let mut state = self.owner.state.lock().unwrap();
-                if state.admission_closed {
+                if !state.phase.is_open() {
                     return false;
                 }
-                state
-                    .operations
-                    .get_mut(&self.id)
-                    .unwrap()
+                let Some(operation) = state.operations.get_mut(&self.id) else {
+                    return false;
+                };
+                operation
+                    .state
                     .withdraw_uncommitted_cancellation(&self.owner.changed);
-                if state.operations[&self.id].winner.is_terminal() {
+                let winner = operation.state.winner().clone();
+                if winner.is_terminal() {
                     return false;
                 }
                 if state
                     .operations
                     .values()
-                    .any(|operation| operation.winner.is_selecting())
+                    .any(|operation| operation.state.winner().is_selecting())
                 {
                     None
-                } else if !matches!(state.operations[&self.id].winner, ToolOperationWinner::Open) {
+                } else if !matches!(winner, ToolOperationWinner::Open) {
                     return false;
                 } else {
-                    state.admission_closed = true;
-                    state.owner_winner = Some(OwnerFailureWinner::Trap(trap.clone()));
-                    state.owner_failure_cleanup = Some(OwnerFailureCleanupState {
-                        owner: OwnerFailureCleanupOwner::Tool(self.id),
-                        claimed: false,
-                    });
+                    if !state.phase.select_failure(
+                        OwnerFailureWinner::Trap(trap.clone()),
+                        Some(OwnerFailureCleanupOwner::Tool(self.id)),
+                    ) {
+                        return false;
+                    }
                     let mut attachments = Vec::new();
                     for (id, operation) in state.operations.iter_mut() {
-                        if matches!(operation.winner, ToolOperationWinner::Open) {
-                            operation.winner = if *id == self.id {
-                                ToolOperationWinner::Trap
-                            } else {
-                                ToolOperationWinner::FencedByOwner
-                            };
-                            operation.winner_tx.send_replace(operation.winner.clone());
+                        if operation.state.fence_by_owner(*id == self.id) {
                             attachments.extend(
                                 operation
                                     .stdin
@@ -309,52 +310,30 @@ impl OwnerToolOperation {
             .claim_owner_failure_cleanup(OwnerFailureCleanupOwner::Tool(self.id))
     }
 
-    pub(super) fn begin_selection(&self, selecting: ToolOperationWinner) -> bool {
-        let mut state = self.owner.state.lock().unwrap();
-        if state.admission_closed {
-            return false;
-        }
-        let Some(operation) = state.operations.get_mut(&self.id) else {
-            return false;
-        };
-        if !matches!(operation.winner, ToolOperationWinner::Open) {
-            return false;
-        }
-        operation.winner = selecting.clone();
-        operation.winner_tx.send_replace(selecting);
-        true
-    }
-
-    pub(crate) async fn resolve_cancel(&self, committed: bool) {
-        self.resolve_selection(
-            ToolOperationWinner::SelectingCancelled,
-            committed.then_some(ToolOperationWinner::Cancelled),
-        )
-        .await;
+    pub(crate) async fn resolve_cancel(
+        &self,
+        resolution: TerminalResolution,
+    ) -> Result<(), WorkerExecutorError> {
+        self.resolve_selection(TerminalSelection::Cancelled, resolution)
+            .await
     }
 
     pub(crate) async fn resolve_ordinary(
         &self,
         terminal: Arc<SerializableToolOperationTerminal>,
-        committed: bool,
-    ) {
-        self.resolve_selection(
-            ToolOperationWinner::SelectingOrdinary,
-            committed.then_some(ToolOperationWinner::Ordinary {
-                _terminal: terminal,
-            }),
-        )
-        .await;
+        resolution: TerminalResolution,
+    ) -> Result<(), WorkerExecutorError> {
+        self.resolve_selection(TerminalSelection::Ordinary(terminal), resolution)
+            .await
     }
 
     pub(super) async fn resolve_selection(
         &self,
-        expected: ToolOperationWinner,
-        committed: Option<ToolOperationWinner>,
-    ) {
-        self.resolve_selection_with_cleanup(expected, committed, async { Ok(()) })
+        selection: TerminalSelection,
+        resolution: TerminalResolution,
+    ) -> Result<(), WorkerExecutorError> {
+        self.resolve_selection_with_cleanup(selection, resolution, async { Ok(()) })
             .await
-            .expect("terminal resolution without cleanup cannot fail");
     }
 
     pub(crate) async fn resolve_ordinary_with_cleanup(
@@ -363,10 +342,8 @@ impl OwnerToolOperation {
         cleanup: impl std::future::Future<Output = Result<(), WorkerExecutorError>>,
     ) -> Result<(), WorkerExecutorError> {
         self.resolve_selection_with_cleanup(
-            ToolOperationWinner::SelectingOrdinary,
-            Some(ToolOperationWinner::Ordinary {
-                _terminal: terminal,
-            }),
+            TerminalSelection::Ordinary(terminal),
+            TerminalResolution::Committed,
             cleanup,
         )
         .await
@@ -377,8 +354,8 @@ impl OwnerToolOperation {
         cleanup: impl std::future::Future<Output = Result<(), WorkerExecutorError>>,
     ) -> Result<(), WorkerExecutorError> {
         self.resolve_selection_with_cleanup(
-            ToolOperationWinner::SelectingCancelled,
-            Some(ToolOperationWinner::Cancelled),
+            TerminalSelection::Cancelled,
+            TerminalResolution::Committed,
             cleanup,
         )
         .await
@@ -386,26 +363,21 @@ impl OwnerToolOperation {
 
     async fn resolve_selection_with_cleanup(
         &self,
-        expected: ToolOperationWinner,
-        committed: Option<ToolOperationWinner>,
+        selection: TerminalSelection,
+        resolution: TerminalResolution,
         cleanup: impl std::future::Future<Output = Result<(), WorkerExecutorError>>,
     ) -> Result<(), WorkerExecutorError> {
-        let terminal_committed = committed.is_some();
-        let next = committed.unwrap_or(ToolOperationWinner::Open);
+        let terminal_committed = matches!(resolution, TerminalResolution::Committed);
         {
             let mut state = self.owner.state.lock().unwrap();
-            let operation = state.operations.get_mut(&self.id).unwrap();
-            assert_eq!(
-                std::mem::discriminant(&operation.winner),
-                std::mem::discriminant(&expected),
-                "owner tool operation selection resolved from the wrong state"
-            );
-            operation.winner = next.clone();
-            operation.winner_tx.send_replace(next);
+            let operation = state.operations.get_mut(&self.id).ok_or_else(|| {
+                WorkerExecutorError::runtime("tool operation is no longer registered")
+            })?;
+            operation.state.resolve_selection(selection, resolution)?;
             tracing::debug!(
                 operation_id = self.id,
                 terminal_committed,
-                winner = operation.winner.kind_label(),
+                winner = operation.state.winner().kind_label(),
                 "Resolved tool operation terminal selection"
             );
         }
@@ -416,12 +388,16 @@ impl OwnerToolOperation {
         cleanup.await?;
         let lane = {
             let mut state = self.owner.state.lock().unwrap();
-            let operation = state.operations.get_mut(&self.id).unwrap();
-            if terminal_committed {
-                std::mem::replace(&mut operation.lane, LaneOwnership::None)
-            } else {
-                LaneOwnership::None
-            }
+            state
+                .operations
+                .get_mut(&self.id)
+                .map_or(LaneOwnership::None, |operation| {
+                    if terminal_committed {
+                        operation.state.take_lane_for_drain()
+                    } else {
+                        LaneOwnership::None
+                    }
+                })
         };
         drain_lane_ownerships(vec![lane]).await;
         tracing::debug!(
@@ -439,31 +415,35 @@ impl OwnerToolOperation {
             .unwrap()
             .operations
             .get(&self.id)
-            .map(|operation| operation.winner.clone())
+            .map(|operation| operation.state.winner().clone())
     }
 
     pub(crate) fn subscribe(&self) -> watch::Receiver<ToolOperationWinner> {
         self._winner.subscribe()
     }
 
-    pub(crate) async fn settle(self) {
+    pub(crate) async fn settle(self) -> Result<(), WorkerExecutorError> {
         let lane = {
             let mut state = self.owner.state.lock().unwrap();
-            let Some(operation) = state.operations.remove(&self.id) else {
-                return;
+            let Some(operation) = state.operations.get_mut(&self.id) else {
+                return Ok(());
             };
-            assert!(
-                operation.winner.is_terminal(),
-                "an owner tool operation can only settle after terminal selection"
-            );
+            if !operation.state.winner().is_terminal() {
+                return Err(WorkerExecutorError::runtime(
+                    "an owner tool operation can only settle after terminal selection",
+                ));
+            }
+            let lane = operation.state.take_lane_for_drain();
+            state.operations.remove(&self.id);
             #[cfg(test)]
             self.owner
                 .operation_removals
                 .fetch_add(1, Ordering::Relaxed);
-            operation.lane
+            lane
         };
         self.owner.changed.notify_waiters();
         drain_lane_ownerships(vec![lane]).await;
         tracing::debug!(operation_id = self.id, "Settled tool operation resources");
+        Ok(())
     }
 }

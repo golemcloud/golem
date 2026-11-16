@@ -422,7 +422,7 @@ fn record_error(source: anyhow::Error) -> Error {
 ///   modification times of the directories: a time that the kernel gave comes back from a replay
 ///   as a new time too.
 /// - Otherwise the capture copies the tree. Then it keeps the calls stopped until 20 ms after the
-///   last call ended, and opens the filesystem again (`finish_transition`). The detection is
+///   last call ended, then finishes its admission transition to reopen calls. The detection is
 ///   [`ChangeDetection::SizeMtime`] when `since` is a mark of this generation with the times of a
 ///   save, and only calls whose times the kernel gave ran since it. Otherwise it is
 ///   [`ChangeDetection::Full`].
@@ -560,7 +560,7 @@ where
     Run: FnOnce(Arc<FilesystemGeneration<Adapter>>) -> Running,
     Running: Future<Output = Result<Outcome, CaptureError>>,
 {
-    generation
+    let transition = generation
         .registry
         .begin_transition()
         .map_err(|error| match error {
@@ -574,7 +574,7 @@ where
         Ok(()) => run(Arc::clone(&generation)).await,
         Err(_) => Err(CaptureError::Busy),
     };
-    generation.registry.finish_transition();
+    transition.finish();
     result
 }
 

@@ -121,9 +121,7 @@ before (value) {}
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok(M::AgentInvocationStarted {
                         timestamp: timestamp_from_datetime(params.timestamp),
-                        idempotency_key: golem_common::model::IdempotencyKey::new(
-                            params.idempotency_key,
-                        ),
+                        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -133,6 +131,7 @@ before (value) {}
                 } }
     AgentInvocationFinished { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
+        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
         result: oplog_payload_from_wit(params.result),
         method_name: params.method_name,
         consumed_fuel: params.consumed_fuel,
@@ -148,6 +147,7 @@ before (value) {}
         timestamp: timestamp_from_datetime(params.timestamp),
         entity_parent_start_index: None,
         kind: params.kind.into(),
+        invocation_id: params.invocation_id.map(|id| uuid::Uuid::from(id).into()),
         error: params.error.into(),
         retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
         retry_policy_state: params.retry_policy_state.map(|s| {
@@ -183,9 +183,8 @@ before (value) {}
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok(M::PendingAgentInvocation {
                         timestamp: timestamp_from_datetime(params.timestamp),
-                        idempotency_key: golem_common::model::IdempotencyKey::new(
-                            params.idempotency_key,
-                        ),
+                        not_before: params.not_before.map(timestamp_from_datetime),
+                        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -231,6 +230,7 @@ before (value) {}
             )
         })
         .transpose()?,
+        bootstrap: params.bootstrap.map(oplog_region_from_wit),
     } }
     FailedUpdate { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -317,9 +317,7 @@ before (value) {}
     } }
     CancelPendingInvocation { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
-        idempotency_key: golem_common::model::IdempotencyKey::new(
-            params.idempotency_key,
-        ),
+        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
     } }
     BeginRemoteTransaction { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -356,12 +354,14 @@ before (value) {}
         .filesystem_snapshot
         .map(|name| name.parse())
         .transpose()?,
+        bootstrap: params.bootstrap.map(oplog_region_from_wit),
     } }
     OplogProcessorCheckpoint { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
         plugin_grant_id: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(
             uuid::Uuid::from_u64_pair(params.plugin_grant_id.uuid.high_bits, params.plugin_grant_id.uuid.low_bits),
         ),
+        source_component_revision: params.source_component_revision.try_into()?,
         target_agent_id: golem_common::model::AgentId::from(params.target_agent_id),
         confirmed_up_to: golem_common::model::OplogIndex::from_u64(
             params.confirmed_up_to,
@@ -372,6 +372,7 @@ before (value) {}
         last_batch_start: golem_common::model::OplogIndex::from_u64(
             params.last_batch_start,
         ),
+        delivery: params.delivery,
     } }
     SetRetryPolicy { override (oplog::OplogEntry::SetRetryPolicy(params)) => {
                     let named: golem_common::model::retry_policy::NamedRetryPolicy =
@@ -475,13 +476,7 @@ before (value) {}
         record: oplog_payload_from_wit(params.record),
         summary: params.summary.map(durable_stream_summary_from_wit),
     } }
-    StreamEnd { record (params) {
-        timestamp: timestamp_from_datetime(params.timestamp),
-        entity_parent_start_index: None,
-        record: oplog_payload_from_wit(params.record),
-        summary: params.summary.map(durable_stream_summary_from_wit),
-    } }
-    StreamCancel { record (params) {
+    StreamTerminal { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
         entity_parent_start_index: None,
         record: oplog_payload_from_wit(params.record),
@@ -539,6 +534,7 @@ before (value) {}
                         local_agent_config,
                         original_phantom_id,
                         instance_id,
+                        create_request: _,
                     } = *parameters;
                     Ok(Self::Create(oplog::RawCreateParameters {
                         timestamp: timestamp.into(),
@@ -613,7 +609,7 @@ before (value) {}
     } }
     AgentInvocationStarted { record () => RawAgentInvocationStartedParameters {
         timestamp: timestamp.into(),
-        idempotency_key: idempotency_key.value,
+        invocation_id: invocation_id.0.into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -622,6 +618,7 @@ before (value) {}
     } }
     AgentInvocationFinished { record () => RawAgentInvocationFinishedParameters {
         timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
         result: oplog_payload_to_wit(result)?,
         method_name: method_name,
         consumed_fuel: consumed_fuel,
@@ -631,6 +628,7 @@ before (value) {}
     Error { record (entity_parent_start_index) => RawErrorParameters {
         timestamp: timestamp.into(),
         kind: kind.into(),
+        invocation_id: invocation_id.map(|id| id.0.into()),
         error: error.into(),
         retry_from: retry_from.into(),
         retry_policy_state: retry_policy_state.map(|s| s.into()),
@@ -647,7 +645,8 @@ before (value) {}
     Exited { override (M::Exited { timestamp }) => Ok(Self::Exited(timestamp.into())) }
     PendingAgentInvocation { record () => RawPendingAgentInvocationParameters {
         timestamp: timestamp.into(),
-        idempotency_key: idempotency_key.value,
+        not_before: not_before.map(Into::into),
+        invocation_id: invocation_id.0.into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -671,6 +670,7 @@ before (value) {}
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        bootstrap: bootstrap.map(oplog_region_to_wit),
     } }
     FailedUpdate { record (snapshot_fault) => FailedUpdateParameters {
         timestamp: timestamp.into(),
@@ -732,7 +732,7 @@ before (value) {}
     } }
     CancelPendingInvocation { record () => CancelPendingInvocationParameters {
         timestamp: timestamp.into(),
-        idempotency_key: idempotency_key.value,
+        invocation_id: invocation_id.0.into(),
     } }
     BeginRemoteTransaction { record () => RawBeginRemoteTransactionParameters {
         timestamp: timestamp.into(),
@@ -765,14 +765,17 @@ before (value) {}
         .collect::<Result<Vec<_>, _>>()?,
         wallet_generation: wallet_generation,
         filesystem_snapshot: filesystem_snapshot.map(String::from),
+        bootstrap: bootstrap.map(oplog_region_to_wit),
     } }
     OplogProcessorCheckpoint { record () => RawOplogProcessorCheckpointParameters {
         timestamp: timestamp.into(),
         plugin_grant_id: plugin_grant_id.into(),
+        source_component_revision: source_component_revision.into(),
         target_agent_id: target_agent_id.into(),
         confirmed_up_to: confirmed_up_to.into(),
         sending_up_to: sending_up_to.into(),
         last_batch_start: last_batch_start.into(),
+        delivery: delivery,
     } }
     SetRetryPolicy { record (entity_parent_start_index) => SetRetryPolicyParameters {
         timestamp: timestamp.into(),
@@ -889,12 +892,7 @@ before (value) {}
         record: oplog_payload_to_wit(record)?,
         summary: summary.map(durable_stream_summary_to_wit),
     } }
-    StreamEnd { record (entity_parent_start_index) => RawDurableStreamRecordParameters {
-        timestamp: timestamp.into(),
-        record: oplog_payload_to_wit(record)?,
-        summary: summary.map(durable_stream_summary_to_wit),
-    } }
-    StreamCancel { record (entity_parent_start_index) => RawDurableStreamRecordParameters {
+    StreamTerminal { record (entity_parent_start_index) => RawDurableStreamRecordParameters {
         timestamp: timestamp.into(),
         record: oplog_payload_to_wit(record)?,
         summary: summary.map(durable_stream_summary_to_wit),

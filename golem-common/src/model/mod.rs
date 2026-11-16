@@ -32,6 +32,7 @@ pub mod environment_tool_grant;
 pub mod environment_tool_middleware_grant;
 pub mod error;
 pub mod filesystem;
+pub mod golem_issuer;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod invocation_session_public;
@@ -69,11 +70,12 @@ pub use agent::{
     DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, DURABLE_STREAM_SESSION_RECENT_CAPACITY,
     DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
     EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions, ExportForkReservation,
-    FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership, InvocationStatus,
-    LogLevel, OpenEntityReplayScope, OplogProcessorCheckpointState, OwnedAgentId,
-    PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    RedactedAgentInvocationResult, ScheduleId, ScheduledAction, SnapshotFiles,
-    SuccessfulUpdateRecord, TimestampedAgentInvocation, UsableAutomaticSnapshot,
+    FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
+    InvocationResultPosition, InvocationStatus, LogLevel, OpenEntityReplayScope,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, RedactedAgentInvocationResult, ScheduleId,
+    ScheduledAction, SnapshotFiles, SuccessfulUpdateRecord, TimestampedAgentInvocation,
+    UsableAutomaticSnapshot,
 };
 pub use card::{
     ReceivedCardTransferIndex, ReceivedCardTransferState, SourceCardTransferIndex,

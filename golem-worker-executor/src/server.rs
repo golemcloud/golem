@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
+use golem_common::config::LoadOrDump;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor::bootstrap;
 use golem_worker_executor::metrics;
@@ -26,25 +27,25 @@ use tracing::info;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> Result<(), anyhow::Error> {
-    match make_config_loader().load_or_dump_config() {
-        Some(mut config) => {
-            config.validate()?;
-            rustls::crypto::ring::default_provider()
-                .install_default()
-                .expect("Failed to install crypto provider");
+    let mut config = match make_config_loader().load_or_dump_config()? {
+        LoadOrDump::Loaded(config) => config,
+        LoadOrDump::Dumped => return Ok(()),
+    };
 
-            config.add_port_to_tracing_file_name_if_enabled();
-            init_tracing_with_default_env_filter(&config.tracing);
-            info!("Using configuration:\n{}", config.to_safe_string_indented());
+    config.validate()?;
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
 
-            let prometheus = metrics::register_all();
+    config.add_port_to_tracing_file_name_if_enabled();
+    init_tracing_with_default_env_filter(&config.tracing);
+    info!("Using configuration:\n{}", config.to_safe_string_indented());
 
-            let runtime = Arc::new(bootstrap::create_runtime()?);
+    let prometheus = metrics::register_all();
 
-            runtime.block_on(async_main(config, prometheus, runtime.clone()))
-        }
-        None => Ok(()),
-    }
+    let runtime = Arc::new(bootstrap::create_runtime()?);
+
+    runtime.block_on(async_main(config, prometheus, runtime.clone()))
 }
 
 async fn async_main(

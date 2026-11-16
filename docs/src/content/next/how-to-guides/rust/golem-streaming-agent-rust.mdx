@@ -25,14 +25,13 @@ pub trait StreamingAgent {
 
 ## Consume, Produce, and Forward
 
-Read one item at a time with `next().await`. `Ok(None)` is normal close; `Err` is a decoding,
-transport, producer, or invocation failure, not EOF.
+Read one item at a time with `next().await`. It returns `Option<Result<T, StreamError>>`: `None` is normal close, and a terminal failure appears as one `Some(Err(error))` followed by `None`.
 
 ```rust
-async fn sum_stream(mut values: AgentStream<u32>) -> Result<u32, String> {
+async fn sum_stream(mut values: AgentStream<u32>) -> Result<u32, golem_rust::agentic::StreamError> {
     let mut total = 0;
-    while let Some(value) = values.next().await? {
-        total += value;
+    while let Some(value) = values.next().await {
+        total += value?;
     }
     Ok(total)
 }
@@ -42,16 +41,16 @@ fn doubled_stream(mut input: AgentStream<u32>) -> AgentStream<u32> {
     spawn_local(async move {
         loop {
             match input.next().await {
-                Ok(Some(value)) => {
+                Some(Ok(value)) => {
                     if writer.write_one(value * 2).await.is_err() {
-                        break; // the reader dropped; stop producing
+                        return; // the reader dropped; stop producing
                     }
                 }
-                Ok(None) => break,
-                Err(error) => panic!("Input stream failed: {error}"),
+                None => break,
+                Some(Err(error)) => panic!("Input stream failed: {error}"),
             }
         }
-        // Dropping writer closes output normally.
+        let _ = writer.close().await;
     });
     output
 }
@@ -59,8 +58,7 @@ fn doubled_stream(mut input: AgentStream<u32>) -> AgentStream<u32> {
 
 `write_one` and each element of `write_all` wait for downstream acceptance, so a producer cannot
 run arbitrarily ahead. Acceptance is back-pressure, not proof that user code processed the item.
-Dropping the writer closes normally. Dropping the reader cancels that stream cooperatively; a later
-write reports that the reader was dropped.
+Call `writer.close().await` for success or `writer.finish(Err(StreamError::Failed(value))).await` for a declared typed failure. Dropping a writer is not success: a normal body selects `Abandoned`, and a trapped body selects `Trapped`. Dropping the reader cancels that stream cooperatively; a later write reports that the reader was dropped.
 
 Return an unread input stream directly to forward its endpoint without collecting or copying it:
 
@@ -80,10 +78,9 @@ large or unbounded data.
 - Items within one stream stay ordered.
 - Independent sibling streams have no relative ordering guarantee. Drain them concurrently when
   either producer could block on back-pressure.
-- Bare agent streams have normal close but no recoverable terminal error payload. Use
-  `AgentStream<Result<T, E>>` for recoverable per-item or stream-local application errors.
-- A producer panic, decode failure, transport failure, or fatal agent invocation failure fails the
-  active operation; it must not be treated as normal EOF.
+- A stream outcome is success or `StreamError`: `Failed` carries a typed schema value; `Trapped`, `Cancelled`, `Abandoned`, `Interrupted`, and `ResourceExhausted` are host outcomes. Guests may author only success or `Failed`.
+- Handle a terminal `Err` without failing unrelated sibling streams. `AgentStream<Result<T, E>>` remains useful for per-item application errors that do not end the stream.
+- Item EOF is not proof of success. The reader awaits the completion outcome after items end. Forward an unread endpoint to preserve its original outcome rather than recreating it.
 - Dropping a stream is explicit consumer cancellation. It is distinct from an external transport
   disconnect, which may only detach an observer while the durable invocation continues.
 
@@ -97,11 +94,12 @@ let target = StreamingAgentClient::get("main".to_string());
 let (mut writer, input) = AgentStream::new();
 spawn_local(async move {
     let _ = writer.write_all([1, 2, 3]).await;
+    let _ = writer.close().await;
 });
 
 let mut output = target.doubled(input).await;
-while let Some(value) = output.next().await? {
-    println!("{value}");
+while let Some(value) = output.next().await {
+    println!("{}", value?);
 }
 ```
 

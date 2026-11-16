@@ -165,6 +165,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+        self.state.refuse_on_bootstrap_cursor(&scope_name)?;
         let invocation_id = self.direct_call_invocation_id()?;
         // A transaction begun after the live transition claims first while unclaimed retained
         // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live

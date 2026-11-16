@@ -40,7 +40,6 @@ export const StreamingAgent = defineAgent({
             { source: "input", slot: "input" },
             { source: "output", slot: "$result" },
           ],
-          allowExternalWrites: true,
         },
       }),
     }),

@@ -105,7 +105,12 @@ impl ComponentDiff {
     }
 
     pub fn agent_types_changed(&self) -> bool {
-        self.wasm_changed()
+        match self {
+            ComponentDiff::All => true,
+            ComponentDiff::Diff { diff } => {
+                diff.wasm_changed || !diff.agent_type_changes.is_empty()
+            }
+        }
     }
 
     pub fn provision_config_changed(&self) -> bool {
@@ -1718,6 +1723,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
                 tool_middleware_deployment_config_changes: BTreeMap::new(),
@@ -1726,7 +1732,33 @@ mod tests {
         .unwrap();
 
         assert!(!diff.wasm_changed());
+        assert!(!diff.agent_types_changed());
         assert!(!diff.tools_changed());
+    }
+
+    #[test]
+    fn declaration_only_change_stages_agent_types_without_wasm() {
+        let diff = ComponentDiff::new(Some(&diff::DiffForHashOf::ValueDiff {
+            diff: diff::ComponentDiff {
+                component_config_changed: false,
+                wasm_changed: false,
+                agent_type_changes: BTreeMap::from([(
+                    "Counter".to_string(),
+                    diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
+                        new_hash: Hash::empty(),
+                        current_hash: Hash::empty(),
+                    }),
+                )]),
+                agent_type_provision_config_changes: BTreeMap::new(),
+                tool_deployment_config_changes: BTreeMap::new(),
+                tool_middleware_deployment_config_changes: BTreeMap::new(),
+            },
+        }))
+        .unwrap();
+
+        assert!(!diff.wasm_changed());
+        assert!(diff.agent_types_changed());
+        assert!(!diff.provision_config_changed());
     }
 
     #[test]
@@ -1735,6 +1767,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: true,
                 wasm_changed: false,
+                agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
                 tool_middleware_deployment_config_changes: BTreeMap::new(),
@@ -1753,6 +1786,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: true,
+                agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
                 tool_middleware_deployment_config_changes: BTreeMap::new(),
@@ -1770,6 +1804,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::from([(
                     "grep".to_string(),
@@ -1790,6 +1825,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::from([(
                     "grep".to_string(),

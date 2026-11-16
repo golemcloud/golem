@@ -68,15 +68,30 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
         let receipt = receipt.or_else(|| {
             matches!(event, ReplayEvent::ReplayFinished).then(|| owner.latest_replay_receipt())
         });
+        // A snapshot-based update is finalized by loading its snapshot, not by a replay.
         let pending_update = if matches!(event, ReplayEvent::ReplayFinished) {
-            ctx.state
+            let mut pending_update = ctx
+                .state
                 .pending_update
                 .try_lock()
-                .map_err(|_| WorkerExecutorError::runtime("pending replay update is locked"))?
-                .take()
+                .map_err(|_| WorkerExecutorError::runtime("pending replay update is locked"))?;
+            pending_update.take_if(|update| {
+                !matches!(update.description, UpdateDescription::SnapshotBased { .. })
+            })
         } else {
             None
         };
+        // A snapshot-assisted update names in its outcome the bootstrap block that its target
+        // replayed: the block of its selected record.
+        let bootstrap = pending_update
+            .as_ref()
+            .filter(|update| {
+                matches!(
+                    update.description,
+                    UpdateDescription::SnapshotAssistedAutomatic { .. }
+                )
+            })
+            .and_then(|_| ctx.state.bootstrap_range.clone());
         let local_predecessor = ctx.state.replay_applications.back().cloned();
         let predecessor = order.tail.upgrade();
         let initial_installed_revision = ctx.state.component_metadata.revision;
@@ -151,11 +166,6 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                 let target_revision = match (&event, &pending_update) {
                     (ReplayEvent::UpdateReplayed { new_revision }, _) => Some(*new_revision),
                     (ReplayEvent::ReplayFinished, Some(update)) => {
-                        if matches!(update.description, UpdateDescription::SnapshotBased { .. }) {
-                            return Err(WorkerExecutorError::runtime(
-                                "replay finalization requires an automatic update",
-                            ));
-                        }
                         Some(*update.description.target_revision())
                     }
                     _ => None,
@@ -260,6 +270,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                                 crate::worker::start_outcome::success_details_of(
                                     &pending.reference,
                                 ),
+                                bootstrap,
                                 captured_owner.clone(),
                                 futures::future::ready(Ok(boundary.clone())).boxed(),
                             )
@@ -320,14 +331,11 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                         .try_get_active_agent(&owner_id)
                         .await
                         .filter(|active| Arc::ptr_eq(&active.execution(), &execution));
-                    let winner = operations
-                        .selected_owner_failure()
-                        .expect("failure cleanup has an owner winner");
+                    let winner = cleanup.winner().clone();
                     let interrupt = task_worker.current_execution_interrupt_signal();
                     let primary_interrupt = interrupt.clone();
                     let cleanup_operations = operations.clone();
-                    let cleanup = operations.start_owner_failure_cleanup(
-                        cleanup,
+                    let cleanup = cleanup.start(
                         async move {
                             if let Some(active) = active {
                                 active.fence_entity_bodies(winner).await;

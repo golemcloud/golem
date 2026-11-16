@@ -9,6 +9,7 @@ fn stream(chunks: Vec<Vec<u8>>) -> AgentStream<Vec<u8>> {
     let (mut writer, stream) = AgentStream::new();
     spawn_local(async move {
         let _ = writer.write_all(chunks).await;
+        let _ = writer.close().await;
     });
     stream
 }
@@ -157,11 +158,16 @@ impl HttpRouter for RawHttpRouterImpl {
                 let mut input = request.body;
                 let (mut writer, output) = AgentStream::new();
                 spawn_local(async move {
-                    while let Ok(Some(chunk)) = input.next().await {
+                    while let Some(chunk) = input.next().await {
+                        let chunk = match chunk {
+                            Ok(chunk) => chunk,
+                            Err(error) => panic!("request body failed: {error}"),
+                        };
                         if writer.write_one(chunk).await.is_err() {
-                            break;
+                            return;
                         }
                     }
+                    let _ = writer.close().await;
                 });
                 (200, output)
             }

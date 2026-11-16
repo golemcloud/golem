@@ -212,6 +212,9 @@ the signed webhook URL and its HTTP routing.
 - Only the creating agent may call `handle.await`, `handle.poll`, or the corresponding raw promise
   read operations. Another agent may complete a shared promise ID.
 - The URL accepts a POST body only and completes one promise once.
+- The URL and `handle.promiseId` carry the fingerprint of the agent incarnation that created the
+  promise. A deleted and re-created agent gets a new fingerprint, so URLs of the deleted
+  incarnation do not complete promises of the new one.
 - Treat the signed URL as a one-shot bearer capability: share it only with the intended caller and
   do not write it to application logs.
 - Let Golem persist the suspension and replay. Do not add polling loops or manual retries around

@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use golem_common::model::{AgentStatusRecord, AssistedSelection, UsableAutomaticSnapshot};
@@ -43,6 +47,7 @@ fn strategy(target: u64, admission: u64, snapshot: u64) -> OplogEntry {
             snapshot_index: idx(snapshot),
             snapshot_revision: revision(1),
             filesystem_snapshot: Some(FilesystemSnapshotName::periodic()),
+            snapshot_bootstrap: None,
         },
         Some(idx(admission)),
     )
@@ -51,7 +56,8 @@ fn strategy(target: u64, admission: u64, snapshot: u64) -> OplogEntry {
 fn manual_invocation(target: u64) -> OplogEntry {
     OplogEntry::PendingAgentInvocation {
         timestamp: Timestamp::from(1_000),
-        idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+        not_before: None,
+        invocation_id: InvocationId(Uuid::new_v4()),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
             target_revision: revision(target),
         })),
@@ -78,7 +84,7 @@ fn failed(target: u64, attempt: Option<u64>) -> OplogEntry {
 }
 
 fn succeeded(target: u64) -> OplogEntry {
-    OplogEntry::successful_update(revision(target), 10, None, Default::default(), None)
+    OplogEntry::successful_update(revision(target), 10, None, Default::default(), None, None)
 }
 
 /// The queue and the steps after `entries`, from `queue`, with no entry deleted.
@@ -314,6 +320,7 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
                 index: idx(4),
                 component_revision: revision(1),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     };
@@ -322,12 +329,14 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
         pending_invocations: vec![
             PendingInvocationRef {
                 timestamp: Timestamp::from(1_000),
+                not_before: None,
                 oplog_index: idx(6),
-                idempotency_key: Some(golem_common::model::IdempotencyKey::fresh()),
+                idempotency_key: Some(InvocationId(Uuid::new_v4())),
                 manual_update_target_revision: None,
             },
             PendingInvocationRef {
                 timestamp: Timestamp::from(1_000),
+                not_before: None,
                 oplog_index: idx(7),
                 idempotency_key: None,
                 manual_update_target_revision: Some(revision(4)),
@@ -366,6 +375,7 @@ fn only_an_unrefined_automatic_admission_is_an_unselected_automatic_update() {
                 index: idx(7),
                 component_revision: revision(2),
                 filesystem_snapshot,
+                bootstrap: None,
             },
         }))
     };

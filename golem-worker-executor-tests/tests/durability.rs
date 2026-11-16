@@ -1498,12 +1498,29 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
+    // A constructor of agent-counters grows the memory of this agent type by 16 pages. The
+    // core initializer runs the constructors, so the growth happens while the component is
+    // instantiated.
+    const INSTANTIATION_GROWTH_BYTES: u64 = 16 * 65536;
+    let control_id = agent_id!("Counter", "memory-growth-control");
+    let control_worker_id = executor
+        .start_agent(&component.id, control_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &control_id, "increment", data_value!())
+        .await?;
+    let control_bytes = executor
+        .worker_memory_requirement(&OwnedAgentId::new(
+            context.default_environment_id,
+            &control_worker_id,
+        ))
+        .await?;
+
     let agent_id = agent_id!("InstantiationGrowthCounter", "memory-growth-recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let initial_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
 
     executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
@@ -1516,8 +1533,8 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
     );
     let canonical_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
     assert!(
-        canonical_bytes > initial_bytes,
-        "fixture must grow linear memory after instantiation: initial={initial_bytes}, canonical={canonical_bytes}"
+        canonical_bytes >= control_bytes + INSTANTIATION_GROWTH_BYTES,
+        "the memory requirement must include the instantiation growth: control={control_bytes}, canonical={canonical_bytes}"
     );
 
     let executor_clone = executor.clone();
@@ -1641,10 +1658,18 @@ async fn automatic_snapshot_every_2nd_invocation(
         .await?;
 
     // Construction counts as an invocation; align subsequent snapshots with even increments.
-    let initial = executor
-        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
-        .await?;
-    assert_eq!(initial.into_typed::<u32>()?, 0);
+    // This read also captures the state that the core initializer derived from its random seed
+    // while the agent was created. The seed is recorded before the first snapshot, so recovery
+    // from a snapshot must reproduce it by replaying the initializer's recorded host calls.
+    let initializer_seed_hash = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
@@ -1677,6 +1702,17 @@ async fn automatic_snapshot_every_2nd_invocation(
                 PublicOplogEntry::Start(params) if params.function_name == "monotonic_clock::now"
             )),
         "core initializer must record a clock call before the snapshot"
+    );
+    assert!(
+        oplog
+            .iter()
+            .take_while(|entry| !matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+            .any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "random::insecure_seed::insecure_seed"
+            )),
+        "core initializer must record its random seed before the snapshot"
     );
     let snapshot_count = oplog
         .iter()
@@ -1721,6 +1757,143 @@ async fn automatic_snapshot_every_2nd_invocation(
         result_after_restart.into_typed::<u32>()?,
         11,
         "Counter should include the increment replayed after the automatic snapshot"
+    );
+    let initializer_seed_hash_after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(
+        initializer_seed_hash_after_restart, initializer_seed_hash,
+        "snapshot recovery must replay the initializer's recorded random seed"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+/// While recovery replays a bootstrap block, the core initializer may make only direct read
+/// calls. An idempotency key that the initializer generated is a recorded write in the block, so
+/// recovery rejects the periodic snapshot that names the block, and the start recovers by full
+/// replay with the same initializer state.
+#[test]
+#[tracing::instrument]
+#[timeout("120s")]
+async fn a_periodic_snapshot_whose_bootstrap_block_holds_a_write_is_rejected(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .with_env(
+            "SnapshotCounter",
+            vec![(
+                "INITIALIZER_GENERATES_IDEMPOTENCY_KEY".to_string(),
+                "1".to_string(),
+            )],
+        )
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "initializer-write");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let initializer_seed_hash = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    for expected in 1..=2 {
+        let count = executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(count, expected);
+    }
+    let last_finished = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .rev()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .expect("the second increment has completed")
+        .oplog_index;
+    let (oplog, newest, bootstrap) = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let newest = oplog.iter().rev().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Snapshot(params) if entry.oplog_index > last_finished => {
+                    Some((entry.oplog_index, params.bootstrap.clone()))
+                }
+                _ => None,
+            });
+            if let Some((newest, bootstrap)) = newest {
+                break Ok::<_, anyhow::Error>((oplog, newest, bootstrap));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the second increment should commit its automatic snapshot")?;
+    let bootstrap = bootstrap.expect("the core initializer made durable calls");
+    assert!(
+        oplog.iter().any(|entry| bootstrap.contains(entry.oplog_index)
+            && matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == "golem::api::generate_idempotency-key"
+            )),
+        "the bootstrap block {bootstrap} must hold the idempotency key that the core initializer generated"
+    );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let count_after_restart = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    // The start stores the rejected records before it publishes readiness.
+    let rejected = executor.rejected_automatic_snapshots(&worker_id).await?;
+    let initializer_seed_hash_after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+
+    assert!(
+        rejected.contains(&newest),
+        "recovery must reject the newest snapshot {newest}, but rejected {rejected:?}"
+    );
+    assert_eq!(count_after_restart, 2);
+    assert_eq!(
+        initializer_seed_hash_after_restart, initializer_seed_hash,
+        "full replay must replay the initializer's recorded random seed"
     );
 
     drop(executor);
@@ -1798,6 +1971,143 @@ async fn automatic_snapshot_periodic(
         result_after_restart.into_typed::<u32>()?,
         SNAPSHOT_TEST_INVOCATIONS as u32,
         "Counter should be restored from the automatic snapshot after restart"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+/// The number of `Snapshot` entries after the last `AgentInvocationFinished` entry of `oplog`.
+fn snapshots_after_last_finished(oplog: &[PublicOplogEntryWithIndex]) -> usize {
+    let last_finished = oplog
+        .iter()
+        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .expect("the agent finished an invocation");
+    oplog[last_finished + 1..]
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count()
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn automatic_snapshot_periodic_skips_idle_and_read_only_periods(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const PERIOD: Duration = Duration::from_millis(500);
+    const IDLE: Duration = Duration::from_secs(4);
+
+    let context = TestContext::new(last_unique_id);
+    let executor =
+        start_with_snapshot_policy(deps, &context, SnapshotPolicy::Periodic { period: PERIOD })
+            .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("JsonSnapshotCounter", "periodic-idle");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for _ in 0..3 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+    }
+    tokio::time::sleep(IDLE).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        snapshots_after_last_finished(&oplog),
+        1,
+        "An idle agent takes one periodic snapshot after its last change, and no more"
+    );
+
+    for _ in 0..3 {
+        let peeked = executor
+            .invoke_and_await_agent(&component, &agent_id, "peek", data_value!())
+            .await?;
+        assert_eq!(peeked.into_typed::<u32>()?, 3);
+    }
+    tokio::time::sleep(IDLE).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        snapshots_after_last_finished(&oplog),
+        0,
+        "Read-only invocations do not change the state, so they need no periodic snapshot"
+    );
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    tokio::time::sleep(IDLE).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        snapshots_after_last_finished(&oplog),
+        1,
+        "A change after an idle time takes one periodic snapshot again"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn automatic_snapshot_periodic_takes_pending_snapshot_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const PERIOD: Duration = Duration::from_millis(500);
+    const IDLE: Duration = Duration::from_secs(4);
+
+    let context = TestContext::new(last_unique_id);
+    // The first executor takes no snapshot, so the restart comes before the snapshot of the
+    // increments.
+    let executor = start_with_snapshot_policy(deps, &context, SnapshotPolicy::Disabled).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("JsonSnapshotCounter", "periodic-restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    for _ in 0..3 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+    }
+    drop(executor);
+
+    let executor =
+        start_with_snapshot_policy(deps, &context, SnapshotPolicy::Periodic { period: PERIOD })
+            .await?;
+    for _ in 0..3 {
+        let peeked = executor
+            .invoke_and_await_agent(&component, &agent_id, "peek", data_value!())
+            .await?;
+        assert_eq!(peeked.into_typed::<u32>()?, 3);
+    }
+    tokio::time::sleep(IDLE).await;
+    // The period has passed when the agent starts again, so the snapshot can come between the
+    // read-only invocations; only the first executor's increments can need it.
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .count(),
+        1,
+        "The increments replayed after the restart take one periodic snapshot, and no more"
     );
 
     drop(executor);

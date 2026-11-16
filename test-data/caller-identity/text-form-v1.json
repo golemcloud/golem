@@ -1,0 +1,313 @@
+{
+  "version": 1,
+  "roundTrip": [
+    {
+      "name": "spec example",
+      "issuer": "https://login.acme.example",
+      "subject": "subject-123",
+      "text": "(\"https://login.acme.example\",\"subject-123\")"
+    },
+    {
+      "name": "agent subject",
+      "issuer": "https://id.golem.acme.example",
+      "subject": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f",
+      "text": "(\"https://id.golem.acme.example\",\"agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f\")"
+    },
+    {
+      "name": "account subject",
+      "issuer": "https://id.golem.acme.example",
+      "subject": "account:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "text": "(\"https://id.golem.acme.example\",\"account:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\")"
+    },
+    {
+      "name": "tool subject",
+      "issuer": "https://id.golem.acme.example",
+      "subject": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/report",
+      "text": "(\"https://id.golem.acme.example\",\"tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/report\")"
+    },
+    {
+      "name": "github user",
+      "issuer": "https://github.com",
+      "subject": "583231",
+      "text": "(\"https://github.com\",\"583231\")"
+    },
+    {
+      "name": "quote",
+      "issuer": "https://login.acme.example",
+      "subject": "a\"b",
+      "text": "(\"https://login.acme.example\",\"a\\\"b\")"
+    },
+    {
+      "name": "backslash",
+      "issuer": "https://login.acme.example",
+      "subject": "a\\b",
+      "text": "(\"https://login.acme.example\",\"a\\\\b\")"
+    },
+    {
+      "name": "quote and backslash at the ends",
+      "issuer": "\"",
+      "subject": "\\",
+      "text": "(\"\\\"\",\"\\\\\")"
+    },
+    {
+      "name": "slash is never escaped",
+      "issuer": "https://login.acme.example/tenants/7/",
+      "subject": "a/b",
+      "text": "(\"https://login.acme.example/tenants/7/\",\"a/b\")"
+    },
+    {
+      "name": "short escapes",
+      "issuer": "https://login.acme.example",
+      "subject": "\b\t\n\f\r",
+      "text": "(\"https://login.acme.example\",\"\\b\\t\\n\\f\\r\")"
+    },
+    {
+      "name": "other control characters",
+      "issuer": "https://login.acme.example",
+      "subject": "\u0000\u0001\u000b\u000e\u001b\u001f",
+      "text": "(\"https://login.acme.example\",\"\\u0000\\u0001\\u000b\\u000e\\u001b\\u001f\")"
+    },
+    {
+      "name": "delete is not a control character here",
+      "issuer": "https://login.acme.example",
+      "subject": "",
+      "text": "(\"https://login.acme.example\",\"\")"
+    },
+    {
+      "name": "latin text with an accent",
+      "issuer": "https://login.acme.example",
+      "subject": "élève",
+      "text": "(\"https://login.acme.example\",\"élève\")"
+    },
+    {
+      "name": "decomposed accent stays decomposed",
+      "issuer": "https://login.acme.example",
+      "subject": "élève",
+      "text": "(\"https://login.acme.example\",\"élève\")"
+    },
+    {
+      "name": "cjk text",
+      "issuer": "https://login.acme.example",
+      "subject": "日本",
+      "text": "(\"https://login.acme.example\",\"日本\")"
+    },
+    {
+      "name": "emoji outside the basic plane",
+      "issuer": "https://login.acme.example",
+      "subject": "😀",
+      "text": "(\"https://login.acme.example\",\"😀\")"
+    },
+    {
+      "name": "line and paragraph separators",
+      "issuer": "https://login.acme.example",
+      "subject": "  ",
+      "text": "(\"https://login.acme.example\",\"  \")"
+    },
+    {
+      "name": "comma and parentheses inside a string",
+      "issuer": "https://login.acme.example",
+      "subject": "a,b)(\"c",
+      "text": "(\"https://login.acme.example\",\"a,b)(\\\"c\")"
+    },
+    {
+      "name": "quoted asterisk is a literal",
+      "issuer": "https://login.acme.example",
+      "subject": "*",
+      "text": "(\"https://login.acme.example\",\"*\")"
+    },
+    {
+      "name": "spaces inside a string",
+      "issuer": "https://login.acme.example",
+      "subject": " a b ",
+      "text": "(\"https://login.acme.example\",\" a b \")"
+    },
+    {
+      "name": "empty strings",
+      "issuer": "",
+      "subject": "",
+      "text": "(\"\",\"\")"
+    },
+    {
+      "name": "every printable ascii character, including & < > quote backslash and slash",
+      "issuer": "https://login.acme.example",
+      "subject": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+      "text": "(\"https://login.acme.example\",\" !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\")"
+    },
+    {
+      "name": "every c1 control character is written as itself",
+      "issuer": "https://login.acme.example",
+      "subject": "",
+      "text": "(\"https://login.acme.example\",\"\")"
+    }
+  ],
+  "reject": [
+    {
+      "name": "empty input",
+      "text": ""
+    },
+    {
+      "name": "no parentheses",
+      "text": "\"a\",\"b\""
+    },
+    {
+      "name": "leading space",
+      "text": " (\"a\",\"b\")"
+    },
+    {
+      "name": "trailing space",
+      "text": "(\"a\",\"b\") "
+    },
+    {
+      "name": "space after the open parenthesis",
+      "text": "( \"a\",\"b\")"
+    },
+    {
+      "name": "space after the comma",
+      "text": "(\"a\", \"b\")"
+    },
+    {
+      "name": "space before the comma",
+      "text": "(\"a\" ,\"b\")"
+    },
+    {
+      "name": "space before the close parenthesis",
+      "text": "(\"a\",\"b\" )"
+    },
+    {
+      "name": "single quotes",
+      "text": "('a','b')"
+    },
+    {
+      "name": "missing quote after the issuer",
+      "text": "(\"a,\"b\")"
+    },
+    {
+      "name": "missing quote after the subject",
+      "text": "(\"a\",\"b)"
+    },
+    {
+      "name": "one element",
+      "text": "(\"a\")"
+    },
+    {
+      "name": "third element",
+      "text": "(\"a\",\"b\",\"c\")"
+    },
+    {
+      "name": "unquoted asterisk as issuer",
+      "text": "(*,\"b\")"
+    },
+    {
+      "name": "unquoted asterisk as subject",
+      "text": "(\"a\",*)"
+    },
+    {
+      "name": "trailing text",
+      "text": "(\"a\",\"b\")x"
+    },
+    {
+      "name": "second close parenthesis",
+      "text": "(\"a\",\"b\"))"
+    },
+    {
+      "name": "leading text",
+      "text": "x(\"a\",\"b\")"
+    },
+    {
+      "name": "escaped slash",
+      "text": "(\"a\",\"\\/\")"
+    },
+    {
+      "name": "unicode escape of a printable letter",
+      "text": "(\"a\",\"\\u0062ob\")"
+    },
+    {
+      "name": "unicode escape of a quote",
+      "text": "(\"a\",\"\\u0022\")"
+    },
+    {
+      "name": "unicode escape of a backslash",
+      "text": "(\"a\",\"\\u005c\")"
+    },
+    {
+      "name": "unicode escape of a newline",
+      "text": "(\"a\",\"\\u000a\")"
+    },
+    {
+      "name": "unicode escape of a tab",
+      "text": "(\"a\",\"\\u0009\")"
+    },
+    {
+      "name": "uppercase hex",
+      "text": "(\"a\",\"\\u001F\")"
+    },
+    {
+      "name": "uppercase u in a unicode escape",
+      "text": "(\"a\",\"\\U0001\")"
+    },
+    {
+      "name": "unicode escape of non-ascii text",
+      "text": "(\"a\",\"\\u00e9\")"
+    },
+    {
+      "name": "surrogate pair escape",
+      "text": "(\"a\",\"\\ud83d\\ude00\")"
+    },
+    {
+      "name": "short unicode escape",
+      "text": "(\"a\",\"\\u01\")"
+    },
+    {
+      "name": "unknown escape",
+      "text": "(\"a\",\"\\x41\")"
+    },
+    {
+      "name": "escaped single quote",
+      "text": "(\"a\",\"\\'\")"
+    },
+    {
+      "name": "raw tab inside a string",
+      "text": "(\"a\",\"\t\")"
+    },
+    {
+      "name": "raw newline inside a string",
+      "text": "(\"a\",\"\n\")"
+    },
+    {
+      "name": "raw nul inside a string",
+      "text": "(\"a\",\"\u0000\")"
+    },
+    {
+      "name": "backslash at the end of the input",
+      "text": "(\"a\",\"\\"
+    },
+    {
+      "name": "unicode escape of a letter above U+00FF",
+      "text": "(\"a\",\"\\u0100\")"
+    },
+    {
+      "name": "unicode escape of the line separator",
+      "text": "(\"a\",\"\\u2028\")"
+    },
+    {
+      "name": "unicode escape of the paragraph separator",
+      "text": "(\"a\",\"\\u2029\")"
+    },
+    {
+      "name": "unicode escape of U+FFFF",
+      "text": "(\"a\",\"\\uffff\")"
+    },
+    {
+      "name": "escaped lone high surrogate",
+      "text": "(\"a\",\"\\ud800\")"
+    },
+    {
+      "name": "escaped lone low surrogate",
+      "text": "(\"a\",\"\\udfff\")"
+    },
+    {
+      "name": "escaped high surrogate followed by a plain letter",
+      "text": "(\"a\",\"\\ud83dx\")"
+    }
+  ]
+}

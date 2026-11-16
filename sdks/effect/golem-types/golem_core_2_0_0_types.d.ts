@@ -14,13 +14,16 @@ declare module 'golem:core/types@2.0.0' {
   }
   export class SchemaValueStream {
     /**
-     * Wraps any native schema-value reader for placement in a value tree.
+     * Wraps items and their producer's explicit outcome for placement in a value tree.
+     * Producers may supply only ok or failed. None means no explicit outcome:
+     * body settlement supplies abandoned on normal return or trapped on a trap.
      */
-    static wrap(reader: AsyncIterable<SchemaValueTree>): Promise<SchemaValueStream>;
+    static wrap(reader: AsyncIterable<SchemaValueTree>, outcome: Promise<StreamOutcome | undefined>): Promise<SchemaValueStream>;
     /**
-     * Consumes a schema-value-stream wrapper and returns its native reader.
+     * Consumes the wrapper. Completion resolves only after the reader consumes EOF.
+     * Readers must await completion at EOF; a failed outcome is not a clean end.
      */
-    static unwrap(value: SchemaValueStream): Promise<AsyncIterable<SchemaValueTree>>;
+    static unwrap(value: SchemaValueStream): Promise<[AsyncIterable<SchemaValueTree>, Promise<StreamOutcome>]>;
   }
   export class PermissionCard {
   }
@@ -88,6 +91,27 @@ declare module 'golem:core/types@2.0.0' {
     agentId: string;
   };
   /**
+   * The owner whose oplog records an invocation
+   */
+  export type InvocationOwner =
+  /** An agent. A tool invocation is owned by the agent of its external-tool owner. */
+  {
+    tag: 'agent'
+    val: AgentId
+  } |
+  /** A tool. The runtime does not produce this case yet. */
+  {
+    tag: 'tool'
+    val: string
+  };
+  /**
+   * Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's `agent-id` string without the component.
+   */
+  export type InvocationId = {
+    owner: InvocationOwner;
+    id: Uuid;
+  };
+  /**
    * Represents a Golem account
    */
   export type AccountId = {
@@ -110,6 +134,12 @@ declare module 'golem:core/types@2.0.0' {
    */
   export type PromiseId = {
     agentId: AgentId;
+    /**
+     * Fingerprint of the agent incarnation that created the promise. A deleted and
+     * re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs
+     * of the deleted incarnation do not reach the new one.
+     */
+    fingerprint: Uuid;
     oplogIdx: OplogIndex;
   };
   /**
@@ -846,6 +876,35 @@ declare module 'golem:core/types@2.0.0' {
     graph: SchemaGraph;
     value: SchemaValueTree;
   };
+  /**
+   * The producer's failure, independent of a reader dropping its stream.
+   */
+  export type StreamError =
+  {
+    tag: 'failed'
+    val: TypedSchemaValue
+  } |
+  {
+    tag: 'trapped'
+    val: string
+  } |
+  /** An invocation cancellation request was recorded and honoured. */
+  {
+    tag: 'cancelled'
+  } |
+  /** The producing invocation completed with its writer still open. */
+  {
+    tag: 'abandoned'
+  } |
+  {
+    tag: 'interrupted'
+    val: string
+  } |
+  {
+    tag: 'resource-exhausted'
+    val: string
+  };
+  export type StreamOutcome = Result<void, StreamError>;
   /**
    * A declared tool failure shared by invocation and oplog interfaces.
    */

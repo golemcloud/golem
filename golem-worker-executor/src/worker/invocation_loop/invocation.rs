@@ -1,9 +1,11 @@
 use super::*;
+use crate::durable_host::durability::DurabilityHost;
+use golem_common::model::InvocationId;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     pub(super) async fn record_retry_interrupt_failure(
         &self,
-        store: &Mutex<Store<Ctx>>,
+        store: &Mutex<PrimaryStore<Ctx>>,
         kind: InterruptKind,
     ) {
         // The invocation callback may have committed its outcome while this stop was being
@@ -91,9 +93,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         match self
                             .parent
                             .owner_retirement_requested
-                            .run_until_cancelled(
-                                self.parent.cancel_invocation(idempotency_key.clone()),
-                            )
+                            .run_until_cancelled(self.parent.cancel_invocation(*idempotency_key))
                             .await
                         {
                             Some(Ok(())) => CommandOutcome::Continue,
@@ -126,7 +126,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .invocation
             .idempotency_key()
             .cloned()
-            .unwrap_or_else(IdempotencyKey::fresh);
+            .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
 
         let span = span!(
             Level::INFO,
@@ -151,12 +151,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     pub(super) async fn invoke_agent_inner(
         &mut self,
         invocation_context: InvocationContextStack,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         invocation: HydratedInvocation,
     ) -> CommandOutcome {
         let kind = invocation.invocation.kind();
         let display_name = invocation.invocation.display_name();
-        let invocation_idempotency_key = idempotency_key.clone();
+        let invocation_idempotency_key = idempotency_key;
         self.uses_streams = invocation_uses_streams(
             &invocation.invocation,
             &self.store.data().component_metadata().metadata,
@@ -167,7 +167,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         if admission != MonthlyResourceAdmission::Admit {
             self.store
                 .data_mut()
-                .set_current_idempotency_key(idempotency_key.clone())
+                .set_current_idempotency_key(idempotency_key)
                 .await;
         }
         match admission {
@@ -209,6 +209,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
+        let result = match result {
+            Ok(None) => return CommandOutcome::Continue,
+            Ok(Some(result)) => Ok(result),
+            Err(error) => Err(error),
+        };
 
         match result {
             Ok(InvokeResult::Succeeded {
@@ -250,13 +255,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     pub(super) async fn invoke_agent_with_context(
         &mut self,
         mut invocation_context: InvocationContextStack,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         invocation: HydratedInvocation,
-    ) -> Result<InvokeResult, WorkerExecutorError> {
+    ) -> Result<Option<InvokeResult>, WorkerExecutorError> {
         let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
                 .data_mut()
-                .set_current_idempotency_key(idempotency_key.clone())
+                .set_current_idempotency_key(idempotency_key)
                 .await;
 
             Self::extend_invocation_context(
@@ -300,19 +305,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         .instrument(span!(Level::INFO, "prepare_invocation_context"))
         .await?;
 
-        let display_name = lowered.display_name.clone();
-        let result = invoke_observed_and_traced(
+        let result = invoke_live_observed_and_traced(
             lowered,
             self.store,
             self.instance,
-            InvocationMode::Live(invocation),
+            invocation,
+            self.uses_streams.then_some(&idempotency_key),
         )
         .await;
-        let result = if self.uses_streams {
-            materialize_streaming_result(self.store, result, &display_name, &idempotency_key).await
-        } else {
-            result
-        };
 
         // Invocation-owned spans are closed by AgentInvocationFinished in the
         // oplog processor; removing their resident context records no transition.
@@ -334,7 +334,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     pub(super) async fn agent_invocation_finished(
         &mut self,
         full_function_name: String,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
         invocation_result: AgentInvocationResult,
         consumed_fuel: u64,
         kind: AgentInvocationKind,
@@ -359,7 +359,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(()) => {
                 if self.uses_streams {
                     let parent = self.parent.clone();
-                    let idempotency_key = idempotency_key.clone();
+                    let idempotency_key = *idempotency_key;
                     // Host stream operations can retain session locks across a pending poll.
                     // Keep driving the Store while protocol-only completion acquires them.
                     let result = self
@@ -524,9 +524,57 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     pub(super) async fn agent_invocation_failed(
         &mut self,
         full_function_name: &str,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
         result: Result<InvokeResult, WorkerExecutorError>,
     ) -> CommandOutcome {
+        let mut result = result;
+        if let Ok(outputs) = self
+            .store
+            .data()
+            .durable_ctx()
+            .schema_output_drain_monitor()
+            && let Some(error) = outputs.wait_for_failure().now_or_never()
+        {
+            result = Err(error);
+        }
+        if let Ok(InvokeResult::Failed {
+            error: error @ (AgentError::DeterministicTrap(_) | AgentError::StackOverflow),
+            timed_out: false,
+            semantic_trap_retry_override: None,
+            ..
+        }) = &result
+            && self
+                .store
+                .data()
+                .durable_ctx()
+                .selected_tool_owner_failure()
+                .is_none()
+            && self.store.data().check_interrupt().is_none()
+        {
+            self.store
+                .data_mut()
+                .durable_ctx_mut()
+                .settle_schema_producers(Err(error.to_string("")));
+            self.store.dispose();
+            self.store
+                .data_mut()
+                .durable_ctx_mut()
+                .dispose_trapped_guest_resources();
+            match self
+                .store
+                .data()
+                .durable_ctx()
+                .schema_output_drain_monitor()
+            {
+                Ok(outputs) => {
+                    let interrupt = self.store.data().durable_ctx().create_interrupt_signal();
+                    if let Err(error) = outputs.drain_interruptibly(interrupt).await {
+                        result = Err(error);
+                    }
+                }
+                Err(error) => result = Err(error),
+            }
+        }
         self.store
             .data()
             .durable_ctx()
@@ -622,10 +670,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Extends the invocation context with a new span containing information about the invocation
     pub(super) fn extend_invocation_context(
         invocation_context: &mut InvocationContextStack,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
         invocation: &AgentInvocation,
         agent_id: &AgentId,
-        parsed_agent_id: &Option<ParsedAgentId>,
+        parsed_agent_id: &Option<ParsedAgentKey>,
     ) {
         let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(

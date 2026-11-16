@@ -12,26 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Schema evolution validation for agent types.
+//! Constructor schema evolution of agent types.
 //!
-//! When a component is redeployed with a new version, this module compares the
-//! old and new agent type schemas and produces warnings about positionally
-//! incompatible changes that could corrupt existing agent IDs.
+//! A keyed agent's key is its user-supplied constructor parameters in the canonical
+//! agent key text (see [`super::structural_format`]). A constructor change is
+//! compatible only when the canonical text of every existing key still parses with
+//! the new schema and formats to the same text; any other change gives existing
+//! keyed agents new keys. This module reports the changes that are not compatible.
+//! An integer type can widen, because the text of an integer does not depend on
+//! its width; a float type cannot change width.
 
 use crate::base_model::agent::AgentTypeName;
-use crate::schema::agent::{AgentTypeSchema, InputSchema};
-use crate::schema::graph::SchemaGraph;
+use crate::schema::agent::AgentTypeSchema;
+use crate::schema::graph::{SchemaGraph, reachable_defs};
 use crate::schema::schema_type::SchemaType;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SchemaEvolutionWarning {
+pub struct SchemaEvolutionError {
     pub agent_type_name: AgentTypeName,
     pub path: String,
     pub description: String,
 }
 
-impl fmt::Display for SchemaEvolutionWarning {
+impl fmt::Display for SchemaEvolutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -41,81 +45,30 @@ impl fmt::Display for SchemaEvolutionWarning {
     }
 }
 
-/// Compare old and new agent type lists and produce warnings about
-/// positionally incompatible schema changes.
-pub fn validate_schema_evolution(
-    old_agent_types: &[AgentTypeSchema],
-    new_agent_types: &[AgentTypeSchema],
-) -> Vec<SchemaEvolutionWarning> {
-    let mut warnings = Vec::new();
-
-    for old in old_agent_types {
-        match new_agent_types
-            .iter()
-            .find(|n| n.type_name == old.type_name)
-        {
-            None => {
-                warnings.push(SchemaEvolutionWarning {
-                    agent_type_name: old.type_name.clone(),
-                    path: "constructor".to_string(),
-                    description: "Agent type removed".to_string(),
-                });
-            }
-            Some(new) => {
-                validate_input_schema(
-                    &old.type_name,
-                    "constructor",
-                    &old.schema,
-                    &old.constructor.input_schema,
-                    &new.schema,
-                    &new.constructor.input_schema,
-                    &mut warnings,
-                );
-            }
-        }
-    }
-
-    warnings
+/// The schema of an agent type's keys: its user-supplied constructor parameter record,
+/// with the definitions reachable from it.
+pub fn constructor_key_schema(agent_type: &AgentTypeSchema) -> SchemaGraph {
+    let root = super::constructor_parameter_record(agent_type);
+    let defs = reachable_defs(&agent_type.schema, &root);
+    SchemaGraph { defs, root }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn validate_input_schema(
-    name: &AgentTypeName,
-    path: &str,
-    old_graph: &SchemaGraph,
-    old: &InputSchema,
-    new_graph: &SchemaGraph,
-    new: &InputSchema,
-    warnings: &mut Vec<SchemaEvolutionWarning>,
-) {
-    let old_fields = old.fields();
-    let new_fields = new.fields();
-
-    if new_fields.len() < old_fields.len() {
-        warnings.push(SchemaEvolutionWarning {
-            agent_type_name: name.clone(),
-            path: path.to_string(),
-            description: format!(
-                "Elements removed (was {}, now {})",
-                old_fields.len(),
-                new_fields.len()
-            ),
-        });
-        return;
-    }
-
-    for (i, (old_field, new_field)) in old_fields.iter().zip(new_fields.iter()).enumerate() {
-        let elem_path = format!("{}.elements[{}]", path, i);
-        validate_schema_type(
-            name,
-            &elem_path,
-            old_graph,
-            &old_field.schema,
-            new_graph,
-            &new_field.schema,
-            warnings,
-        );
-    }
+/// Compares two key schemas (see [`constructor_key_schema`]) of one agent type and
+/// returns every change that would change the key of an existing agent.
+pub fn validate_constructor_evolution(
+    agent_type_name: &AgentTypeName,
+    old: &SchemaGraph,
+    new: &SchemaGraph,
+) -> Vec<SchemaEvolutionError> {
+    let mut checker = Checker {
+        agent_type_name,
+        old_graph: old,
+        new_graph: new,
+        visited: Vec::new(),
+        errors: Vec::new(),
+    };
+    checker.check("constructor", &old.root, &new.root);
+    checker.errors
 }
 
 fn discriminant_name(typ: &SchemaType) -> &'static str {
@@ -161,6 +114,35 @@ fn discriminant_name(typ: &SchemaType) -> &'static str {
     }
 }
 
+/// The signedness and bit width of an integer type.
+fn integer_width(typ: &SchemaType) -> Option<(bool, u32)> {
+    match typ {
+        SchemaType::S8 { .. } => Some((true, 8)),
+        SchemaType::S16 { .. } => Some((true, 16)),
+        SchemaType::S32 { .. } => Some((true, 32)),
+        SchemaType::S64 { .. } => Some((true, 64)),
+        SchemaType::U8 { .. } => Some((false, 8)),
+        SchemaType::U16 { .. } => Some((false, 16)),
+        SchemaType::U32 { .. } => Some((false, 32)),
+        SchemaType::U64 { .. } => Some((false, 64)),
+        _ => None,
+    }
+}
+
+/// The key text of an integer is its decimal value for every integer type, so an
+/// integer type can change to another integer type that holds every value of the
+/// old one.
+fn holds_every_value(
+    (old_signed, old_bits): (bool, u32),
+    (new_signed, new_bits): (bool, u32),
+) -> bool {
+    match (old_signed, new_signed) {
+        (false, true) => new_bits > old_bits,
+        (true, false) => false,
+        _ => new_bits >= old_bits,
+    }
+}
+
 /// Resolve any [`SchemaType::Ref`] chain against the owning graph, returning
 /// the original (possibly ref) type if resolution fails so that downstream
 /// comparison still produces a stable result.
@@ -172,309 +154,281 @@ fn is_option(graph: &SchemaGraph, ty: &SchemaType) -> bool {
     matches!(resolve(graph, ty), SchemaType::Option { .. })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn validate_schema_type(
-    name: &AgentTypeName,
-    path: &str,
-    old_graph: &SchemaGraph,
-    old: &SchemaType,
-    new_graph: &SchemaGraph,
-    new: &SchemaType,
-    warnings: &mut Vec<SchemaEvolutionWarning>,
-) {
-    let old = resolve(old_graph, old);
-    let new = resolve(new_graph, new);
+struct Checker<'a> {
+    agent_type_name: &'a AgentTypeName,
+    old_graph: &'a SchemaGraph,
+    new_graph: &'a SchemaGraph,
+    /// Pairs of nodes already compared where one side is a reference, so recursive
+    /// types terminate.
+    visited: Vec<(*const SchemaType, *const SchemaType)>,
+    errors: Vec<SchemaEvolutionError>,
+}
 
-    let old_disc = discriminant_name(old);
-    let new_disc = discriminant_name(new);
-    if old_disc != new_disc {
-        warnings.push(SchemaEvolutionWarning {
-            agent_type_name: name.clone(),
+impl<'a> Checker<'a> {
+    fn error(&mut self, path: &str, description: impl Into<String>) {
+        self.errors.push(SchemaEvolutionError {
+            agent_type_name: self.agent_type_name.clone(),
             path: path.to_string(),
-            description: format!("Type changed from {} to {}", old_disc, new_disc),
+            description: description.into(),
         });
-        return;
     }
 
-    match (old, new) {
-        (
-            SchemaType::Record {
-                fields: old_fields, ..
-            },
-            SchemaType::Record {
-                fields: new_fields, ..
-            },
-        ) => {
-            if new_fields.len() < old_fields.len() {
-                warnings.push(SchemaEvolutionWarning {
-                    agent_type_name: name.clone(),
-                    path: path.to_string(),
-                    description: format!(
-                        "Record fields removed (was {}, now {})",
-                        old_fields.len(),
-                        new_fields.len()
-                    ),
-                });
+    fn check(&mut self, path: &str, old: &'a SchemaType, new: &'a SchemaType) {
+        if matches!(old, SchemaType::Ref { .. }) || matches!(new, SchemaType::Ref { .. }) {
+            let pair = (old as *const SchemaType, new as *const SchemaType);
+            if self.visited.contains(&pair) {
                 return;
             }
-            for (i, (old_f, new_f)) in old_fields.iter().zip(new_fields.iter()).enumerate() {
-                let field_path = format!("{}.fields[{}]", path, i);
-                validate_schema_type(
-                    name,
-                    &field_path,
-                    old_graph,
-                    &old_f.body,
-                    new_graph,
-                    &new_f.body,
-                    warnings,
-                );
-            }
-            for (i, new_f) in new_fields.iter().enumerate().skip(old_fields.len()) {
-                if !is_option(new_graph, &new_f.body) {
-                    let field_path = format!("{}.fields[{}]", path, i);
-                    warnings.push(SchemaEvolutionWarning {
-                        agent_type_name: name.clone(),
-                        path: field_path,
-                        description: "Appended non-Option record field".to_string(),
-                    });
-                }
-            }
+            self.visited.push(pair);
         }
-        (
-            SchemaType::Tuple {
-                elements: old_items,
-                ..
-            },
-            SchemaType::Tuple {
-                elements: new_items,
-                ..
-            },
-        ) => {
-            if new_items.len() < old_items.len() {
-                warnings.push(SchemaEvolutionWarning {
-                    agent_type_name: name.clone(),
-                    path: path.to_string(),
-                    description: format!(
-                        "Tuple items removed (was {}, now {})",
-                        old_items.len(),
-                        new_items.len()
+        let old = resolve(self.old_graph, old);
+        let new = resolve(self.new_graph, new);
+
+        if let (Some(old_int), Some(new_int)) = (integer_width(old), integer_width(new)) {
+            if !holds_every_value(old_int, new_int) {
+                self.error(
+                    path,
+                    format!(
+                        "Type changed from {} to {}, which does not hold every value of the old type",
+                        discriminant_name(old),
+                        discriminant_name(new)
                     ),
-                });
-                return;
-            }
-            for (i, (old_item, new_item)) in old_items.iter().zip(new_items.iter()).enumerate() {
-                let item_path = format!("{}.items[{}]", path, i);
-                validate_schema_type(
-                    name, &item_path, old_graph, old_item, new_graph, new_item, warnings,
                 );
             }
-            for (i, new_item) in new_items.iter().enumerate().skip(old_items.len()) {
-                if !is_option(new_graph, new_item) {
-                    let item_path = format!("{}.items[{}]", path, i);
-                    warnings.push(SchemaEvolutionWarning {
-                        agent_type_name: name.clone(),
-                        path: item_path,
-                        description: "Appended non-Option tuple item".to_string(),
-                    });
+            return;
+        }
+
+        let old_disc = discriminant_name(old);
+        let new_disc = discriminant_name(new);
+        if old_disc != new_disc {
+            self.error(path, format!("Type changed from {old_disc} to {new_disc}"));
+            return;
+        }
+
+        match (old, new) {
+            (
+                SchemaType::Record {
+                    fields: old_fields, ..
+                },
+                SchemaType::Record {
+                    fields: new_fields, ..
+                },
+            ) => {
+                if new_fields.len() < old_fields.len() {
+                    self.error(
+                        path,
+                        format!(
+                            "Record fields removed (was {}, now {})",
+                            old_fields.len(),
+                            new_fields.len()
+                        ),
+                    );
+                    return;
+                }
+                for (i, (old_f, new_f)) in old_fields.iter().zip(new_fields).enumerate() {
+                    self.check(&format!("{path}.fields[{i}]"), &old_f.body, &new_f.body);
+                }
+                for (i, new_f) in new_fields.iter().enumerate().skip(old_fields.len()) {
+                    if !is_option(self.new_graph, &new_f.body) {
+                        self.error(
+                            &format!("{path}.fields[{i}]"),
+                            "Appended non-Option record field",
+                        );
+                    }
                 }
             }
-        }
-        (
-            SchemaType::Variant {
-                cases: old_cases, ..
-            },
-            SchemaType::Variant {
-                cases: new_cases, ..
-            },
-        ) => {
-            if new_cases.len() < old_cases.len() {
-                warnings.push(SchemaEvolutionWarning {
-                    agent_type_name: name.clone(),
-                    path: path.to_string(),
-                    description: format!(
-                        "Variant cases removed (was {}, now {})",
+            (
+                SchemaType::Tuple {
+                    elements: old_items,
+                    ..
+                },
+                SchemaType::Tuple {
+                    elements: new_items,
+                    ..
+                },
+            ) => {
+                if new_items.len() != old_items.len() {
+                    let change = if new_items.len() < old_items.len() {
+                        "removed"
+                    } else {
+                        "added"
+                    };
+                    self.error(
+                        path,
+                        format!(
+                            "Tuple items {change} (was {}, now {})",
+                            old_items.len(),
+                            new_items.len()
+                        ),
+                    );
+                    return;
+                }
+                for (i, (old_item, new_item)) in old_items.iter().zip(new_items).enumerate() {
+                    self.check(&format!("{path}.items[{i}]"), old_item, new_item);
+                }
+            }
+            (
+                SchemaType::Variant {
+                    cases: old_cases, ..
+                },
+                SchemaType::Variant {
+                    cases: new_cases, ..
+                },
+            ) => {
+                if new_cases.len() < old_cases.len() {
+                    self.error(
+                        path,
+                        format!(
+                            "Variant cases removed (was {}, now {})",
+                            old_cases.len(),
+                            new_cases.len()
+                        ),
+                    );
+                    return;
+                }
+                for (i, (old_case, new_case)) in old_cases.iter().zip(new_cases).enumerate() {
+                    let case_path = format!("{path}.cases[{i}]");
+                    match (&old_case.payload, &new_case.payload) {
+                        (None, Some(_)) => self.error(&case_path, "Variant case gained a payload"),
+                        (Some(_), None) => self.error(&case_path, "Variant case lost its payload"),
+                        (Some(old_t), Some(new_t)) => self.check(&case_path, old_t, new_t),
+                        (None, None) => {}
+                    }
+                }
+            }
+            (
+                SchemaType::Union { spec: old_spec, .. },
+                SchemaType::Union { spec: new_spec, .. },
+            ) => {
+                if new_spec.branches.len() < old_spec.branches.len() {
+                    self.error(
+                        path,
+                        format!(
+                            "Union branches removed (was {}, now {})",
+                            old_spec.branches.len(),
+                            new_spec.branches.len()
+                        ),
+                    );
+                    return;
+                }
+                for (i, (old_branch, new_branch)) in
+                    old_spec.branches.iter().zip(&new_spec.branches).enumerate()
+                {
+                    self.check(
+                        &format!("{path}.branches[{i}]"),
+                        &old_branch.body,
+                        &new_branch.body,
+                    );
+                }
+            }
+            (
+                SchemaType::Enum {
+                    cases: old_cases, ..
+                },
+                SchemaType::Enum {
+                    cases: new_cases, ..
+                },
+            ) if new_cases.len() < old_cases.len() => {
+                self.error(
+                    path,
+                    format!(
+                        "Enum cases removed (was {}, now {})",
                         old_cases.len(),
                         new_cases.len()
                     ),
-                });
-                return;
+                );
             }
-            for (i, (old_case, new_case)) in old_cases.iter().zip(new_cases.iter()).enumerate() {
-                let case_path = format!("{}.cases[{}]", path, i);
-                match (&old_case.payload, &new_case.payload) {
-                    (None, Some(_)) => {
-                        warnings.push(SchemaEvolutionWarning {
-                            agent_type_name: name.clone(),
-                            path: case_path,
-                            description: "Variant case gained a payload".to_string(),
-                        });
-                    }
-                    (Some(_), None) => {
-                        warnings.push(SchemaEvolutionWarning {
-                            agent_type_name: name.clone(),
-                            path: case_path,
-                            description: "Variant case lost its payload".to_string(),
-                        });
-                    }
-                    (Some(old_t), Some(new_t)) => {
-                        validate_schema_type(
-                            name, &case_path, old_graph, old_t, new_graph, new_t, warnings,
-                        );
-                    }
-                    (None, None) => {}
-                }
+            (
+                SchemaType::Flags {
+                    flags: old_flags, ..
+                },
+                SchemaType::Flags {
+                    flags: new_flags, ..
+                },
+            ) if new_flags.len() < old_flags.len() => {
+                self.error(
+                    path,
+                    format!(
+                        "Flags removed (was {}, now {})",
+                        old_flags.len(),
+                        new_flags.len()
+                    ),
+                );
             }
-        }
-        (
-            SchemaType::Enum {
-                cases: old_cases, ..
-            },
-            SchemaType::Enum {
-                cases: new_cases, ..
-            },
-        ) if new_cases.len() < old_cases.len() => {
-            warnings.push(SchemaEvolutionWarning {
-                agent_type_name: name.clone(),
-                path: path.to_string(),
-                description: format!(
-                    "Enum cases removed (was {}, now {})",
-                    old_cases.len(),
-                    new_cases.len()
-                ),
-            });
-        }
-        (
-            SchemaType::Flags {
-                flags: old_flags, ..
-            },
-            SchemaType::Flags {
-                flags: new_flags, ..
-            },
-        ) if new_flags.len() < old_flags.len() => {
-            warnings.push(SchemaEvolutionWarning {
-                agent_type_name: name.clone(),
-                path: path.to_string(),
-                description: format!(
-                    "Flags removed (was {}, now {})",
-                    old_flags.len(),
-                    new_flags.len()
-                ),
-            });
-        }
-        (
-            SchemaType::List {
-                element: old_inner, ..
-            },
-            SchemaType::List {
-                element: new_inner, ..
-            },
-        ) => {
-            validate_schema_type(
-                name, path, old_graph, old_inner, new_graph, new_inner, warnings,
-            );
-        }
-        (
-            SchemaType::FixedList {
-                element: old_inner, ..
-            },
-            SchemaType::FixedList {
-                element: new_inner, ..
-            },
-        ) => {
-            validate_schema_type(
-                name, path, old_graph, old_inner, new_graph, new_inner, warnings,
-            );
-        }
-        (
-            SchemaType::Map {
-                key: old_key,
-                value: old_value,
-                ..
-            },
-            SchemaType::Map {
-                key: new_key,
-                value: new_value,
-                ..
-            },
-        ) => {
-            validate_schema_type(
-                name,
-                &format!("{}.key", path),
-                old_graph,
-                old_key,
-                new_graph,
-                new_key,
-                warnings,
-            );
-            validate_schema_type(
-                name,
-                &format!("{}.value", path),
-                old_graph,
-                old_value,
-                new_graph,
-                new_value,
-                warnings,
-            );
-        }
-        (
-            SchemaType::Option {
-                inner: old_inner, ..
-            },
-            SchemaType::Option {
-                inner: new_inner, ..
-            },
-        ) => {
-            validate_schema_type(
-                name, path, old_graph, old_inner, new_graph, new_inner, warnings,
-            );
-        }
-        (SchemaType::Result { spec: old_spec, .. }, SchemaType::Result { spec: new_spec, .. }) => {
-            match (&old_spec.ok, &new_spec.ok) {
-                (None, Some(_)) | (Some(_), None) => {
-                    warnings.push(SchemaEvolutionWarning {
-                        agent_type_name: name.clone(),
-                        path: format!("{}.ok", path),
-                        description: "Result ok payload presence changed".to_string(),
-                    });
-                }
-                (Some(old_ok), Some(new_ok)) => {
-                    validate_schema_type(
-                        name,
-                        &format!("{}.ok", path),
-                        old_graph,
-                        old_ok,
-                        new_graph,
-                        new_ok,
-                        warnings,
+            (
+                SchemaType::List {
+                    element: old_inner, ..
+                },
+                SchemaType::List {
+                    element: new_inner, ..
+                },
+            ) => self.check(path, old_inner, new_inner),
+            (
+                SchemaType::FixedList {
+                    element: old_inner,
+                    length: old_length,
+                    ..
+                },
+                SchemaType::FixedList {
+                    element: new_inner,
+                    length: new_length,
+                    ..
+                },
+            ) => {
+                if old_length != new_length {
+                    self.error(
+                        path,
+                        format!("Fixed list length changed from {old_length} to {new_length}"),
                     );
+                    return;
                 }
-                (None, None) => {}
+                self.check(path, old_inner, new_inner);
             }
-            match (&old_spec.err, &new_spec.err) {
-                (None, Some(_)) | (Some(_), None) => {
-                    warnings.push(SchemaEvolutionWarning {
-                        agent_type_name: name.clone(),
-                        path: format!("{}.err", path),
-                        description: "Result err payload presence changed".to_string(),
-                    });
-                }
-                (Some(old_err), Some(new_err)) => {
-                    validate_schema_type(
-                        name,
-                        &format!("{}.err", path),
-                        old_graph,
-                        old_err,
-                        new_graph,
-                        new_err,
-                        warnings,
-                    );
-                }
-                (None, None) => {}
+            (
+                SchemaType::Map {
+                    key: old_key,
+                    value: old_value,
+                    ..
+                },
+                SchemaType::Map {
+                    key: new_key,
+                    value: new_value,
+                    ..
+                },
+            ) => {
+                self.check(&format!("{path}.key"), old_key, new_key);
+                self.check(&format!("{path}.value"), old_value, new_value);
             }
+            (
+                SchemaType::Option {
+                    inner: old_inner, ..
+                },
+                SchemaType::Option {
+                    inner: new_inner, ..
+                },
+            ) => self.check(path, old_inner, new_inner),
+            (
+                SchemaType::Result { spec: old_spec, .. },
+                SchemaType::Result { spec: new_spec, .. },
+            ) => {
+                for (arm, old_arm, new_arm) in [
+                    ("ok", &old_spec.ok, &new_spec.ok),
+                    ("err", &old_spec.err, &new_spec.err),
+                ] {
+                    let arm_path = format!("{path}.{arm}");
+                    match (old_arm, new_arm) {
+                        (None, Some(_)) | (Some(_), None) => {
+                            self.error(&arm_path, format!("Result {arm} payload presence changed"))
+                        }
+                        (Some(old_t), Some(new_t)) => self.check(&arm_path, old_t, new_t),
+                        (None, None) => {}
+                    }
+                }
+            }
+            // Same-discriminant primitives, rich scalars, capabilities and P3
+            // stubs keep their text.
+            _ => {}
         }
-        // Same-discriminant primitives, rich scalars, capabilities, unions and
-        // P3 stubs are treated as compatible (no positional drift).
-        _ => {}
     }
 }
 

@@ -322,7 +322,7 @@ pub(crate) fn finish_replay<Adapter: SandboxFilesystemAdapter>(
         })
     } else {
         match generation.registry.begin_replay_drain() {
-            Ok(()) => Ok((generation, stage)),
+            Ok(transition) => Ok((generation, stage, transition)),
             Err(error) => Err(ReconstructionFailure {
                 filesystem: sealed_filesystem(generation, stage.meter),
                 source: Error::Access(error),
@@ -332,13 +332,16 @@ pub(crate) fn finish_replay<Adapter: SandboxFilesystemAdapter>(
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_module_task(async move {
         let result = match fenced {
-            Ok((generation, mut stage)) => {
+            Ok((generation, mut stage, transition)) => {
                 generation.registry.wait_for_calls().await;
                 stage.replay_drained = true;
-                Ok(AgentFilesystem {
-                    generation: Some(generation),
-                    stage: Some(stage),
-                })
+                Ok((
+                    AgentFilesystem {
+                        generation: Some(generation),
+                        stage: Some(stage),
+                    },
+                    transition,
+                ))
             }
             Err(failure) => Err(failure),
         };
@@ -347,18 +350,11 @@ pub(crate) fn finish_replay<Adapter: SandboxFilesystemAdapter>(
         }
     });
     async move {
-        let result = receiver
+        let (filesystem, transition) = receiver
             .await
-            .expect("module-owned replay drain stopped unexpectedly");
-        if let Ok(filesystem) = &result {
-            filesystem
-                .generation
-                .as_ref()
-                .expect("reconstructing filesystem generation missing")
-                .registry
-                .finish_transition();
-        }
-        result
+            .expect("module-owned replay drain stopped unexpectedly")?;
+        transition.finish();
+        Ok(filesystem)
     }
 }
 
@@ -374,7 +370,7 @@ pub(crate) fn finish_reconstruction<Adapter: SandboxFilesystemAdapter>(
 + 'static {
     let (generation, stage) = filesystem.into_parts();
     let fenced = match generation.begin_transition() {
-        Ok(()) => Ok((generation, stage)),
+        Ok(transition) => Ok((generation, stage, transition)),
         Err(error) => Err(ReconstructionFailure {
             filesystem: sealed_filesystem(generation, stage.meter),
             source: Error::Access(error),
@@ -383,7 +379,9 @@ pub(crate) fn finish_reconstruction<Adapter: SandboxFilesystemAdapter>(
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_module_task(async move {
         let result = match fenced {
-            Ok((generation, stage)) => complete_reconstruction(generation, stage).await,
+            Ok((generation, stage, transition)) => complete_reconstruction(generation, stage)
+                .await
+                .map(|filesystem| (filesystem, transition)),
             Err(failure) => Err(failure),
         };
         if let Err(unobserved) = sender.send(result) {
@@ -391,18 +389,11 @@ pub(crate) fn finish_reconstruction<Adapter: SandboxFilesystemAdapter>(
         }
     });
     async move {
-        let result = receiver
+        let (filesystem, transition) = receiver
             .await
-            .expect("module-owned reconstruction transition stopped unexpectedly");
-        if let Ok(filesystem) = &result {
-            filesystem
-                .generation
-                .as_ref()
-                .expect("resident filesystem generation missing")
-                .registry
-                .finish_transition();
-        }
-        result
+            .expect("module-owned reconstruction transition stopped unexpectedly")?;
+        transition.finish();
+        Ok(filesystem)
     }
 }
 
@@ -455,7 +446,7 @@ pub(crate) fn set_limits<Adapter: SandboxFilesystemAdapter>(
 {
     let (generation, stage) = filesystem.into_parts();
     let fenced = match generation.begin_transition() {
-        Ok(()) => Ok((generation, stage)),
+        Ok(transition) => Ok((generation, stage, transition)),
         Err(error) => Err(LimitFailure {
             filesystem: sealed_filesystem(generation, stage.meter),
             source: Error::Access(error),
@@ -464,7 +455,11 @@ pub(crate) fn set_limits<Adapter: SandboxFilesystemAdapter>(
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_module_task(async move {
         let result = match fenced {
-            Ok((generation, stage)) => complete_limit_transition(generation, stage, limits).await,
+            Ok((generation, stage, transition)) => {
+                complete_limit_transition(generation, stage, limits)
+                    .await
+                    .map(|outcome| (outcome, transition))
+            }
             Err(failure) => Err(failure),
         };
         if let Err(unobserved) = sender.send(result) {
@@ -472,18 +467,13 @@ pub(crate) fn set_limits<Adapter: SandboxFilesystemAdapter>(
         }
     });
     async move {
-        let result = receiver
+        let (outcome, transition) = receiver
             .await
-            .expect("module-owned filesystem limit transition stopped unexpectedly");
-        if let Ok(LimitTransition::Resident(filesystem)) = &result {
-            filesystem
-                .generation
-                .as_ref()
-                .expect("resident filesystem generation missing")
-                .registry
-                .finish_transition();
+            .expect("module-owned filesystem limit transition stopped unexpectedly")?;
+        if matches!(outcome, LimitTransition::Resident(_)) {
+            transition.finish();
         }
-        result
+        Ok(outcome)
     }
 }
 

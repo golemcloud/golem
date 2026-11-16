@@ -25,9 +25,7 @@ use crate::filesystem_snapshot::SnapshotInfo;
 use crate::filesystem_snapshot::clock::monotonic_now as now;
 use crate::filesystem_snapshot::errors::Failed;
 use crate::filesystem_snapshot::retry::run_delay;
-use crate::filesystem_snapshot::run_admission::{
-    RunSlots, Slot, Withdrawal, WithdrawnCall, withdrawn_call,
-};
+use crate::filesystem_snapshot::{RunSlots, Slot, Withdrawal, WithdrawnCall, withdrawn_call};
 use golem_common::model::RetryConfig;
 use rand::Rng as _;
 use std::time::Instant;

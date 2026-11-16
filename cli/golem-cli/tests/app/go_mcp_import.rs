@@ -217,7 +217,7 @@ async fn go_mcp_client_projects_contract_and_runs_imported_middleware() {
     let deployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(deployed.success_or_dump());
     assert!(!deployed.stderr_contains("Deployment discovery unavailable"));
-    let agent = "McpGoConsumer(\"contract-2\")";
+    let agent = "McpGoConsumer(\"projection\")";
     for (query, expected) in [
         ("streamed", "streamed:stream-answer:7:finite-stream"),
         ("blocks", "blocks:left:right:blocks-answer:11"),

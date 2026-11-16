@@ -1,0 +1,84 @@
+name: Cleanup sticky disks
+
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  pull_request_target:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: List the proposed deletions without deleting disks
+        type: boolean
+        default: true
+
+concurrency:
+  group: cleanup-sticky-disks
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  cleanup:
+    # Do not depend on Blacksmith capacity to recover from a full disk inventory.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # This workflow has a privileged token. Never execute the triggering PR's code.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Install Blacksmith CLI
+        env:
+          BLACKSMITH_DISABLE_AUTO_UPDATE: '1'
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/blacksmith-cli"
+          mkdir -p "$install_dir"
+          url=https://clireleases.blacksmith.sh/cli/v0.5.3/linux/amd64/blacksmith
+          curl --fail --silent --show-error --location "$url" -o "$install_dir/blacksmith"
+          curl --fail --silent --show-error --location "$url.sha256" -o "$install_dir/checksum"
+          expected=$(awk '{print $1}' "$install_dir/checksum")
+          printf '%s  %s\n' "$expected" "$install_dir/blacksmith" | sha256sum --check --strict
+          chmod +x "$install_dir/blacksmith"
+          echo "$install_dir" >> "$GITHUB_PATH"
+      - name: Authenticate Blacksmith
+        env:
+          BLACKSMITH_API_TOKEN: ${{ secrets.BLACKSMITH_API_TOKEN }}
+          BLACKSMITH_DISABLE_AUTO_UPDATE: '1'
+        run: |
+          set -euo pipefail
+          : "${BLACKSMITH_API_TOKEN:?Create the BLACKSMITH_API_TOKEN Actions secret with a Blacksmith organization token}"
+          printf '%s\n' "$BLACKSMITH_API_TOKEN" | blacksmith auth login \
+            --api-token - --non-interactive --organization "${GITHUB_REPOSITORY_OWNER}"
+      - name: Bound sticky disk inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$DRY_RUN" != true ]]; then args+=(--apply); fi
+          python3 .github/scripts/cleanup_sticky_disks.py --repo "$GITHUB_REPOSITORY" "${args[@]}" \
+            | tee "$RUNNER_TEMP/sticky-disk-cleanup.log"
+      - name: Publish cleanup log
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/sticky-disk-cleanup.log" ]]; then
+            {
+              echo '### Sticky disk cleanup'
+              echo '```text'
+              cat "$RUNNER_TEMP/sticky-disk-cleanup.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Remove Blacksmith credentials
+        if: always()
+        run: rm -f "$HOME/.blacksmith/credentials"

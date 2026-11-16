@@ -61,10 +61,12 @@ macro_rules! oplog_entry {
                 constructor_name = :snake_case($case) =>
 
                 pub fn $constructor_name($( $field: $typ ),*) -> Self {
-                    Self::$case {
+                    let entry = Self::$case {
                         timestamp: Timestamp::now_utc(),
                         $( $field ),*
-                    }
+                    };
+                    entry.debug_assert_well_formed();
+                    entry
                 }
             })*
 

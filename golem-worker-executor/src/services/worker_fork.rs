@@ -66,21 +66,23 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRequest, ForkStreamSlotResponse,
 };
 use golem_common::base_model::oplog::QueuedCardEvent;
-use golem_common::base_model::regions::DeletedRegionsBuilder;
+use golem_common::base_model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::StreamSessionRecord;
+use golem_common::model::durable_stream::{
+    StreamSessionRecord, StreamTerminal, StreamTerminalAuthor,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
-    DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex,
-    OplogIndexRange,
+    CreateRequest, DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName,
+    OplogEntry, OplogIndex, OplogIndexRange,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentMetadata, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    AgentFingerprint, AgentMetadata, InvocationId, PendingUpdateKind, PendingUpdateRef, Timestamp,
 };
-use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -101,6 +103,7 @@ pub trait WorkerForkService: Send + Sync {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError>;
 
     // TODO: this should be restricted to targets within the same component
@@ -114,6 +117,7 @@ pub trait WorkerForkService: Send + Sync {
         invocation_id: Option<DurableInvocationId>,
         forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError>;
 }
 
@@ -591,6 +595,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         )>,
         max_copied_bytes: Option<u64>,
         export: Option<&export::Candidate>,
+        fork_request: &CreateRequest,
     ) -> Result<
         (
             Arc<dyn Oplog>,
@@ -680,6 +685,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             original_phantom_id: initial_source_worker_metadata.original_phantom_id,
             fingerprint: AgentFingerprint(instance_id),
             agent_mode,
+            create_request: fork_request.clone(),
         };
 
         let source_oplog = self
@@ -779,15 +785,20 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         fork_cut.export = export.map(|candidate| candidate.export.clone());
 
         let initial_oplog_entry = read_source(OplogIndex::INITIAL).await?;
-        let initial_size = golem_common::serialization::serialize(&initial_oplog_entry)
-            .map_err(WorkerExecutorError::runtime)?
-            .len() as u64;
 
         // Update the oplog initial entry with the new worker
-        let target_initial_oplog_entry =
-            Self::update_agent_id(initial_oplog_entry, &target_agent_id, instance_id).ok_or(
-                WorkerExecutorError::unknown("Failed to update worker id in oplog entry"),
-            )?;
+        let target_initial_oplog_entry = Self::update_agent_id(
+            initial_oplog_entry,
+            &target_agent_id,
+            instance_id,
+            fork_request.clone(),
+        )
+        .ok_or(WorkerExecutorError::unknown(
+            "Failed to update worker id in oplog entry",
+        ))?;
+        let initial_size = golem_common::serialization::serialize(&target_initial_oplog_entry)
+            .map_err(WorkerExecutorError::runtime)?
+            .len() as u64;
 
         let new_oplog = self
             .oplog_service
@@ -805,10 +816,12 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         // Track unmatched work so the fork can cancel unrelated queued invocations and
         // updates. Export forks retain their selected invocation and its constructor.
-        let mut pending_invocation_keys: Vec<(IdempotencyKey, OplogIndex)> = Vec::new();
+        let mut pending_invocation_keys: Vec<(InvocationId, OplogIndex)> = Vec::new();
         // The entries that the update queue reads, kept from the copy, so the fold over them
         // after the copy, when the deleted regions are known, reads no entry again.
         let mut update_entries: Vec<(OplogIndex, KeptUpdateEntry)> = Vec::new();
+        // The bootstrap ranges that the copied restore points name.
+        let mut restore_points: Vec<(OplogIndex, OplogRegion)> = Vec::new();
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
         let mut copied_bytes = initial_size;
         let external_payload_bytes = Arc::new(AtomicU64::new(0));
@@ -875,6 +888,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
                 deleted_regions_builder.add(dropped_region.clone());
             }
+            if let Some(range) = crate::worker::cut_point::bootstrap_range_named_by(&entry) {
+                restore_points.push((oplog_index, range.clone()));
+            }
 
             // For pending invocations, deleted regions don't matter - both inputs
             // and outputs in deleted regions are still accounted for (see calculate_pending_invocations).
@@ -888,17 +904,20 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             };
             match &entry {
                 OplogEntry::PendingAgentInvocation {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } if manual_update.is_none() => {
-                    pending_invocation_keys.push((idempotency_key.clone(), oplog_index));
+                    pending_invocation_keys.push((*idempotency_key, oplog_index));
                 }
                 OplogEntry::AgentInvocationStarted {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     pending_invocation_keys.retain(|(key, _)| key != idempotency_key);
                 }
                 OplogEntry::CancelPendingInvocation {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     pending_invocation_keys.retain(|(key, _)| key != idempotency_key);
                 }
@@ -912,6 +931,16 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // The update queue pairs the update entries as the status fold does: entries in a
         // deleted region change only the manual update admissions.
         let deleted_regions = deleted_regions_builder.build();
+        crate::worker::cut_point::validate_restore_point_ranges(
+            restore_points.iter().map(|(index, range)| (*index, range)),
+            oplog_index_cut_off,
+            &deleted_regions,
+        )
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!(
+                "Cannot fork worker at oplog index {oplog_index_cut_off}: {error}"
+            ))
+        })?;
         let (cancellations, baseline) = update_entries
             .into_iter()
             .fold(ForkUpdates::default(), |updates, (oplog_index, entry)| {
@@ -962,7 +991,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             new_oplog
                 .add(OplogEntry::CancelPendingInvocation {
                     timestamp: now,
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                 })
                 .await?;
         }
@@ -1013,7 +1042,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     &mapping.handle.source_invocation,
                     mapping.handle.stream_id,
                     candidate.initial.clone(),
-                    candidate.export.closed,
+                    candidate
+                        .export
+                        .closed
+                        .then_some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
                     None,
                 )
                 .await
@@ -1045,6 +1077,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         cut: OplogIndex,
         guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         self.validate_worker_forking(
             source.environment_id,
@@ -1087,6 +1120,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     source_metadata.fingerprint,
                     hash,
                     guest_result,
+                    &fork_request,
                 )
                 .await?;
             }
@@ -1116,6 +1150,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source_fingerprint: AgentFingerprint,
         hash: [u8; 32],
         guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
+        fork_request: &CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         let reconcile =
             || publication::existing_fork(self.oplog_service.as_ref(), target, cut, hash);
@@ -1133,6 +1168,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     None,
                     None,
                     None,
+                    fork_request,
                 )
                 .await?;
             if let Some((scope, invocation_id, phantom)) = guest_result {
@@ -1200,10 +1236,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         result
     }
 
+    /// Rewrites the source's Create entry for the fork target. The target records the fork
+    /// request, not the request that created the source.
     pub fn update_agent_id(
         entry: OplogEntry,
         agent_id: &AgentId,
         instance_id: Uuid,
+        fork_request: CreateRequest,
     ) -> Option<OplogEntry> {
         match entry {
             OplogEntry::Create {
@@ -1213,6 +1252,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 parameters.agent_id = agent_id.clone();
                 parameters.instance_id = instance_id;
                 parameters.canonical_key = None;
+                parameters.create_request = fork_request;
                 Some(OplogEntry::Create {
                     timestamp,
                     parameters,
@@ -1293,6 +1333,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         self.perform_fork(
             fork_account_id,
@@ -1301,6 +1342,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             oplog_index_cut_off,
             None,
             auth_ctx,
+            fork_request,
         )
         .await
     }
@@ -1315,6 +1357,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         invocation_id: Option<DurableInvocationId>,
         forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         self.perform_fork(
             fork_account_id,
@@ -1323,6 +1366,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             oplog_index_cut_off,
             Some((copied_scope_start, invocation_id, forked_phantom_id)),
             auth_ctx,
+            fork_request,
         )
         .await
     }
@@ -1461,14 +1505,20 @@ const CANCELLED_BY_FORK: &str = "cancelled by fork";
 
 #[cfg(test)]
 mod tests {
+    use golem_common::model::{IdempotencyKey, InvocationId};
+    use uuid::Uuid;
+    fn test_invocation_id(value: String) -> InvocationId {
+        InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+    }
+
     use super::*;
     use golem_common::base_model::component::ComponentRevision;
+    use golem_common::model::AgentInvocationPayload;
     use golem_common::model::agent::Principal;
     use golem_common::model::card::{CardId, InvocationWalletPin, WalletVersionToken};
     use golem_common::model::component::ComponentId;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{OplogPayload, UpdateDescription};
-    use golem_common::model::{AgentInvocationPayload, IdempotencyKey};
     use golem_common::schema::SchemaValue;
     use std::collections::HashSet;
     use test_r::test;
@@ -1486,7 +1536,7 @@ mod tests {
         let target = agent_id("target");
         let entry = OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::new("fork-wallet-pin".to_string()),
+            invocation_id: test_invocation_id("fork-wallet-pin".to_string()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "test".to_string(),
                 input: SchemaValue::Record { fields: Vec::new() },
@@ -1515,6 +1565,67 @@ mod tests {
                 CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
             ),
             other => panic!("expected pinned invocation start, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fork_target_create_records_the_fork_request_not_the_source_request() {
+        use golem_common::model::account::AccountId;
+        use golem_common::model::agent::{AgentMode, AgentPrincipal, OwnerKind};
+        use golem_common::model::environment::EnvironmentId;
+        use golem_common::model::invocation_context::InvocationContextStack;
+        use golem_common::model::oplog::{CreateParameters, CreateRequestKind};
+
+        let source = agent_id("source");
+        let target = agent_id("target");
+        let source_request = CreateRequest::new(
+            CreateRequestKind::Exclusive,
+            Some(IdempotencyKey::new("source-create".to_string())),
+            Principal::anonymous(),
+            &InvocationContextStack::fresh_rounded(),
+        );
+        let fork_request = CreateRequest::new(
+            CreateRequestKind::Fork,
+            None,
+            Principal::Agent(AgentPrincipal {
+                agent_id: agent_id("forker"),
+            }),
+            &InvocationContextStack::fresh_rounded(),
+        );
+        let entry = OplogEntry::create(Box::new(CreateParameters {
+            agent_id: source.clone(),
+            component_id: source.component_id,
+            agent_type_name: None,
+            canonical_key: None,
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_mode: AgentMode::Durable,
+            component_revision: ComponentRevision::INITIAL,
+            env: vec![],
+            environment_id: EnvironmentId::new(),
+            created_by: AccountId::new(),
+            parent: None,
+            component_size: 100,
+            initial_total_linear_memory_size: 100,
+            initial_active_plugins: HashSet::new(),
+            local_agent_config: vec![],
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+            create_request: source_request,
+        }));
+        let instance_id = Uuid::new_v4();
+
+        match DefaultWorkerFork::<crate::workerctx::default::Context>::update_agent_id(
+            entry,
+            &target,
+            instance_id,
+            fork_request.clone(),
+        ) {
+            Some(OplogEntry::Create { parameters, .. }) => {
+                assert_eq!(parameters.agent_id, target);
+                assert_eq!(parameters.instance_id, instance_id);
+                assert_eq!(parameters.create_request, fork_request);
+            }
+            other => panic!("expected a Create entry, got {other:?}"),
         }
     }
 
@@ -1587,6 +1698,7 @@ mod tests {
                 snapshot_index: index(snapshot),
                 snapshot_revision: revision(1),
                 filesystem_snapshot: name,
+                snapshot_bootstrap: None,
             },
             Some(index(admission)),
         )
@@ -1607,7 +1719,8 @@ mod tests {
     fn manual_invocation(target: u64) -> OplogEntry {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::fresh(),
+            not_before: None,
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
             })),
@@ -1618,7 +1731,7 @@ mod tests {
     }
 
     fn succeeded(target: u64) -> OplogEntry {
-        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None)
+        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None, None)
     }
 
     /// The updates of the prefix `entries` from oplog index 2, with the regions in `deleted`.
@@ -1776,7 +1889,8 @@ mod tests {
     fn the_updates_of_the_kept_entries_are_the_updates_of_the_whole_prefix() {
         let invocation = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::fresh(),
+            not_before: None,
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
@@ -1847,7 +1961,8 @@ mod tests {
 
         let stored = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::fresh(),
+            not_before: None,
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
                     &AgentInvocationPayload::ManualUpdate {

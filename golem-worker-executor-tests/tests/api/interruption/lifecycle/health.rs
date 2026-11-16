@@ -64,7 +64,11 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
         let key = IdempotencyKey::fresh();
         let physical = if ephemeral {
             name.clone()
-                .with_ephemeral_invocation_phantom(&key)
+                .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                    &executor,
+                    &key,
+                    "tcp_collect_p3",
+                ))
                 .unwrap()
         } else {
             name.clone()
@@ -295,7 +299,8 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs(
             })
             .await?;
         }
-        let mut started = executor.gate_next_invocation_started_append(&id).await;
+        let lane = worker.owner_execution().lane();
+        let prebody = lane.acquire_exclusive().await;
         if later {
             executor
                 .invoke_agent(&component, &name, "increment", data_value!())
@@ -303,7 +308,12 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs(
         } else {
             Worker::start_if_needed(worker.clone()).await?;
         }
-        tokio::time::timeout(Duration::from_secs(10), started.entered()).await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while lane.metadata().active_invocation_count == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
         let directory = storage_root
             .join(context.default_environment_id.to_string())
             .join(component.id.to_string())
@@ -358,7 +368,7 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs(
             Some(ToolOwnerFailureMetadata::Lifecycle)
         );
         assert!((&mut contender).now_or_never().is_none());
-        drop(started);
+        drop(prebody);
         let error = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if let Err(error) = worker.await_ready_to_process_commands().await {

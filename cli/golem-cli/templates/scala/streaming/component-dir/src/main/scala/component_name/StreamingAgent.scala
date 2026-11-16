@@ -2,7 +2,7 @@ package component_name
 
 import golem.BaseAgent
 import golem.config.AgentConfig
-import golem.runtime.annotations.{agentDefinition, durableStreamSlot, durableStreams, endpoint}
+import golem.runtime.annotations.{agentDefinition, durableStreamSlot, endpoint}
 import zio.blocks.schema.Schema
 import golem.config.Secret
 
@@ -27,7 +27,6 @@ trait StreamingAgent extends BaseAgent with AgentConfig[StreamingConfig] {
   @endpoint(method = "PUT", path = "/echo")
   @durableStreamSlot(source = "input", slot = "input")
   @durableStreamSlot(source = "output", slot = "$result")
-  @durableStreams(allowExternalWrites = true)
   def durableEcho(input: golem.schema.AgentStream[String]): Future[golem.schema.AgentStream[String]]
 
   def appendExternal(

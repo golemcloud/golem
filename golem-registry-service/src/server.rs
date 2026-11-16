@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
-use golem_common::config::DbConfig;
+use golem_common::config::{DbConfig, LoadOrDump};
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_registry_service::api::make_open_api_service;
 use golem_registry_service::bootstrap::Services;
@@ -30,50 +30,53 @@ use tracing::info;
 
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        tokio::runtime::Builder::new_multi_thread()
+        return tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
-            .block_on(dump_openapi_yaml())
-    } else if let Some(config) = make_config_loader().load_or_dump_config() {
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .expect("Failed to install crypto provider");
-
-        let tracer = init_tracing_with_default_env_filter(&config.tracing);
-        info!("Using configuration:\n{}", config.to_safe_string_indented());
-
-        let prometheus = metrics::register_all();
-
-        let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
-            .without_counter_suffixes()
-            .without_units()
-            .build();
-
-        global::set_meter_provider(
-            MeterProviderBuilder::default()
-                .with_reader(exporter)
-                .build(),
-        );
-
-        let num_cpus = std::thread::available_parallelism()?;
-
-        // We don't want rayon to starve the tokio async pool from doing async work. Can allocate more cpus
-        // to rayon if the cpu bound work is being to slow.
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(num_cpus.get().div_ceil(2))
-            .build_global()
-            .unwrap();
-
-        tokio::runtime::Builder::new_multi_thread()
-            // Component metadata contains recursive schema graphs whose decoding can exceed
-            // Tokio's 2 MiB default worker stack.
-            .thread_stack_size(4 * 1024 * 1024)
-            .enable_all()
-            .build()?
-            .block_on(async_main(config, prometheus, tracer))
-    } else {
-        Ok(())
+            .block_on(dump_openapi_yaml());
     }
+
+    let config = match make_config_loader().load_or_dump_config()? {
+        LoadOrDump::Loaded(config) => config,
+        LoadOrDump::Dumped => return Ok(()),
+    };
+
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
+
+    let tracer = init_tracing_with_default_env_filter(&config.tracing);
+    info!("Using configuration:\n{}", config.to_safe_string_indented());
+
+    let prometheus = metrics::register_all();
+
+    let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
+        .without_counter_suffixes()
+        .without_units()
+        .build();
+
+    global::set_meter_provider(
+        MeterProviderBuilder::default()
+            .with_reader(exporter)
+            .build(),
+    );
+
+    let num_cpus = std::thread::available_parallelism()?;
+
+    // We don't want rayon to starve the tokio async pool from doing async work. Can allocate more cpus
+    // to rayon if the cpu bound work is being to slow.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_cpus.get().div_ceil(2))
+        .build_global()
+        .unwrap();
+
+    tokio::runtime::Builder::new_multi_thread()
+        // Component metadata contains recursive schema graphs whose decoding can exceed
+        // Tokio's 2 MiB default worker stack.
+        .thread_stack_size(4 * 1024 * 1024)
+        .enable_all()
+        .build()?
+        .block_on(async_main(config, prometheus, tracer))
 }
 
 /// Prints the OpenAPI spec. The services that build it keep their local data in a temporary

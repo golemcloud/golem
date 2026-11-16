@@ -13,9 +13,9 @@ pub fn discover_agent_types() -> Result[Array[@common.AgentType], @common.AgentE
 
 pub fn get_definition() -> @common.AgentType
 
-pub async fn initialize(String, @types.SchemaValueTree, @common.Principal, @async-core.TaskGroup[Unit]) -> Result[Unit, @common.AgentError]
+pub async fn initialize(String, @types.SchemaValueTree, @async-core.TaskGroup[Unit]) -> Result[Unit, @common.AgentError]
 
-pub async fn invoke(String, @types.SchemaValueTree, @common.Principal, @async-core.TaskGroup[Unit]) -> Result[@types.SchemaValueTree?, @common.AgentError]
+pub async fn invoke(String, @types.SchemaValueTree, @async-core.TaskGroup[Unit]) -> Result[@types.SchemaValueTree?, @common.AgentError]
 
 pub async fn load(@host.Snapshot, @async-core.TaskGroup[Unit]) -> Result[Unit, String]
 

@@ -12,18 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::durable_host::durable_stream::{
     CommittedProducerStreamEventPayload, DurableStreamStore, ExternalAppendOutcome,
     ExternalProducer, SessionError, StreamHandleReadResult, StreamStoreError, StreamWriteAdmission,
 };
 use golem_common::model::DurableStreamPublicBinding;
+use golem_common::model::IdempotencyKey;
 use golem_common::model::ScheduledAction;
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, DurableStreamReadRequest,
     ExternalProducerId, PersistedInvocationTarget, StreamHandleReadRequest, StreamItemsPayload,
     StreamOffset, StreamRegistrationInvocation, StreamSessionExpiredRecord,
     StreamSessionExpiryPolicy, StreamSessionExpiryRefreshedRecord, StreamSessionKey,
+    StreamTerminal, StreamTerminalAuthor,
 };
 use golem_common::model::invocation_session_public::validate_durable_stream_session_id;
 use golem_common::schema::{
@@ -39,7 +45,7 @@ pub struct CreateStreamSessionResult {
     pub session: String,
     pub replayed: bool,
     pub component_revision: ComponentRevision,
-    pub invocation_key: IdempotencyKey,
+    pub invocation_key: InvocationId,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
 }
@@ -53,14 +59,16 @@ pub enum StreamSessionCreationIntent {
 pub struct StreamSessionCreationAdmission {
     _guard: OwnedMutexGuard<()>,
     public_session_id: String,
-    invocation_key: IdempotencyKey,
+    pub(super) route_scope: String,
+    invocation_key: InvocationId,
     expiry_policy: StreamSessionExpiryPolicy,
     expiry_deadline_millis: Option<u64>,
 }
 
 #[derive(Clone)]
 struct PublicStreamSessionBinding {
-    invocation_key: IdempotencyKey,
+    route_scope: String,
+    invocation_key: InvocationId,
     expiry_policy: StreamSessionExpiryPolicy,
     expiry_deadline_millis: Option<u64>,
 }
@@ -73,7 +81,7 @@ enum StreamSessionExpiryTransition {
 }
 
 impl StreamSessionCreationAdmission {
-    pub fn invocation_key(&self) -> &IdempotencyKey {
+    pub fn invocation_key(&self) -> &InvocationId {
         &self.invocation_key
     }
 }
@@ -81,6 +89,7 @@ impl StreamSessionCreationAdmission {
 /// Domain request for reading one invocation stream slot.
 pub struct ReadStreamSlotRequest {
     pub session: String,
+    pub route_scope: String,
     pub slot: String,
     pub from_offset: Option<StreamOffset>,
     pub max_items: u32,
@@ -93,7 +102,7 @@ pub struct ReadStreamSlotRequest {
 pub enum StreamSlotReadAdmission {
     TouchingOriginGet,
     Head,
-    Continuation(IdempotencyKey),
+    Continuation(InvocationId),
 }
 
 /// One domain item returned by a stream-slot read.
@@ -123,7 +132,7 @@ pub struct ReadStreamSlotResult {
     pub tombstoned: bool,
     pub writable: bool,
     pub fork: Option<golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotSuccess>,
-    pub invocation_key: IdempotencyKey,
+    pub invocation_key: InvocationId,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
 }
@@ -131,6 +140,7 @@ pub struct ReadStreamSlotResult {
 /// Domain target for cancelling a session or tombstoning one export slot.
 pub struct ExportStreamControlRequest {
     pub session: String,
+    pub route_scope: String,
     pub slot: Option<String>,
     pub expected_method: String,
 }
@@ -158,6 +168,7 @@ pub struct StreamSlotProducer {
 /// Domain request for appending to one input stream slot.
 pub struct AppendToStreamSlotRequest {
     pub session: String,
+    pub route_scope: String,
     pub slot: String,
     pub payload: Option<AppendStreamSlotPayload>,
     pub close: bool,
@@ -185,7 +196,7 @@ pub enum AppendStreamSlotOutcome {
 
 pub struct AppendToStreamSlotResult {
     pub outcome: AppendStreamSlotOutcome,
-    pub invocation_key: Option<IdempotencyKey>,
+    pub invocation_key: Option<InvocationId>,
     pub expiry_policy: Option<StreamSessionExpiryPolicy>,
     pub expiry_deadline_millis: Option<u64>,
     pub stream_head_offset: Option<StreamOffset>,
@@ -384,13 +395,13 @@ impl SlotSchema {
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn stream_session_content_key(
         &self,
-        invocation_key: &IdempotencyKey,
-    ) -> Result<IdempotencyKey, WorkerExecutorError> {
+        invocation_key: &InvocationId,
+    ) -> Result<InvocationId, WorkerExecutorError> {
         Ok(self
             .durable_stream_session_status(invocation_key)
             .await?
             .and_then(|status| status.export_source_invocation)
-            .map_or_else(|| invocation_key.clone(), |source| source.idempotency_key))
+            .map_or_else(|| *invocation_key, |source| source.idempotency_key))
     }
 
     async fn commit_stream_session_expiry_owned(
@@ -398,7 +409,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owner: &Arc<DurableStreamStore>,
         admission: &Arc<StreamWriteAdmission>,
         public_session_id: String,
-        invocation_key: IdempotencyKey,
+        invocation_key: InvocationId,
         expected_deadline_millis: u64,
         expired_at_millis: u64,
     ) -> Result<(), AdmittedTouchError> {
@@ -435,6 +446,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             0,
             StreamSessionRecord::Expired(StreamSessionExpiredRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
+                route_scope: self
+                    .durable_stream_session_status(&invocation_key)
+                    .await?
+                    .and_then(|status| status.route_scope)
+                    .ok_or_else(|| {
+                        WorkerExecutorError::runtime("expiring session has no route scope")
+                    })?,
                 session_key: invocation_key,
                 public_session_id,
                 expected_deadline_millis,
@@ -454,7 +472,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn schedule_stream_session_expiry(
         &self,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         deadline_millis: Option<u64>,
     ) -> Result<(), WorkerExecutorError> {
         let Some(deadline_millis) = deadline_millis else {
@@ -482,13 +500,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn public_stream_session_binding(
         &self,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, WorkerExecutorError> {
+        golem_common::model::durable_stream::validate_durable_stream_route_scope(route_scope)
+            .map_err(WorkerExecutorError::invalid_request)?;
         self.worker_service()
             .lookup_durable_stream_public_binding(
                 &self.owned_agent_id,
                 self.agent_mode(),
                 self.initial_worker_metadata.fingerprint,
+                route_scope,
                 public_session_id,
             )
             .await
@@ -498,9 +520,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn expire_stream_session_transition(
         self: &Arc<Self>,
         public_session_id: String,
-        invocation_key: IdempotencyKey,
+        invocation_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<StreamSessionExpiryTransition, WorkerExecutorError> {
+        let Some(route_scope) = self
+            .durable_stream_session_status(&invocation_key)
+            .await?
+            .and_then(|status| status.route_scope)
+        else {
+            return Ok(StreamSessionExpiryTransition::Stale);
+        };
         let producer = self.durable_stream_producer().await?;
         let content_key = self.stream_session_content_key(&invocation_key).await?;
         let session_key =
@@ -511,7 +540,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let lock = owner.session_lock(&session_key);
                 let _guard = lock.lock_owned().await;
                 let binding = worker
-                    .public_stream_session_binding(&public_session_id)
+                    .public_stream_session_binding(&route_scope, &public_session_id)
                     .await?;
                 match binding {
                     Some(DurableStreamPublicBinding::Retired { session_key })
@@ -553,13 +582,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn deliver_stream_session_expiry(
         self: &Arc<Self>,
         public_session_id: String,
-        invocation_key: IdempotencyKey,
+        invocation_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         let transition = self
             .expire_stream_session_transition(
                 public_session_id.clone(),
-                invocation_key.clone(),
+                invocation_key,
                 expected_deadline_millis,
             )
             .await?;
@@ -592,6 +621,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn expire_public_stream_session_if_due(
         self: &Arc<Self>,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<(), WorkerExecutorError> {
         let Some(DurableStreamPublicBinding::Live {
@@ -599,7 +629,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             expiry_deadline_millis: Some(deadline),
             ..
         }) = self
-            .public_stream_session_binding(public_session_id)
+            .public_stream_session_binding(route_scope, public_session_id)
             .await?
         else {
             return Ok(());
@@ -608,16 +638,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
         match self
-            .deliver_stream_session_expiry(
-                public_session_id.to_owned(),
-                session_key.clone(),
-                deadline,
-            )
+            .deliver_stream_session_expiry(public_session_id.to_owned(), session_key, deadline)
             .await
         {
             Ok(()) => Ok(()),
             Err(error) => match self
-                .public_stream_session_binding(public_session_id)
+                .public_stream_session_binding(route_scope, public_session_id)
                 .await?
             {
                 Some(DurableStreamPublicBinding::Retired {
@@ -630,13 +656,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn resolve_public_stream_session_binding(
         &self,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<PublicStreamSessionBinding>, WorkerExecutorError> {
         validate_durable_stream_session_id(public_session_id)
             .map_err(WorkerExecutorError::invalid_request)?;
         Ok(
             match self
-                .public_stream_session_binding(public_session_id)
+                .public_stream_session_binding(route_scope, public_session_id)
                 .await?
             {
                 Some(DurableStreamPublicBinding::Live {
@@ -644,6 +671,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     expiry_policy,
                     expiry_deadline_millis,
                 }) => Some(PublicStreamSessionBinding {
+                    route_scope: route_scope.to_owned(),
                     invocation_key: session_key,
                     expiry_policy,
                     expiry_deadline_millis,
@@ -655,10 +683,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn resolve_public_stream_session_key(
         &self,
+        route_scope: &str,
         public_session_id: &str,
-    ) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+    ) -> Result<Option<InvocationId>, WorkerExecutorError> {
         Ok(self
-            .resolve_public_stream_session_binding(public_session_id)
+            .resolve_public_stream_session_binding(route_scope, public_session_id)
             .await?
             .map(|binding| binding.invocation_key))
     }
@@ -666,16 +695,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn begin_stream_session_creation(
         self: &Arc<Self>,
         public_session_id: String,
+        route_scope: String,
+        operation: &str,
         requested_expiry_policy: StreamSessionExpiryPolicy,
         intent: StreamSessionCreationIntent,
     ) -> Result<StreamSessionCreationAdmission, WorkerExecutorError> {
         validate_durable_stream_session_id(&public_session_id)
             .map_err(WorkerExecutorError::invalid_request)?;
         let guard = self.stream_session_creation_lock.clone().lock_owned().await;
-        self.expire_public_stream_session_if_due(&public_session_id)
+        self.expire_public_stream_session_if_due(&route_scope, &public_session_id)
             .await?;
         let binding = self
-            .public_stream_session_binding(&public_session_id)
+            .public_stream_session_binding(&route_scope, &public_session_id)
             .await?;
         let now_millis = Timestamp::now_utc().to_millis();
         let new_deadline = || match requested_expiry_policy {
@@ -693,6 +724,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             StreamSessionExpiryPolicy::Absolute { .. } => Err(
                 WorkerExecutorError::invalid_request("stream expiry must be in the future"),
             ),
+        };
+        let fresh_key = |generation| {
+            let prepared = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
+                scope: route_scope.clone(),
+                key: generation,
+            };
+            prepared
+                .finalize(
+                    self.agent_id().clone(),
+                    self.initial_worker_metadata.fingerprint,
+                    operation,
+                )
+                .id()
         };
         let (invocation_key, expiry_policy, expiry_deadline_millis) = match binding {
             Some(DurableStreamPublicBinding::Live {
@@ -721,17 +765,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ));
                 }
                 StreamSessionCreationIntent::ExplicitPut => (
-                    IdempotencyKey::new(uuid::Uuid::new_v4().to_string()),
+                    fresh_key(IdempotencyKey::from_uuid(Uuid::new_v4())),
                     requested_expiry_policy,
                     new_deadline()?,
                 ),
             },
             None => (
-                if self.agent_mode() == AgentMode::Ephemeral {
+                fresh_key(if self.agent_mode() == AgentMode::Ephemeral {
                     IdempotencyKey::new(public_session_id.clone())
                 } else {
-                    IdempotencyKey::new(uuid::Uuid::new_v4().to_string())
-                },
+                    IdempotencyKey::from_uuid(Uuid::new_v4())
+                }),
                 requested_expiry_policy,
                 new_deadline()?,
             ),
@@ -739,6 +783,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(StreamSessionCreationAdmission {
             _guard: guard,
             public_session_id,
+            route_scope,
             invocation_key,
             expiry_policy,
             expiry_deadline_millis,
@@ -747,22 +792,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn resolve_export_fork_slot(
         self: &Arc<Self>,
+        route_scope: &str,
         session: &str,
         name: &str,
         expected_method: &str,
     ) -> Result<Option<ExportForkSlot>, WorkerExecutorError> {
-        self.expire_public_stream_session_if_due(session).await?;
+        self.expire_public_stream_session_if_due(route_scope, session)
+            .await?;
         let Some(DurableStreamPublicBinding::Live {
             session_key,
             expiry_policy,
             expiry_deadline_millis,
-        }) = self.public_stream_session_binding(session).await?
+        }) = self
+            .public_stream_session_binding(route_scope, session)
+            .await?
         else {
             return Ok(None);
         };
         let producer = self.durable_stream_producer().await?;
         let Some(slot) = producer
-            .with_metadata_activity(self.resolve_stream_slot(session, name, Some(expected_method)))
+            .with_metadata_activity(self.resolve_stream_slot(
+                route_scope,
+                session,
+                name,
+                Some(expected_method),
+            ))
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??
         else {
@@ -773,6 +827,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &producer,
                 session.to_owned(),
                 PublicStreamSessionBinding {
+                    route_scope: route_scope.to_owned(),
                     invocation_key: session_key,
                     expiry_policy,
                     expiry_deadline_millis,
@@ -816,7 +871,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Resolves the pinned revision for a stream-slot session before transport decoding.
     pub async fn stream_session_revision(
         &self,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<ComponentRevision, WorkerExecutorError> {
         let producer = self.durable_stream_producer().await?;
         let pinned = producer
@@ -854,7 +909,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         request.expiry_deadline_millis = admission.expiry_deadline_millis;
         let component_revision = request.attempt.invocation.target_component_revision;
         let public_session_id = admission.public_session_id.clone();
-        let invocation_key = admission.invocation_key.clone();
+        let invocation_key = admission.invocation_key;
         let expiry_policy = admission.expiry_policy;
         let expiry_deadline_millis = admission.expiry_deadline_millis;
         let acceptance = self
@@ -872,13 +927,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn resolve_stream_slot(
         &self,
+        route_scope: &str,
         session: &str,
         name: &str,
         expected_method: Option<&str>,
     ) -> Result<Option<Slot>, WorkerExecutorError> {
         validate_durable_stream_session_id(session)
             .map_err(WorkerExecutorError::invalid_request)?;
-        let Some(session_key) = self.resolve_public_stream_session_key(session).await? else {
+        let Some(session_key) = self
+            .resolve_public_stream_session_key(route_scope, session)
+            .await?
+        else {
             return Ok(None);
         };
         self.resolve_stream_slot_by_key(&session_key, name, expected_method)
@@ -887,7 +946,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn resolve_stream_slot_by_key(
         &self,
-        session_key: &IdempotencyKey,
+        session_key: &InvocationId,
         name: &str,
         expected_method: Option<&str>,
     ) -> Result<Option<Slot>, WorkerExecutorError> {
@@ -1096,8 +1155,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         Ok(Some(StreamSessionExpiryRefreshedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: binding.invocation_key.clone(),
+            session_key: binding.invocation_key,
             public_session_id: public_session_id.to_owned(),
+            route_scope: binding.route_scope.clone(),
             expected_deadline_millis,
             refreshed_at_millis,
             deadline_millis,
@@ -1123,7 +1183,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let lock = owner.session_lock(&session_key);
                 let _guard = lock.lock_owned().await;
                 let Some(current) = worker
-                    .resolve_public_stream_session_binding(&public_session_id)
+                    .resolve_public_stream_session_binding(
+                        &expected.route_scope,
+                        &public_session_id,
+                    )
                     .await?
                 else {
                     return Ok::<_, AdmittedTouchError>((None, false));
@@ -1169,7 +1232,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker
                     .schedule_stream_session_expiry(
                         public_session_id.clone(),
-                        current.invocation_key.clone(),
+                        current.invocation_key,
                         Some(deadline_millis),
                     )
                     .await?;
@@ -1198,6 +1261,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         request: ReadStreamSlotRequest,
     ) -> Result<Option<ReadStreamSlotResult>, DurableStreamRemoteError<WorkerExecutorError>> {
+        golem_common::model::durable_stream::validate_durable_stream_route_scope(
+            &request.route_scope,
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
         let requested_wait_millis = request.wait_millis;
         let touching = matches!(
             &request.admission,
@@ -1216,13 +1283,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         validate_durable_stream_session_id(&request.session)
             .map_err(WorkerExecutorError::invalid_request)?;
         if !matches!(request.admission, StreamSlotReadAdmission::Continuation(_)) {
-            self.expire_public_stream_session_if_due(&request.session)
+            self.expire_public_stream_session_if_due(&request.route_scope, &request.session)
                 .await?;
         }
         let binding = match &request.admission {
             StreamSlotReadAdmission::TouchingOriginGet | StreamSlotReadAdmission::Head => {
                 let Some(binding) = self
-                    .resolve_public_stream_session_binding(&request.session)
+                    .resolve_public_stream_session_binding(&request.route_scope, &request.session)
                     .await?
                 else {
                     return Ok(None);
@@ -1233,11 +1300,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let Some(status) = self.durable_stream_session_status(invocation_key).await? else {
                     return Ok(None);
                 };
-                if status.public_session_id.as_deref() != Some(&request.session) {
+                if status.public_session_id.as_deref() != Some(&request.session)
+                    || status.route_scope.as_deref() != Some(&request.route_scope)
+                {
                     return Ok(None);
                 }
                 PublicStreamSessionBinding {
-                    invocation_key: invocation_key.clone(),
+                    route_scope: request.route_scope.clone(),
+                    invocation_key: *invocation_key,
                     expiry_policy: status.expiry_policy,
                     expiry_deadline_millis: status.expiry_deadline_millis,
                 }
@@ -1334,7 +1404,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 })
                 .await?
                 .clone(),
-            invocation_key: binding.invocation_key.clone(),
+            invocation_key: binding.invocation_key,
             expiry_policy: binding.expiry_policy,
             expiry_deadline_millis: binding.expiry_deadline_millis,
         };
@@ -1431,6 +1501,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 return Box::pin(self.read_stream_slot(ReadStreamSlotRequest {
                     session: request.session,
+                    route_scope: request.route_scope,
                     slot: request.slot,
                     from_offset: response.next_offset,
                     max_items: request.max_items,
@@ -1452,7 +1523,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<ExportStreamControlResult, WorkerExecutorError> {
         validate_durable_stream_session_id(&request.session)
             .map_err(WorkerExecutorError::invalid_request)?;
-        self.expire_public_stream_session_if_due(&request.session)
+        self.expire_public_stream_session_if_due(&request.route_scope, &request.session)
             .await?;
         if request.expected_method.is_empty()
             || request
@@ -1466,7 +1537,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let producer = self.durable_stream_producer().await?;
         let Some(binding) = self
-            .resolve_public_stream_session_binding(&request.session)
+            .resolve_public_stream_session_binding(&request.route_scope, &request.session)
             .await?
         else {
             return Ok(ExportStreamControlResult::NotFound);
@@ -1478,6 +1549,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(ExportStreamControlResult::NotFound);
         };
         let session_key = admitted.invocation_key;
+        let expected_invocation_key = session_key;
         let content_key = self.stream_session_content_key(&session_key).await?;
         let Some(prepared) = self.prepared_stream_session(&content_key).await? else {
             return Ok(ExportStreamControlResult::NotFound);
@@ -1490,7 +1562,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = StreamSession::open(
             producer.clone(),
             self.oplog.clone(),
-            StreamRegistrationInvocation::Local(prepared.session_key.clone()),
+            StreamRegistrationInvocation::Local(prepared.session_key),
             prepared.stream_mappings.iter().cloned(),
         )
         .await
@@ -1505,6 +1577,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .run_admitted(None, 0, true, move |owner, admission| async move {
                     let lock = owner.session_lock(&session_key);
                     let guard = lock.lock_owned().await;
+                    if worker
+                        .resolve_public_stream_session_key(&request.route_scope, &request.session)
+                        .await
+                        .map_err(SessionError::from)?
+                        .as_ref()
+                        != Some(&expected_invocation_key)
+                    {
+                        return Ok::<_, SessionError>(ExportStreamControlResult::NotFound);
+                    }
                     let Some(slot) = worker
                         .resolve_stream_slot_by_key(
                             &session_key.idempotency_key,
@@ -1564,11 +1645,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<AppendToStreamSlotResult, WorkerExecutorError> {
         validate_durable_stream_session_id(&request.session)
             .map_err(WorkerExecutorError::invalid_request)?;
-        self.expire_public_stream_session_if_due(&request.session)
+        self.expire_public_stream_session_if_due(&request.route_scope, &request.session)
             .await?;
         let producer = self.durable_stream_producer().await?;
         let Some(binding) = self
-            .resolve_public_stream_session_binding(&request.session)
+            .resolve_public_stream_session_binding(&request.route_scope, &request.session)
             .await?
         else {
             return Ok(AppendToStreamSlotResult::not_found());
@@ -1592,16 +1673,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             epoch: producer.epoch,
             sequence: producer.sequence,
         });
+        let terminal = request
+            .close
+            .then_some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished));
         let retained_bytes = DurableStreamStore::external_input_reservation(
             payload.as_ref(),
+            terminal.as_ref(),
             external_producer.as_ref(),
-        );
+        )
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let worker = self.clone();
         let session_key =
             producer.qualify_session(&StreamRegistrationInvocation::Local(prepared.session_key));
         let public_session_id = request.session.clone();
         let expiry_policy = binding.expiry_policy;
-        let invocation_key = binding.invocation_key.clone();
+        let invocation_key = binding.invocation_key;
         let (outcome, expiry_deadline_millis, stream_metadata, expired_session) = producer
             .run_admitted(
                 None,
@@ -1611,7 +1697,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let lock = owner.session_lock(&session_key);
                     let _guard = lock.lock_owned().await;
                     let Some(current) = worker
-                        .resolve_public_stream_session_binding(&public_session_id)
+                        .resolve_public_stream_session_binding(
+                            &request.route_scope,
+                            &public_session_id,
+                        )
                         .await?
                     else {
                         return Ok::<_, AdmittedAppendError>((
@@ -1720,7 +1809,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker
                             .schedule_stream_session_expiry(
                                 public_session_id.clone(),
-                                current.invocation_key.clone(),
+                                current.invocation_key,
                                 Some(refresh.deadline_millis),
                             )
                             .await?;
@@ -1731,7 +1820,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             &slot.session,
                             handle.stream_id,
                             payload,
-                            request.close,
+                            terminal,
                             external_producer,
                             expiry_refresh,
                         )
@@ -1838,7 +1927,12 @@ mod tests {
     #[test]
     fn sliding_expiry_refreshes_at_most_ten_times_per_ttl_window() {
         let binding = PublicStreamSessionBinding {
-            invocation_key: IdempotencyKey::new("invocation".into()),
+            route_scope: golem_common::model::durable_stream::durable_stream_route_scope(
+                "environment",
+                "1",
+                "route",
+            ),
+            invocation_key: InvocationId(Uuid::from_u128(1)),
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
             expiry_deadline_millis: Some(20_000),
         };
@@ -1856,6 +1950,7 @@ mod tests {
         .unwrap()
         .expect("ten percent extension refreshes the deadline");
         assert_eq!(refresh.expected_deadline_millis, 20_000);
+        assert_eq!(refresh.route_scope, binding.route_scope);
         assert_eq!(refresh.refreshed_at_millis, 11_000);
         assert_eq!(refresh.deadline_millis, 21_000);
     }
@@ -1959,7 +2054,7 @@ mod tests {
             callee_environment_id: environment,
             callee: id.clone(),
             callee_fingerprint: fingerprint,
-            idempotency_key: IdempotencyKey::new("source-session".into()),
+            idempotency_key: InvocationId(Uuid::from_u128(2)),
         };
         let first = DurableStreamHandle {
             format_version: 1,

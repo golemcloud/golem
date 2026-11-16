@@ -129,10 +129,11 @@ mod definition_owned_matrix_proxy {
 #[path = "../../../../builtin-tools/filesystem-tools/src/bounded_stream.rs"]
 mod bounded_stream;
 
-#[unsafe(export_name = "_initialize")]
-pub extern "C" fn initialize_component_baseline_clock() {
+#[ctor::ctor]
+fn initialize_component_baseline_clock() {
     if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
-        // Observe the reactor initializer independently of any agent constructor.
+        // Observe the reactor `_initialize`, which runs the constructors, independently of any
+        // agent constructor.
         std::hint::black_box(std::time::Instant::now());
     }
 }
@@ -649,6 +650,18 @@ pub trait ToolStreamingCaller {
     async fn filesystem_limit_roundtrip(&self) -> Vec<u64>;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
     async fn yielding_tool_result_observation(&self, yields: u32) -> bool;
+    fn produce_tool_results(
+        &self,
+        capable: bool,
+        gate: Option<golem_rust::PromiseId>,
+    ) -> AgentStream<String>;
+    async fn collect_tool_results(
+        &self,
+        target: String,
+        capable: bool,
+        gate: Option<golem_rust::PromiseId>,
+    ) -> Vec<String>;
+    fn produce_terminal(&self, mode: String, gate: golem_rust::PromiseId) -> AgentStream<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
     async fn benchmark_producer(
@@ -815,6 +828,7 @@ fn matrix_typed_input(values: [u32; 3]) -> AgentStream<u32> {
             .write_all(values)
             .await
             .expect("write matrix typed input values");
+        writer.close().await.unwrap();
     });
     input
 }
@@ -1191,6 +1205,7 @@ fn gated_typed_input<T: IntoWire + FromWire + 'static>(items: [T; 3]) -> AgentSt
             .write_all([second, third])
             .await
             .expect("write remaining typed tool input items");
+        writer.close().await.unwrap();
     });
     input
 }
@@ -1378,6 +1393,92 @@ async fn wait_at_promise_checkpoint(name: &str) {
 
 #[agent_implementation]
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
+    fn produce_tool_results(
+        &self,
+        capable: bool,
+        gate: Option<golem_rust::PromiseId>,
+    ) -> AgentStream<String> {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            // The first write cannot finish until the returned stream is being drained.
+            writer.write_one("before-tool".to_string()).await.unwrap();
+            for input in [b"first".to_vec(), b"second".to_vec()] {
+                let output = if capable {
+                    let collected = CapableStreamingClient::default()
+                        .run_capable(
+                            format!(
+                                "order:{}:/stream-tool-results",
+                                String::from_utf8(input.clone()).unwrap()
+                            ),
+                            input_stream(vec![input]),
+                        )
+                        .await
+                        .expect("start capable tool from output producer")
+                        .collect()
+                        .await;
+                    collected
+                        .result
+                        .expect("capable tool result from output producer");
+                    collected.stdout.unwrap().unwrap()
+                } else {
+                    let collected = StreamingClient::default()
+                        .run("echo".to_string(), input_stream(vec![input]))
+                        .await
+                        .expect("start tool from output producer")
+                        .collect()
+                        .await;
+                    collected.result.expect("tool result from output producer");
+                    collected.stdout.unwrap().unwrap()
+                };
+                writer
+                    .write_one(String::from_utf8(output).unwrap())
+                    .await
+                    .unwrap();
+                if let Some(gate) = &gate {
+                    golem_rust::await_promise(gate).await;
+                }
+            }
+            writer.close().await.unwrap();
+        });
+        stream
+    }
+
+    async fn collect_tool_results(
+        &self,
+        target: String,
+        capable: bool,
+        gate: Option<golem_rust::PromiseId>,
+    ) -> Vec<String> {
+        ToolStreamingCallerClient::get(target)
+            .produce_tool_results(capable, gate)
+            .await
+            .collect()
+            .await
+            .expect("collect tool results from output producer")
+    }
+
+    fn produce_terminal(&self, mode: String, gate: golem_rust::PromiseId) -> AgentStream<String> {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one("before-terminal".to_string())
+                .await
+                .unwrap();
+            golem_rust::await_promise(&gate).await;
+            match mode.as_str() {
+                "trap" => panic!("producer failed after returning its stream"),
+                "deadline" => {
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(60_000_000_000).await;
+                }
+                "complete" => {}
+                _ => panic!("unknown producer mode"),
+            }
+            writer.write_one("completed".to_string()).await.unwrap();
+            writer.close().await.unwrap();
+        });
+        stream
+    }
+
     fn new(_name: String, #[agent_config] _config: Config<ToolStreamingCallerConfig>) -> Self {
         assert!(
             std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
@@ -3360,7 +3461,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 label: first.label,
                 ordinal: first.ordinal,
             }];
-            while let Some(item) = source.next().await.expect("read direct typed output") {
+            while let Some(item) = source.next().await {
+                let item = item.expect("read direct typed output");
                 items.push(TypedOutputEvidence {
                     label: item.label,
                     ordinal: item.ordinal,

@@ -417,11 +417,11 @@ macro_rules! data_value {
     }};
 }
 
-/// Create a ParsedAgentId with the given agent type name and parameters.
+/// Create a ParsedAgentKey with the given agent type name and parameters.
 ///
 /// The first argument is the agent type name (as a string expression), followed by
 /// optional component model values. Expands to:
-/// `ParsedAgentId::from_legacy_parameters(AgentTypeName("NAME".to_string()), data_value!(...params), None)`
+/// `ParsedAgentKey::from_legacy_parameters(AgentTypeName("NAME".to_string()), data_value!(...params), None)`
 ///
 /// # Example
 /// ```ignore
@@ -431,14 +431,14 @@ macro_rules! data_value {
 #[macro_export]
 macro_rules! agent_id {
     ($name:expr) => {
-        $crate::model::agent::ParsedAgentId::try_new(
+        $crate::model::agent::ParsedAgentKey::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             None
         ).unwrap()
     };
     ($name:expr, $($element:expr),+ $(,)?) => {
-        $crate::model::agent::ParsedAgentId::try_new(
+        $crate::model::agent::ParsedAgentKey::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             None
@@ -446,11 +446,11 @@ macro_rules! agent_id {
     };
 }
 
-/// Create a ParsedAgentId with a phantom UUID.
+/// Create a ParsedAgentKey with a phantom UUID.
 ///
 /// The first argument is the agent type name (as a string expression), the second is
 /// a UUID, followed by optional component model values. Expands to:
-/// `ParsedAgentId::from_legacy_parameters(AgentTypeName("NAME".to_string()), data_value!(...params), Some(uuid))`
+/// `ParsedAgentKey::from_legacy_parameters(AgentTypeName("NAME".to_string()), data_value!(...params), Some(uuid))`
 ///
 /// # Example
 /// ```ignore
@@ -461,14 +461,14 @@ macro_rules! agent_id {
 #[macro_export]
 macro_rules! phantom_agent_id {
     ($name:expr, $phantom_id:expr) => {
-        $crate::model::agent::ParsedAgentId::try_new(
+        $crate::model::agent::ParsedAgentKey::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             Some($phantom_id)
         ).unwrap()
     };
     ($name:expr, $phantom_id:expr, $($element:expr),+ $(,)?) => {
-        $crate::model::agent::ParsedAgentId::try_new(
+        $crate::model::agent::ParsedAgentKey::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             Some($phantom_id)

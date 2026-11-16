@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
+use golem_common::config::LoadOrDump;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_shard_manager::config::{
     ShardManagerConfig, make_config_loader, reject_legacy_db_env_vars,
@@ -29,24 +30,24 @@ fn main() -> Result<(), anyhow::Error> {
     // deployment's legacy settings.
     reject_legacy_db_env_vars().map_err(|err| anyhow::anyhow!(err))?;
 
-    match make_config_loader().load_or_dump_config() {
-        Some(config) => {
-            rustls::crypto::ring::default_provider()
-                .install_default()
-                .expect("Failed to install crypto provider");
+    let config = match make_config_loader().load_or_dump_config()? {
+        LoadOrDump::Loaded(config) => config,
+        LoadOrDump::Dumped => return Ok(()),
+    };
 
-            init_tracing_with_default_env_filter(&config.tracing);
-            info!("Using configuration:\n{}", config.to_safe_string_indented());
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
 
-            let registry = default_registry().clone();
+    init_tracing_with_default_env_filter(&config.tracing);
+    info!("Using configuration:\n{}", config.to_safe_string_indented());
 
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?
-                .block_on(async_main(config, registry))
-        }
-        None => Ok(()),
-    }
+    let registry = default_registry().clone();
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main(config, registry))
 }
 
 async fn async_main(

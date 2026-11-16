@@ -28,6 +28,7 @@ use super::{
 };
 #[cfg(test)]
 use super::{SkippedToolAttachmentEndpoints, ToolStdinEntry};
+use operation::TerminalResolution;
 
 pub(super) fn recorded_tool_body_is_skipped(
     recorded: &RecordedEntityTerminal,
@@ -176,21 +177,22 @@ pub(super) async fn complete_owner_attachment_terminals<Ctx: WorkerCtx>(
 
 pub(super) async fn rollback_live_attachment_admission_rejection(
     operation: &operation::OwnerToolOperation,
-) {
+) -> Result<(), WorkerExecutorError> {
     if operation
         .take_live_attachment_admission_rejection()
         .await
-        .is_some_and(|rejection| rejection.preselected)
+        .is_some_and(|rejection| rejection.ordinary_reserved())
     {
         operation
             .resolve_ordinary(
                 Arc::new(resource_exhausted_terminal(
                     SerializableEntityBodyExecution::Executed,
                 )),
-                false,
+                TerminalResolution::RolledBack,
             )
-            .await;
+            .await?;
     }
+    Ok(())
 }
 
 pub(super) fn publish_no_body_terminals(
@@ -212,10 +214,7 @@ pub(super) fn settle_resource_exhausted_admission(
     start: golem_common::model::oplog::OplogIndex,
     call_mode: EntityCallMode,
 ) -> anyhow::Result<()> {
-    if !operation.transition_admission(
-        operation::BodyAdmissionState::Staging,
-        operation::BodyAdmissionState::SettledWithoutBody,
-    ) {
+    if !operation.settle_without_body(operation::BodyAdmissionState::Staging) {
         return Err(anyhow!(
             "tool invocation was fenced before resource-exhausted no-body admission"
         ));
@@ -262,7 +261,7 @@ where
     let admission_rejection_preselected = operation
         .take_live_attachment_admission_rejection()
         .await
-        .is_some_and(|rejection| rejection.preselected);
+        .is_some_and(|rejection| rejection.ordinary_reserved());
     if !admission_rejection_preselected && !operation.begin_ordinary() {
         return Err(anyhow!(
             "tool invocation was fenced before no-body completion"
@@ -274,7 +273,9 @@ where
     let response = match resource_exhausted_without_body().await {
         Ok(response) => response,
         Err(error) => {
-            operation.resolve_ordinary(fallback_terminal, false).await;
+            operation
+                .resolve_ordinary(fallback_terminal, TerminalResolution::RolledBack)
+                .await?;
             let _ = operation.select_infrastructure(error.clone()).await;
             return Err(error.into());
         }
@@ -282,7 +283,9 @@ where
     let terminal = match terminal_from_response(&response) {
         Ok(terminal) => terminal,
         Err(error) => {
-            operation.resolve_ordinary(fallback_terminal, false).await;
+            operation
+                .resolve_ordinary(fallback_terminal, TerminalResolution::RolledBack)
+                .await?;
             let _ = operation.select_infrastructure(error.clone()).await;
             return Err(error.into());
         }
@@ -295,7 +298,9 @@ where
             response,
             _,
         )) => {
-            operation.resolve_ordinary(terminal, true).await;
+            operation
+                .resolve_ordinary(terminal, TerminalResolution::Committed)
+                .await?;
             let terminal = terminal_from_response(&response)?;
             let failure = skipped_attachment_failure(&terminal);
             complete_owner_attachment_terminals(
@@ -313,16 +318,20 @@ where
             }
             publish_no_body_terminals(stdin, stdout, stderr);
             let response = decode_tool_terminal(*response)?;
-            operation.settle().await;
+            operation.settle().await?;
             Ok(response)
         }
         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
             response,
             _,
         )) => {
-            operation.resolve_ordinary(terminal, false).await;
+            operation
+                .resolve_ordinary(terminal, TerminalResolution::RolledBack)
+                .await?;
             let _ = operation.begin_cancel();
-            operation.resolve_cancel(true).await;
+            operation
+                .resolve_cancel(TerminalResolution::Committed)
+                .await?;
             let terminal = terminal_from_response(&response)?;
             let failure = skipped_attachment_failure(&terminal);
             complete_owner_attachment_terminals(
@@ -335,11 +344,13 @@ where
             .await?;
             publish_no_body_terminals(stdin, stdout, stderr);
             let response = decode_tool_terminal(*response)?;
-            operation.settle().await;
+            operation.settle().await?;
             Ok(response)
         }
         Err(error) => {
-            operation.resolve_ordinary(terminal, false).await;
+            operation
+                .resolve_ordinary(terminal, TerminalResolution::RolledBack)
+                .await?;
             let _ = operation.select_infrastructure(error.clone()).await;
             Err(error.into())
         }
@@ -382,10 +393,7 @@ where
             .as_ref()
             .map(ToolOutputWriterEntry::controller),
     );
-    if !operation.transition_admission(
-        operation::BodyAdmissionState::Staging,
-        operation::BodyAdmissionState::SettledWithoutBody,
-    ) {
+    if !operation.settle_without_body(operation::BodyAdmissionState::Staging) {
         return Err(anyhow!(
             "tool invocation was fenced before recorded no-body replay"
         ));
@@ -423,9 +431,15 @@ where
                     _,
                     _,
                 )) => {
-                    operation.resolve_ordinary(terminal, true).await;
+                    operation
+                        .resolve_ordinary(terminal, TerminalResolution::Committed)
+                        .await?;
                 }
-                _ => operation.resolve_ordinary(terminal, false).await,
+                _ => {
+                    operation
+                        .resolve_ordinary(terminal, TerminalResolution::RolledBack)
+                        .await?
+                }
             }
             outcome
         }
@@ -439,7 +453,8 @@ where
                 .cancel_without_body_owned(&accessor.settlement)
                 .await;
             operation
-                .resolve_cancel(matches!(
+                .resolve_cancel(
+                    if matches!(
                     &outcome,
                     Ok(
                         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
@@ -447,8 +462,13 @@ where
                             _
                         )
                     )
-                ))
-                .await;
+                ) {
+                        TerminalResolution::Committed
+                    } else {
+                        TerminalResolution::RolledBack
+                    },
+                )
+                .await?;
             outcome
         }
     }?;
@@ -476,7 +496,7 @@ where
             decode_tool_terminal(*response)?
         }
     };
-    operation.settle().await;
+    operation.settle().await?;
     Ok(response)
 }
 
@@ -550,11 +570,17 @@ where
         .cancel_without_body_owned(&accessor.settlement)
         .await;
     operation
-        .resolve_cancel(matches!(
-            &outcome,
-            Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(_, _))
-        ))
-        .await;
+        .resolve_cancel(
+            if matches!(
+                &outcome,
+                Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(_, _))
+            ) {
+                TerminalResolution::Committed
+            } else {
+                TerminalResolution::RolledBack
+            },
+        )
+        .await?;
     let outcome = outcome?;
     complete_owner_attachment_terminals(
         accessor,
@@ -571,7 +597,7 @@ where
             decode_tool_terminal(*response)?
         }
     };
-    operation.settle().await;
+    operation.settle().await?;
     Ok(response)
 }
 
@@ -597,11 +623,17 @@ where
         .cancel_without_body_owned(&accessor.settlement)
         .await;
     operation
-        .resolve_cancel(matches!(
-            &outcome,
-            Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(_, _))
-        ))
-        .await;
+        .resolve_cancel(
+            if matches!(
+                &outcome,
+                Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(_, _))
+            ) {
+                TerminalResolution::Committed
+            } else {
+                TerminalResolution::RolledBack
+            },
+        )
+        .await?;
     let outcome = outcome?;
     complete_owner_attachment_terminals(
         accessor,
@@ -618,7 +650,7 @@ where
             decode_tool_terminal(*response)?
         }
     };
-    operation.settle().await;
+    operation.settle().await?;
     Ok(response)
 }
 
@@ -691,7 +723,11 @@ where
     if let Err(error) = &mut result {
         let settlement_hook =
             Ctx::worker_deletion_hook(&crate::services::HasExtraDeps::extra_deps(primary.as_ref()));
-        rollback_live_attachment_admission_rejection(&cleanup_operation).await;
+        if let Err(rollback_error) =
+            rollback_live_attachment_admission_rejection(&cleanup_operation).await
+        {
+            *error = rollback_error.into();
+        }
         let mut failed_resources = failed_resources.lock().unwrap().take();
         if let Some(failed_resources) = failed_resources.as_mut() {
             if !failed_resources.parent_end_attempted {
@@ -713,8 +749,11 @@ where
         if matches!(
             cleanup_operation.winner_if_active(),
             Some(operation::ToolOperationWinner::SelectingCancelled)
-        ) {
-            cleanup_operation.resolve_cancel(false).await;
+        ) && let Err(rollback_error) = cleanup_operation
+            .resolve_cancel(TerminalResolution::RolledBack)
+            .await
+        {
+            *error = rollback_error.into();
         }
         let active_agent = active_agents
             .try_get_active_agent(&owner_id)
@@ -739,16 +778,18 @@ where
             "Classifying accepted tool operation failure"
         );
         cleanup_operation.select_failure(requested_winner).await;
-        let winner = owner_operations
-            .selected_owner_failure()
-            .expect("failed accepted tool operation must select an owner winner");
+        let winner = owner_operations.selected_owner_failure().ok_or_else(|| {
+            WorkerExecutorError::runtime(
+                "failed accepted tool operation did not select an owner winner",
+            )
+        })?;
         let preserve_exact_trap = matches!(&winner, operation::OwnerFailureWinner::Trap(_));
         let owner_failure_cleanup = cleanup_operation.claim_owner_failure_cleanup();
         if let Some(owner_failure_cleanup) = owner_failure_cleanup {
+            let winner = owner_failure_cleanup.winner().clone();
             let interrupt_signal = primary.current_execution_interrupt_signal();
             let operations = owner_operations.clone();
-            let cleanup = owner_operations.start_owner_failure_cleanup(
-                owner_failure_cleanup,
+            let cleanup = owner_failure_cleanup.start(
                 async move {
                     if let Some(active_agent) = active_agent {
                         active_agent.fence_entity_bodies(winner).await;
@@ -764,7 +805,7 @@ where
                         hook.before_failed_tool_settlement(&owner_id, cleanup_start)
                             .await;
                     }
-                    cleanup_operation.settle().await;
+                    cleanup_operation.settle().await?;
                     settlement
                 },
                 move || {
@@ -790,7 +831,9 @@ where
                 hook.before_failed_tool_settlement(&owner_id, cleanup_start)
                     .await;
             }
-            cleanup_operation.settle().await;
+            if let Err(settlement_error) = cleanup_operation.settle().await {
+                *error = settlement_error.into();
+            }
         }
     }
     drop(reconstruction_hold);
@@ -939,10 +982,7 @@ where
     if filesystem == golem_common::model::entity::FilesystemCapability::Incapable
         && execution.is_some_and(ToolExecution::is_cancelled)
     {
-        if !operation.transition_admission(
-            operation::BodyAdmissionState::Staging,
-            operation::BodyAdmissionState::SettledWithoutBody,
-        ) {
+        if !operation.settle_without_body(operation::BodyAdmissionState::Staging) {
             return Err(anyhow!(
                 "tool invocation was fenced before pre-dispatch cancellation"
             ));
@@ -998,10 +1038,7 @@ where
                     ))
                     .await;
                 }
-                if !operation.transition_admission(
-                    operation::BodyAdmissionState::Staging,
-                    operation::BodyAdmissionState::SettledWithoutBody,
-                ) {
+                if !operation.settle_without_body(operation::BodyAdmissionState::Staging) {
                     return Err(anyhow!(
                         "tool invocation was fenced before pre-dispatch cancellation"
                     ));
@@ -1047,10 +1084,7 @@ where
     }
     match filesystem {
         golem_common::model::entity::FilesystemCapability::Incapable => {
-            if !operation.transition_admission(
-                operation::BodyAdmissionState::Staging,
-                operation::BodyAdmissionState::Running,
-            ) {
+            if !operation.start_body_without_lane() {
                 return Err(anyhow!("tool invocation was fenced before dispatch"));
             }
         }
@@ -1142,14 +1176,13 @@ where
                 );
                 stdin.publish_completion();
             }
-            if !operation.transition_admission(
-                operation::BodyAdmissionState::Staging,
-                operation::BodyAdmissionState::Ready,
-            ) || !deferred_admission.settle_staging(
-                &parent,
-                start,
-                operation::DeferredAdmissionReadiness::Ready,
-            ) {
+            if !operation.mark_body_ready()
+                || !deferred_admission.settle_staging(
+                    &parent,
+                    start,
+                    operation::DeferredAdmissionReadiness::Ready,
+                )
+            {
                 return Err(anyhow!(
                     "tool invocation was fenced before lane registration"
                 ));
@@ -1338,10 +1371,13 @@ where
                                 "tool attachment admission rejection lost its operation marker",
                             )
                         })?;
-                    (resource_exhausted_after_body().await, rejection.preselected)
+                    (
+                        resource_exhausted_after_body().await,
+                        rejection.ordinary_reserved(),
+                    )
                 }
                 Err(error) => {
-                    rollback_live_attachment_admission_rejection(&operation).await;
+                    rollback_live_attachment_admission_rejection(&operation).await?;
                     (Err(error), false)
                 }
                 result => (result, false),
@@ -1367,9 +1403,9 @@ where
                         Arc::new(resource_exhausted_terminal(
                             SerializableEntityBodyExecution::Executed,
                         )),
-                        false,
+                        TerminalResolution::RolledBack,
                     )
-                    .await;
+                    .await?;
             }
             match &result {
                 Ok(response) => {
@@ -1382,9 +1418,9 @@ where
                                         Arc::new(resource_exhausted_terminal(
                                             SerializableEntityBodyExecution::Executed,
                                         )),
-                                        false,
+                                        TerminalResolution::RolledBack,
                                     )
-                                    .await;
+                                    .await?;
                             }
                             return Err(error);
                         }
@@ -1484,7 +1520,7 @@ where
     let body = match body {
         Ok(body) => body,
         Err(error) => {
-            rollback_live_attachment_admission_rejection(&operation).await;
+            rollback_live_attachment_admission_rejection(&operation).await?;
             let _ = operation.select_infrastructure(error.clone()).await;
             return Err(error.into());
         }
@@ -1512,14 +1548,15 @@ where
             },
             move |error| async move {
                 let terminal = terminal_for_completed_failure.lock().unwrap().take();
-                if let Some(terminal) = terminal {
+                let rollback = if let Some(terminal) = terminal {
                     operation_for_completed_failure
-                        .resolve_ordinary(terminal, false)
-                        .await;
+                        .resolve_ordinary(terminal, TerminalResolution::RolledBack)
+                        .await
                 } else {
                     rollback_live_attachment_admission_rejection(&operation_for_completed_failure)
-                        .await;
-                }
+                        .await
+                };
+                let error = rollback.err().unwrap_or(error);
                 let _ = operation_for_completed_failure
                     .select_infrastructure(error)
                     .await;
@@ -1552,7 +1589,9 @@ where
                     Some(retained)
                 }
                 None => {
-                    operation.resolve_ordinary(terminal, true).await;
+                    operation
+                        .resolve_ordinary(terminal, TerminalResolution::Committed)
+                        .await?;
                     None
                 }
             };
@@ -1607,7 +1646,7 @@ where
             let response =
                 streams::restore_response(&result_streams, decode_tool_terminal(*response)?)
                     .await?;
-            operation.settle().await;
+            operation.settle().await?;
             Ok(response)
         }
         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
@@ -1620,7 +1659,9 @@ where
                 response_terminal.body_execution == SerializableEntityBodyExecution::Skipped;
             let selected_terminal = terminal.lock().unwrap().take();
             if let Some(terminal) = selected_terminal {
-                operation.resolve_ordinary(terminal, false).await;
+                operation
+                    .resolve_ordinary(terminal, TerminalResolution::RolledBack)
+                    .await?;
             }
             let _ = operation.begin_cancel();
             let resources = match resources {
@@ -1638,7 +1679,9 @@ where
                     Some(retained)
                 }
                 None => {
-                    operation.resolve_cancel(true).await;
+                    operation
+                        .resolve_cancel(TerminalResolution::Committed)
+                        .await?;
                     None
                 }
             };
@@ -1673,7 +1716,7 @@ where
                     .map_err(SessionError::into_trap)?;
             }
             let response = decode_tool_terminal(*response)?;
-            operation.settle().await;
+            operation.settle().await?;
             if no_body {
                 publish_no_body_terminals(
                     stdin_controller.as_ref(),
@@ -1694,9 +1737,11 @@ where
         Err(failure) => {
             let selected_terminal = terminal.lock().unwrap().take();
             if let Some(terminal) = selected_terminal {
-                operation.resolve_ordinary(terminal, false).await;
+                operation
+                    .resolve_ordinary(terminal, TerminalResolution::RolledBack)
+                    .await?;
             } else {
-                rollback_live_attachment_admission_rejection(&operation).await;
+                rollback_live_attachment_admission_rejection(&operation).await?;
             }
             if let Some(resources) = failure.resources {
                 *failed_resources.lock().unwrap() = Some(FailedRetainedEntityResources {

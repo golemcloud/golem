@@ -51,14 +51,25 @@ const decision = JSON.parse(new TextDecoder().decode(bytes));
 
 ## PromiseId Structure
 
-A `PromiseId` contains an `agentId` and an `oplogIdx`. To let an external system complete the promise via the Golem REST API, the agent must expose both fields. The external caller then sends:
+A `PromiseId` contains an `agentId`, a `fingerprint`, and an `oplogIdx`. The `fingerprint` is a UUID (`{ highBits, lowBits }`) that identifies the agent incarnation that created the promise: a deleted and re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs of the deleted incarnation do not complete the promises of the new one. To let an external system complete the promise via the Golem REST API, the agent must expose all three fields. Convert the fingerprint to its string form with `uuidToString`:
+
+```typescript
+import { uuidToString } from 'golem:core/types@2.0.0';
+
+const fingerprint = uuidToString(promiseId.fingerprint);
+const oplogIdx = promiseId.oplogIdx.toString();
+```
+
+The external caller then sends:
 
 ```
 POST /v1/components/{component_id}/workers/{agent_name}/complete
 Content-Type: application/json
 
-{"oplogIdx": <oplog_idx>, "data": [<bytes>]}
+{"oplogIdx": <oplog_idx>, "fingerprint": "<fingerprint_uuid>", "data": [<bytes>]}
 ```
+
+All three body fields are required. The display form of a promise ID is `<agent-id>/<fingerprint>/<oplog-idx>`.
 
 ## Full Example: Human-in-the-Loop Approval
 
@@ -82,7 +93,7 @@ export const WorkflowAgentImpl = WorkflowAgent.implement({
       // 1. Create a promise
       const promiseId = createPromise();
 
-      // 2. Pass promiseId.oplogIdx to an external system.
+      // 2. Pass promiseId.fingerprint and promiseId.oplogIdx to an external system.
       // Creation does not suspend the agent; awaiting can suspend it after the policy delay.
 
       // 3. Wait for external completion

@@ -793,9 +793,8 @@ impl EnvironmentsApi {
                 .find(|value| value.definition.name == middleware_name.0.as_str())
                 .map(Json)
                 .ok_or_else(|| {
-                    crate::services::deployment::DeploymentError::ToolNotFound(
-                        ToolName::try_from(middleware_name.0.as_str())
-                            .expect("middleware names are valid tool names"),
+                    crate::services::deployment::DeploymentError::ToolMiddlewareNotFound(
+                        middleware_name.0.clone(),
                     )
                 })
                 .map_err(Into::into)
@@ -810,3 +809,6 @@ impl EnvironmentsApi {
 struct UploadInitialAgentFileRequest {
     file: TempFileUpload,
 }
+
+#[cfg(test)]
+mod tests;

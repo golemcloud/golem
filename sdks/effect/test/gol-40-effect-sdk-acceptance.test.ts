@@ -19,6 +19,7 @@ import {
   lifecycleWriter,
   trackedBytes,
 } from "./fixtures/gol-40-effect-sdk-acceptance.js"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const principal = { tag: "oidc", val: { subject: "effect-acceptance", claims: [] } } as const
 const request = {
@@ -154,14 +155,15 @@ describe("GOL-40 Effect SDK acceptance", () => {
       const stdout = lifecycleWriter()
       const stderr = lifecycleWriter()
       const input = trackedBytes()
-      const invocation = invokeRegistered(
-        `gol40-lifecycle-${scenario}`,
-        [],
-        emptyInput(),
-        input.iterable,
-        stdout.writer as never,
-        stderr.writer as never,
-        principal,
+      const invocation = withCaller(principal, () =>
+        invokeRegistered(
+          `gol40-lifecycle-${scenario}`,
+          [],
+          emptyInput(),
+          input.iterable,
+          stdout.writer as never,
+          stderr.writer as never,
+        ),
       )
       if (outcome === "success") await expect(invocation).resolves.toHaveProperty("result")
       else if (outcome === "declared")
@@ -254,14 +256,15 @@ describe("GOL-40 Effect SDK acceptance", () => {
     const stderr = lifecycleWriter()
 
     await expect(
-      invokeRegistered(
-        "gol40-lifecycle-success",
-        [],
-        emptyInput(),
-        trackedBytes().iterable,
-        stdout.writer as never,
-        stderr.writer as never,
-        principal,
+      withCaller(principal, () =>
+        invokeRegistered(
+          "gol40-lifecycle-success",
+          [],
+          emptyInput(),
+          trackedBytes().iterable,
+          stdout.writer as never,
+          stderr.writer as never,
+        ),
       ),
     ).resolves.toHaveProperty("result")
     expect(stdout.events).toEqual(["write:1", "finish"])
@@ -273,14 +276,15 @@ describe("GOL-40 Effect SDK acceptance", () => {
     const stdout = lifecycleWriter(new Error("stdout finish failed"))
     const stderr = lifecycleWriter()
     await expect(
-      invokeRegistered(
-        "gol40-lifecycle-declared",
-        [],
-        emptyInput(),
-        trackedBytes().iterable,
-        stdout.writer as never,
-        stderr.writer as never,
-        principal,
+      withCaller(principal, () =>
+        invokeRegistered(
+          "gol40-lifecycle-declared",
+          [],
+          emptyInput(),
+          trackedBytes().iterable,
+          stdout.writer as never,
+          stderr.writer as never,
+        ),
       ),
     ).rejects.toMatchObject({ tag: "custom-error" })
     expect(stdout.events).toContain("finish")

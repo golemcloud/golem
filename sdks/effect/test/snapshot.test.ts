@@ -33,6 +33,7 @@ import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-mod
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
 import { Principal } from "../src/Principal.js"
 import * as Ids from "../src/Ids.js"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const anonymous = { tag: "anonymous" } as const
 const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
@@ -348,6 +349,7 @@ describe("snapshotting", () => {
             componentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
             agentId: "waiting-agent",
           },
+          fingerprint: "00000000-0000-0007-ffff-ffffffffffff" as Ids.Uuid,
           oplogIdx: 9007199254740993n,
         },
         controls: ["9007199254740993", 9007199254740993n, 0n, -123n],
@@ -381,8 +383,8 @@ describe("snapshotting", () => {
           snapshot: Snapshot.ref(),
         })
       }
-      await guest.initialize("PromiseSnapshot", wire(), anonymous)
-      await guest.invoke("check", wire(), anonymous)
+      await withCaller(anonymous, () => guest.initialize("PromiseSnapshot", wire()))
+      await withCaller(anonymous, () => guest.invoke("check", wire()))
       const snapshot = await dispatchSaveSnapshot()
       const persisted = JSON.parse(new TextDecoder().decode(snapshot.payload))
       expect(persisted.state.promise.oplogIdx).toEqual({
@@ -391,12 +393,15 @@ describe("snapshotting", () => {
       expect(persisted.state.promise.agentId.componentId.uuid.highBits).toEqual({
         $golemSnapshot: ["bigint", "18446744073709551615"],
       })
+      expect(persisted.state.promise.fingerprint.lowBits).toEqual({
+        $golemSnapshot: ["bigint", "18446744073709551615"],
+      })
       expect(persisted.state.transformed).toBe("7")
       await __resetAgents()
       __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "PromiseSnapshot"]])
       __setParseAgentIdForTest(() => ["PromiseSnapshot", typed(wire()), undefined])
       await dispatchLoadSnapshot(snapshot)
-      await guest.invoke("check", wire(), anonymous)
+      await withCaller(anonymous, () => guest.invoke("check", wire()))
     },
   )
 
@@ -436,9 +441,11 @@ describe("snapshotting", () => {
       const aliceWv = yield* Schema.encodeEffect(stringCodec.codec)("alice")
       const sevenWv = yield* Schema.encodeEffect(numberCodec.codec)(7)
 
-      yield* Effect.promise(() => guest.initialize("AutoSnapshotCounter", wire(aliceWv), oidcBob))
-      yield* Effect.promise(() => guest.invoke("add", wire(sevenWv), oidcBob))
-      yield* Effect.promise(() => guest.invoke("add", wire(sevenWv), oidcBob))
+      yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.initialize("AutoSnapshotCounter", wire(aliceWv))),
+      )
+      yield* Effect.promise(() => withCaller(oidcBob, () => guest.invoke("add", wire(sevenWv))))
+      yield* Effect.promise(() => withCaller(oidcBob, () => guest.invoke("add", wire(sevenWv))))
 
       const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
       expect(snapshot.mimeType).toBe("application/json")
@@ -476,18 +483,22 @@ describe("snapshotting", () => {
 
       yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
 
-      const out = yield* Effect.promise(() => guest.invoke("value", wire(), oidcBob))
+      const out = yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.invoke("value", wire())),
+      )
       const value = read<number>(out!)
       expect(value).toBe(14)
 
-      const ownerOut = yield* Effect.promise(() => guest.invoke("owner", wire(), oidcBob))
+      const ownerOut = yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.invoke("owner", wire())),
+      )
       const owner = read<string>(ownerOut!)
       expect(owner).toBe("alice")
     }),
   )
 
   it("auto: init runs once for initialization and is skipped during restoration", async () => {
-    await guest.initialize("DirectSnapshotAgent", wire(), anonymous)
+    await withCaller(anonymous, () => guest.initialize("DirectSnapshotAgent", wire()))
     expect(directInitCalls).toBe(1)
     const snapshot = await dispatchSaveSnapshot()
 
@@ -497,7 +508,7 @@ describe("snapshotting", () => {
     await dispatchLoadSnapshot(snapshot)
 
     expect(directInitCalls).toBe(1)
-    const out = await guest.invoke("value", wire(), anonymous)
+    const out = await withCaller(anonymous, () => guest.invoke("value", wire()))
     expect(read<number>(out!)).toBe(1)
   })
 
@@ -538,9 +549,11 @@ describe("snapshotting", () => {
       const carolWv = yield* Schema.encodeEffect(stringCodec.codec)("carol")
       const threeWv = yield* Schema.encodeEffect(numberCodec.codec)(3)
 
-      yield* Effect.promise(() => guest.initialize("CustomSnapshotAgent", wire(carolWv), oidcBob))
-      yield* Effect.promise(() => guest.invoke("add", wire(threeWv), oidcBob))
-      yield* Effect.promise(() => guest.invoke("add", wire(threeWv), oidcBob))
+      yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.initialize("CustomSnapshotAgent", wire(carolWv))),
+      )
+      yield* Effect.promise(() => withCaller(oidcBob, () => guest.invoke("add", wire(threeWv))))
+      yield* Effect.promise(() => withCaller(oidcBob, () => guest.invoke("add", wire(threeWv))))
 
       const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
       expect(snapshot.mimeType).toBe("application/octet-stream")
@@ -553,7 +566,9 @@ describe("snapshotting", () => {
       yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
       expect(customStore.loadCalls).toBe(1)
 
-      const out = yield* Effect.promise(() => guest.invoke("value", wire(), oidcBob))
+      const out = yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.invoke("value", wire())),
+      )
       const value = read<number>(out!)
       expect(value).toBe(6)
     }),
@@ -572,8 +587,10 @@ describe("snapshotting", () => {
         throw new Error(`unexpected config path: ${path.join(".")}`)
       })
 
-      yield* Effect.promise(() => guest.initialize("ConfigCustomAgent", wire(danWv), oidcBob))
-      yield* Effect.promise(() => guest.invoke("add", wire(fourWv), oidcBob))
+      yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.initialize("ConfigCustomAgent", wire(danWv))),
+      )
+      yield* Effect.promise(() => withCaller(oidcBob, () => guest.invoke("add", wire(fourWv))))
 
       const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
       expect(snapshot.mimeType).toBe("application/octet-stream")
@@ -590,7 +607,9 @@ describe("snapshotting", () => {
       yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
       expect(configCustomStore.loadCalls).toBe(1)
 
-      const out = yield* Effect.promise(() => guest.invoke("value", wire(), oidcBob))
+      const out = yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.invoke("value", wire())),
+      )
       const value = read<number>(out!)
       expect(value).toBe(4)
     }),
@@ -605,7 +624,7 @@ describe("snapshotting", () => {
     const prefixA = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("A"))
     __setGetConfigValueForTest(() => schemaValueToWit(prefixA))
 
-    await guest.initialize("ConfigCustomAgent", wire(danWv), oidcBob)
+    await withCaller(oidcBob, () => guest.initialize("ConfigCustomAgent", wire(danWv)))
     const snapshot = await dispatchSaveSnapshot()
 
     await __resetAgents()
@@ -643,14 +662,14 @@ describe("snapshotting", () => {
       methods: { ping: method({ input: {}, success: Schema.Void }) },
     }).implement({ init: () => Effect.void, methods: () => ({ ping: () => Effect.void }) })
     void NoSnap
-    await guest.initialize("NoSnap", wire(), anonymous)
+    await withCaller(anonymous, () => guest.initialize("NoSnap", wire()))
     await expect(dispatchSaveSnapshot()).rejects.toThrow(/did not declare a snapshot/)
   })
 
   it("load fails when an agent is already initialized", async () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
-    await guest.initialize("AutoSnapshotCounter", wire(aliceWv), oidcBob)
+    await withCaller(oidcBob, () => guest.initialize("AutoSnapshotCounter", wire(aliceWv)))
     const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "alice" })
     await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(/already initialized/)
   })

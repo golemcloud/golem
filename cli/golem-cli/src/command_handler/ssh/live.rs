@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! One `run` call through the live session, which is what lets Ctrl+C stop a command.
+//! One `run` call through the live session, which tells the command's accepted invocation key
+//! before the command runs and lets Ctrl+C stop a command.
 
 use crate::command_handler::agent::invocation_session::CliSessionRequestProvider;
 use crate::command_handler::tool::{ToolOwner, public_target, public_typed_value};
@@ -21,10 +22,10 @@ use golem_client::invocation_session::{
     InvocationSession, InvocationSessionRequestProvider, InvocationSessionStateSnapshot,
     ReconnectPolicy, SessionTransportError, drive_native_tool_session_with_stop,
 };
-use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_VERSION, PublicClientMessage, PublicInvocationResult,
 };
+use golem_common::model::{IdempotencyKey, InvocationId};
 use golem_common::schema::ExternalTypedSchemaValue;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -36,7 +37,39 @@ use tokio_tungstenite::tungstenite;
 /// as the server cannot be reached, and a call that has not reached it has not run.
 const OPEN_WAIT: Duration = Duration::from_secs(10);
 
-/// An input that never has data and never ends: the stdin stays open until it is cancelled.
+/// One command's keys: the request key the session sends, and the invocation key the server
+/// accepted the command under. Only the accepted key cancels the command or looks it up.
+pub(super) struct CallKey {
+    pub(super) request: IdempotencyKey,
+    accepted: tokio::sync::watch::Sender<Option<InvocationId>>,
+}
+
+impl CallKey {
+    pub(super) fn fresh() -> Self {
+        Self {
+            request: IdempotencyKey::fresh(),
+            accepted: tokio::sync::watch::Sender::new(None),
+        }
+    }
+
+    fn accept(&self, key: &InvocationId) {
+        self.accepted.send_replace(Some(*key));
+    }
+
+    /// The accepted key, when the server has accepted the command.
+    pub(super) fn accepted(&self) -> Option<InvocationId> {
+        *self.accepted.borrow()
+    }
+
+    /// Waits until the server has accepted the command. It never answers when the call ends
+    /// without an acceptance, so the caller bounds the wait.
+    pub(super) async fn wait_accepted(&self) {
+        let mut accepted = self.accepted.subscribe();
+        let _ = accepted.wait_for(Option::is_some).await;
+    }
+}
+
+/// An input that never has data and never ends: the stdin stays open until it is stopped.
 struct OpenInput;
 
 impl tokio::io::AsyncRead for OpenInput {
@@ -49,9 +82,10 @@ impl tokio::io::AsyncRead for OpenInput {
     }
 }
 
-/// Runs one `run` call through the live session with an open, empty stdin. `stop` cancels the
-/// stdin, which asks the tool to stop the script; `give_up` leaves the call running and
-/// returns the transport's `Interrupted` error.
+/// Runs one `run` call through the live session and gives its accepted key to `key`. With
+/// `stdin`, the call has an open, empty stdin and `stop` fails it, which asks the tool to stop
+/// the script; without it `stop` does nothing. `give_up` leaves the call running and returns the
+/// transport's `Interrupted` error.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_live(
     ctx: &Arc<Context>,
@@ -59,7 +93,8 @@ pub(super) async fn run_live(
     tool: &str,
     command_path: Vec<String>,
     input: ExternalTypedSchemaValue,
-    key: &IdempotencyKey,
+    key: &CallKey,
+    stdin: bool,
     stop: impl Future<Output = ()>,
     give_up: impl Future<Output = ()>,
 ) -> Result<PublicInvocationResult, SessionTransportError> {
@@ -72,20 +107,30 @@ pub(super) async fn run_live(
             attempt_id: uuid::Uuid::new_v4(),
             application: owner.application_name.to_string(),
             environment: owner.environment_name.to_string(),
-            idempotency_key: key.value.clone(),
+            idempotency_key: key.request.value.clone(),
             tool_name: tool.to_string(),
             command_path,
             target: public_target(owner),
             input: Box::new(input),
-            stdin: true,
+            stdin,
             stdout: false,
             stderr: false,
             version: INVOCATION_SESSION_VERSION,
         }),
         session_token: None,
+        accepted_invocation: None,
     };
     let requests = Arc::new(CliSessionRequestProvider::new(ctx.clone()));
-    open_and_drive(requests, initial, OPEN_WAIT, stop, give_up).await
+    open_and_drive(
+        requests,
+        initial,
+        OPEN_WAIT,
+        stdin,
+        stop,
+        give_up,
+        |accepted| key.accept(accepted),
+    )
+    .await
 }
 
 /// Opens the session for `initial` within `open_wait` and drives the call to its result. A
@@ -94,8 +139,10 @@ async fn open_and_drive(
     requests: Arc<dyn InvocationSessionRequestProvider>,
     initial: InvocationSessionStateSnapshot,
     open_wait: Duration,
+    stdin: bool,
     stop: impl Future<Output = ()>,
     give_up: impl Future<Output = ()>,
+    on_accepted: impl FnMut(&InvocationId),
 ) -> Result<PublicInvocationResult, SessionTransportError> {
     tokio::pin!(give_up);
     let session = tokio::select! {
@@ -121,11 +168,12 @@ async fn open_and_drive(
     };
     drive_native_tool_session_with_stop(
         session,
-        Some(OpenInput),
+        stdin.then_some(OpenInput),
         &mut tokio::io::sink(),
         &mut tokio::io::sink(),
         give_up,
         stop,
+        on_accepted,
     )
     .await
 }
@@ -203,13 +251,16 @@ mod tests {
                 version: INVOCATION_SESSION_VERSION,
             }),
             session_token: None,
+            accepted_invocation: None,
         };
         let call = open_and_drive(
             Arc::new(Unreachable(address)),
             initial,
             open_wait,
+            true,
             std::future::pending(),
             give_up,
+            |_| {},
         );
         tokio::time::timeout(Duration::from_secs(5), call)
             .await

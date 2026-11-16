@@ -14,7 +14,7 @@
 
 use crate::benchmarks::{cleanup_user_state, delete_workers};
 use async_trait::async_trait;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, IdempotencyKey};
@@ -41,7 +41,7 @@ pub struct BenchmarkContext {
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    agent_id: ParsedAgentId,
+    agent_id: ParsedAgentKey,
     env_id: EnvironmentId,
 }
 

@@ -18,13 +18,13 @@ use super::{
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
-    AgentFilesystemBehaviour, AgentRouteMode, CallAgentBehaviour, CompiledInputSchema,
-    CompiledOutputSchema, CompiledSchema, ConstructorParameter, CorsPreflightBehaviour,
-    CorsPreflightMethodPolicy, DurableStreamRepresentation, DurableStreamRouteLoadPolicy,
-    DurableStreamRoutePolicy, DurableStreamSlot, DurableStreamSlotDirection, HttpRouterBehaviour,
-    MethodParameter, OriginPattern, PhantomSelection, QueryOrHeaderType, RouteMatch,
-    RouterFileIndexEntry, RouterMethod, SecuritySchemeRouteSecurity,
-    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    AgentFilesystemBehaviour, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
+    CompiledSchema, ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
+    DurableStreamRepresentation, DurableStreamRouteLoadPolicy, DurableStreamRoutePolicy,
+    DurableStreamSlot, DurableStreamSlotDirection, HttpRouterBehaviour, MethodParameter,
+    OriginPattern, PhantomSelection, QueryOrHeaderType, RouteMatch, RouterFileIndexEntry,
+    RouterMethod, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
 use golem_common::model::account::AccountEmail;
@@ -233,17 +233,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .durable_streams
                     .map(TryInto::try_into)
                     .transpose()?,
-                route_mode: match proto::golem::customapi::route_behaviour::AgentRouteMode::try_from(
-                    call_agent.route_mode,
-                ) {
-                    Ok(proto::golem::customapi::route_behaviour::AgentRouteMode::Rest) => {
-                        AgentRouteMode::Rest
-                    }
-                    Ok(
-                        proto::golem::customapi::route_behaviour::AgentRouteMode::DurableStreams,
-                    ) => AgentRouteMode::DurableStreams,
-                    _ => return Err("Invalid or missing agent route mode".into()),
-                },
+                route_mode: call_agent.route_mode.try_into()?,
                 component_id: call_agent
                     .component_id
                     .ok_or("Missing component_id")?
@@ -532,10 +522,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     proto::golem::customapi::route_behaviour::CallAgent {
                         base_path_variables,
                         durable_streams: durable_streams.map(Into::into),
-                        route_mode: match route_mode {
-                            AgentRouteMode::Rest => proto::golem::customapi::route_behaviour::AgentRouteMode::Rest as i32,
-                            AgentRouteMode::DurableStreams => proto::golem::customapi::route_behaviour::AgentRouteMode::DurableStreams as i32,
-                        },
+                        route_mode: golem_schema::proto::golem::http::HttpRouteMode::from(route_mode) as i32,
                         component_id: Some(component_id.into()),
                         component_revision: component_revision.into(),
                         agent_type: agent_type.0,
@@ -639,6 +626,7 @@ impl TryFrom<proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy>
         value: proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
+            family_id: value.family_id,
             slots: value
                 .slots
                 .into_iter()
@@ -657,6 +645,7 @@ impl From<DurableStreamRoutePolicy>
 {
     fn from(value: DurableStreamRoutePolicy) -> Self {
         Self {
+            family_id: value.family_id,
             slots: value.slots.into_iter().map(Into::into).collect(),
             allow_external_writes: value.allow_external_writes,
             allow_stream_delete: value.allow_stream_delete,

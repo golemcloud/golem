@@ -16,9 +16,12 @@ mod admission;
 mod deferred;
 mod lane;
 mod owner;
+mod state;
 mod terminal;
 
 use lane::drain_lane_ownerships;
+use state::{OperationState, OwnerPhase};
+pub(crate) use state::{OwnerFailureCleanupToken, TerminalResolution};
 
 use super::attachment::{AttachmentController, ToolAttachmentMetadata};
 use crate::model::TrapType;
@@ -64,12 +67,20 @@ pub(crate) enum ToolLiveAdmissionOutcome {
 enum ToolLiveAdmissionState {
     Historical,
     Live,
-    ResourceExhaustedPending { preselected: bool },
+    ResourceExhaustedPending(ToolAttachmentAdmissionRejection),
     ResourceExhaustedHandled,
 }
 
-pub(crate) struct ToolAttachmentAdmissionRejection {
-    pub(crate) preselected: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ToolAttachmentAdmissionRejection {
+    LiveReserved,
+    Recorded,
+}
+
+impl ToolAttachmentAdmissionRejection {
+    pub(crate) fn ordinary_reserved(self) -> bool {
+        matches!(self, Self::LiveReserved)
+    }
 }
 
 #[derive(Default)]
@@ -218,11 +229,7 @@ struct RegisteredOperation {
     context: Arc<OwnerToolOperationContext>,
     lease: Arc<OperationLease>,
     invocation_id: Option<EntityInvocationId>,
-    winner: ToolOperationWinner,
-    winner_tx: watch::Sender<ToolOperationWinner>,
-    admission: BodyAdmissionState,
-    lane: LaneOwnership,
-    acquisition_error: Option<String>,
+    state: OperationState,
     stdin: Option<AttachmentController>,
     stdout: Option<AttachmentController>,
     stderr: Option<AttachmentController>,
@@ -231,16 +238,6 @@ struct RegisteredOperation {
 
 struct OperationLease {
     handles: AtomicUsize,
-}
-
-impl RegisteredOperation {
-    fn withdraw_uncommitted_cancellation(&mut self, changed: &Notify) {
-        if matches!(self.winner, ToolOperationWinner::SelectingCancelled) {
-            self.winner = ToolOperationWinner::Open;
-            self.winner_tx.send_replace(ToolOperationWinner::Open);
-            changed.notify_waiters();
-        }
-    }
 }
 
 enum LaneOwnership {
@@ -267,12 +264,7 @@ struct AcquisitionDrainGuard {
 }
 
 struct OwnerToolOperationsState {
-    admission_closed: bool,
-    owner_winner: Option<OwnerFailureWinner>,
-    owner_failure_cleanup: Option<OwnerFailureCleanupState>,
-    owner_failure_cleanup_complete: bool,
-    owner_failure_cleanup_settled: bool,
-    cleanup_task: Option<Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>>,
+    phase: OwnerPhase,
     operations: HashMap<u64, RegisteredOperation>,
 }
 
@@ -280,15 +272,6 @@ struct OwnerToolOperationsState {
 enum OwnerFailureCleanupOwner {
     Primary,
     Tool(u64),
-}
-
-struct OwnerFailureCleanupState {
-    owner: OwnerFailureCleanupOwner,
-    claimed: bool,
-}
-
-pub(crate) struct OwnerFailureCleanupToken {
-    owner: OwnerFailureCleanupOwner,
 }
 
 /// One arbitration domain for all accepted tool operations in an owner generation. Durable
@@ -354,15 +337,19 @@ impl OwnerToolOperation {
         }
     }
 
-    pub(super) fn register_execution(&self, execution: std::sync::Weak<super::ToolExecution>) {
-        self.owner
-            .state
-            .lock()
-            .unwrap()
+    pub(super) fn register_execution(
+        &self,
+        execution: std::sync::Weak<super::ToolExecution>,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut state = self.owner.state.lock().unwrap();
+        state
             .operations
             .get_mut(&self.id)
-            .expect("accepted tool operation must remain registered")
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("accepted tool operation is no longer registered")
+            })?
             .execution = execution;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -371,7 +358,7 @@ impl OwnerToolOperation {
         state
             .operations
             .get(&self.id)
-            .map(|operation| !matches!(operation.lane, LaneOwnership::None))
+            .map(|operation| !matches!(operation.state.lane(), LaneOwnership::None))
     }
 
     #[cfg(test)]
@@ -382,7 +369,7 @@ impl OwnerToolOperation {
             .unwrap()
             .operations
             .get(&self.id)
-            .map(|operation| matches!(operation.lane, LaneOwnership::Acquiring(_)))
+            .map(|operation| matches!(operation.state.lane(), LaneOwnership::Acquiring(_)))
     }
 }
 

@@ -25,11 +25,11 @@
 
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use golem_common::base_model::Empty;
-use golem_common::base_model::IdempotencyKey;
+use golem_common::base_model::InvocationId;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Principal, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocation;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::schema::{
@@ -132,7 +132,7 @@ fn component_metadata() -> ComponentMetadata {
     )
 }
 
-fn parsed_agent_id() -> ParsedAgentId {
+fn parsed_agent_id() -> ParsedAgentKey {
     let parameters = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -145,7 +145,7 @@ fn parsed_agent_id() -> ParsedAgentId {
             fields: vec![SchemaValue::U64(1)],
         },
     );
-    ParsedAgentId::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+    ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
 }
 
 fn method_input_value() -> SchemaValue {
@@ -170,7 +170,7 @@ fn method_input_value() -> SchemaValue {
 
 fn agent_method_invocation() -> AgentInvocation {
     AgentInvocation::AgentMethod {
-        idempotency_key: IdempotencyKey::new("bench-key".to_string()),
+        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
         method_name: METHOD_NAME.to_string(),
         input: method_input_value(),
         invocation_context: InvocationContextStack::fresh(),

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
+use golem_common::config::LoadOrDump;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_component_compilation_service::config::{ServerConfig, make_config_loader};
 use prometheus::Registry;
@@ -21,24 +22,24 @@ use tokio::task::JoinSet;
 use tracing::info;
 
 pub fn main() -> anyhow::Result<()> {
-    match make_config_loader().load_or_dump_config() {
-        Some(config) => {
-            rustls::crypto::ring::default_provider()
-                .install_default()
-                .expect("Failed to install crypto provider");
+    let config = match make_config_loader().load_or_dump_config()? {
+        LoadOrDump::Loaded(config) => config,
+        LoadOrDump::Dumped => return Ok(()),
+    };
 
-            init_tracing_with_default_env_filter(&config.tracing);
-            info!("Using configuration:\n{}", config.to_safe_string_indented());
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
 
-            let prometheus = golem_component_compilation_service::metrics::register_all();
+    init_tracing_with_default_env_filter(&config.tracing);
+    info!("Using configuration:\n{}", config.to_safe_string_indented());
 
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?
-                .block_on(async_main(config, prometheus))
-        }
-        None => Ok(()),
-    }
+    let prometheus = golem_component_compilation_service::metrics::register_all();
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main(config, prometheus))
 }
 
 async fn async_main(config: ServerConfig, prometheus: Registry) -> anyhow::Result<()> {

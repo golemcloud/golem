@@ -374,6 +374,8 @@ export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_DEV_INCREMENTAL=false
 export CARGO_PROFILE_TEST_DEBUG=0
 export CARGO_PROFILE_TEST_INCREMENTAL=false
+# Match the production runtime and cargo-make executor tests when running binaries directly.
+export RUST_MIN_STACK=33554432
 
 run_test() {
   if [[ -n ${SUDO_USER:-} ]]; then

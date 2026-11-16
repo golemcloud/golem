@@ -28,6 +28,30 @@ use url::Url;
 const ENV_VAR_PREFIX: &str = "GOLEM__";
 const ENV_VAR_NESTED_SEPARATOR: &str = "__";
 
+/// What [`ConfigLoader::load_or_dump_config`] did.
+#[derive(Debug)]
+pub enum LoadOrDump<T> {
+    /// The configuration loaded. The service starts with it.
+    Loaded(T),
+    /// A `--dump-config-*` flag printed the configuration. The process exits with code 0.
+    Dumped,
+}
+
+/// A configuration that does not load, or a `--dump-config*` flag that is not known.
+///
+/// `Load` has the figment error in its message and not as its `source`, so `anyhow` and the
+/// `Error:` line of a failed `main` print it once.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("Failed to load config: {0}")]
+    Load(figment::Error),
+    #[error(
+        "Unknown dump config parameter: {0}. Use --dump-config-default, \
+         --dump-config-default-env-var or --dump-config-default-toml"
+    )]
+    UnknownDumpFlag(String),
+}
+
 pub trait ConfigLoaderConfig: Default + Serialize + Deserialize<'static> + SafeDisplay {}
 impl<T: Default + Serialize + Deserialize<'static> + SafeDisplay> ConfigLoaderConfig for T {}
 
@@ -92,41 +116,44 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         self.figment().extract::<T>()
     }
 
-    /// Parses command line arguments looking for default config dump flags
-    /// If found, dumps the config and returns None
-    /// Otherwise it tries to load the configuration, and returns it.
-    /// If loading the configuration fails, it prints a user-friendly error and
-    /// returns None.
-    pub fn load_or_dump_config(&self) -> Option<T> {
-        let args: Vec<String> = std::env::args().collect();
-        let flag = args.get(1).map_or("", |a| a.as_str());
-        if dump_config(flag, &self.default_figment(), &self.example_figments()) {
-            None
+    /// Reads the first command line argument. A `--dump-config-*` flag prints the default
+    /// configuration and the examples and returns [`LoadOrDump::Dumped`] without loading
+    /// anything. An unknown `--dump-config*` flag is an error. Otherwise it loads the
+    /// configuration. It prints nothing on a failure: the caller returns the error, and the
+    /// process exits with code 1.
+    pub fn load_or_dump_config(&self) -> Result<LoadOrDump<T>, ConfigError> {
+        let flag = std::env::args().nth(1).unwrap_or_default();
+        self.load_or_dump_config_for_flag(&flag)
+    }
+
+    fn load_or_dump_config_for_flag(&self, flag: &str) -> Result<LoadOrDump<T>, ConfigError> {
+        if dump_config(flag, &self.default_figment(), &self.example_figments())? {
+            Ok(LoadOrDump::Dumped)
         } else {
-            match self.load() {
-                Ok(config) => Some(config),
-                Err(err) => {
-                    eprintln!("Failed to load config: {err}");
-                    None
-                }
-            }
+            self.load()
+                .map(LoadOrDump::Loaded)
+                .map_err(ConfigError::Load)
         }
     }
 }
 
 /// Prints the default config and the examples in the format selected by a `--dump-config*`
 /// flag: `--dump-config-default`, `--dump-config-default-env-var` or
-/// `--dump-config-default-toml`. Returns `false` when `flag` is not a dump flag, and panics on an
-/// unknown `--dump-config*` flag.
-pub fn dump_config(flag: &str, default: &Figment, examples: &[(&str, Figment)]) -> bool {
+/// `--dump-config-default-toml`. Returns `Ok(false)` when `flag` is not a dump flag, and
+/// [`ConfigError::UnknownDumpFlag`] for an unknown `--dump-config*` flag, before it prints anything.
+pub fn dump_config(
+    flag: &str,
+    default: &Figment,
+    examples: &[(&str, Figment)],
+) -> Result<bool, ConfigError> {
     let dump = match flag {
         "--dump-config-default" => dump::print(),
         "--dump-config-default-env-var" => dump::env_var(),
         "--dump-config-default-toml" => dump::toml(),
         other if other.starts_with("--dump-config") => {
-            panic!("Unknown dump config parameter: {other}")
+            return Err(ConfigError::UnknownDumpFlag(other.to_string()));
         }
-        _ => return false,
+        _ => return Ok(false),
     };
 
     let extract =
@@ -155,7 +182,7 @@ pub fn dump_config(flag: &str, default: &Figment, examples: &[(&str, Figment)]) 
         );
     }
 
-    true
+    Ok(true)
 }
 
 fn visit_dump<'a>(
@@ -549,5 +576,110 @@ impl SafeDisplay for DbPostgresConfig {
             let _ = writeln!(&mut result, "schema: {schema}");
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigError, ConfigLoader, LoadOrDump, dump_config};
+    use crate::SafeDisplay;
+    use figment::Figment;
+    use serde::{Deserialize, Serialize};
+    use test_r::test;
+
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    struct LoaderTestConfig {
+        loader_test_port: u16,
+    }
+
+    impl SafeDisplay for LoaderTestConfig {
+        fn to_safe_string(&self) -> String {
+            String::new()
+        }
+    }
+
+    fn loader_with_file(contents: &str) -> (tempfile::TempDir, ConfigLoader<LoaderTestConfig>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("loader-test.toml");
+        std::fs::write(&path, contents).unwrap();
+        (dir, ConfigLoader::new(&path))
+    }
+
+    #[test]
+    fn invalid_value_is_a_load_error() {
+        let (_dir, loader) = loader_with_file("loader_test_port = \"notanumber\"\n");
+        let err = loader.load_or_dump_config_for_flag("").unwrap_err();
+        assert!(matches!(err, ConfigError::Load(_)), "got {err:?}");
+
+        let printed = format!("{:?}", anyhow::Error::from(err));
+        assert_eq!(printed.matches("Failed to load config").count(), 1);
+        assert_eq!(printed.matches("notanumber").count(), 1);
+    }
+
+    #[test]
+    fn valid_file_loads() {
+        let (_dir, loader) = loader_with_file("loader_test_port = 1234\n");
+        for flag in ["", "--report-time"] {
+            match loader.load_or_dump_config_for_flag(flag) {
+                Ok(LoadOrDump::Loaded(config)) => assert_eq!(config.loader_test_port, 1234),
+                other => panic!("flag {flag:?}: expected Loaded, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn missing_file_is_a_load_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let loader = ConfigLoader::<LoaderTestConfig>::new(&dir.path().join("does-not-exist.toml"));
+        let err = loader.load_or_dump_config_for_flag("").unwrap_err();
+        assert!(matches!(err, ConfigError::Load(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn malformed_file_is_a_load_error() {
+        let (_dir, loader) = loader_with_file("loader_test_port = = 1\n");
+        let err = loader.load_or_dump_config_for_flag("").unwrap_err();
+        assert!(matches!(err, ConfigError::Load(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn dump_flag_dumps_without_loading() {
+        let (_dir, loader) = loader_with_file("loader_test_port = \"notanumber\"\n");
+        for flag in [
+            "--dump-config-default",
+            "--dump-config-default-env-var",
+            "--dump-config-default-toml",
+        ] {
+            match loader.load_or_dump_config_for_flag(flag) {
+                Ok(LoadOrDump::Dumped) => {}
+                other => panic!("flag {flag}: expected Dumped, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_dump_flag_is_an_error() {
+        let err = dump_config("--dump-config-bogus", &Figment::new(), &[]).unwrap_err();
+        match &err {
+            ConfigError::UnknownDumpFlag(flag) => assert_eq!(flag, "--dump-config-bogus"),
+            other => panic!("expected UnknownDumpFlag, got {other:?}"),
+        }
+        let message = err.to_string();
+        assert!(message.contains("--dump-config-bogus"), "{message}");
+        assert!(message.contains("--dump-config-default,"), "{message}");
+        assert!(
+            message.contains("--dump-config-default-env-var"),
+            "{message}"
+        );
+        assert!(message.contains("--dump-config-default-toml"), "{message}");
+
+        let (_dir, loader) = loader_with_file("loader_test_port = 1234\n");
+        let err = loader
+            .load_or_dump_config_for_flag("--dump-config-bogus")
+            .unwrap_err();
+        assert!(
+            matches!(err, ConfigError::UnknownDumpFlag(_)),
+            "got {err:?}"
+        );
     }
 }

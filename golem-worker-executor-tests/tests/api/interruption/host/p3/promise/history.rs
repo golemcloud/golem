@@ -19,7 +19,7 @@ pub(super) struct PromiseRecord {
 
 pub(super) fn invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<OplogIndex> {
     let mut current = false;
@@ -28,7 +28,7 @@ pub(super) fn invocation(
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.idempotency_key == key);
+                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.invocation_id == key);
                 if current {
                     starts.push(entry.oplog_index);
                 }
@@ -103,7 +103,7 @@ fn completed(
 
 pub(super) fn promise_record(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     owner: &AgentId,
     ready: bool,
     finished: usize,

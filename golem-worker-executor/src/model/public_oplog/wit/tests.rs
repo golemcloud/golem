@@ -23,16 +23,20 @@ use golem_common::model::card::{
     AccountCardHolder, ApplicationCardHolder, Card, CardHolder, CardId, InvocationWalletPin,
     PublicInvocationWalletPin, WalletVersionToken,
 };
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
-    AgentInvocationStartedParams, CancelledParams, EndParams, StartParams,
+    AgentInvocationStartedParams, CancelledParams, EndParams, PendingAgentInvocationParams,
+    SnapshotParams, StartParams, SuccessfulUpdateParams,
 };
 use golem_common::model::oplog::{
     AttributeMap, DurableFunctionType, OplogEntry, OplogPayload, PublicAgentInvocation,
-    PublicOplogEntry, SpanAttributes, SpanFinished, SpanKind, SpanLink, SpanOutcome, SpanStarted,
+    PublicOplogEntry, PublicSnapshotData, RawSnapshotData, SpanAttributes, SpanFinished, SpanKind,
+    SpanLink, SpanOutcome, SpanStarted, UpdateDescription,
 };
-use golem_common::model::{AgentInvocationPayload, Empty, IdempotencyKey, Timestamp};
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::{AgentInvocationPayload, Empty, OplogIndex, Timestamp};
 use golem_common::schema::SchemaValue;
 use test_r::test;
 use uuid::Uuid;
@@ -49,6 +53,46 @@ fn test_card(card_id: CardId) -> Card {
         expires_at: None,
         system_card: false,
         managed_by: None,
+    }
+}
+
+#[test]
+fn pending_invocation_deadline_survives_raw_and_public_wit_conversion() {
+    for not_before in [None, Some(Timestamp::from(123_456))] {
+        let raw = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before,
+            invocation_id: uuid::Uuid::from_u128(1).into(),
+            payload: OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(
+                    &AgentInvocationPayload::SaveSnapshot,
+                )
+                .unwrap(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        let encoded = oplog::OplogEntry::try_from(raw.clone()).unwrap();
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap(),
+            raw.clone().into()
+        );
+
+        let public = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+            timestamp: raw.timestamp(),
+            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+            not_before,
+        });
+        let encoded = oplog::PublicOplogEntry::try_from(public).unwrap();
+        let oplog::PublicOplogEntry::PendingAgentInvocation(params) = encoded else {
+            panic!("expected pending invocation")
+        };
+        assert_eq!(
+            params.not_before.map(super::timestamp_from_datetime),
+            not_before
+        );
     }
 }
 
@@ -253,6 +297,7 @@ fn raw_snapshot_wit_roundtrip_preserves_wallet_state() {
         active_cards: vec![card.clone().into()],
         wallet_generation: 73,
         filesystem_snapshot: None,
+        bootstrap: Some(bootstrap()),
     };
 
     let encoded = oplog::OplogEntry::try_from(entry).unwrap();
@@ -260,6 +305,7 @@ fn raw_snapshot_wit_roundtrip_preserves_wallet_state() {
     let golem_common::model::oplog::OplogEnrichmentEntry::Other(OplogEntry::Snapshot {
         active_cards,
         wallet_generation,
+        bootstrap: decoded_bootstrap,
         ..
     }) = decoded
     else {
@@ -267,6 +313,88 @@ fn raw_snapshot_wit_roundtrip_preserves_wallet_state() {
     };
     assert_eq!(active_cards, vec![card.into()]);
     assert_eq!(wallet_generation, 73);
+    assert_eq!(decoded_bootstrap, Some(bootstrap()));
+}
+
+fn bootstrap() -> OplogRegion {
+    OplogRegion {
+        start: OplogIndex::from_u64(3),
+        end: OplogIndex::from_u64(7),
+    }
+}
+
+#[test]
+fn raw_update_wit_roundtrip_preserves_bootstrap_ranges() {
+    let timestamp = Timestamp::now_utc().rounded();
+    let entries = [
+        OplogEntry::SuccessfulUpdate {
+            timestamp,
+            target_revision: ComponentRevision::new(2).unwrap(),
+            new_component_size: 100,
+            new_total_linear_memory_size: None,
+            new_active_plugins: Default::default(),
+            snapshot_assisted_details: None,
+            bootstrap: Some(bootstrap()),
+        },
+        OplogEntry::PendingUpdate {
+            timestamp,
+            description: UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: ComponentRevision::new(2).unwrap(),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(9),
+                snapshot_revision: ComponentRevision::new(1).unwrap(),
+                filesystem_snapshot: None,
+                snapshot_bootstrap: Some(bootstrap()),
+            },
+            update_attempt_index: Some(OplogIndex::from_u64(10)),
+        },
+    ];
+
+    for entry in entries {
+        let encoded = oplog::OplogEntry::try_from(entry.clone()).unwrap();
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap(),
+            entry.into()
+        );
+    }
+}
+
+#[test]
+fn public_wit_projection_preserves_bootstrap_ranges() {
+    let timestamp = Timestamp::now_utc().rounded();
+    let snapshot = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp,
+        data: PublicSnapshotData::Raw(RawSnapshotData {
+            data: vec![1, 2, 3],
+            mime_type: "application/octet-stream".to_string(),
+        }),
+        filesystem_snapshot: None,
+        bootstrap: Some(bootstrap()),
+    });
+    let oplog::PublicOplogEntry::Snapshot(snapshot) =
+        oplog::PublicOplogEntry::try_from(snapshot).unwrap()
+    else {
+        panic!("expected public snapshot")
+    };
+    let wit_bootstrap = snapshot.bootstrap.unwrap();
+    assert_eq!((wit_bootstrap.start, wit_bootstrap.end), (3, 7));
+
+    let update = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
+        timestamp,
+        target_revision: ComponentRevision::new(2).unwrap(),
+        new_component_size: 100,
+        new_active_plugins: Default::default(),
+        snapshot_assisted_details: None,
+        bootstrap: Some(bootstrap()),
+    });
+    let oplog::PublicOplogEntry::SuccessfulUpdate(update) =
+        oplog::PublicOplogEntry::try_from(update).unwrap()
+    else {
+        panic!("expected public successful update")
+    };
+    let wit_bootstrap = update.bootstrap.unwrap();
+    assert_eq!((wit_bootstrap.start, wit_bootstrap.end), (3, 7));
 }
 
 #[test]
@@ -327,7 +455,7 @@ fn wit_projection_preserves_invocation_wallet_pins() {
     let pinned_card_ids = vec![CardId::new(), CardId::new()];
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
-        idempotency_key: IdempotencyKey::new("wallet-pin".to_string()),
+        invocation_id: uuid::Uuid::from_u128(2).into(),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
@@ -647,6 +775,13 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
                 local_agent_config: Vec::new(),
                 original_phantom_id: Some(phantom_id),
                 instance_id,
+                create_request: golem_common::model::oplog::CreateRequest::new(
+                    golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                    None,
+                    golem_common::model::agent::Principal::anonymous(),
+                    &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
+                    ),
+                ),
             }),
         };
         let oplog::OplogEntry::Create(mut encoded) = oplog::OplogEntry::try_from(entry).unwrap()

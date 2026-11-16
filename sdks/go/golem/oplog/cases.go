@@ -115,10 +115,8 @@ const (
 	StreamRegistered = oplogwit.PublicOplogEntryStreamRegistered
 	// Records committed durable stream values or a packed-u8 batch
 	StreamItems = oplogwit.PublicOplogEntryStreamItems
-	// Records a durable stream end terminal
-	StreamEnd = oplogwit.PublicOplogEntryStreamEnd
-	// Records a durable stream cancellation terminal
-	StreamCancel = oplogwit.PublicOplogEntryStreamCancel
+	// Records the selected durable stream terminal
+	StreamTerminal = oplogwit.PublicOplogEntryStreamTerminal
 	// Records durable Stream Session state and consumer-journal facts
 	StreamSession = oplogwit.PublicOplogEntryStreamSession
 	// The successful completion of the durable host call started by the matching `start`

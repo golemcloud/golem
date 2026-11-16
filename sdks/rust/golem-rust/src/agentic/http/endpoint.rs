@@ -67,6 +67,7 @@ pub fn get_http_endpoint_details(
         cors_options: CorsOptions {
             allowed_patterns: cors_options,
         },
+        mode: None,
         durable_streams,
     })
 }

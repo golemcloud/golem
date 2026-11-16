@@ -1,0 +1,32 @@
+---
+import Icon from "./Icon.astro";
+import { code } from "../../data/home-preview/golem-2";
+const codeLines = code.split("\n");
+---
+
+<div class="execution-example">
+  <div class="code-example">
+    <div class="code-header">
+      <span><i></i>TypeScript · inside an actor method</span><span>01—05</span>
+    </div><pre><code>{codeLines.map((line,i) => <span class={line.startsWith("//") ? "code-comment" : line.startsWith("await sleep") ? "code-wait" : ""}><span class="line-number" aria-hidden="true">{i+1}</span><span class="code-text">{line}</span></span>)}</code></pre><div
+      class="code-outcome"
+    >
+      <Icon name="clock" size={18} /><span>Wait for a week. Resume with your place intact.</span><b
+        >0 CPU / RAM while waiting</b
+      >
+    </div>
+  </div>
+  <div class="example-outcomes">
+    <article>
+      <h3>Memory + execution</h3><p>Local values and the execution position survive the wait.</p>
+    </article>
+    <article>
+      <h3>Zero idle compute</h3><p>Waiting consumes zero CPU and RAM until execution resumes.</p>
+    </article>
+    <article>
+      <h3>Runtime permissions</h3><p>
+        File access is checked against the VM's runtime permissions.
+      </p>
+    </article>
+  </div>
+</div>

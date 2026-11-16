@@ -20,10 +20,27 @@ object AgentStreamStep {
 }
 
 sealed abstract class AgentStreamTerminal(message: String) extends RuntimeException(message)
-final case class AgentStreamError(code: String, override val getMessage: String)
+/** `stderr` is what the agent wrote to stderr when a failure of the agent ended the invocation. */
+final case class AgentStreamError(code: String, override val getMessage: String, stderr: Option[String] = None)
     extends AgentStreamTerminal(getMessage)
-final case class AgentStreamCancelled(reason: String)
-    extends AgentStreamTerminal(s"stream cancelled: $reason")
+
+sealed trait StreamError
+object StreamError {
+  final case class Failed(graph: golem.bridge.runtime.json.Json, value: SchemaValue) extends StreamError
+  final case class Trapped(message: String) extends StreamError
+  case object Cancelled extends StreamError
+  case object Abandoned extends StreamError
+  final case class Interrupted(message: String) extends StreamError
+  final case class ResourceExhausted(message: String) extends StreamError
+}
+sealed trait StreamOutcome
+object StreamOutcome {
+  case object Finished extends StreamOutcome
+  final case class Failed(error: StreamError) extends StreamOutcome
+  final case class ConsumerCancelled(details: Option[String]) extends StreamOutcome
+}
+final case class AgentStreamEnded(outcome: StreamOutcome)
+    extends AgentStreamTerminal(s"stream ended: $outcome")
 
 /**
  * Dependency-free, demand-driven stream. `consume` is affine: a second call
@@ -56,7 +73,7 @@ object AgentStream {
     def drop(): Future[Unit]
   }
 
-  /** Creates an input stream. Source failures become `source-unavailable`. */
+  /** Creates an input stream. Source failures become an Interrupted terminal. */
   def fromPull[A](next: () => Future[AgentStreamStep[A]], onCancel: () => Future[Unit] = () => Future.successful(())): AgentStream[A] =
     new AgentStream(() => Future.successful(new Consumer[A] {
       private val terminal = new AtomicBoolean(false)

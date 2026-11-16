@@ -56,6 +56,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll};
 
+mod admission;
 mod attributes;
 mod effects;
 mod handles;
@@ -63,6 +64,7 @@ mod namespace;
 mod operations;
 mod registry;
 mod transitions;
+use admission::{Admission, AdmissionTransition};
 use attributes::read_sandbox_attributes;
 #[cfg(test)]
 use attributes::resize_postcondition_evidence;
@@ -578,7 +580,7 @@ struct GenerationUsageReader<Reader> {
 }
 
 impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
-    fn begin_transition(&self) -> Result<(), AccessError> {
+    fn begin_transition(&self) -> Result<AdmissionTransition, AccessError> {
         self.registry.begin_transition()
     }
 
@@ -615,14 +617,6 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
     fn invalidate(&self) {
         self.registry.invalidate();
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AdmissionState {
-    Open,
-    Transitioning,
-    Sealed,
-    Invalidated,
 }
 
 struct GenerationRegistry {
@@ -734,8 +728,9 @@ pub(crate) struct TreeMark {
 static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 struct RegistryState {
-    admission: AdmissionState,
-    replay_access: bool,
+    admission: Admission,
+    /// Outstanding leases, including replay calls and internal cleanup. Sealing or invalidating
+    /// admission does not release them; they must drain before the generation is deleted.
     calls: usize,
     nodes: usize,
     /// The number of the generation, unique in the process.

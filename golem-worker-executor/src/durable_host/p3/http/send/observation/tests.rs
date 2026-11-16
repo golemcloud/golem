@@ -167,9 +167,7 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
     use crate::durable_host::concurrent::{
         Resolution, ResolutionOutcome, cleanup_recorder_for_store,
     };
-    use crate::durable_host::replay_state::{
-        ReplayStartClaimOutcome, ReplayState, ReplayToLiveRole, StartClaim,
-    };
+    use crate::durable_host::replay_state::{ReplayStartClaimOutcome, ReplayState, StartClaim};
     use golem_common::model::entity::InvocationExecutionMode;
     use golem_common::model::{AgentId, OwnedAgentId};
 
@@ -229,8 +227,9 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
     let (recorder, mut events) = cleanup_recorder_for_store(
         oplog.clone(),
         replay.clone(),
-        completed_entity.then_some(InvocationExecutionMode::ReplayingCompleted),
-        Arc::new(AtomicBool::new(false)),
+        crate::durable_host::StoreReplayState::new(
+            completed_entity.then_some(InvocationExecutionMode::ReplayingCompleted),
+        ),
         true,
     );
     let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
@@ -289,10 +288,7 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
         )),
         std::time::Instant::now(),
     );
-    replay
-        .switch_to_live(&memory, ReplayToLiveRole::PrimaryAgent)
-        .await
-        .unwrap();
+    replay.publish_primary_live(&memory).await.unwrap();
     assert!(replay.is_live_published());
     let mut delivery = if let Some(delivery) = delivery.take() {
         delivery

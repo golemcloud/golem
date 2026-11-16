@@ -1091,7 +1091,9 @@ describe('tool runtime client', () => {
     }));
     vi.mocked(ToolRpc)
       .mockClear()
-      .mockImplementation(() => ({ asyncInvokeAndAwait }) as unknown as ToolRpc);
+      .mockImplementation(function () {
+        return { asyncInvokeAndAwait } as unknown as ToolRpc;
+      });
     const definition = toolDefinition('default').body((body) => body.returns(z.string()));
     const runtime = client(definition);
 
@@ -1107,10 +1109,9 @@ describe('tool runtime client', () => {
 
   it('uses an explicit leaf lookup name for an adapted presented client', async () => {
     const get = vi.fn(async () => ({ result: undefined }));
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () =>
-        ({ asyncInvokeAndAwait: vi.fn(() => ({ get, cancel: vi.fn() })) }) as unknown as ToolRpc,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return { asyncInvokeAndAwait: vi.fn(() => ({ get, cancel: vi.fn() })) } as unknown as ToolRpc;
+    });
     const presented = toolDefinition('presented').body((body) => body.returns(z.void()));
 
     await client(presented, { lookupName: 'leaf-registration' }).presented({});
@@ -1121,15 +1122,14 @@ describe('tool runtime client', () => {
   it('keeps a rejected host result handled until a started invocation result is accessed', async () => {
     const rpcError = { tag: 'denied', val: 'not allowed' } satisfies RpcError;
     vi.mocked(createOutput).mockReturnValueOnce([{}, streamItems(bytes())] as never);
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () =>
-        ({
-          asyncInvokeAndAwait: vi.fn(() => ({
-            get: () => Promise.reject(rpcError),
-            cancel: vi.fn(),
-          })),
-        }) as never,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return {
+        asyncInvokeAndAwait: vi.fn(() => ({
+          get: () => Promise.reject(rpcError),
+          cancel: vi.fn(),
+        })),
+      } as never;
+    });
     const definition = toolDefinition('rejected-host-result').body((body) =>
       body.stdout({ required: true }).returns(z.void()),
     );
@@ -1155,15 +1155,14 @@ describe('tool runtime client', () => {
     const rpcError = { tag: 'denied', val: 'not allowed' } satisfies RpcError;
     const cancel = vi.fn();
     vi.mocked(createOutput).mockReturnValueOnce([{}, undefined] as never);
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () =>
-        ({
-          asyncInvokeAndAwait: vi.fn(() => ({
-            get: () => Promise.reject(rpcError),
-            cancel,
-          })),
-        }) as never,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return {
+        asyncInvokeAndAwait: vi.fn(() => ({
+          get: () => Promise.reject(rpcError),
+          cancel,
+        })),
+      } as never;
+    });
     const definition = toolDefinition('invalid-host-stdout').body((body) =>
       body.stdout({ required: true }).returns(z.void()),
     );
@@ -1218,7 +1217,9 @@ describe('tool runtime client', () => {
     }));
     vi.mocked(ToolRpc)
       .mockClear()
-      .mockImplementation(() => ({ asyncInvokeAndAwait }) as unknown as ToolRpc);
+      .mockImplementation(function () {
+        return { asyncInvokeAndAwait } as unknown as ToolRpc;
+      });
     const definition = toolDefinition('streams-host').body((body) =>
       body.stdin({ required: true }).stdout({ required: true }).returns(z.void()),
     );

@@ -20,6 +20,8 @@ pub mod agent_secrets;
 pub mod applications;
 pub mod cards;
 pub mod components;
+#[cfg(test)]
+mod deployment_publication_tests;
 pub mod domain_registrations;
 pub mod environment_plugin_grants;
 pub mod environment_tool_grants;

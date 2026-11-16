@@ -698,6 +698,26 @@ import golem.bridge.runtime.StreamSessionState.*
 import golem.bridge.runtime.json.Json
 
 class StreamRuntimeTest extends munit.FunSuite {
+  test("accepted invocation identity is final and stable across resume") {
+    val key = "00000000-0000-0000-0000-000000000123"
+    def acceptance(attempt: String = "attempt", component: String = "component", agent: String = "accepted-agent", acceptedKey: String = key): Json =
+      Json.parse(StreamSessionProtocol.message("invocationAccepted", Vector(
+        "attemptId" -> Json.string(attempt),
+        "agentId" -> Json.obj("componentId" -> Json.string(component), "agentId" -> Json.string(agent)),
+        "idempotencyKey" -> Json.string(acceptedKey), "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector.empty)))).toOption.get
+    val message = acceptance()
+    StreamSessionProtocol.validateServerMessage(message)
+    val identity = StreamSessionProtocol.acceptanceIdentity(message, "attempt", None)
+    assertEquals(identity, (AgentId("component", "accepted-agent"), key))
+    assertEquals(StreamSessionProtocol.acceptanceIdentity(acceptance("resume"), "resume", Some(identity)), identity)
+    intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(message, "wrong", Some(identity)))
+    for (changed <- List(acceptance(component = "other"), acceptance(agent = "other"), acceptance(acceptedKey = "00000000-0000-0000-0000-000000000124")))
+      intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(changed, "attempt", Some(identity)))
+    intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(acceptance(acceptedKey = "not-a-uuid"), "attempt", None))
+    val missingOwner = Json.obj(Json.asObject(message).toOption.get.filterNot(_._1 == "agentId"))
+    intercept[BridgeException](StreamSessionProtocol.validateServerMessage(missingOwner))
+  }
+
   private def fixtureField(value: Json, name: String): Json =
     Json.asObject(value).toOption.get.find(_._1 == name).map(_._2).get
 
@@ -803,13 +823,201 @@ class StreamRuntimeTest extends munit.FunSuite {
     val messages = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("json-messages.json"))).toOption.get
     Json.asArray(Json.requireField(messages, "vectors").toOption.get).toOption.get.foreach { vector =>
       val canonical = Json.asString(Json.requireField(vector, "canonical").toOption.get).toOption.get
-      assertEquals(Json.parse(canonical).toOption.get.render, canonical)
+      val parsed = Json.parse(canonical).toOption.get
+      assertEquals(parsed.render, canonical)
+      if (Json.field(parsed, "type").flatMap(Json.asString(_).toOption).contains("stream-end")) {
+        val outcome = StreamSessionProtocol.streamOutcome(fixtureField(parsed, "outcome"))
+        val direction = Json.asString(fixtureField(parsed, "direction")).toOption.get
+        val server = Json.asString(fixtureField(vector, "direction")).toOption.get == "server"
+        if (server) assertEquals(StreamSessionProtocol.serverStreamEnd(parsed)._2, outcome)
+        else assertEquals(StreamSessionProtocol.streamEnd(StreamSessionProtocol.channel(parsed), direction,
+          StreamSessionProtocol.u64(parsed, "sequence"), fixtureField(parsed, "outcome")), canonical)
+      }
     }
+    val serverMessages = Json.asArray(Json.requireField(messages, "vectors").toOption.get).toOption.get.filter { vector =>
+      Json.asString(Json.requireField(vector, "direction").toOption.get).toOption.get == "server"
+    }.map { vector =>
+      val name = Json.asString(Json.requireField(vector, "name").toOption.get).toOption.get
+      val message = Json.parse(Json.asString(Json.requireField(vector, "canonical").toOption.get).toOption.get).toOption.get
+      assertEquals(StreamSessionProtocol.validateServerMessage(message), Json.asString(Json.requireField(vector, "type").toOption.get).toOption.get, name)
+      name -> message
+    }.toMap
+    val rejection = StreamSessionProtocol.invocationRejection(serverMessages("invocation-rejected-previous-invocation-failed"))
+    assertEquals(rejection.code, "previous-invocation-failed")
+    assertEquals(rejection.serverMessage, "intentional invocation failure")
+    assertEquals(rejection.stderr, Some("intentional failure stderr\n"))
+    assertEquals(StreamSessionProtocol.invocationRejection(serverMessages("invocation-rejected")).stderr, None)
+    def failureOutcome(name: String): Json = Json.requireField(serverMessages(name), "outcome").toOption.get
+    assertEquals(StreamSessionProtocol.invocationFailure(failureOutcome("invocation-finished-failure-with-stderr")),
+      AgentStreamError("invocation-failed", "intentional invocation failure", Some("intentional failure stderr\n")))
+    assertEquals(StreamSessionProtocol.invocationFailure(failureOutcome("invocation-finished-failure")).stderr, None)
+    intercept[BridgeException](StreamSessionProtocol.validateServerMessage(Json.parse(
+      """{"code":"invocation-failed","extra":"x","message":"m","retryable":false,"stderr":"e","type":"invocationRejected","version":1}""").toOption.get))
+    intercept[BridgeException](StreamSessionProtocol.invocationFailure(Json.parse(
+      """{"code":"invocation-failed","extra":"x","kind":"failure","message":"m","stderr":"e"}""").toOption.get))
+    intercept[BridgeException](StreamSessionProtocol.invocationFailure(Json.parse(
+      """{"code":"invocation-failed","kind":"failure","message":"m","stderr":1}""").toOption.get))
     val malformed = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("malformed.json"))).toOption.get
     val invalid = Json.asArray(Json.requireField(malformed, "vectors").toOption.get).toOption.get.find { vector =>
       Json.field(vector, "name").flatMap(Json.asString(_).toOption).contains("invalid-json")
     }.get
     assert(Json.parse(Json.asString(Json.requireField(invalid, "input").toOption.get).toOption.get).isLeft)
+    Json.asArray(fixtureField(malformed, "vectors")).toOption.get.foreach { vector =>
+      Json.field(vector, "input").flatMap(Json.asString(_).toOption).foreach { input =>
+        if (input.contains("stream-end") && Json.field(vector, "state").isEmpty) {
+          val name = Json.asString(fixtureField(vector, "name")).toOption.get
+          val rejected = try {
+            StreamSessionProtocol.serverStreamEnd(Json.parse(input).fold(e => throw BridgeException(e), identity))
+            false
+          } catch { case _: BridgeException => true }
+          assert(rejected, name)
+        }
+      }
+    }
+  }
+
+  test("all typed terminals and nullable consumer details are validated") {
+    val outcomes = List(
+      """{"kind":"finished"}""",
+      """{"kind":"consumer-cancelled"}""",
+      """{"kind":"consumer-cancelled","details":null}""",
+      """{"kind":"consumer-cancelled","details":"dropped"}"""
+    ) ++ List("trapped", "interrupted", "resource-exhausted").map(kind =>
+      s"""{"kind":"failed","error":{"kind":"$kind","message":"diagnostic"}}""") ++
+      List("cancelled", "abandoned").map(kind => s"""{"kind":"failed","error":{"kind":"$kind"}}""")
+    outcomes.foreach { raw =>
+      val outcome = Json.parse(raw).toOption.get
+      val typed = StreamSessionProtocol.streamOutcome(outcome)
+      for (direction <- List("input", "output")) {
+        val frame = Json.parse(StreamSessionProtocol.streamEnd(1, direction, 0, outcome)).toOption.get
+        assertEquals(StreamSessionProtocol.serverStreamEnd(frame)._2, typed)
+      }
+    }
+    for (raw <- List("""{"kind":"unknown"}""", """{"kind":"failed","error":{"kind":"unknown"}}""",
+      """{"kind":"consumer-cancelled","details":42}""", """{"kind":"failed","error":{"kind":"interrupted"}}"""))
+      intercept[BridgeException](StreamSessionProtocol.streamOutcome(Json.parse(raw).toOption.get))
+    val graph = Json.parse("""{"root":{"kind":"u64","value":{}}}""").toOption.get
+    val typed = Json.obj("graph" -> graph, "value" -> Json.parse("""{"kind":"u64","value":"18446744073709551615"}""").toOption.get)
+    val failed = Json.obj("kind" -> Json.string("failed"), "error" -> Json.obj("kind" -> Json.string("failed"), "value" -> typed))
+    assertEquals(StreamSessionProtocol.streamOutcome(failed), StreamOutcome.Failed(StreamError.Failed(graph, SchemaValue.U64Value(-1L))))
+    val invalid = Json.obj("graph" -> graph, "value" -> Json.parse("""{"kind":"string","value":"wrong type"}""").toOption.get)
+    intercept[BridgeException](StreamSessionProtocol.streamOutcome(Json.obj("kind" -> Json.string("failed"),
+      "error" -> Json.obj("kind" -> Json.string("failed"), "value" -> invalid))))
+    val stream = Json.parse("""{"graph":{"root":{"kind":"stream","value":{"inner":{"kind":"u8","value":{}}}}},"value":{"kind":"stream","value":{"streamToken":"token"}}}""").toOption.get
+    intercept[BridgeException](StreamSessionProtocol.streamOutcome(Json.obj("kind" -> Json.string("failed"),
+      "error" -> Json.obj("kind" -> Json.string("failed"), "value" -> stream))))
+  }
+
+  test("failed input terminal retains its diagnostic across detach and remap until terminal ACK") {
+    val state = InputState()
+    val sent = collection.mutable.ArrayBuffer.empty[Json]
+    val outcome = Json.parse("""{"kind":"failed","error":{"kind":"interrupted","message":"source diagnostic"}}""").toOption.get
+    state.remap(1, 0, false)
+    val (terminal, channel) = state.reserve(PendingTerminal(0, outcome.render.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, ch => {
+      sent += Json.parse(StreamSessionProtocol.streamEnd(ch, "input", 0, outcome)).toOption.get
+      Future.unit
+    }))
+    terminal.send(channel)
+    state.detach()
+    state.remap(9, 0, false).foreach { case (pending, ch) => pending.send(ch) }
+    assertEquals(sent.map(StreamSessionProtocol.channel).toList, List(1L, 9L))
+    sent.foreach(frame => assertEquals(StreamSessionProtocol.streamOutcome(fixtureField(frame, "outcome")),
+      StreamOutcome.Failed(StreamError.Interrupted("source diagnostic"))))
+    assert(!state.acknowledge(0, false))
+    assert(state.acknowledge(0, true))
+    assert(state.remap(11, 0, true).isEmpty)
+  }
+
+  test("retained input terminals obey stream and combined replay budgets and release only on ACK or cancellation") {
+    val total = new java.util.concurrent.atomic.AtomicLong(0L)
+    val first = InputState(total)
+    val second = InputState(total)
+    val third = InputState(total)
+    val limit = StreamSessionProtocol.MaxReplayBytes
+    def terminal(bytes: Int): PendingTerminal = PendingTerminal(0, bytes, _ => Future.unit)
+    intercept[BridgeException](first.reserve(terminal(limit + 1)))
+    assertEquals(total.get(), 0L)
+    first.reserve(terminal(limit))
+    second.reserve(terminal(limit))
+    assertEquals(total.get(), StreamSessionProtocol.MaxSessionQueuedBytes.toLong)
+    intercept[BridgeException](third.reserve(terminal(1)))
+    assertEquals(total.get(), StreamSessionProtocol.MaxSessionQueuedBytes.toLong)
+    first.detach()
+    assert(first.remap(9, 0, false).nonEmpty)
+    assert(!first.acknowledge(0, false))
+    assertEquals(total.get(), StreamSessionProtocol.MaxSessionQueuedBytes.toLong)
+    assert(first.acknowledge(0, true))
+    third.reserve(terminal(limit))
+    second.cancel()
+    third.cancel()
+    assertEquals(total.get(), 0L)
+  }
+
+  test("deferred failure ownership survives prefix replay and transfers its charge to the terminal") {
+    val total = new java.util.concurrent.atomic.AtomicLong(0L)
+    val state = InputState(total)
+    val outcome = Json.parse("""{"kind":"failed","error":{"kind":"interrupted","message":"deferred diagnostic"}}""").toOption.get
+    val bytes = outcome.render.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+    state.remap(1, 0, false)
+    state.reserve(PendingData(0, 1, 1, _ => Future.unit))
+    assert(state.retainFailure(outcome))
+    assertEquals(total.get(), bytes.toLong + 1)
+    state.detach()
+    assert(state.remap(9, 0, false).nonEmpty)
+    assertEquals(state.failureOutcome, Some(outcome))
+    assertEquals(total.get(), bytes.toLong + 1)
+    assert(state.acknowledge(1, false))
+    assertEquals(total.get(), bytes.toLong)
+    state.reserve(PendingTerminal(1, bytes, _ => Future.unit))
+    assertEquals(state.failureOutcome, None)
+    assertEquals(total.get(), bytes.toLong)
+    state.detach()
+    assert(state.remap(17, 1, false).nonEmpty)
+    assert(state.acknowledge(1, true))
+    assertEquals(total.get(), 0L)
+  }
+
+  test("deferred diagnostic and prefix share admission and cancellation prevents a late failure reservation") {
+    val total = new java.util.concurrent.atomic.AtomicLong(0L)
+    val outcome = Json.parse("""{"kind":"failed","error":{"kind":"interrupted","message":"deferred diagnostic"}}""").toOption.get
+    val bytes = outcome.render.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+    val full = InputState(total)
+    full.reserve(PendingData(0, 1, StreamSessionProtocol.MaxReplayBytes - bytes + 1, _ => Future.unit))
+    intercept[BridgeException](full.retainFailure(outcome))
+    full.cancel()
+    assertEquals(total.get(), 0L)
+    for (failureFirst <- List(false, true)) {
+      val state = InputState(total)
+      state.reserve(PendingData(0, 1, 1, _ => Future.unit))
+      if (failureFirst) assert(state.retainFailure(outcome))
+      state.cancel()
+      assertEquals(state.failureOutcome, None)
+      assertEquals(total.get(), 0L)
+      assert(!state.retainFailure(outcome))
+      assertEquals(state.failureOutcome, None)
+      assertEquals(total.get(), 0L)
+    }
+  }
+
+  test("output terminal queue byte boundary and release on delivery disposal and resume") {
+    val limit = StreamSessionProtocol.MaxQueuedBytes
+    var charged = limit
+    val output = StreamSession.Output[Int](n => charged -= n)
+    val outcome = StreamOutcome.Failed(StreamError.Interrupted("retained diagnostic"))
+    output.offer(limit, Left(() => { charged -= limit; AgentStreamEnded(outcome) }))
+    charged += 1
+    intercept[BridgeException](output.offer(1, Right(() => End)))
+    assertEquals(charged, limit)
+    assertEquals(intercept[AgentStreamEnded](Await.result(output.pull(), 1.second)).outcome, outcome)
+    assertEquals(charged, 0)
+    for (dispose <- List(false, true)) {
+      charged = limit
+      val queued = StreamSession.Output[Int](n => charged -= n)
+      queued.offer(limit, Left(() => AgentStreamEnded(outcome)))
+      queued.markTerminal()
+      if (dispose) Await.result(queued.drop(), 1.second) else queued.prepareResume()
+      assertEquals(charged, 0)
+    }
   }
 
   test("binary codec matches every frozen public v1 frame") {
@@ -861,8 +1069,8 @@ class StreamRuntimeTest extends munit.FunSuite {
     assertEquals(StreamSessionProtocol.u64(metadata, "itemCount"), BigInt(3))
     intercept[BridgeException](StreamSessionProtocol.inputBinaryMetadata("input-u8", 7, StreamSessionProtocol.MaxU64, 2, None))
     intercept[BridgeException](StreamSessionProtocol.inputBinaryMetadata("input-u8", 7, 0, 1, Some("text/plain")))
-    val malformed = Json.parse("{\"version\":1,\"type\":\"streamCancel\",\"channel\":1,\"reason\":\"cancelled\",\"extra\":1}").toOption.get
-    intercept[BridgeException](StreamSessionProtocol.validate(malformed, "streamCancel", Set("channel", "reason")))
+    val malformed = Json.parse("""{"version":1,"type":"stream-end","direction":"output","channel":1,"sequence":"0","outcome":{"kind":"finished"},"extra":1}""").toOption.get
+    intercept[BridgeException](StreamSessionProtocol.serverStreamEnd(malformed))
   }
 
   test("public codec uses structural, s64, and binary protocol shapes") {
@@ -1012,9 +1220,8 @@ class StreamRuntimeTest extends munit.FunSuite {
     );
 }
 
-// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
-fn provisional_invocation_input_acquires_scala_stream_ownership_immediately() {
+fn invocation_input_acquires_scala_stream_ownership_immediately() {
     let pkg = GeneratedPackage::new(agent(
         "AffineInputAgent",
         "scala",
@@ -1821,7 +2028,7 @@ fn generates_named_type_definitions() {
 
 /// Each generated named composite type gets an `encode<Name>` / `decode<Name>`
 /// codec in the `Codecs` object, structurally encoding to and decoding from the
-/// runtime `SchemaValue` (Step 5).
+/// runtime `SchemaValue`.
 #[test]
 fn generates_codecs_for_named_types() {
     let pkg = GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone());
@@ -2255,7 +2462,7 @@ fn reserved_idents_collide_modulo_backticks() {
     );
 }
 
-// --- Scala identifier escaping (Step 2) ------------------------------------
+// --- Scala identifier escaping -----------------------------------------------
 
 #[test]
 fn valid_scala_idents_are_recognized() {

@@ -713,7 +713,9 @@ mod tests {
         CanonicalFilePathWithPermissions, InitialComponentFile, InitialComponentFileSource,
     };
     use async_zip::tokio::read::seek::ZipFileReader;
-    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+    use golem_common::model::component::{
+        AgentFilePermissions, ArchiveFilePath, CanonicalFilePath,
+    };
     use std::collections::BTreeMap;
     use std::path::Path;
     use test_r::test;
@@ -721,47 +723,34 @@ mod tests {
     use url::Url;
 
     #[test]
-    fn archive_path_is_deterministic_for_same_source_path() {
-        let sources = vec![Url::parse("file:///tmp/some/path/main.ts").unwrap()];
-
-        let first = resolve_archive_paths_for_sources(sources.clone()).unwrap();
-        let second = resolve_archive_paths_for_sources(sources).unwrap();
-
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn archive_path_differs_for_different_source_paths() {
-        let first_source = Url::parse("file:///tmp/some/path/main.ts").unwrap();
-        let second_source = Url::parse("file:///tmp/some/path/other-main.ts").unwrap();
-
-        let paths =
-            resolve_archive_paths_for_sources(vec![first_source.clone(), second_source.clone()])
-                .unwrap();
-
-        let first = paths.get(first_source.as_str()).unwrap();
-        let second = paths.get(second_source.as_str()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    #[test]
     fn archive_path_uses_counter_on_name_collision() {
         let first_source = Url::parse("file:///tmp/a/main.ts").unwrap();
         let second_source = Url::parse("file:///tmp/b/main.ts").unwrap();
+        let other_source = Url::parse("file:///tmp/a/other-main.ts").unwrap();
 
-        let paths: BTreeMap<String, _> =
-            resolve_archive_paths_for_sources(vec![first_source.clone(), second_source.clone()])
-                .unwrap();
+        let paths: BTreeMap<String, _> = resolve_archive_paths_for_sources(vec![
+            first_source.clone(),
+            second_source.clone(),
+            other_source.clone(),
+        ])
+        .unwrap();
 
-        let first = paths.get(first_source.as_str()).unwrap().to_string();
-        let second = paths.get(second_source.as_str()).unwrap().to_string();
-
-        assert_ne!(first, second);
-        assert!(
-            (first.ends_with("/.golem-ifs/main.ts") && second.ends_with("/.golem-ifs/main-2.ts"))
-                || (second.ends_with("/.golem-ifs/main.ts")
-                    && first.ends_with("/.golem-ifs/main-2.ts"))
+        assert_eq!(
+            paths,
+            BTreeMap::from([
+                (
+                    first_source.to_string(),
+                    ArchiveFilePath::from_abs_str("/.golem-ifs/main.ts").unwrap()
+                ),
+                (
+                    second_source.to_string(),
+                    ArchiveFilePath::from_abs_str("/.golem-ifs/main-2.ts").unwrap()
+                ),
+                (
+                    other_source.to_string(),
+                    ArchiveFilePath::from_abs_str("/.golem-ifs/other-main.ts").unwrap()
+                ),
+            ])
         );
     }
 

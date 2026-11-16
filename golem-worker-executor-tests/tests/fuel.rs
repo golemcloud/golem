@@ -143,17 +143,22 @@ async fn zero_fuel_suspends_and_unloads_runnable_constructor(
 
     // Clocks::new only stores its name: it is runnable and has no guest wait
     // that could cause voluntary suspension. Do not invoke a sleeping method.
-    let worker_id = tokio::time::timeout(
-        Duration::from_secs(30),
-        executor.start_agent(
-            &component.id,
-            agent_id!("Clocks", "zero-fuel-runnable-constructor"),
-        ),
-    )
-    .await??;
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(30))
-        .await?;
+    let agent = agent_id!("Clocks", "zero-fuel-runnable-constructor");
+    let worker_id = golem_common::model::AgentId::from_agent_id(component.id, &agent)
+        .map_err(anyhow::Error::msg)?;
+    let create = executor.start_agent(&component.id, agent);
+    tokio::pin!(create);
+    tokio::select! {
+        result = &mut create => panic!("zero-fuel construction must remain pending: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(30), async {
+            while executor.get_worker_metadata_opt(&worker_id).await?.is_none() {
+                tokio::task::yield_now().await;
+            }
+            executor.wait_for_status(
+                &worker_id, AgentStatus::Suspended, Duration::from_secs(30),
+            ).await
+        }) => { result??; },
+    }
 
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -180,6 +185,10 @@ async fn zero_fuel_suspends_and_unloads_runnable_constructor(
     assert!(
         !executor.worker_is_loaded(&owned_agent_id).await,
         "mandatory fuel suspension must actually unload the instance"
+    );
+    assert!(
+        futures::poll!(&mut create).is_pending(),
+        "create must still await the suspended constructor"
     );
 
     Ok(())

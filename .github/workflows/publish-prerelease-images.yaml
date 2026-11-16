@@ -1,0 +1,188 @@
+name: Publish prerelease images
+
+# Publishes the Docker images of the services for a prerelease tag, such as v1.6.4-rc1, so that a
+# deployment can test the tag. It does not prepare or publish a Golem release, and it never moves
+# `:latest`. The registry image uses the built-ins of a published Golem release, so the workflow
+# refuses a tag whose built-in sources differ from the sources of that release. A tag that already
+# has images on Docker Hub, for example from publish-golem-release.yaml, is refused too.
+#
+#   gh workflow run publish-prerelease-images.yaml --repo golemcloud/golem \
+#     -f tag=v1.6.4-rc1 -f builtins-from=v1.6.3
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The prerelease tag to build, such as v1.6.4-rc1'
+        required: true
+      builtins-from:
+        description: 'The published Golem release whose built-ins the images use, such as v1.6.3'
+        required: true
+
+concurrency:
+  group: publish-prerelease-images-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.repository == 'golemcloud/golem'
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the tag, the built-ins and Docker Hub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          BUILTINS_FROM: ${{ inputs.builtins-from }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]] \
+            || { echo "::error::$TAG is not a prerelease tag such as v1.6.4-rc1"; exit 1; }
+          [[ "$BUILTINS_FROM" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::$BUILTINS_FROM is not a Golem release tag such as v1.6.3"; exit 1; }
+          draft=$(gh release view "$BUILTINS_FROM" --repo golemcloud/golem --json isDraft --jq .isDraft)
+          [[ "$draft" == false ]] || { echo "::error::$BUILTINS_FROM is not a published release"; exit 1; }
+          gh release view "$BUILTINS_FROM" --repo golemcloud/golem --json assets \
+            --jq '.assets[].name' | grep -qx builtin-artifacts.release.json \
+            || { echo "::error::$BUILTINS_FROM has no builtin-artifacts.release.json"; exit 1; }
+          paths=$(jq -r '[.[].inputs[]] | unique | .[]' builtin-artifacts.json)
+          mapfile -t inputs <<< "$paths"
+          if ! git diff --quiet "refs/tags/$BUILTINS_FROM" HEAD -- builtin-artifacts.json "${inputs[@]}"; then
+            git diff --stat "refs/tags/$BUILTINS_FROM" HEAD -- builtin-artifacts.json "${inputs[@]}"
+            echo "::error::The built-in sources of $TAG differ from $BUILTINS_FROM. Prepare a Golem release instead."
+            exit 1
+          fi
+          for image in golem-worker-executor golem-shard-manager golem-xfs-quotad registry-service golem-worker-service golem-component-compilation-service; do
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' --retry 3 \
+              "https://hub.docker.com/v2/repositories/golemservices/$image/tags/$TAG")
+            case "$status" in
+              404) ;;
+              200) echo "::error::golemservices/$image:$TAG exists already"; exit 1 ;;
+              *) echo "::error::Docker Hub returned HTTP $status for golemservices/$image:$TAG"; exit 1 ;;
+            esac
+          done
+
+  # The same build as docker-targets-build of publish-golem-release.yaml, with the built-in
+  # manifest of builtins-from instead of the manifest of the tag's own release.
+  build:
+    needs: validate
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - platform: linux/amd64
+            name: linux/amd64
+            target: x86_64-unknown-linux-gnu
+            rustflags_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-cpu=x86-64-v3"
+          - platform: linux/arm64
+            name: linux/arm64
+            target: aarch64-unknown-linux-gnu
+            cross: true
+            rustflags_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-feature=+neon,+crc,+lse,+aes,+sha2,+dotprod"
+    name: build (${{ matrix.platform.platform }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Download the built-in manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILTINS_FROM: ${{ inputs.builtins-from }}
+        run: |
+          gh release download "$BUILTINS_FROM" --repo golemcloud/golem --pattern builtin-artifacts.release.json
+          echo 'GOLEM_BUILTIN_RELEASE=1' >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-rust
+        with:
+          fetch-tag: 'true'
+          rust-targets: ${{ matrix.platform.target }}
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+          echo "${{ matrix.platform.rustflags_env }}=${{ matrix.platform.rustflags }}" >> "$GITHUB_ENV"
+      - run: cargo install cross
+        if: ${{ matrix.platform.cross }}
+      - name: Build executables
+        run: cargo make --profile ci build-release
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
+      - name: Prepare Targets
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
+        run: cargo make --profile ci package-release
+      - uses: actions/upload-artifact@v6
+        with:
+          name: prerelease-targets-${{ env.PLATFORM_PAIR }}
+          path: target/${{ matrix.platform.target }}.tar
+
+  publish:
+    needs: build
+    runs-on: blacksmith
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: golem-worker-executor
+            dockerfile: ./golem-worker-executor/docker/Dockerfile
+          - name: golem-shard-manager
+            dockerfile: ./golem-shard-manager/docker/Dockerfile
+          - name: golem-xfs-quotad
+            dockerfile: ./golem-xfs-quotad/docker/Dockerfile
+          - name: registry-service
+            dockerfile: ./golem-registry-service/docker/Dockerfile
+          - name: golem-worker-service
+            dockerfile: ./golem-worker-service/docker/Dockerfile
+          - name: golem-component-compilation-service
+            dockerfile: ./golem-component-compilation-service/docker/Dockerfile
+    name: publish (${{ matrix.image.name }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: prerelease-targets-*
+          path: target
+          merge-multiple: true
+      - name: Extract the executables
+        working-directory: target
+        run: for f in *.tar; do tar xf "$f"; done
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      # The git context labels the image with the commit of the tag, not of the dispatching branch.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          context: git
+          images: golemservices/${{ matrix.image.name }}
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=${{ inputs.tag }}
+      - uses: useblacksmith/build-push-action@v1
+        with:
+          context: .
+          file: ${{ matrix.image.dockerfile }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

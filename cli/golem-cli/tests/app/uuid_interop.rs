@@ -12,6 +12,11 @@
 //! option, in a list and in a record field, reads back the constructor key,
 //! and increments a counter. The counter proves that every bridge computes the
 //! same agent ID for a UUID constructor parameter.
+//!
+//! `RustUuidTarget` also reads a `label` config that the manifest sets. The
+//! Rust, TypeScript and MoonBit guest callers override it with
+//! `get_with_config`, trigger `touch` on a pinned phantom and then await it,
+//! and the Rust caller checks that `new_phantom` creates a fresh instance.
 
 use super::agents::{assert_generated_driver, run_generated_driver};
 use super::{TestContext, cmd, flag};
@@ -75,6 +80,11 @@ fn manifest() -> String {
                 - {APP}:go/GoUuidTarget
                 - {APP}:scala/ScalaUuidTarget
                 - {APP}:moonbit/MoonbitUuidTarget
+                - {APP}:rust-target/RustUuidTarget
+        agents:
+          RustUuidTarget:
+            config:
+              label: manifest
     "#, version = versions::sdk::MANIFEST}
 }
 
@@ -82,7 +92,13 @@ fn write_rust_target(ctx: &TestContext) {
     fs::write_str(
         ctx.cwd_path_join("rust-target/src/lib.rs"),
         indoc! {r#"
-            use golem_rust::{agent_definition, agent_implementation, FromSchema, FromWire, IntoSchema, IntoWire, Uuid, WireSchema};
+            use golem_rust::agentic::Config;
+            use golem_rust::{agent_definition, agent_implementation, ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, Uuid, WireSchema};
+
+            #[derive(ConfigSchema)]
+            pub struct TargetConfig {
+                pub label: String,
+            }
 
             #[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
             pub struct UuidHolder {
@@ -93,22 +109,24 @@ fn write_rust_target(ctx: &TestContext) {
 
             #[agent_definition]
             pub trait RustUuidTarget {
-                fn new(key: Uuid) -> Self;
+                fn new(key: Uuid, #[agent_config] config: Config<TargetConfig>) -> Self;
                 fn echo(&self, value: Uuid) -> Uuid;
                 fn nested(&self, value: UuidHolder) -> UuidHolder;
                 fn identity(&self) -> Uuid;
                 fn touch(&mut self) -> u32;
+                fn label(&self) -> String;
             }
 
             struct RustUuidTargetImpl {
                 key: Uuid,
                 touches: u32,
+                config: Config<TargetConfig>,
             }
 
             #[agent_implementation]
             impl RustUuidTarget for RustUuidTargetImpl {
-                fn new(key: Uuid) -> Self {
-                    Self { key, touches: 0 }
+                fn new(key: Uuid, #[agent_config] config: Config<TargetConfig>) -> Self {
+                    Self { key, touches: 0, config }
                 }
                 fn echo(&self, value: Uuid) -> Uuid {
                     value
@@ -122,6 +140,9 @@ fn write_rust_target(ctx: &TestContext) {
                 fn touch(&mut self) -> u32 {
                     self.touches += 1;
                     self.touches
+                }
+                fn label(&self) -> String {
+                    self.config.get().expect("target config").label
                 }
             }
         "#},
@@ -164,6 +185,7 @@ fn write_rust_caller(ctx: &TestContext) {
             pub trait RustUuidCaller {
                 fn new(name: String) -> Self;
                 async fn run(&self, target: String, key: String) -> String;
+                async fn probe(&self, key: String) -> String;
             }
 
             struct RustUuidCallerImpl;
@@ -183,6 +205,18 @@ fn write_rust_caller(ctx: &TestContext) {
                         other => panic!("unknown target {other}"),
                     }
                 }
+                async fn probe(&self, key: String) -> String {
+                    use rust_uuid_target_guest_client::RustUuidTarget;
+                    let key = Uuid::parse_str(&key).unwrap();
+                    assert_eq!(RustUuidTarget::get(key).unwrap().label().await.unwrap(), "manifest");
+                    let configured = RustUuidTarget::get_with_config(Uuid::from_u128(11), Some("rust".to_string())).unwrap();
+                    assert_eq!(configured.label().await.unwrap(), "rust");
+                    let phantom = Uuid::from_u128(1);
+                    RustUuidTarget::get_phantom(phantom, key).unwrap().trigger_touch().unwrap();
+                    assert_eq!(RustUuidTarget::get_phantom(phantom, key).unwrap().touch().await.unwrap(), 2);
+                    assert_eq!(RustUuidTarget::new_phantom(key).unwrap().touch().await.unwrap(), 1);
+                    "probed".to_string()
+                }
             }
         "#},
     )
@@ -199,6 +233,7 @@ fn write_rust_caller(ctx: &TestContext) {
                 go-uuid-target-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/go-uuid-target-guest-client" }
                 scala-uuid-target-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/scala-uuid-target-guest-client" }
                 moonbit-uuid-target-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/moonbit-uuid-target-guest-client" }
+                rust-uuid-target-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/rust-uuid-target-guest-client" }
             "#}
             .trim_end(),
         ),
@@ -280,6 +315,11 @@ fn write_ts(ctx: &TestContext) {
                     check(back.all.map(text).join() === [id, nil, max].map(text).join(), 'nested all');
                   }
                   check(text(await target.identity()) === key, 'identity');
+                  const configured = RustUuidTarget.getWithConfig(Uuid.parse('00000000-0000-0000-0000-00000000000c'), 'ts');
+                  check(await configured.label() === 'ts', 'config override');
+                  const phantom = Uuid.parse('00000000-0000-0000-0000-000000000002');
+                  RustUuidTarget.getPhantom(phantom, id).touch.trigger();
+                  check(await RustUuidTarget.getPhantom(phantom, id).touch() === 2, 'trigger on phantom');
                   return `ok:${await target.touch()}`;
                 },
               },
@@ -628,6 +668,14 @@ fn write_moonbit(ctx: &TestContext) {
               let id = @schema.Uuid::parse(key) catch { _ => abort("invalid key") }
               let nil = @schema.Uuid::from_bits(0, 0)
               let max = @schema.Uuid::from_bits(0xFFFFFFFFFFFFFFFFUL, 0xFFFFFFFFFFFFFFFFUL)
+              let configured = @rust.RustUuidTargetClient::get_with_config(@schema.Uuid::from_bits(0, 13), Some("moonbit"))
+              defer configured.drop()
+              assert_eq(configured.label(), "moonbit")
+              let phantom = @schema.Uuid::from_bits(0, 3)
+              let pinned = @rust.RustUuidTargetClient::get_phantom(id, phantom)
+              defer pinned.drop()
+              pinned.trigger_touch()
+              assert_eq(pinned.touch(), 2)
               @rust.RustUuidTargetClient::scoped(id, async fn(remote) {
                 for value in [id, nil, max] {
                   assert_eq(remote.echo(value), value)
@@ -1063,6 +1111,17 @@ async fn uuid_values_cross_every_bridge() {
             "Rust guest caller of the {target} target: {stdout}"
         );
     }
+
+    let stdout = invoke(
+        &ctx,
+        "RustUuidCaller(\"hub\")",
+        &["probe", &format!("\"{KEY}\"")],
+    )
+    .await;
+    assert!(
+        stdout.contains("probed"),
+        "Rust guest caller config, trigger and phantom calls: {stdout}"
+    );
 
     let stdout = invoke(
         &ctx,

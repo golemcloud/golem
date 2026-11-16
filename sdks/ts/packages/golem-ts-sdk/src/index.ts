@@ -14,6 +14,7 @@
 
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal } from 'golem:agent/common@2.0.0';
+import { caller } from 'golem:agent/invocation-context@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
@@ -45,6 +46,12 @@ import './schema/arktype';
 import './schema/effect';
 
 export { Uuid } from './uuid';
+export { InvocationId } from './invocationId';
+export type {
+  InvocationMetadata,
+  ScheduledInvocationReceipt,
+  CancelableScheduledInvocationReceipt,
+} from './invocationId';
 export { Datetime } from './datetime';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
@@ -113,6 +120,8 @@ export type {
 } from './defineAgent';
 export { Secret } from './secret';
 export { AgentStream } from './schema/agentStream';
+export { StreamError } from './internal/schema-model/errors';
+export type { StreamFailure } from './internal/schema-model/errors';
 export { schemaFingerprintV1, SchemaFingerprintError } from './internal/schema-model/fingerprint';
 export type { SchemaGraph, SchemaType } from './internal/schema-model/model';
 export { method } from './method';
@@ -245,13 +254,9 @@ export { ToolStreamError } from './internal/tool/startedToolInvocation';
 let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;
 
 interface GolemAgentGuest {
-  initialize(agentTypeName: string, input: SchemaValueTree, principal: Principal): Promise<void>;
+  initialize(agentTypeName: string, input: SchemaValueTree): Promise<void>;
   discoverAgentTypes(): AgentType[];
-  invoke(
-    methodName: string,
-    input: SchemaValueTree,
-    principal: Principal,
-  ): Promise<SchemaValueTree | undefined>;
+  invoke(methodName: string, input: SchemaValueTree): Promise<SchemaValueTree | undefined>;
   getDefinition(): AgentType;
 }
 
@@ -265,7 +270,6 @@ interface GolemToolGuest {
     stdin: AsyncIterable<ByteStreamItem> | undefined,
     stdout: ToolOutputWriter | undefined,
     stderr: ToolOutputWriter | undefined,
-    principal: Principal,
   ): Promise<InvocationResult>;
 }
 
@@ -277,11 +281,7 @@ interface LoadSnapshotGuest {
   load(snapshot: Snapshot): Promise<void>;
 }
 
-async function initialize(
-  agentTypeName: string,
-  input: SchemaValueTree,
-  principal: Principal,
-): Promise<void> {
+async function initialize(agentTypeName: string, input: SchemaValueTree): Promise<void> {
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
@@ -302,6 +302,7 @@ async function initialize(
     );
   }
 
+  const principal = caller().immediate;
   const initiateResult = await initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
@@ -314,12 +315,11 @@ async function initialize(
 async function invokeAgent(
   methodName: string,
   input: SchemaValueTree,
-  principal: Principal,
 ): Promise<SchemaValueTree | undefined> {
   if (!initializedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
-  const result = await initializedAgent.agent.invoke(methodName, input, principal);
+  const result = await initializedAgent.agent.invoke(methodName, input, caller().immediate);
 
   if (result.tag === 'ok') {
     return result.val;
@@ -353,7 +353,6 @@ async function invokeTool(
   stdin: AsyncIterable<ByteStreamItem> | undefined,
   stdout: ToolOutputWriter | undefined,
   stderr: ToolOutputWriter | undefined,
-  principal: Principal,
 ): Promise<InvocationResult> {
   let inputAdapter: ToolInputStreamAdapter | undefined;
   let stdoutAdapter: ToolOutputStreamAdapter | undefined;
@@ -380,7 +379,7 @@ async function invokeTool(
     if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
 
     const context: Record<string, unknown> = {
-      principal: sdkPrincipalFromHost(principal),
+      principal: sdkPrincipalFromHost(caller().immediate),
     };
     if (body.stdin) {
       if (!stdin && body.stdin.required) {

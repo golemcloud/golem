@@ -38,7 +38,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentMode, AgentTarget, ParsedAgentId, Principal, ResolvedOwnerContext,
+    AgentMode, AgentTarget, ParsedAgentKey, Principal, ResolvedOwnerContext,
 };
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -61,6 +61,7 @@ use golem_common::model::oplog::{
     types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
     types::SerializableToolOperationTerminal,
 };
+use golem_common::model::regions::OplogRegion;
 mod oplog_fixture;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::plan::PlanId;
@@ -111,7 +112,6 @@ use golem_worker_executor::preview2::golem::agent::host::{
     HostFutureInvokeResult, HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata,
     RpcError, ScheduledInvocationReceipt, WasmRpc,
 };
-use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::HasWorker;
 use golem_worker_executor::services::active_agents::memory_probe::FixedProbe;
 use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoops};
@@ -208,8 +208,8 @@ use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
 use tracing::{Level, debug, info};
 use uuid::{Uuid, uuid};
-use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
-use wasmtime::{Engine, MemoryKind, ResourceLimiterAsync, Store};
+use wasmtime::component::{Instance, Resource, ResourceAny};
+use wasmtime::{MemoryKind, ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 
 #[cfg(test)]
@@ -628,6 +628,7 @@ pub struct TestWorkerExecutor {
     production_oplog: Option<Arc<dyn golem_worker_executor::services::oplog::OplogService>>,
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     leak_detector: std::sync::Weak<()>,
+    caller: Option<AuthCtx>,
 }
 
 impl TestWorkerExecutor {
@@ -709,10 +710,17 @@ impl TestWorkerExecutor {
         let worker =
             Worker::get_exact_existing_suspended(services, &owned_agent_id, principal.clone())
                 .await?;
+        let invocation_id = golem_common::model::InvocationRequestKey::Internal(idempotency_key)
+            .finalize(
+                agent_id.clone(),
+                expected_fingerprint,
+                &format!("tool:{tool_name}/{}", command_path.join("/")),
+            )
+            .id();
         worker
             .invoke_external_tool(
                 expected_fingerprint,
-                idempotency_key,
+                invocation_id,
                 tool_name,
                 command_path,
                 input,
@@ -923,7 +931,19 @@ impl TestWorkerExecutor {
         executor_release::wait_for_release(&shutdown, &invocation_loops, released).await
     }
 
+    /// A handle to the same executor whose DSL calls authenticate as `caller` instead of the
+    /// test account, and so derive their invocation IDs in the caller's idempotency scope.
+    pub fn as_caller(&self, caller: AuthCtx) -> Self {
+        Self {
+            caller: Some(caller),
+            ..self.clone()
+        }
+    }
+
     pub fn auth_ctx(&self) -> AuthCtx {
+        if let Some(caller) = &self.caller {
+            return caller.clone();
+        }
         AuthCtx::User(UserAuthCtx {
             account_id: self.context.account_id,
             account_email: golem_common::model::account::AccountEmail::new("test@golem"),
@@ -936,6 +956,38 @@ impl TestWorkerExecutor {
             },
             delegation_surface: None,
         })
+    }
+
+    /// The invocation ID this executor's DSL caller gets for `key` on `operation` of the current
+    /// incarnation of `agent_id`, as the UUID stored in the agent's oplog.
+    pub async fn external_invocation_key(
+        &self,
+        agent_id: &AgentId,
+        key: &IdempotencyKey,
+        operation: &str,
+    ) -> anyhow::Result<golem_common::model::InvocationId> {
+        let request_key = golem_common::model::InvocationRequestKey::external(
+            self.auth_ctx().idempotency_scope(),
+            Some(key),
+        );
+        self.finalized_invocation_key(agent_id, &request_key, operation)
+            .await
+    }
+
+    /// The invocation ID that `request_key` finalizes to on `operation` of the current
+    /// incarnation of `agent_id`, as the UUID stored in the agent's oplog.
+    pub async fn finalized_invocation_key(
+        &self,
+        agent_id: &AgentId,
+        request_key: &golem_common::model::InvocationRequestKey,
+        operation: &str,
+    ) -> anyhow::Result<golem_common::model::InvocationId> {
+        let fingerprint = golem_test_framework::dsl::TestDsl::get_worker_metadata(self, agent_id)
+            .await?
+            .fingerprint;
+        Ok(request_key
+            .finalize(agent_id.clone(), fingerprint, operation)
+            .id())
     }
 
     /// Returns the number of entries the agent's opened oplog returned from `Oplog::read_exact`.
@@ -1099,6 +1151,32 @@ impl TestWorkerExecutor {
             )
             .await?;
         Ok(())
+    }
+
+    /// The automatic snapshot entries that a start of the agent rejected and stored for its
+    /// incarnation, so no later start selects them.
+    pub async fn rejected_automatic_snapshots(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<std::collections::BTreeSet<OplogIndex>> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker_service = self
+            .services
+            .as_ref()
+            .ok_or_else(|| anyhow!("the test service graph is not captured"))?
+            .worker_service();
+        let metadata = worker_service
+            .get(&owned_agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("no metadata for {owned_agent_id}"))?;
+        Ok(worker_service
+            .get_rejected_periodic_snapshots(
+                &owned_agent_id,
+                metadata.initial_worker_metadata.fingerprint,
+            )
+            .await?
+            .into_iter()
+            .collect())
     }
 
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
@@ -1712,9 +1790,9 @@ impl TestWorkerExecutor {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<Arc<golem_worker_executor::services::active_agents::ActiveAgent<TestWorkerCtx>>>
     {
-        self.additional_test_deps
-            .active_agents
-            .get()?
+        self.services
+            .as_ref()?
+            .active_agents()
             .try_get_active_agent(owned_agent_id)
             .await
     }
@@ -1801,8 +1879,13 @@ impl TestWorkerExecutor {
     /// Returns whether a Worker shell is currently in `ActiveAgents` without
     /// refreshing its last-access time.
     pub async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        match self.additional_test_deps.active_agents.get() {
-            Some(active_agents) => active_agents.contains_cached_agent(owned_agent_id).await,
+        match self.services.as_ref() {
+            Some(services) => {
+                services
+                    .active_agents()
+                    .contains_cached_agent(owned_agent_id)
+                    .await
+            }
             None => false,
         }
     }
@@ -3067,6 +3150,7 @@ async fn start_executor_with_config(
                 production_oplog: None,
                 concurrent_resource_entry: None,
                 leak_detector,
+                caller: None,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
@@ -3552,11 +3636,11 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
 #[async_trait]
 impl InvocationManagement for TestWorkerCtx {
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey) {
+    async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.durable_ctx.set_current_idempotency_key(key).await
     }
 
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+    async fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
@@ -3602,7 +3686,7 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: golem_worker_executor::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
             .await
@@ -3715,6 +3799,7 @@ impl UpdateManagement for TestWorkerCtx {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(
@@ -3722,6 +3807,7 @@ impl UpdateManagement for TestWorkerCtx {
                 new_component_size,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             )
             .await
     }
@@ -3940,7 +4026,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -4143,6 +4229,10 @@ impl HostWasmRpc for TestWorkerCtx {
         self.durable_ctx
             .create(agent_type_name, constructor, phantom_id, config)
             .await
+    }
+
+    async fn bind_self(&mut self) -> anyhow::Result<Result<(String, Resource<WasmRpc>), RpcError>> {
+        self.durable_ctx.bind_self().await
     }
 
     async fn invoke_and_await(
@@ -4753,105 +4843,6 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     ) -> Arc<dyn DirectInvocationAuthService> {
         Arc::new(NoOpDirectInvocationAuthService)
     }
-
-    fn create_wasmtime_linker(
-        &self,
-        engine: &Engine,
-    ) -> anyhow::Result<Linker<golem_worker_executor::workerctx::default::Context>> {
-        use golem_worker_executor::workerctx::default::Context;
-        let mut linker = golem_worker_executor::wasi_host::create_linker(
-            engine,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_api_1_x::retry::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
-            _,
-            HasSelf<DurableWorkerCtx<Context>>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::preview2::golem::tool::host::add_to_linker::<
-            _,
-            HasSelf<DurableWorkerCtx<Context>>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::durable_host::tool::add_common_to_linker(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::preview2::golem::permissions::types::add_to_linker::<
-            _,
-            HasSelf<DurableWorkerCtx<Context>>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::preview2::golem::permissions::inspect::add_to_linker::<
-            _,
-            HasSelf<DurableWorkerCtx<Context>>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::preview2::golem::permissions::derive::add_to_linker::<
-            _,
-            HasSelf<DurableWorkerCtx<Context>>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::preview2::golem::permissions::revoke::add_to_linker::<
-            _,
-            HasSelf<DurableWorkerCtx<Context>>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::preview2::golem::permissions::wallet::add_to_linker::<
-            _,
-            HasSelf<DurableWorkerCtx<Context>>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_worker_executor::preview2::golem::permissions::kernel_introspection::add_to_linker::<
-            _,
-            HasSelf<DurableWorkerCtx<Context>>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        golem_schema::schema::wit::wire::add_to_linker::<
-            _,
-            golem_worker_executor::durable_host::CoreTypesHost<Context>,
-        >(
-            &mut linker,
-            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
-        )?;
-        Ok(linker)
-    }
 }
 
 /// A `ResourceLimits` implementation that provides a fixed table element limit
@@ -4973,6 +4964,7 @@ async fn run_production_context_bootstrap(
                 production_oplog: oplog.get().cloned(),
                 concurrent_resource_entry,
                 leak_detector,
+                caller: None,
             });
         } else if start.elapsed().as_secs() > 10 {
             return Err(anyhow::anyhow!(timeout_msg));
@@ -7503,8 +7495,18 @@ impl AdditionalTestDeps {
         agent_id: AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         fn is_initialization_enqueue(entry: &OplogEntry) -> bool {
-            matches!(entry, OplogEntry::PendingAgentInvocation { idempotency_key, .. }
-                if idempotency_key.value.starts_with("init-"))
+            let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
+                return false;
+            };
+            let payload = match payload {
+                OplogPayload::Inline(payload) => Some(payload.as_ref()),
+                OplogPayload::SerializedInline { cached, .. }
+                | OplogPayload::External { cached, .. } => cached.as_deref(),
+            };
+            matches!(
+                payload,
+                Some(golem_common::model::AgentInvocationPayload::AgentInitialization { .. })
+            )
         }
         self.gate_next_append(agent_id, is_initialization_enqueue)
             .await
@@ -9450,6 +9452,7 @@ pub struct RecordingRpc {
     inner: Arc<dyn Rpc>,
     method_name: String,
     attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
+    call_count: Arc<AtomicUsize>,
 }
 
 impl RecordingRpc {
@@ -9462,7 +9465,12 @@ impl RecordingRpc {
             inner,
             method_name: method_name.into(),
             attempts,
+            call_count: Arc::default(),
         }
+    }
+
+    pub fn call_count(&self) -> Arc<AtomicUsize> {
+        self.call_count.clone()
     }
 }
 
@@ -9477,6 +9485,70 @@ impl FailingRpc {
 
 #[async_trait]
 impl Rpc for RecordingRpc {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: golem_common::model::InvocationId,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                request_key,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn create_demand(
         &self,
         target: AgentTarget,
@@ -9491,6 +9563,7 @@ impl Rpc for RecordingRpc {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .create_demand(
                 target,
@@ -9514,6 +9587,7 @@ impl Rpc for RecordingRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -9524,6 +9598,7 @@ impl Rpc for RecordingRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<SchemaValue, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         if method_name == self.method_name {
             self.attempts.lock().unwrap().push(idempotency_key.clone());
         }
@@ -9533,6 +9608,7 @@ impl Rpc for RecordingRpc {
                 environment_id,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 method_name,
                 method_parameters,
                 self_created_by,
@@ -9552,6 +9628,7 @@ impl Rpc for RecordingRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -9561,12 +9638,14 @@ impl Rpc for RecordingRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .invoke(
                 target,
                 environment_id,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 method_name,
                 method_parameters,
                 self_created_by,
@@ -9582,6 +9661,67 @@ impl Rpc for RecordingRpc {
 
 #[async_trait]
 impl Rpc for FailingRpc {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: golem_common::model::InvocationId,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                request_key,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn create_demand(
         &self,
         target: AgentTarget,
@@ -9619,6 +9759,7 @@ impl Rpc for FailingRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -9644,6 +9785,7 @@ impl Rpc for FailingRpc {
                     environment_id,
                     idempotency_key,
                     freshness_disposition,
+                    expected_callee_fingerprint,
                     method_name,
                     method_parameters,
                     self_created_by,
@@ -9664,6 +9806,7 @@ impl Rpc for FailingRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -9679,6 +9822,7 @@ impl Rpc for FailingRpc {
                 environment_id,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 method_name,
                 method_parameters,
                 self_created_by,

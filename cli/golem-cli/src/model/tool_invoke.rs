@@ -4,7 +4,7 @@
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text_format::{TextOutput, logln};
 use golem_client::model::NativeToolInvocationResponse;
-use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationId;
 use golem_common::model::invocation_session_public::{
     PublicInvocationResult, PublicNativeToolTarget,
 };
@@ -30,7 +30,7 @@ impl TextOutput for ToolInvokeView {
 #[serde(rename_all = "camelCase")]
 pub struct ToolInvocationSessionView {
     pub target: PublicNativeToolTarget,
-    pub idempotency_key: IdempotencyKey,
+    pub idempotency_key: InvocationId,
     pub result: PublicInvocationResult,
 }
 

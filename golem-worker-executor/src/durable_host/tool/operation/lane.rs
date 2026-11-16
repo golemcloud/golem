@@ -50,42 +50,41 @@ impl OwnerToolOperations {
         result_await_parent: Option<&OwnerInvocationId>,
     ) -> Result<(Vec<OwnerInvocationId>, Option<OwnerLaneWait>), WorkerExecutorError> {
         let mut state = self.state.lock().unwrap();
-        if state.admission_closed {
+        if !state.phase.is_open() {
             return Err(WorkerExecutorError::runtime(
                 "owner generation was fenced before tool lane registration",
             ));
         }
         let mut starts = starts.to_vec();
         starts.sort_unstable();
-        let registrations = starts
-            .iter()
-            .map(|start| {
-                let (operation_id, operation) = state
-                    .operations
-                    .iter()
-                    .find(|(_, operation)| {
-                        operation
-                            .invocation_id
-                            .as_ref()
-                            .is_some_and(|invocation| invocation.start_index() == *start)
-                    })
-                    .ok_or_else(|| {
-                        WorkerExecutorError::runtime(format!(
-                            "ready tool operation at {start} is no longer registered"
-                        ))
-                    })?;
-                if operation.admission != BodyAdmissionState::Ready
-                    || !matches!(operation.winner, ToolOperationWinner::Open)
-                {
-                    return Err(WorkerExecutorError::runtime(format!(
-                        "tool operation at {start} is not ready for lane registration"
-                    )));
-                }
+        let mut operations = state
+            .operations
+            .values_mut()
+            .filter_map(|operation| {
+                let start = operation.invocation_id.as_ref()?.start_index();
+                starts.binary_search(&start).ok()?;
+                Some((start, operation))
+            })
+            .collect::<Vec<_>>();
+        operations.sort_unstable_by_key(|(start, _)| *start);
+        if !operations.iter().map(|(start, _)| start).eq(starts.iter()) {
+            return Err(WorkerExecutorError::runtime(
+                "tool lane registration requires distinct registered operations",
+            ));
+        }
+        let registrations = operations
+            .into_iter()
+            .map(|(start, operation)| {
                 let invocation_id = operation.invocation_id.clone().ok_or_else(|| {
                     WorkerExecutorError::runtime("tool operation was not durably accepted")
                 })?;
+                let ready = operation.state.ready_body().ok_or_else(|| {
+                    WorkerExecutorError::runtime(format!(
+                        "tool operation at {start} is not ready for lane registration"
+                    ))
+                })?;
                 Ok((
-                    *operation_id,
+                    ready,
                     operation.context.parent.clone(),
                     invocation_id,
                     operation.context.call_mode,
@@ -95,12 +94,12 @@ impl OwnerToolOperations {
             .collect::<Result<Vec<_>, WorkerExecutorError>>()?;
         let mut tickets = Vec::with_capacity(registrations.len());
         let mut invocations = Vec::with_capacity(registrations.len());
-        for (operation_id, parent, invocation_id, call_mode, filesystem) in registrations {
+        for (ready, parent, invocation_id, call_mode, filesystem) in registrations {
             let ticket = lane
                 .register_entity(parent, invocation_id.clone(), call_mode, filesystem)
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             invocations.push(OwnerInvocationId::Entity(invocation_id));
-            tickets.push((operation_id, ticket));
+            tickets.push((ready, ticket));
         }
         let wait = result_await_parent
             .filter(|_| !invocations.is_empty())
@@ -109,13 +108,8 @@ impl OwnerToolOperations {
                     .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
             })
             .transpose()?;
-        for (operation_id, ticket) in tickets {
-            let operation = state
-                .operations
-                .get_mut(&operation_id)
-                .expect("validated tool operation must remain registered while locked");
-            operation.lane = LaneOwnership::Ticket(ticket);
-            operation.admission = BodyAdmissionState::Registered;
+        for (ready, ticket) in tickets {
+            ready.queue(ticket);
         }
         drop(state);
         self.changed.notify_waiters();
@@ -129,18 +123,18 @@ impl OwnerToolOperation {
     #[cfg(test)]
     pub(crate) fn register_body(&self, lane: &OwnerLane) -> Result<bool, WorkerExecutorError> {
         let mut state = self.owner.state.lock().unwrap();
-        if state.admission_closed {
+        if !state.phase.is_open() {
             return Ok(false);
         }
-        let operation = state.operations.get_mut(&self.id).unwrap();
-        if operation.admission != BodyAdmissionState::Ready
-            || !matches!(operation.winner, ToolOperationWinner::Open)
-        {
+        let Some(operation) = state.operations.get_mut(&self.id) else {
             return Ok(false);
-        }
+        };
         let invocation_id = operation.invocation_id.clone().ok_or_else(|| {
             WorkerExecutorError::runtime("tool operation was not durably accepted")
         })?;
+        let Some(ready) = operation.state.ready_body() else {
+            return Ok(false);
+        };
         match lane.register_entity(
             self.context.parent.clone(),
             invocation_id,
@@ -148,8 +142,7 @@ impl OwnerToolOperation {
             self.context.activation.filesystem(),
         ) {
             Ok(ticket) => {
-                operation.lane = LaneOwnership::Ticket(ticket);
-                operation.admission = BodyAdmissionState::Registered;
+                ready.queue(ticket);
                 Ok(true)
             }
             Err(error) => Err(WorkerExecutorError::runtime(error.to_string())),
@@ -163,17 +156,13 @@ impl OwnerToolOperation {
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let task = {
             let mut state = self.owner.state.lock().unwrap();
-            let operation = state.operations.get_mut(&self.id).unwrap();
-            if operation.admission != BodyAdmissionState::Registered {
+            let Some(operation) = state.operations.get_mut(&self.id) else {
+                return Ok(false);
+            };
+            if operation.state.admission() != BodyAdmissionState::Registered {
                 return Ok(false);
             }
-            let LaneOwnership::Ticket(ticket) =
-                std::mem::replace(&mut operation.lane, LaneOwnership::None)
-            else {
-                return Err(WorkerExecutorError::runtime(
-                    "registered tool operation lost its lane ticket",
-                ));
-            };
+            let (ticket, acquisition) = operation.state.take_ticket()?;
             let owner = self.owner.clone();
             let operation_id = self.id;
             let task_drain = drained.clone();
@@ -192,10 +181,7 @@ impl OwnerToolOperation {
                             state.operations.get_mut(&operation_id).ok_or_else(|| {
                                 WorkerExecutorError::runtime("acquiring tool operation was removed")
                             })?;
-                        if matches!(operation.lane, LaneOwnership::Acquiring(_)) {
-                            operation.lane = LaneOwnership::None;
-                            operation.acquisition_error = Some(error.to_string());
-                        }
+                        operation.state.fail_acquisition(error.to_string());
                         return Ok::<(), WorkerExecutorError>(());
                     }
                 }
@@ -204,31 +190,35 @@ impl OwnerToolOperation {
                     let wait = owner.changed.notified();
                     let should_wait = {
                         let mut state = owner.state.lock().unwrap();
-                        let owner_open = !state.admission_closed;
+                        let owner_open = state.phase.is_open();
                         let operation =
                             state.operations.get_mut(&operation_id).ok_or_else(|| {
                                 WorkerExecutorError::runtime("acquiring tool operation was removed")
                             })?;
-                        if !matches!(operation.lane, LaneOwnership::Acquiring(_)) {
+                        if !matches!(operation.state.lane(), LaneOwnership::Acquiring(_)) {
                             return Ok(());
                         }
-                        if owner_open && matches!(operation.winner, ToolOperationWinner::Open) {
-                            operation.lane = LaneOwnership::Permit {
-                                _permit: drain
-                                    .permit
-                                    .take()
-                                    .expect("acquired lane permit must remain task-owned"),
-                            };
-                            operation.admission = BodyAdmissionState::Running;
+                        if owner_open
+                            && matches!(operation.state.winner(), ToolOperationWinner::Open)
+                        {
+                            let acquiring = operation.state.acquiring_body().ok_or_else(|| {
+                                WorkerExecutorError::runtime("tool body is not acquiring its lane")
+                            })?;
+                            let permit = drain.permit.take().ok_or_else(|| {
+                                WorkerExecutorError::runtime(
+                                    "acquired lane permit is no longer task-owned",
+                                )
+                            })?;
+                            acquiring.install_grant(permit);
                             false
-                        } else if owner_open && operation.winner.is_selecting() {
+                        } else if owner_open && operation.state.winner().is_selecting() {
                             true
                         } else {
                             // A committed operation or owner failure will detach and abort this
                             // acquisition. If it won before this task observed the state change,
                             // release the permit here instead.
                             drop(drain.permit.take());
-                            operation.lane = LaneOwnership::None;
+                            drop(operation.state.take_lane_for_drain());
                             false
                         }
                     };
@@ -240,7 +230,7 @@ impl OwnerToolOperation {
                 }
                 Ok(())
             });
-            operation.lane = LaneOwnership::Acquiring(AcquisitionControl {
+            acquisition.install(AcquisitionControl {
                 abort: task.abort_handle(),
                 drained: drained.clone(),
             });
@@ -258,23 +248,23 @@ impl OwnerToolOperation {
             }
         }
         let mut state = self.owner.state.lock().unwrap();
-        let owner_open = !state.admission_closed;
+        let owner_open = state.phase.is_open();
         let operation = state
             .operations
             .get_mut(&self.id)
             .ok_or_else(|| WorkerExecutorError::runtime("acquiring tool operation was removed"))?;
-        if let Some(error) = operation.acquisition_error.take() {
+        if let Some(error) = operation.state.take_acquisition_error() {
             return Err(WorkerExecutorError::runtime(error));
         }
-        if start_failed && !operation.winner.is_terminal() && owner_open {
-            operation.lane = LaneOwnership::None;
+        if start_failed && !operation.state.winner().is_terminal() && owner_open {
+            drop(operation.state.take_lane_for_drain());
             return Err(WorkerExecutorError::runtime(
                 "tool lane acquisition failed to start",
             ));
         }
-        Ok(operation.admission == BodyAdmissionState::Running
-            && matches!(operation.lane, LaneOwnership::Permit { .. })
-            && matches!(operation.winner, ToolOperationWinner::Open))
+        Ok(operation.state.admission() == BodyAdmissionState::Running
+            && matches!(operation.state.lane(), LaneOwnership::Permit { .. })
+            && matches!(operation.state.winner(), ToolOperationWinner::Open))
     }
 
     pub(crate) async fn wait_until_registered(&self) -> bool {
@@ -289,10 +279,12 @@ impl OwnerToolOperation {
                 let state = self.owner.state.lock().unwrap();
                 match state.operations.get(&self.id) {
                     None => RegistrationStatus::Terminal,
-                    Some(operation) if operation.winner.is_terminal() => {
+                    Some(operation) if operation.state.winner().is_terminal() => {
                         RegistrationStatus::Terminal
                     }
-                    Some(operation) if operation.admission == BodyAdmissionState::Registered => {
+                    Some(operation)
+                        if operation.state.admission() == BodyAdmissionState::Registered =>
+                    {
                         RegistrationStatus::Registered
                     }
                     Some(_) => RegistrationStatus::Waiting,

@@ -289,12 +289,18 @@ object HostApiCompileSpec extends ZIOSpecDefault {
       assertTrue(aid != null)
     },
 
-    test("PromiseIdLiteral companion constructs from AgentIdLiteral and oplog index") {
-      val uuid = HostApi.UuidLiteral(js.BigInt(1), js.BigInt(2))
-      val cid  = HostApi.ComponentIdLiteral(uuid)
-      val aid  = HostApi.AgentIdLiteral(cid, "my-agent")
-      val pid  = HostApi.PromiseIdLiteral(aid, js.BigInt(42))
-      assertTrue(pid != null)
+    test("PromiseIdLiteral companion constructs from AgentIdLiteral, fingerprint and oplog index") {
+      val uuid        = HostApi.UuidLiteral(js.BigInt(1), js.BigInt(2))
+      val cid         = HostApi.ComponentIdLiteral(uuid)
+      val aid         = HostApi.AgentIdLiteral(cid, "my-agent")
+      val fingerprint = HostApi.UuidLiteral(js.BigInt(3), js.BigInt(4))
+      val pid         = HostApi.PromiseIdLiteral(aid, fingerprint, js.BigInt(42))
+      assertTrue(
+        pid.agentId.agentId == "my-agent",
+        pid.fingerprint.highBits == js.BigInt(3),
+        pid.fingerprint.lowBits == js.BigInt(4),
+        pid.oplogIdx == js.BigInt(42)
+      )
     }
   )
 }

@@ -1401,7 +1401,7 @@ pub(super) fn dispose_producer<Ctx: WorkerCtx>(
 pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     operation: &super::operation::OwnerToolOperation,
-) {
+) -> Result<(), WorkerExecutorError> {
     use crate::durable_host::concurrent::{
         DropEvent, LiveCallPermit, MarkerReceipt, prepare_access_terminal_effect,
     };
@@ -1411,8 +1411,7 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
     let context = PublicationFailureContext::new(ctx);
     let oplog = ctx.state.oplog.clone();
     let replay = ctx.state.replay_state.clone();
-    let mode = ctx.entity_invocation_scope().map(|scope| scope.mode());
-    let local_live = ctx.state.local_live_tail();
+    let store_replay_state = ctx.state.store_replay_state.clone();
     let suppressed = ctx.state.durability_is_suppressed();
     let parent = ctx.entity_parent_start_index();
     let tracker = ctx.tail_work_tracker();
@@ -1430,11 +1429,7 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
             let _ = controller.cancel();
             return;
         }
-        if !crate::durable_host::store_is_live(
-            mode,
-            local_live.load(std::sync::atomic::Ordering::Acquire),
-            replay.is_live_published(),
-        ) {
+        if !store_replay_state.is_live(replay.is_live_published()) {
             return;
         }
         let activity = tracker.activity();
@@ -1525,7 +1520,7 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
             trap_context: trap,
             live_call_permit: Some(permit),
         });
-    }));
+    }))
 }
 
 fn publication_failure<Ctx: WorkerCtx, Access: DurableContext<Ctx>>(
@@ -1610,14 +1605,11 @@ impl<Ctx: WorkerCtx> PublicationFailureContext<Ctx> {
                 operations.select_primary_infrastructure(error).await
             };
             if let Some(cleanup) = cleanup {
-                let winner = operations
-                    .selected_owner_failure()
-                    .expect("failure cleanup has an owner winner");
+                let winner = cleanup.winner().clone();
                 let interrupt = worker.current_execution_interrupt_signal();
                 let primary_interrupt = operation.is_none().then(|| interrupt.clone()).flatten();
                 let cleanup_operations = operations.clone();
-                let cleanup = operations.start_owner_failure_cleanup(
-                    cleanup,
+                let cleanup = cleanup.start(
                     async move {
                         if let Some(active) = active {
                             active.fence_entity_bodies(winner).await;
@@ -1626,7 +1618,7 @@ impl<Ctx: WorkerCtx> PublicationFailureContext<Ctx> {
                             cleanup_operations.drain_owner_failure_lanes().await;
                         }
                         if let Some(operation) = operation {
-                            operation.settle().await;
+                            operation.settle().await?;
                         }
                         Ok(())
                     },

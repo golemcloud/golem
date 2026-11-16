@@ -18,6 +18,7 @@ use crate::model::LookupResult;
 use crate::services::{HasActiveAgents, HasEnvironmentStateService};
 use crate::worker::ResultOrSubscription;
 use golem_api_grpc::proto::golem::worker::{AgentInvocationMode, ExternalToolInvocation};
+use golem_common::model::InvocationRequestKey;
 use golem_common::model::agent::OwnerKind;
 use golem_common::schema::TypedSchemaValue;
 
@@ -45,32 +46,37 @@ where
         request: &InvocationStart,
         acceptance_committed: tokio::sync::oneshot::Sender<()>,
         accepted: tokio::sync::oneshot::Sender<AcceptedInvocation>,
+        scope: &crate::worker::tasks::TaskScope,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         use golem_api_grpc::proto::golem::worker::AgentInvocationMode as Mode;
 
         let tool = request.external_tool.as_ref().expect("native tool request");
-        let key: IdempotencyKey = request
-            .idempotency_key
-            .clone()
-            .ok_or_else(|| {
-                WorkerExecutorError::invalid_request(
-                    "external tool invocation requires an idempotency key",
-                )
-            })?
-            .into();
         let owned = extract_owned_agent_id(request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned.agent_id)?;
-        if tool.fresh_owner {
-            if owned.agent_id.agent_id != OwnerKind::external_tool_instance_name(&key) {
-                return Err(WorkerExecutorError::invalid_request(
-                    "virtual owner identity does not match the invocation key",
-                ));
-            }
-        } else if OwnerKind::is_reserved_instance_name(&owned.agent_id.agent_id) {
+        let operation = format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/"));
+        if !tool.fresh_owner && OwnerKind::is_reserved_instance_name(&owned.agent_id.agent_id) {
             return Err(WorkerExecutorError::invalid_request(
                 "existing tool target must be a real agent",
             ));
         }
+        // An existing owner is named by its fingerprint, and the guard pins that incarnation in
+        // every mode. A virtual owner has no incarnation a caller can name.
+        let expected_fingerprint = match (tool.fresh_owner, request.expected_callee_fingerprint) {
+            (false, Some(fingerprint)) => {
+                Some(golem_common::model::AgentFingerprint(fingerprint.into()))
+            }
+            (true, None) => None,
+            (true, Some(_)) => {
+                return Err(WorkerExecutorError::invalid_request(
+                    "a fresh external tool owner cannot have an expected agent fingerprint",
+                ));
+            }
+            (false, None) => {
+                return Err(WorkerExecutorError::invalid_request(
+                    "an external tool invocation on an existing agent requires its expected agent fingerprint",
+                ));
+            }
+        };
         let principal = request
             .principal
             .clone()
@@ -98,25 +104,64 @@ where
             invocation_status: None,
             component_revision: None,
             agent_id: Some(owned.agent_id.clone()),
-            idempotency_key: Some(key.clone()),
+            idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
         };
         if mode == Mode::Lookup {
-            let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
-            let Some(metadata) = metadata else {
-                response.invocation_status = Some(InvocationStatus::Unknown);
-                publish_acceptance(acceptance_committed, accepted, None)?;
-                return Ok(response);
+            let key = request
+                .idempotency_key
+                .clone()
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(
+                        "external tool lookup requires an invocation identity",
+                    )
+                })?
+                .value
+                .parse::<golem_common::model::InvocationId>()
+                .map_err(|error| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "invalid invocation identity: {error}"
+                    ))
+                })?;
+            response.idempotency_key = Some(key);
+            let (worker, metadata, _response_lease) = if let Some(expected) = expected_fingerprint {
+                // The guard pins the named incarnation, and the response describes that worker,
+                // so a delete or re-create between reads cannot answer for another incarnation.
+                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
+                    self,
+                    &owned,
+                    principal,
+                    Some(expected),
+                )
+                .await?;
+                let bound = scope
+                    .bind(&worker.tasks)
+                    .map_err(WorkerExecutorError::runtime);
+                worker
+                    .deleted_incarnation_as_not_found(Some(expected), bound)
+                    .await?;
+                let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned)
+                    .await?
+                    .filter(|metadata| metadata.fingerprint == expected)
+                    .ok_or_else(|| WorkerExecutorError::worker_not_found(owned.agent_id()))?;
+                (worker, metadata, response_lease)
+            } else {
+                let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
+                let Some(metadata) = metadata else {
+                    response.invocation_status = Some(InvocationStatus::Unknown);
+                    publish_acceptance(acceptance_committed, accepted, &key, None)?;
+                    return Ok(response);
+                };
+                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
+                    self, &owned, principal, None,
+                )
+                .await?;
+                scope
+                    .bind(&worker.tasks)
+                    .map_err(WorkerExecutorError::runtime)?;
+                (worker, metadata, response_lease)
             };
-            if !tool.fresh_owner || request.expected_callee_fingerprint.is_some() {
-                require_expected_callee_fingerprint(
-                    request.expected_callee_fingerprint,
-                    metadata.fingerprint,
-                )?;
-            }
-            let (worker, _response_lease) =
-                Worker::get_exact_existing_suspended_for_response(self, &owned, principal).await?;
             response.component_revision = Some(metadata.last_known_status.component_revision);
             response.agent_fingerprint = Some(metadata.fingerprint);
             match worker.lookup_invocation_result(&key).await {
@@ -134,8 +179,27 @@ where
                     response.invocation_status = Some(InvocationStatus::Unknown)
                 }
             }
-            publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
+            publish_acceptance(
+                acceptance_committed,
+                accepted,
+                &key,
+                response.component_revision,
+            )?;
             return Ok(response);
+        }
+        let request_key: InvocationRequestKey = request
+            .request_key
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("request_key is required"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let owner_key = request_key.owner_key(&operation);
+        if tool.fresh_owner
+            && owned.agent_id.agent_id != OwnerKind::external_tool_instance_name(&owner_key)
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "virtual owner identity does not match the prepared request",
+            ));
         }
         let raw = tool.input.clone().ok_or_else(|| {
             WorkerExecutorError::invalid_request("external tool input is required")
@@ -230,11 +294,31 @@ where
                 })?,
             )
             .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
-            let account_id = request
+            let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
                 .try_into()
                 .map_err(WorkerExecutorError::invalid_request)?;
+            let worker = self
+                .active_agents()
+                .get_or_add_ephemeral_external_tool_pinned(
+                    self,
+                    owned.component_id(),
+                    owned.environment_id,
+                    &owner_key,
+                    component.revision,
+                    &context,
+                    principal.clone(),
+                )
+                .await?;
+            scope
+                .bind(&worker.tasks)
+                .map_err(WorkerExecutorError::runtime)?;
+            let metadata = worker.get_initial_worker_metadata();
+            let key = request_key
+                .finalize(metadata.agent_id, metadata.fingerprint, &operation)
+                .id();
+            response.idempotency_key = Some(key);
             let invocation = AgentInvocation::ExternalTool {
                 idempotency_key: key,
                 tool_name,
@@ -244,27 +328,19 @@ where
                 stdout: false,
                 stderr: false,
                 activation,
-                invocation_context: context,
+                invocation_context: context.clone(),
                 principal: principal.clone(),
                 scope_card,
             };
-            self.scheduler_service()
-                .schedule(
-                    at,
-                    ScheduledAction::InvokeEphemeral {
-                        account_id,
-                        owned_agent_id: owned,
-                        invocation: Box::new(invocation),
-                        component_revision: component.revision,
-                        env: Vec::new(),
-                        config: Vec::new(),
-                        parent: request.parent(),
-                        creation_principal: Box::new(principal),
-                    },
-                )
-                .await;
+            worker.schedule_invocation(invocation, at).await?;
+            response.agent_fingerprint = Some(worker.get_initial_worker_metadata().fingerprint);
             response.component_revision = Some(component.revision);
-            publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
+            publish_acceptance(
+                acceptance_committed,
+                accepted,
+                &key,
+                response.component_revision,
+            )?;
             return Ok(response);
         }
         if tool.fresh_owner {
@@ -273,22 +349,33 @@ where
                     self,
                     owned.component_id(),
                     owned.environment_id,
-                    &key,
+                    &owner_key,
                     &context,
                     principal.clone(),
                 )
                 .await?;
         }
-        let (worker, _response_lease) =
-            Worker::get_exact_existing_suspended_for_response(self, &owned, principal.clone())
-                .await?;
-        if !tool.fresh_owner {
-            require_expected_callee_fingerprint(
-                request.expected_callee_fingerprint,
-                worker.get_initial_worker_metadata().fingerprint,
-            )?;
-        }
+        // A missing, replaced or deleting incarnation is answered before the call reads or
+        // prepares it. A deletion that starts later cancels this session and waits for it before
+        // it stops the agent.
+        let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
+            self,
+            &owned,
+            principal.clone(),
+            expected_fingerprint,
+        )
+        .await?;
+        let bound = scope
+            .bind(&worker.tasks)
+            .map_err(WorkerExecutorError::runtime);
+        worker
+            .deleted_incarnation_as_not_found(expected_fingerprint, bound)
+            .await?;
         let metadata = worker.get_latest_worker_metadata().await;
+        let key = request_key
+            .finalize(owned.agent_id.clone(), metadata.fingerprint, &operation)
+            .id();
+        response.idempotency_key = Some(key);
         response.component_revision = Some(metadata.last_known_status.component_revision);
         response.agent_fingerprint = Some(metadata.fingerprint);
         if streaming && let Some((prepared, _)) = worker.native_tool_session(&key).await? {
@@ -300,62 +387,42 @@ where
             .map(golem_common::model::deployment::DeploymentRevision::try_from)
             .transpose()
             .map_err(WorkerExecutorError::invalid_request)?;
-        let prepared = if expected_deployment_revision.is_some() {
-            Some(
-                worker
-                    .prepare_external_tool_invocation(
-                        key.clone(),
-                        tool.tool_name
-                            .clone()
-                            .try_into()
-                            .map_err(WorkerExecutorError::invalid_request)?,
-                        tool.command_path.clone(),
-                        TypedSchemaValue::new(graph.clone(), value.clone()),
-                        tool.stdin,
-                        tool.stdout,
-                        tool.stderr,
-                        expected_deployment_revision,
-                        context.clone(),
-                        principal.clone(),
-                        scope_card.clone(),
-                    )
-                    .await?,
+        let invocation = worker
+            .prepare_external_tool_invocation(
+                key,
+                tool.tool_name
+                    .clone()
+                    .try_into()
+                    .map_err(WorkerExecutorError::invalid_request)?,
+                tool.command_path.clone(),
+                TypedSchemaValue::new(graph, value),
+                tool.stdin,
+                tool.stdout,
+                tool.stderr,
+                expected_deployment_revision,
+                context,
+                principal,
+                scope_card,
             )
-        } else {
-            None
-        };
-        if !streaming && worker.lookup_invocation_result(&key).await != LookupResult::New {
-            publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
+            .await?;
+        if !streaming
+            && !(mode == Mode::Schedule && request.schedule_at.is_some())
+            && worker.lookup_invocation_result(&key).await != LookupResult::New
+        {
+            publish_acceptance(
+                acceptance_committed,
+                accepted,
+                &key,
+                response.component_revision,
+            )?;
             if mode == Mode::Await {
-                let mut output = worker.await_enqueued_invocation(key.clone()).await?;
+                let mut output = worker.await_enqueued_invocation(key).await?;
                 output.agent_id = response.agent_id;
                 output.idempotency_key = Some(key);
                 return Ok(output);
             }
             return Ok(response);
         }
-        let invocation = if let Some(prepared) = prepared {
-            prepared
-        } else {
-            worker
-                .prepare_external_tool_invocation(
-                    key.clone(),
-                    tool.tool_name
-                        .clone()
-                        .try_into()
-                        .map_err(WorkerExecutorError::invalid_request)?,
-                    tool.command_path.clone(),
-                    TypedSchemaValue::new(graph, value),
-                    tool.stdin,
-                    tool.stdout,
-                    tool.stderr,
-                    None,
-                    context,
-                    principal,
-                    scope_card,
-                )
-                .await?
-        };
         if streaming {
             let component = self
                 .component_service()
@@ -382,6 +449,7 @@ where
                 .await?;
             accepted
                 .send(AcceptedInvocation {
+                    idempotency_key: key,
                     component_revision: response.component_revision,
                     durable_streams: Some(acceptance.streams),
                     prepared: Some(acceptance.prepared),
@@ -403,36 +471,36 @@ where
                 })?,
             )
             .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
-            let account_id = request
+            let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
                 .try_into()
                 .map_err(WorkerExecutorError::invalid_request)?;
-            self.scheduler_service()
-                .schedule(
-                    at,
-                    ScheduledAction::Invoke {
-                        account_id,
-                        owned_agent_id: owned,
-                        invocation: Box::new(invocation),
-                        target_worker_fingerprint: metadata.fingerprint,
-                    },
-                )
-                .await;
-            publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
+            worker.schedule_invocation(invocation, at).await?;
+            publish_acceptance(
+                acceptance_committed,
+                accepted,
+                &key,
+                response.component_revision,
+            )?;
             return Ok(response);
         } else {
             let result = worker.clone().invoke(invocation).await?;
             if let ResultOrSubscription::Finished(Err(error)) = result {
                 return Err(error);
             }
-            publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
+            publish_acceptance(
+                acceptance_committed,
+                accepted,
+                &key,
+                response.component_revision,
+            )?;
             Worker::start_if_needed(worker.clone()).await?;
             if mode == Mode::Schedule {
                 return Ok(response);
             }
         }
-        let mut output = worker.await_enqueued_invocation(key.clone()).await?;
+        let mut output = worker.await_enqueued_invocation(key).await?;
         output.agent_id = response.agent_id;
         output.idempotency_key = Some(key);
         Ok(output)

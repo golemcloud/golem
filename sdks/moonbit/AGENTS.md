@@ -223,6 +223,10 @@ The core pattern (in `agents/agents.mbt`):
 5. `discover_agent_types()` returns all registered agent types.
 6. `get_definition()` returns the current instance's type.
 
+The guest exports take no principal. The export entry points (`agent-exports`, `tool-exports`,
+`tool-middleware-exports`) read `caller().immediate` from `golem:agent/invocation-context` and pass
+it to `construct`, `RawAgent::invoke`, tool invokers, and middleware invocations.
+
 ### The RawAgent Trait
 
 ```moonbit

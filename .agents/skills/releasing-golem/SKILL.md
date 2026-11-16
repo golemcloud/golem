@@ -8,6 +8,9 @@ description: Prepares and releases Golem with published shared crates, six SDKs,
 Release shared crates, then six SDKs, then prepare Golem on its exact tag. Read
 [CONTRIBUTING.md](../../../CONTRIBUTING.md#release-process) and
 [BUILTIN_ARTIFACTS.md](../../../BUILTIN_ARTIFACTS.md#tagged-release-preparation).
+When the goal is only to test a prerelease tag in a deployment, publish its images
+with [prerelease images](../../../CONTRIBUTING.md#prerelease-images-for-testing)
+instead of this process.
 
 ## Authorization and setup
 

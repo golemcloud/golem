@@ -361,8 +361,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             producer_disposal_tasks: Some(crate::worker::tasks::NativeReconstructionTasks::new(
                 &worker.tasks,
             )?),
+            schema_producers: stream_outcome::ProducerOutcomeScope::new(worker.tasks.clone()),
+            schema_output_tasks: Mutex::new(Some(
+                crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks)?,
+            )),
             primary_invocation_start_index: None,
             invocation_principal: None,
+            invocation_id: None,
             owner_execution,
             runtime_suspension: None,
             guest_imports: Default::default(),
@@ -521,7 +526,6 @@ impl PrivateDurableWorkerState {
                 agent_wallet_cards.values().map(Arc::as_ref),
             ),
         };
-        let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
         let snapshot_replay_purpose =
             baseline_role.purpose(pending_update.as_ref().map(|update| &update.reference));
         let completion_marker_recorder =
@@ -557,8 +561,7 @@ impl PrivateDurableWorkerState {
             worker_proxy,
             resources: HashMap::new(),
             last_resource_id: AgentResourceId::INITIAL,
-            entity_execution_mode,
-            local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
+            store_replay_state: StoreReplayState::new(entity_execution_mode),
             active_custom_invocations: HashMap::new(),
             tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
@@ -577,6 +580,7 @@ impl PrivateDurableWorkerState {
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
+            last_state_change: None,
             operator_authorized_oplog_processor_invocation: Arc::new(AtomicBool::new(false)),
             component_metadata,
             owner_component_metadata,
@@ -636,6 +640,8 @@ impl PrivateDurableWorkerState {
             baseline_role,
             snapshot_replay_purpose,
             authoritative_replay_failure: Arc::new(AtomicBool::new(false)),
+            bootstrap: None,
+            bootstrap_range: None,
             resource_limit_entry,
         })
     }

@@ -66,11 +66,12 @@ export const PrincipalSchema: PrincipalInputSchema = Schema.declare(
  * boundary:
  *
  * - inside an agent's `impl` (constructor) effect it resolves to the
- *   principal the host passed to `agent-guest.guest.initialize`;
- * - inside a method handler it resolves to the principal the host
- *   passed to `agent-guest.guest.invoke` for that specific call (which
- *   may differ from the initialize-time principal, e.g. when other
- *   callers reach a durable agent instance).
+ *   immediate caller that `golem:agent/invocation-context.caller`
+ *   reports during `agent-guest.guest.initialize`;
+ * - inside a method handler it resolves to the immediate caller of
+ *   that specific `agent-guest.guest.invoke` call (which may differ
+ *   from the initialize-time principal, e.g. when other callers reach
+ *   a durable agent instance).
  *
  * The dispatcher always provides this service before running user code,
  * so depending on it from inside an agent never leaks into the public
