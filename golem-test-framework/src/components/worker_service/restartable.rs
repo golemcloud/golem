@@ -46,12 +46,22 @@ pub struct RestartableWorkerService {
     verbosity: Level,
     out_level: Level,
     err_level: Level,
+    extra_env_vars: Vec<(String, String)>,
     process: Mutex<Option<Arc<SpawnedWorkerService>>>,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
 impl RestartableWorkerService {
     pub async fn start(deps: &impl TestDependencies) -> anyhow::Result<Self> {
+        Self::start_with_env_vars(deps, Vec::new()).await
+    }
+
+    /// Starts the worker service with `extra_env_vars` added to its environment, such as
+    /// configuration overrides. Every restart keeps them.
+    pub async fn start_with_env_vars(
+        deps: &impl TestDependencies,
+        extra_env_vars: Vec<(String, String)>,
+    ) -> anyhow::Result<Self> {
         let config = EnvBasedTestDependenciesConfig::new();
         let [http_port, grpc_port, custom_request_port, mcp_port] = free_ports().await?;
         let service = Self {
@@ -68,6 +78,7 @@ impl RestartableWorkerService {
             verbosity: config.default_verbosity(),
             out_level: config.default_stdout_level(),
             err_level: config.default_stderr_level(),
+            extra_env_vars,
             process: Mutex::new(None),
             base_http_client: OnceCell::new(),
         };
@@ -108,6 +119,7 @@ impl RestartableWorkerService {
             &self.registry_service,
             true,
             false,
+            &self.extra_env_vars,
         )
         .await;
         *self.process.lock().unwrap() = Some(Arc::new(process));

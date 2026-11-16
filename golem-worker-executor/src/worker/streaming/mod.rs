@@ -642,9 +642,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         }
         drop(instance_guard);
+        // The instance guard is dropped and a local RPC caller holds no task-scope bind, so a
+        // deletion may already have stopped the state actor.
         if matches!(
-            self.lookup_invocation_result(&prepared.attempt.session_key.idempotency_key)
-                .await,
+            self.try_lookup_invocation_result(&prepared.attempt.session_key.idempotency_key)
+                .await?,
             LookupResult::Pending
         ) {
             Worker::start_if_needed(self.clone()).await?;

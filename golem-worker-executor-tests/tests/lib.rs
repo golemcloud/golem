@@ -78,6 +78,7 @@ pub mod scheduled_ephemeral;
 pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
+pub mod socket_replay;
 pub mod suspension_races;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;
@@ -138,6 +139,7 @@ tag_suite!(scope_cards, group2);
 
 tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
+tag_suite!(socket_replay, group3);
 tag_suite!(filesystem_inspection, group3);
 tag_suite!(revert, group3);
 tag_suite!(filesystem_snapshots, group3);

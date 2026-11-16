@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
-use golem_common::model::Empty;
+use golem_schema::Empty;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fmt::Write;

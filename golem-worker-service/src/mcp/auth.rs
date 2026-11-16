@@ -775,7 +775,7 @@ mod tests {
             revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
             name: golem_common::model::security_scheme::SecuritySchemeName("oauth".into()),
             provider_type: golem_common::model::security_scheme::Provider::Google(
-                golem_common::model::Empty {},
+                golem_schema::Empty {},
             ),
             client_id: openidconnect::ClientId::new("client".into()),
             client_secret: openidconnect::ClientSecret::new("secret".into()),
@@ -785,7 +785,7 @@ mod tests {
             .unwrap(),
             scopes: vec![Scope::new("openid".into())],
             login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
-                golem_common::model::Empty {},
+                golem_schema::Empty {},
             ),
         });
         secured

@@ -55,6 +55,7 @@ impl SpawnedWorkerService {
         registry_service: &Arc<dyn RegistryService>,
         enable_fs_cache: bool,
         otlp: bool,
+        extra_env_vars: &[(String, String)],
     ) -> Self {
         info!("Starting golem-worker-service process");
 
@@ -80,6 +81,7 @@ impl SpawnedWorkerService {
                 )
                 .await,
             )
+            .envs(extra_env_vars.iter().cloned())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

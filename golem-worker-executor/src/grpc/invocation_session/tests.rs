@@ -630,6 +630,15 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
     assert!(!drained);
     assert_eq!(terminal, None);
 
+    let stream_id = golem_common::model::durable_stream::StreamId(uuid::Uuid::from_u128(73));
+    let (sent, drained, terminal) = end_attachment(SessionError::IncompleteOutput(stream_id)).await;
+    let expected = WorkerExecutorError::recovery_required(format!(
+        "schema output {stream_id} stopped before its terminal became durable"
+    ));
+    assert_eq!(failure_of(&sent).worker_error, Some(expected.into()));
+    assert!(!drained);
+    assert_eq!(terminal, None);
+
     let violation = "input item arrived after its stream ended";
     let (sent, drained, terminal) = end_attachment(SessionError::from(violation)).await;
     let failure = failure_of(&sent);

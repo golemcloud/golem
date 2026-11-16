@@ -17,12 +17,13 @@ package golem
 import (
 	"encoding/json"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 )
 
 // The shared HTTP handler corpus every SDK and the host check themselves
@@ -90,7 +91,7 @@ func TestFileMappingsFollowTheSharedCorpus(t *testing.T) {
 }
 
 // corpusForm renders compiled mappings the way the corpus spells them.
-func corpusForm(ms []common.FileMapping) []any {
+func corpusForm(ms []coreHTTP.FileMapping) []any {
 	strs := func(ss []string) []any {
 		out := make([]any, len(ss))
 		for i, s := range ss {
@@ -101,10 +102,10 @@ func corpusForm(ms []common.FileMapping) []any {
 	var out []any
 	for _, m := range ms {
 		switch m.Tag() {
-		case common.FileMappingExact:
+		case coreHTTP.FileMappingExact:
 			e := m.Exact()
 			out = append(out, map[string]any{"Exact": map[string]any{"public_path": strs(e.PublicPath), "file_path": e.FilePath}})
-		case common.FileMappingSubtree:
+		case coreHTTP.FileMappingSubtree:
 			s := m.Subtree()
 			out = append(out, map[string]any{"Subtree": map[string]any{"public_prefix": strs(s.PublicPrefix), "filesystem_root": s.FilesystemRoot}})
 		}

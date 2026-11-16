@@ -39,6 +39,7 @@ use golem_common::poem::{
 };
 use golem_service_base::body_limit::RequestBodyLimit;
 use golem_service_base::http_server;
+use golem_service_base::model::auth::with_json_auth_errors;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
@@ -175,7 +176,7 @@ impl WorkerService {
             .start_api_gateway_server(join_set, tracer.clone())
             .await?;
         let mcp_port = self.start_mcp_server(join_set, tracer).await?;
-        let api_endpoint = api::make_open_api_service(&self.services)
+        let api_endpoint = with_json_auth_errors(api::make_open_api_service(&self.services))
             .with(self.api_body_limit())
             .boxed();
 
@@ -219,7 +220,7 @@ impl WorkerService {
             .allow_credentials(true);
 
         let app = Route::new()
-            .nest("/", api_service)
+            .nest("/", with_json_auth_errors(api_service))
             .nest("/docs", ui)
             .nest("/specs", spec)
             .nest("/metrics", metrics)

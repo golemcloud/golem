@@ -36,10 +36,14 @@ interface client {
     connect: static func(
       url: string,
       headers: option<list<tuple<string, string>>>,
-      /// Defaults to reconnect-automatically. Completed durable operations
-      /// replay unchanged under either policy. report-connection-loss prevents
-      /// replacement I/O on reconstructed handles; it does not retry ordinary
-      /// network disconnects or bypass non-idempotent recovery guards.
+      /// Defaults to report-connection-loss: after runtime reconstruction the
+      /// next send, receive, receive-with-timeout or close returns session-lost
+      /// and opens no replacement connection. Choose reconnect-automatically
+      /// only when the peer accepts a new session in place of the lost one,
+      /// for example a stateless feed that needs no initialization handshake.
+      /// Completed durable operations replay unchanged under either policy.
+      /// Neither policy retries ordinary network disconnects or bypasses
+      /// non-idempotent recovery guards.
       reconstruction-policy: option<reconstruction-policy>
     ) -> result<websocket-connection, error>;
 

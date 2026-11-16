@@ -861,7 +861,7 @@ use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
     HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestFileSystemPermissionCheck,
     HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
-    HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
+    HostRequestGolemApiOplogRead, HostRequestGolemToolGetTool,
     HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
     HostRequestGolemToolResponseSecretHoldAdmission, HostRequestKVCacheKey,
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
@@ -871,7 +871,7 @@ use crate::model::oplog::{
     HostRequestSocketsTcpConnectPermissionCheck, HostResponse,
     HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
     HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
-    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
+    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit,
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
     HostResponseGolemToolInvokeResult, HostResponseGolemToolResponseSecretHoldAdmission,
     HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
@@ -1959,21 +1959,31 @@ fn cli_environment_host_payload_pair_roundtrips() {
 }
 
 #[test]
-fn durable_rpc_activation_payload_pair_roundtrips() {
-    let target_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(42));
-    assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcActivate>(
-        HostRequestGolemRpcActivate {
-            remote_agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "target-agent".to_string(),
+fn durable_rpc_create_outcomes_roundtrip() {
+    use crate::model::oplog::{HostRequestGolemRpcCreate, HostResponseGolemRpcCreate};
+
+    for result in [
+        Ok(AgentFingerprint(uuid::Uuid::from_u128(42))),
+        Err(SerializableRpcError::RemoteInternalError {
+            details: "constructor rejected child".to_string(),
+        }),
+        Err(SerializableRpcError::Denied {
+            details: "whole-agent invocation required".to_string(),
+        }),
+    ] {
+        assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcNew>(
+            HostRequestGolemRpcCreate {
+                remote_agent_id: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "child-agent".to_string(),
+                },
             },
-            method_name: "run".to_string(),
-            decision: Ok(()),
-        },
-        HostResponseGolemRpcActivate {
-            result: Ok(target_fingerprint),
-        },
-    );
+            HostResponseGolemRpcCreate {
+                result,
+                target_environment_id: EnvironmentId::new(),
+            },
+        );
+    }
 }
 
 #[test]

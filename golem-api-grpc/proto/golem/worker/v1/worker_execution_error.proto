@@ -39,6 +39,7 @@ message WorkerExecutionError {
     PermissionDenied permission_denied = 28;
     ComponentServiceUnavailable component_service_unavailable = 29;
     ComponentServiceRefused component_service_refused = 30;
+    CreateIdempotencyKeyConflict create_idempotency_key_conflict = 31;
   }
 }
 
@@ -70,6 +71,10 @@ message InvalidRequest {
 }
 
 message AgentAlreadyExists {
+  AgentId agent_id = 1;
+}
+
+message CreateIdempotencyKeyConflict {
   AgentId agent_id = 1;
 }
 

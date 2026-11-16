@@ -12,6 +12,7 @@ use golem_api_grpc::proto::golem::worker::{
     StreamDirection, StreamEnd, StreamMappingRole, StreamTerminalAuthor, invocation_request,
     invocation_session_result,
 };
+use golem_common::model::durable_stream::{StreamError, StreamTerminal};
 use golem_schema::proto::golem::schema::{ListValue, SchemaValue, schema_value};
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -28,6 +29,7 @@ pub(super) struct InputCredits {
 pub(super) enum Command {
     Input(Vec<u8>, InputCredits),
     InputEof(InputCredits),
+    InputIdleFailure(InputCredits),
     DisposeInput,
     DisposeOutput { stream_id: u64 },
 }
@@ -75,29 +77,25 @@ impl Command {
                 )
             }
             Self::InputEof(credits) => {
-                if input.terminal || input.disposal_pending {
+                let Some(request) =
+                    input_end(input, StreamTerminal::Finished, StreamTerminalAuthor::Guest)
+                else {
                     return Ok(None);
-                }
-                input.terminal = true;
-                (
-                    InvocationRequest {
-                        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                            transport_stream_id: INPUT_STREAM_ID,
-                            producer_sequence: input.next_sequence,
-                            direction: StreamDirection::Input as i32,
-                            authored_by: StreamTerminalAuthor::Guest as i32,
-                            outcome: Some(
-                                golem_common::model::durable_stream::StreamTerminal::Finished
-                                    .try_into()
-                                    .expect("finished terminal has no capabilities"),
-                            ),
-                            durable_stream_id: None,
-                            epoch: 0,
-                            durable_offset: Vec::new(),
-                        })),
-                    },
-                    Some(credits),
-                )
+                };
+                (request, Some(credits))
+            }
+            // A stalled request body fails the input stream; it does not interrupt the invocation.
+            Self::InputIdleFailure(credits) => {
+                let Some(request) = input_end(
+                    input,
+                    StreamTerminal::Failed(StreamError::Interrupted(
+                        "HTTP request body idle timeout".into(),
+                    )),
+                    StreamTerminalAuthor::Host,
+                ) else {
+                    return Ok(None);
+                };
+                (request, Some(credits))
             }
             Self::DisposeInput => {
                 if !input.terminal {
@@ -120,6 +118,34 @@ impl Command {
         Ok(Some(PreparedCommand { request, credits }))
     }
 }
+
+fn input_end(
+    input: &mut InputProgress,
+    terminal: StreamTerminal,
+    author: StreamTerminalAuthor,
+) -> Option<InvocationRequest> {
+    if input.terminal || input.disposal_pending {
+        return None;
+    }
+    input.terminal = true;
+    Some(InvocationRequest {
+        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+            transport_stream_id: INPUT_STREAM_ID,
+            producer_sequence: input.next_sequence,
+            direction: StreamDirection::Input as i32,
+            authored_by: author as i32,
+            outcome: Some(
+                terminal
+                    .try_into()
+                    .expect("HTTP input terminal has no capabilities"),
+            ),
+            durable_stream_id: None,
+            epoch: 0,
+            durable_offset: Vec::new(),
+        })),
+    })
+}
+
 pub(super) struct RetainedInput {
     pub(super) request: InvocationRequest,
     encoded_bytes: usize,

@@ -443,6 +443,7 @@ impl EnvBasedTestDependencies {
                 registry_service,
                 true,
                 false,
+                &[],
             )
             .await,
         )

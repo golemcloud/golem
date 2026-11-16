@@ -410,7 +410,8 @@ impl Projection<'_> {
                     .qualify(author.environment_id, &author.agent_id, fingerprint),
                 record.reader_id,
             )),
-            StreamSessionRecord::ConsumerTerminal(record) => Some((
+            StreamSessionRecord::ConsumerTerminal(record)
+            | StreamSessionRecord::ConsumerOutcome(record) => Some((
                 record
                     .session_key
                     .qualify(author.environment_id, &author.agent_id, fingerprint),
