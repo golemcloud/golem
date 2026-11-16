@@ -188,15 +188,29 @@ fn common_config_corpus() {
 async fn static_config_reference_exports_corpus_metadata() -> anyhow::Result<()> {
     let corpus: Corpus =
         serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
-    let agents = extract_agent_type_schemas(
-        Path::new("../test-components/golem_it_agent_sdk_rust_release.wasm"),
-        true,
-        false,
+    check_reference_metadata(
+        "../test-components/golem_it_agent_sdk_rust_release.wasm",
+        &corpus.reference.agent_type,
     )
-    .await?;
+    .await
+}
+
+#[test]
+async fn effect_static_config_exports_corpus_metadata() -> anyhow::Result<()> {
+    check_reference_metadata(
+        "../test-components/golem_it_permissions_effect.wasm",
+        "EffectStaticDefaultsAgent",
+    )
+    .await
+}
+
+async fn check_reference_metadata(component: &str, agent_type: &str) -> anyhow::Result<()> {
+    let corpus: Corpus =
+        serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
+    let agents = extract_agent_type_schemas(Path::new(component), true, false).await?;
     let agent = agents
         .iter()
-        .find(|agent| agent.type_name.0 == corpus.reference.agent_type)
+        .find(|agent| agent.type_name.0 == agent_type)
         .expect("the actual guest must export the reference agent");
     let expected = &corpus.schemas[&corpus.reference.schema];
     assert_eq!(agent.config.len(), expected.declarations.len());

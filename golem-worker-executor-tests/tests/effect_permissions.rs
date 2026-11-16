@@ -61,6 +61,102 @@ inherit_test_dep!(
 );
 inherit_test_dep!(Tracing);
 
+#[test]
+#[timeout("120s")]
+async fn effect_static_config_captures_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("permissions_effect")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let corpus: Value =
+        serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
+    let reference = &corpus["reference"];
+    let agent_type = "EffectStaticDefaultsAgent";
+    let entries = |layer: &str| {
+        reference[layer]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(path, value)| AgentConfigEntryDto {
+                path: vec![path.clone()],
+                value: value.clone().into(),
+            })
+            .collect()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .with_agent_config(agent_type, entries("deployment"))
+        .store()
+        .await?;
+    let agent_id = agent_id!(agent_type, "creation");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::new(),
+            entries("creation"),
+        )
+        .await?;
+    let deployed_agent_id = agent_id!(agent_type, "deployment");
+    let mut expected_deployment = reference["expectedDeploymentRead"].clone();
+    let mut expected_creation = reference["expectedRead"].clone();
+    for expected in [&mut expected_deployment, &mut expected_creation] {
+        expected["choice"] = corpus["staticCases"][0]["expected"]["choice"].clone();
+    }
+    let reads = [
+        (&deployed_agent_id, &expected_deployment),
+        (&agent_id, &expected_creation),
+    ];
+    for (id, expected) in reads {
+        for method in ["constructorRead", "read"] {
+            let actual = executor
+                .invoke_and_await_agent(&component, id, method, data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_eq!(&serde_json::from_str::<Value>(&actual)?, expected);
+        }
+    }
+    crate::hot_update::wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    for (id, expected) in reads {
+        for method in ["constructorRead", "read"] {
+            let actual = executor
+                .invoke_and_await_agent(&component, id, method, data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_eq!(&serde_json::from_str::<Value>(&actual)?, expected);
+        }
+    }
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    for entry in &oplog {
+        if let PublicOplogEntry::Start(_) = &entry.entry {
+            assert!(
+                oplog.iter().any(|terminal| matches!(
+                    &terminal.entry,
+                    PublicOplogEntry::End(end) if end.start_index == entry.oplog_index
+                )),
+                "config call at {} must be settled",
+                entry.oplog_index
+            );
+        }
+    }
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        5
+    );
+    Ok(())
+}
+
 /// Card registry for the test: initial cards and runtime-derived cards are live until revoked,
 /// and revoking a card revokes every stored descendant.
 #[derive(Default)]

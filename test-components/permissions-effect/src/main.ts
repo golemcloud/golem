@@ -7,6 +7,7 @@ import {
   SelfAgentId,
   WitTypes,
 } from "@golemcloud/effect-golem";
+import "../../../sdks/effect/integration-test/components/static-config/src/main.js";
 
 const Probe = Schema.Struct({
   walletKinds: Schema.Array(Schema.String),
