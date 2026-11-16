@@ -25,10 +25,9 @@ use golem_common::model::oplog::{
     HostRequest, HostRequestGolemRpcInvoke, LogLevel, PublicDurableFunctionType,
     PublicOplogEntryAttribution, host_functions,
 };
-use golem_common::model::{
-    AgentId, Empty, IdempotencyKey, InvocationRequestKey, OplogIndex, Timestamp,
-};
+use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, OplogIndex, Timestamp};
 use golem_common::schema::{IntoTypedSchemaValue, SchemaValue, TypedSchemaValue};
+use golem_schema::Empty;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
