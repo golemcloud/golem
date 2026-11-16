@@ -848,20 +848,32 @@ traversal and invocation behavior remain separate deployment concerns.
 typed request and finishes exactly once with a typed response. `forcedCommit: true` asks the host to
 commit after finish. Replay returns the recorded response without executing the body.
 
-**Sequential execution only.** Both wrappers support properly nested operations and a body that
-awaits host calls when no unrelated guest work runs during the wait. Do not overlap a custom
-operation with other fibers, concurrent effects, or JavaScript promises, even if they only use
-ordinary host APIs. The custom scope remains installed while waiting, so sibling effects can be
-attributed to the wrong operation and cause incorrect replay or invocation failure. Misuse is not
-reliably detected. Await each nested operation and do not detach work. Stop and join outstanding
-work before the body exits, including on failure or interruption; structured finalization alone
-does not make concurrent custom scopes supported. Ordinary built-in durability is not subject to
-this restriction when no custom operation is active.
+**Concurrent operations.** Custom operations can run in concurrent fibers (`Effect.all`,
+`Effect.fork`, races) and can nest. Each fiber carries the scope of its operation. The host records
+the calls of a body, including the native Promise jobs that they create, under the operation that
+started them, not under a sibling. On replay, a completed operation returns its recorded response
+and does not run its body; an incomplete operation runs again. These limits apply:
 
-On typed success or typed failure, `wrap` encodes the response and calls
-`finishCustomDurableInvocation`. On defect, interruption, response encoding failure, or any other
-unfinished exit, scope cleanup **drops** the live invocation instead of finishing it. This is the
+- A parent operation finishes only after every child operation that started in its body closes,
+  including a child in a detached fiber.
+- Work that continues after its operation closes, such as a detached fiber or a promise that is not
+  awaited, runs in the nearest open enclosing operation, or else in the agent invocation. Work that
+  continues after the agent invocation ends is not supported.
+- A timer that starts in a body (`setTimeout`, `setInterval`, `setImmediate`,
+  `node:timers/promises`, `Effect.sleep` and other `Clock` waits) sleeps in the operation that
+  started it, like the other calls of the body.
+- Agent methods, tools and middleware run their fibers on a scheduler that yields through Promise
+  jobs, because a runtime timer is a recorded host call. `Effect.yieldNow` does not let host I/O
+  continue: wait for I/O with an effect such as `Deferred.await` or `Queue.take`, not with a polling
+  loop.
+
+On typed success or typed failure, `wrap` encodes the response and finishes the live invocation.
+On defect, interruption, response encoding failure, or any other unfinished exit, it **drops** the
+live invocation instead of finishing it. This is the
 1.6 recovery contract: never manufacture a terminal result for work that did not complete.
+The SDK tracks each fiber's custom scope through a hook in the Golem tracer. Code that replaces the
+Tracer inside an agent, tool or middleware must provide `yield* Tracing.compose(tracer)` instead;
+under a tracer without the hook, `wrap` fails with a defect.
 The four function types are `readLocal`, `writeLocal`, `readRemote`, and `writeRemote`.
 The host records nesting in `Start.parent_start_index`, not in a function-type payload.
 

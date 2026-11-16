@@ -1,11 +1,23 @@
-import { Cause, Effect, Exit, Result, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Fiber, Result, Schema } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type * as DurabilityHost from "golem:durability/durability@1.6.0"
+import {
+  CustomInvocationContextClient,
+  type CustomScopeToken,
+} from "../host/CustomInvocationContextClient.js"
 import { DurabilityClient } from "../host/DurabilityClient.js"
 import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "../WitCodec.js"
 import type { SchemaValue } from "./schema-model/model.js"
 import { typedSchemaValueFromWit, typedSchemaValueToWit } from "./schema-model/wit.js"
 import { DurabilityHostError } from "./durabilityMode.js"
+import {
+  awaitChildren,
+  closeScope,
+  CurrentCustomScope,
+  currentCustomScope,
+  registerChild,
+  releaseChild,
+} from "./customScope.js"
 
 const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/sdk-error")
 
@@ -66,51 +78,6 @@ export const observeFunctionCall = (
   Effect.flatMap(DurabilityClient, (client) =>
     Effect.try({
       try: () => client.observeFunctionCall(iface, function_),
-      catch: (cause) => new DurabilityHostError(cause),
-    }),
-  )
-
-/**
- * Opens an invocation in an Effect scope. An unfinished live resource is dropped
- * when the scope closes, including after interruption or a defect.
- * Resource scoping does not isolate concurrent fibers. Use sequential, properly nested execution
- * only; unrelated host calls while the operation waits can acquire its scope and replay incorrectly.
- * Do not detach work. All children must terminate before the resource closes, including on failure.
- * @since 1.6.0
- * @category host bindings
- */
-export const beginCustomDurableInvocation = (
-  functionName: string,
-  request: CoreTypes.TypedSchemaValue,
-  functionType: DurableFunctionType,
-): Effect.Effect<
-  DurabilityHost.CustomDurableInvocation,
-  DurabilityHostError,
-  Scope.Scope | DurabilityClient
-> =>
-  Effect.gen(function* () {
-    const client = yield* DurabilityClient
-    return yield* Effect.acquireRelease(
-      Effect.try({
-        try: () => client.beginCustomDurableInvocation(functionName, request, functionType),
-        catch: (cause) => new DurabilityHostError(cause),
-      }),
-      (invocation) =>
-        invocation.tag === "live"
-          ? Effect.sync(() => client.drop(invocation.val)).pipe(Effect.ignore)
-          : Effect.void,
-    )
-  })
-
-/** @since 1.6.0 @category host bindings */
-export const finishCustomDurableInvocation = (
-  invocation: DurabilityHost.LiveCustomDurableInvocation,
-  response: CoreTypes.TypedSchemaValue,
-  forcedCommit = false,
-): Effect.Effect<void, DurabilityHostError, DurabilityClient> =>
-  Effect.flatMap(DurabilityClient, (client) =>
-    Effect.try({
-      try: () => client.finish(invocation, response, forcedCommit),
       catch: (cause) => new DurabilityHostError(cause),
     }),
   )
@@ -191,6 +158,70 @@ const sdkErrorsToDefects = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 const sameFunctionType = (left: DurableFunctionType, right: DurableFunctionType): boolean =>
   left.tag === right.tag
 
+const tryHostPromise = <A>(f: () => Promise<A>) =>
+  Effect.tryPromise({ try: f, catch: (cause) => new DurabilityHostError(cause) })
+
+/**
+ * Runs a live body in its own child fiber, in the operation's scope, and finishes the
+ * operation once the body, the response encoding and every child operation registered under its
+ * scope ended.
+ * The live invocation is always dropped under its own scope, then the scope is closed.
+ * Runs uninterruptibly; `restore` makes only the wait for the body interruptible.
+ */
+const runLive = <A, E, R, RF>(
+  restore: <AX, EX, RX>(effect: Effect.Effect<AX, EX, RX>) => Effect.Effect<AX, EX, RX>,
+  parent: CustomScopeToken,
+  live: DurabilityHost.LiveCustomDurableInvocation,
+  body: Effect.Effect<A, E, R>,
+  finishWith: (
+    exit: Exit.Exit<A, E>,
+  ) => Effect.Effect<CoreTypes.TypedSchemaValue | undefined, DurabilityDecodeError, RF>,
+  forcedCommit: boolean,
+) =>
+  Effect.gen(function* () {
+    const client = yield* DurabilityClient
+    const scopes = yield* CustomInvocationContextClient
+    let token: CustomScopeToken
+    try {
+      token = scopes.run(parent, () => scopes.enterLive(live))
+    } catch (cause) {
+      client.drop(live)
+      throw cause
+    }
+    // Every exit waits for the children registered under the scope, including children that the
+    // response encoder started, before the live invocation is dropped and the scope closed.
+    const cleanup = Effect.andThen(
+      awaitChildren(token),
+      Effect.sync(() => {
+        try {
+          scopes.run(token, () => client.drop(live))
+        } finally {
+          closeScope(scopes, token, parent)
+        }
+      }),
+    )
+    return yield* Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(Effect.scoped(body)).pipe(
+        Effect.provideService(CurrentCustomScope, token),
+      )
+      const awaited = yield* Effect.exit(restore(Fiber.await(fiber)))
+      if (Exit.isFailure(awaited)) {
+        yield* Fiber.interrupt(fiber)
+        return yield* Effect.failCause(awaited.cause)
+      }
+      const exit = awaited.value
+      yield* awaitChildren(token)
+      // Replay of a completed operation skips the response encoding, so it runs in the scope.
+      yield* Effect.gen(function* () {
+        const response = yield* finishWith(exit)
+        yield* awaitChildren(token)
+        if (response !== undefined)
+          yield* tryHostPromise(() => client.finishAsync(live, response, forcedCommit))
+      }).pipe(Effect.provideService(CurrentCustomScope, token))
+      return yield* exit
+    }).pipe(Effect.ensuring(cleanup))
+  })
+
 const run = <
   RequestS extends Schema.Top,
   SuccessS extends Schema.Top,
@@ -202,22 +233,18 @@ const run = <
   body: Effect.Effect<SuccessS["Type"], ErrorS["Type"], R>,
   error: ErrorS | undefined,
 ) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const requestCodec = yield* toWitCodec(opts.requestSchema)
-      const responseCodec = (yield* toWitCodec(
-        error === undefined ? opts.success : Schema.Result(opts.success, error),
-      )) as WitCodec<Schema.Top>
-      const requestValue = yield* encodeTyped(requestCodec, request, "request-encode")
-      yield* observeFunctionCall(opts.iface, opts.function)
-      const functionName = opts.iface === "" ? opts.function : `${opts.iface}::${opts.function}`
-      const invocation = yield* beginCustomDurableInvocation(
-        functionName,
-        requestValue,
-        opts.functionType,
-      )
-      if (invocation.tag === "replayed") {
-        const entry = invocation.val
+  Effect.gen(function* () {
+    const client = yield* DurabilityClient
+    const requestCodec = yield* toWitCodec(opts.requestSchema)
+    const responseCodec = (yield* toWitCodec(
+      error === undefined ? opts.success : Schema.Result(opts.success, error),
+    )) as WitCodec<Schema.Top>
+    const requestValue = yield* encodeTyped(requestCodec, request, "request-encode")
+    const parent = yield* currentCustomScope
+    yield* observeFunctionCall(opts.iface, opts.function)
+    const functionName = opts.iface === "" ? opts.function : `${opts.iface}::${opts.function}`
+    const replay = (entry: DurabilityHost.PersistedDurableFunctionInvocation) =>
+      Effect.gen(function* () {
         if (
           entry.functionName !== functionName ||
           !sameFunctionType(entry.functionType, opts.functionType)
@@ -236,41 +263,49 @@ const run = <
         if (error === undefined) return decoded as SuccessS["Type"]
         const result = decoded as Result.Result<SuccessS["Type"], ErrorS["Type"]>
         return Result.isSuccess(result) ? result.success : yield* Effect.fail(result.failure)
-      }
-      const exit = yield* Effect.exit(body)
-      if (Exit.isSuccess(exit)) {
-        const response = yield* encodeTyped(
+      })
+    // Defects, interruptions and response encode failures leave the invocation unfinished.
+    const finishWith = (exit: Exit.Exit<SuccessS["Type"], ErrorS["Type"]>) => {
+      if (Exit.isSuccess(exit))
+        return encodeTyped(
           responseCodec,
           error === undefined ? exit.value : Result.succeed(exit.value),
           "response-encode",
         )
-        yield* finishCustomDurableInvocation(invocation.val, response, opts.forcedCommit ?? false)
-        return exit.value
-      }
-      if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) {
-        return yield* Effect.failCause(exit.cause)
-      }
+      if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) return Effect.undefined
       const failure = exit.cause.reasons.find(Cause.isFailReason)
-      if (failure !== undefined && error !== undefined) {
-        const response = yield* encodeTyped(
-          responseCodec,
-          Result.fail(failure.error),
-          "response-encode",
+      return failure !== undefined && error !== undefined
+        ? encodeTyped(responseCodec, Result.fail(failure.error), "response-encode")
+        : Effect.undefined
+    }
+    // The operation counts as a child of its parent from before admission, so the parent cannot
+    // finish while the host starts it. A live admission must be entered and dropped, so admission
+    // and the live run are uninterruptible apart from the wait for the body.
+    const done = yield* registerChild(parent)
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const invocation = yield* tryHostPromise(() =>
+          client.beginCustomDurableInvocationAsync(functionName, requestValue, opts.functionType),
         )
-        yield* finishCustomDurableInvocation(invocation.val, response, opts.forcedCommit ?? false)
-      }
-      return yield* Effect.failCause(exit.cause)
-    }),
-  )
+        return invocation.tag === "replayed"
+          ? yield* restore(replay(invocation.val))
+          : yield* runLive(
+              restore,
+              parent,
+              invocation.val,
+              body,
+              finishWith,
+              opts.forcedCommit ?? false,
+            )
+      }),
+    ).pipe(Effect.ensuring(releaseChild(parent, done)))
+  })
 
 /**
- * Records a custom operation's result. Sequential and properly nested execution only.
- * The body may await host calls when no unrelated guest work runs during the wait. Do not overlap
- * it with other fibers, concurrent effects, or JavaScript promises, including ordinary host calls:
- * sibling effects can acquire the wrong scope and cause incorrect replay or invocation failure.
- * Misuse is not reliably detected. Await nested operations; do not detach work. Stop and join
- * outstanding work before the body exits, including on failure or interruption. Structured
- * finalization alone does not make concurrent custom scopes supported.
+ * Records a custom operation's result. Operations can run in concurrent fibers and can nest; the
+ * calls of the body are recorded under this operation. Replay returns the recorded result without
+ * running the body. The operation finishes only after its child operations close. Work that
+ * continues after it closes runs in the nearest open enclosing operation.
  * @since 1.6.0
  * @category combinators
  */
@@ -295,8 +330,8 @@ export const wrap = <
 > => sdkErrorsToDefects(run(opts, request, body, opts.error)) as never
 
 /**
- * Infallible form of {@link wrap}, with the same sequential-only and no-detached-work limits.
- * An infallible body can still be interrupted; all children must terminate before its scope closes.
+ * Infallible form of {@link wrap}, with the same limits.
+ * An infallible body can still be interrupted; the operation closes after its children close.
  * @since 1.6.0
  * @category combinators
  */
