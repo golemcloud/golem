@@ -3935,11 +3935,11 @@ fn replace_guest_codec_tokens(mut source: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentTypeName, Snapshotting};
     use golem_common::schema::graph::SchemaTypeDef;
     use golem_common::schema::schema_type::{PathDirection, PathKind, PathSpec};
     use golem_common::schema::{AgentConstructorSchema, MetadataEnvelope, Role, SchemaGraph};
+    use golem_schema::Empty;
 
     #[test]
     fn schema_graph_literal_preserves_ids_refs_metadata_and_numeric_literals() {

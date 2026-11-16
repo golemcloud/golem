@@ -38,6 +38,9 @@ async fn rejected_invocation_identity_conflict_returns_422_before_response_heade
         poem::Body::empty(),
         &mut None,
         Arc::new(AtomicBool::new(false)),
+        HttpSessionLimits::default().request_body_idle_timeout,
+        false,
+        HttpVersion::Http1,
     )
     .await
     .unwrap_err();
@@ -88,6 +91,9 @@ async fn opening_size_error_returns_413_with_the_original_message() {
             poem::Body::empty(),
             &mut None,
             Arc::new(AtomicBool::new(false)),
+            HttpSessionLimits::default().request_body_idle_timeout,
+            false,
+            HttpVersion::Http1,
         )
         .await
         .unwrap_err();
@@ -116,9 +122,17 @@ async fn late_upload_overflow_cancels_the_session_without_buffering_the_body() {
     let done = Arc::new(AtomicBool::new(false));
     h.response_txs[0].send(Ok(accepted(1, None))).await.unwrap();
     h.response_txs[0].send(Ok(stream_result())).await.unwrap();
-    let _head = receive_response_head(&mut session, request.take_body(), &mut upload, done.clone())
-        .await
-        .unwrap();
+    let _head = receive_response_head(
+        &mut session,
+        request.take_body(),
+        &mut upload,
+        done.clone(),
+        HttpSessionLimits::default().request_body_idle_timeout,
+        true,
+        HttpVersion::Http1,
+    )
+    .await
+    .unwrap();
     // Response headers are available while the request body has not supplied a single chunk.
     assert!(limit.rejection().is_none());
     let response_head = process_response_head("POST", 200, &vec![]).unwrap();

@@ -20,8 +20,7 @@ use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentFileContentHash, AgentMode, AgentTypeName, FileMapping, FileResponseHeader, HttpMethod,
-    ReadOnlyConfig,
+    AgentFileContentHash, AgentMode, AgentTypeName, HttpMethod, ReadOnlyConfig,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -31,6 +30,7 @@ use golem_common::model::security_scheme::{SecuritySchemeLogin, SecuritySchemeRe
 use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, PromiseId};
 use golem_common::schema::{InputSchema, MetadataEnvelope, OutputSchema, SchemaGraph, SchemaType};
 pub use golem_schema::http::HttpRouteMode as AgentRouteMode;
+use golem_schema::http::{FileMapping, FileResponseHeader};
 use hmac::{Hmac, Mac};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use sha2::Sha256;

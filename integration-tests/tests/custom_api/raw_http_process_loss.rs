@@ -167,6 +167,7 @@ fn worker_service_binary() -> PathBuf {
 async fn spawn_worker_service(
     deps: &EnvBasedTestDependencies,
     ports: [u16; 4],
+    extra_env_vars: &[(String, String)],
 ) -> SpawnedWorkerService {
     SpawnedWorkerService::new(
         &worker_service_binary(),
@@ -184,8 +185,193 @@ async fn spawn_worker_service(
         &deps.registry_service(),
         true,
         false,
+        extra_env_vars,
     )
     .await
+}
+
+#[test]
+#[timeout("2m")]
+async fn request_body_idle_timeout_is_catchable_without_interrupting_the_owner(
+    context: &RawHttpProcessLossContext,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentId;
+    use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+
+    let ports = free_ports().await?;
+    let _service = spawn_worker_service(
+        &context.http.user.deps,
+        ports,
+        &[(
+            "GOLEM__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
+            "2s".into(),
+        )],
+    )
+    .await;
+    let url = reqwest::Url::parse(&format!("http://127.0.0.1:{}/raw/catch-input", ports[2]))?;
+    let (tx, rx) = mpsc::channel::<Result<Vec<u8>, std::io::Error>>(2);
+    tx.send(Ok(b"before-timeout".to_vec())).await?;
+    let response = tokio::time::timeout(
+        Duration::from_secs(20),
+        context
+            .http
+            .client
+            .post(url)
+            .body(Body::wrap_stream(ReceiverStream::new(rx)))
+            .send(),
+    )
+    .await??;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let owner = AgentId {
+        component_id: context.component_id,
+        agent_id: response.headers()["x-echo-agent"].to_str()?.to_string(),
+    };
+    assert_eq!(
+        response.bytes().await?,
+        b"before-timeout|HTTP request body idle timeout|handled".as_slice()
+    );
+    drop(tx);
+    let oplog = context
+        .http
+        .user
+        .get_oplog(&owner, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_))),
+        "request-body failure must not interrupt its owner"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn steady_request_body_preserves_bytes_over_many_idle_intervals(
+    context: &RawHttpProcessLossContext,
+) -> anyhow::Result<()> {
+    let ports = free_ports().await?;
+    let _service = spawn_worker_service(
+        &context.http.user.deps,
+        ports,
+        &[(
+            "GOLEM__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
+            "2s".into(),
+        )],
+    )
+    .await;
+    let url = reqwest::Url::parse(&format!("http://127.0.0.1:{}/raw/echo", ports[2]))?;
+    let (tx, rx) = mpsc::channel::<Result<Vec<u8>, std::io::Error>>(1);
+    tx.send(Ok(b"first".to_vec())).await?;
+    let mut response = tokio::time::timeout(
+        Duration::from_secs(20),
+        context
+            .http
+            .client
+            .post(url)
+            .body(Body::wrap_stream(ReceiverStream::new(rx)))
+            .send(),
+    )
+    .await??;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.chunk().await?.unwrap(), b"first".as_slice());
+    let mut expected = Vec::new();
+    for i in 0..24 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let chunk = format!("-{i:02}-payload").into_bytes();
+        expected.extend_from_slice(&chunk);
+        tx.send(Ok(chunk)).await?;
+    }
+    drop(tx);
+    assert_eq!(response.bytes().await?, expected);
+    Ok(())
+}
+
+async fn explicit_cancellations(metrics_port: u16) -> anyhow::Result<u64> {
+    let metrics = reqwest::get(format!("http://127.0.0.1:{metrics_port}/metrics"))
+        .await?
+        .text()
+        .await?;
+    Ok(metrics
+        .lines()
+        .find_map(|line| line.strip_prefix("http_session_explicit_cancellations_total "))
+        .map(|value| value.trim().parse::<f64>())
+        .transpose()?
+        .unwrap_or_default() as u64)
+}
+
+#[test]
+#[timeout("2m")]
+async fn unread_incomplete_body_does_not_wait_for_acceptance_through_an_outage(
+    context: &RawHttpProcessLossContext,
+    cluster: &WorkerExecutorClusterControlStub,
+) -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let ports = free_ports().await?;
+    let _service = spawn_worker_service(
+        &context.http.user.deps,
+        ports,
+        &[(
+            "GOLEM__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
+            "2s".into(),
+        )],
+    )
+    .await;
+    cluster
+        .kill_all_and_wait(60_000)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let result = async {
+        let request = format!(
+            "POST /raw/echo HTTP/1.1\r\nHost: {}\r\nContent-Length: 100\r\n\r\nx",
+            context.http.host_header.to_str()?
+        );
+        let mut connected = TcpStream::connect(("127.0.0.1", ports[2])).await?;
+        connected.write_all(request.as_bytes()).await?;
+        let mut disconnected = TcpStream::connect(("127.0.0.1", ports[2])).await?;
+        disconnected.write_all(request.as_bytes()).await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        drop(disconnected);
+
+        let mut head = Vec::new();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            let mut buffer = [0u8; 1024];
+            while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = connected.read(&mut buffer).await?;
+                anyhow::ensure!(read > 0, "connection closed before a response head");
+                head.extend_from_slice(&buffer[..read]);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("an unread body waited for acceptance without a bound"))??;
+        anyhow::ensure!(
+            head.starts_with(b"HTTP/1.1 504"),
+            "unexpected response: {}",
+            String::from_utf8_lossy(&head)
+        );
+
+        // The disconnected client sees no response, so the ended sessions are counted instead.
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while explicit_cancellations(ports[0]).await? < 2 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("a disconnected request kept its session"))??;
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    cluster.restart_all().await;
+    result
 }
 
 #[test]
@@ -193,7 +379,7 @@ async fn spawn_worker_service(
 async fn lifecycle_serving_process_loss(context: &RawHttpProcessLossContext) -> anyhow::Result<()> {
     let deps = &context.http.user.deps;
     let ports = free_ports().await?;
-    let service = spawn_worker_service(deps, ports).await;
+    let service = spawn_worker_service(deps, ports, &[]).await;
     let base_url = reqwest::Url::parse(&format!("http://127.0.0.1:{}", ports[2]))?;
     let (_request_body, mut response) = open_streaming_echo(context, base_url).await?;
     let before = agent_count(context).await?;
@@ -201,7 +387,7 @@ async fn lifecycle_serving_process_loss(context: &RawHttpProcessLossContext) -> 
 
     service.kill().await;
     let terminal = tokio::time::timeout(Duration::from_secs(10), response.chunk()).await;
-    let replacement = spawn_worker_service(deps, ports).await;
+    let replacement = spawn_worker_service(deps, ports, &[]).await;
 
     let terminal = terminal
         .map_err(|_| anyhow::anyhow!("response did not abort after serving process loss"))?;

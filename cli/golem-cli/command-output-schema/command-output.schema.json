@@ -6298,7 +6298,7 @@
             "componentId": { "type": "string" },
             "agentType": { "type": "string" },
             "methodName": { "type": "string" },
-            "httpMethod": { "$ref": "#/definitions/DeployValidationHttpMethod" },
+            "httpMethod": { "$ref": "#/definitions/AgentHttpMethod" },
             "path": { "type": "string" }
           },
           "additionalProperties": false
@@ -6338,45 +6338,6 @@
           "additionalProperties": false
         }
       ]
-    },
-    "DeployValidationHttpMethod": {
-      "type": "object",
-      "required": ["type"],
-      "properties": {
-        "type": {
-          "type": "string",
-          "enum": [
-            "Get",
-            "Head",
-            "Post",
-            "Put",
-            "Delete",
-            "Connect",
-            "Options",
-            "Trace",
-            "Patch",
-            "Custom"
-          ]
-        },
-        "value": {
-          "type": "string"
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": { "type": { "const": "Custom" } },
-            "required": ["type"]
-          },
-          "then": {
-            "required": ["value"]
-          },
-          "else": {
-            "not": { "required": ["value"] }
-          }
-        }
-      ],
-      "additionalProperties": false
     },
     "FileNode": {
       "type": "object",
@@ -8012,12 +7973,12 @@
       "type": "object",
       "required": ["pathPrefix", "authDetails", "phantomAgent", "phantomIdBinding", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "fileResponseHeaders", "openapiProviderMethod"],
       "properties": {
-        "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/AgentPathSegment" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "phantomAgent": { "type": "boolean" },
         "phantomIdBinding": { "oneOf": [{ "$ref": "#/definitions/PhantomIdBinding" }, { "type": "null" }] },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
-        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/AgentPathSegment" } },
         "staticBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
         "filesystemBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
         "fileResponseHeaders": { "type": "array", "items": { "$ref": "#/definitions/FileResponseHeader" } },
@@ -8076,8 +8037,8 @@
       "type": "object",
       "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "mode", "durableStreams"],
       "properties": {
-        "httpMethod": { "$ref": "#/definitions/HttpMethod" },
-        "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "httpMethod": { "$ref": "#/definitions/AgentHttpMethod" },
+        "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/AgentPathSegment" } },
         "headerVars": { "type": "array", "items": { "$ref": "#/definitions/HeaderVariable" } },
         "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
@@ -8121,10 +8082,15 @@
       },
       "additionalProperties": false
     },
+    "AgentPathSegment": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Segment" }, "value": { "$ref": "#/definitions/PathSegment" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "SystemVariable" }, "value": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/definitions/SystemVariable" } }, "additionalProperties": false } }, "additionalProperties": false }
+      ]
+    },
     "PathSegment": {
       "oneOf": [
         { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Literal" }, "value": { "type": "string" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "SystemVariable" }, "value": { "$ref": "#/definitions/SystemVariable" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "variableName"], "properties": { "type": { "const": "PathVariable" }, "variableName": { "type": "string" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "variableName"], "properties": { "type": { "const": "RemainingPathVariable" }, "variableName": { "type": "string" } }, "additionalProperties": false }
       ]
@@ -8154,11 +8120,16 @@
       "properties": { "queryParamName": { "type": "string" }, "variableName": { "type": "string" } },
       "additionalProperties": false
     },
+    "AgentHttpMethod": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Method" }, "value": { "$ref": "#/definitions/HttpMethod" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Any" }, "value": { "type": "object", "properties": {}, "additionalProperties": false } }, "additionalProperties": false }
+      ]
+    },
     "HttpMethod": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["Get", "Head", "Post", "Put", "Delete", "Connect", "Options", "Trace", "Patch"] } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Any" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false }
       ]
     },
     "ApiPredicateValue": {

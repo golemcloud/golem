@@ -36,8 +36,9 @@ use golem_common::model::oplog::{
     SpanLink, SpanOutcome, SpanStarted, UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentInvocationPayload, Empty, OplogIndex, Timestamp};
+use golem_common::model::{AgentInvocationPayload, OplogIndex, Timestamp};
 use golem_common::schema::SchemaValue;
+use golem_schema::Empty;
 use test_r::test;
 use uuid::Uuid;
 
