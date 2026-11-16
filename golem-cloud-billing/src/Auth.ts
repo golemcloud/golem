@@ -29,6 +29,12 @@ export interface AuthOptions {
 export const tableNames: ReadonlyArray<string> = ["user", "session", "account", "verification"]
 
 /**
+ * The GitHub sign-ins that one client address can start: Better Auth's default rule for its
+ * `/sign-in` paths. The landing page tells a refused client how long to wait.
+ */
+export const signInRateLimit = { window: 10, max: 3 } as const
+
+/**
  * The options of Better Auth that decide its tables: the database and the extra fields of the user
  * and the session. The web app and `Migrations.migrate` both use them, so the migration creates the
  * tables that the web app reads.
@@ -103,7 +109,16 @@ export const authOptions = (options: AuthOptions) =>
     logger: loggerOptions(options.log),
     // Errors that end the OAuth flow redirect to the landing page with `?error=<code>`. The
     // default error page of Better Auth is not routed.
-    onAPIError: { errorURL: "/" }
+    onAPIError: { errorURL: "/" },
+    // Better Auth limits the requests to `auth.handler` for each client address, also outside
+    // production. It reads the address from `x-forwarded-for`, which the routes set to the one
+    // client address (`clientAddress` in Http.ts) before they call the handler.
+    // `POST /sign-in/github` calls the handler, not `auth.api`, so that this limit applies to it.
+    // The memory store counts on each replica.
+    rateLimit: {
+      enabled: true,
+      customRules: { "/sign-in/social": signInRateLimit }
+    }
   }) satisfies BetterAuthOptions
 
 export const makeAuth = (options: AuthOptions) => betterAuth(authOptions(options))

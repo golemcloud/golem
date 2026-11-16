@@ -121,6 +121,8 @@ const signInErrorMessage = (code: string): string => {
       return "Another GitHub account signed in with this email address before. Sign in with that GitHub account."
     case "unable_to_create_session":
       return "GitHub accepted the sign-in, but Golem could not link it to your Golem account. Try again after one minute."
+    case "too_many_requests":
+      return "Too many sign-in attempts came from your network. Wait 10 seconds, then try again."
     default:
       return "Sign-in failed. Try again."
   }
@@ -149,6 +151,16 @@ export const signedOutPage = (options: { readonly error: string | undefined }) =
  * that an administrator gave the account, or `unknown` when the registry call failed.
  */
 export type PlanState = "free" | "paid" | "suspended" | "other" | "unknown"
+
+/**
+ * Whether the page offers a checkout of the paid product, and `POST /billing/checkout` accepts
+ * one: only on the free plan. On the paid plan a checkout starts a second subscription. On the
+ * suspended plan the account stays suspended until it pays the open order. A subscription does
+ * not change another plan (see `changePlan` of `Settlement`). A `past_due` subscription has an
+ * open payment, and a second subscription does not pay it.
+ */
+export const canCheckOut = (plan: PlanState, subscription: Subscription | undefined): boolean =>
+  plan === "free" && subscription?.status !== "past_due"
 
 /**
  * The result of the last post of the overage form, from the redirect after it: paid overage is
@@ -226,21 +238,21 @@ const planHero = (options: SignedInPageOptions) => {
           ${portalForm("Pay the invoice")}
         </div>`
     case "free":
-      // A new checkout would start a second subscription; the payment of the first one is open.
-      if (options.subscription?.status === "past_due") {
+      if (canCheckOut(options.plan, options.subscription)) {
         return html`<span class="eyebrow">Your plan</span>
-        <h1>Free</h1>
-        <p class="alert" role="alert">The last payment for Paid failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Paid again.</p>
-        <div class="actions">
-          ${portalForm("Manage billing")}
-        </div>`
-      }
-      return html`<span class="eyebrow">Your plan</span>
         <h1>Free</h1>
         <p class="lead">Paid has larger monthly allowances. You pay through Polar.</p>
         <div class="actions">
           ${checkoutForm}
           ${options.subscription === undefined ? null : portalForm("Billing history")}
+        </div>`
+      }
+      // On the free plan, `canCheckOut` refuses only an account with a `past_due` subscription.
+      return html`<span class="eyebrow">Your plan</span>
+        <h1>Free</h1>
+        <p class="alert" role="alert">The last payment for Paid failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Paid again.</p>
+        <div class="actions">
+          ${portalForm("Manage billing")}
         </div>`
     case "other":
       return html`<span class="eyebrow">Your plan</span>
@@ -391,7 +403,7 @@ const usageSection = (limits: AccountLimits, prices: OveragePrices, subscription
     return html`<p class="muted">Golem did not send the usage of this month. Reload the page.</p>`
   }
   const total = meterKeys.reduce((sum, key) => sum + overageCost(usageMeters[key], monthly[key], prices), 0)
-  return html`<p class="muted">This month (UTC), against the monthly allowance of the plan.</p>
+  return html`<p class="muted">This month, against the monthly allowance of the plan. The monthly allowance starts again on the 1st of each month (UTC).</p>
         ${
           total > 0
             ? html`<p class="notice">Paid overage so far this month: about ${money(total)} plus tax, at the prices below. ${overageBilling(subscription)} ${polarDelay}</p>`
