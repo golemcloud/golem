@@ -19,7 +19,7 @@ continues.
 ```
 
 Replay: claim `Start#11` by identity (`StartClaim`), resolve `End#12` through
-`ConcurrentReplayResolver`, classify as `Delivered`, release `v` to the guest at the boundary
+`ReplayStarts` under the cursor lock, classify as `Delivered`, release `v` to the guest at the boundary
 recorded by `#13` (`CompletionDelivery::AtMarker`). No live action runs.
 Owners: `concurrent/call.rs::run`, `concurrent/delivery.rs`, `replay_state/cursor.rs`.
 
@@ -112,19 +112,23 @@ replay-to-live transition before live disposal under the original `Start`.
 ## 5. One invocation, end to end
 
 ```
-#20 PendingAgentInvocation { key: K, payload } (h)   enqueue_worker_invocation_with_effect,
+#20 PendingAgentInvocation { invocation_id: I, payload } (h)   enqueue_worker_invocation_with_effect,
                                                      committed before the caller sees "accepted"
-#21 AgentInvocationStarted { key: K, ... }          invocation loop picked it up
+#21 AgentInvocationStarted { invocation_id: I, ... } invocation loop picked it up
 #22..#40 durable calls of the invocation
-#41 AgentInvocationFinished { result: R }           on_agent_invocation_success, CommitLevel::Always,
-                                                     then waiters are notified
+#41 AgentInvocationFinished { invocation_id: I, result: R }  on_agent_invocation_success,
+                                                     CommitLevel::Always, then waiters are notified
 ```
 
-Crash before `#20` commits: the caller was never told "accepted"; it retries with the same key.
+`I` is finalized from the caller's key `K`, its scope, the method and the agent fingerprint (see
+"Invocation identity" in `SKILL.md`). Crash before `#20` commits: the caller was never told
+"accepted"; it retries with the same key, which finalizes to the same `I`.
 Crash after `#20`, before `#21`: reconstruction folds status from the oplog, sees the pending
 invocation, and runs it. Crash between `#21` and `#41`: `replay` replays the recorded prefix
-of this invocation, then the guest continues live from the tail. Crash after `#41`: a repeated
-call with key `K` hits `lookup_invocation_result` and returns `R` without touching the guest.
+of this invocation, then the guest continues live from the tail; a recorded `#41` that names
+another invocation is a divergence. Crash after `#41`: a repeated call with key `K`, the same
+method and the same caller finalizes to `I`, hits `lookup_invocation_result` and returns `R`
+without touching the guest. A different input under the same `I` is an `IdempotencyConflict`.
 Test: `tests/api/mod.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart`.
 
 During replay `on_agent_invocation_success` compares the recomputed result with `#41` via
@@ -140,17 +144,17 @@ Caller C invokes target T's `increment` through durable RPC.
 Caller C                                             Target T
 #30 Start { fn: rpc/invoke-and-await, request }      
     key = derive_idempotency_key(#30)                
-    dispatch(key) ─────────────────────────────────▶ #5 PendingAgentInvocation { key } (h)
-                                                     #6 AgentInvocationStarted { key }
+    dispatch(Internal(key)) ───────────────────────▶ #5 PendingAgentInvocation { invocation_id: I } (h)
+                                                     #6 AgentInvocationStarted { invocation_id: I }
                                                      ... counter 0 → 1 ...
-                                                     #9 AgentInvocationFinished { result: 1 }
+                                                     #9 AgentInvocationFinished { invocation_id: I, result: 1 }
      ✕ caller crashes before End
 ```
 
 Caller reconstruction: `Start#30` is incomplete. RPC is a `WriteRemote` durable call, so the path
 re-dispatches under the existing `Start` with the *same* key
-(`InvocationFreshnessDisposition::MayExist`). T's
-`lookup_invocation_result(key)` is not `New`, so it attaches to invocation `#6..#9` and returns
+(`InvocationFreshnessDisposition::MayExist`). The key finalizes to the same `I` against T's
+unchanged fingerprint, so `lookup_invocation_result(I)` is not `New`; it attaches to invocation `#6..#9` and returns
 `1`. C appends `End { start_index: 30, response: 1 }`. Two caller attempts, one target
 execution, counter 1.
 
@@ -299,7 +303,7 @@ Owners: `Worker::set_interrupting` (`Interrupt` / `Restart` / `Suspend`),
 For an interrupted active durable invocation, the resume request has this prefix:
 
 ```
-#79 AgentInvocationStarted { key: K }
+#79 AgentInvocationStarted { invocation_id: I }
 #80 Start { fn: p3/wait, ... }             pending when interrupted
 #81 Interrupted (h)                        status = Interrupted
 #82 Resumed (h)                            timestamp only; committed under the instance lock
@@ -350,7 +354,7 @@ Caller C invokes `P.generate()` whose result is an output stream. Two oplogs are
 
 ```
 Caller C oplog                                   Producer P oplog
-#20 Start { fn: rpc/invoke-and-await, P.generate } #40 PendingAgentInvocation { key: derived(C#20) } (h)
+#20 Start { fn: rpc/invoke-and-await, P.generate } #40 PendingAgentInvocation { invocation_id: from(derived(C#20)) } (h)
 #21 StreamSession { CallerAttempt { attempt_id } } (h)
 #22 StreamSession { Prepared / Attached }         (h)  #41 AgentInvocationStarted
                                                   #42 StreamRegistered { stream, fingerprint(P) } (h)
@@ -480,7 +484,7 @@ incomplete_tool_replay_persists_attachment_upgrade_rejection, deterministic_stre
 ### 14a. Entity cancellation after a blob write enters its provider
 
 ```
-#60 AgentInvocationStarted { key: K }
+#60 AgentInvocationStarted { invocation_id: I }
 #61 Start { parent_start_index: 60, ... }   entity tool root
 #62 Start { parent_start_index: 61, ... }   serialized blob write
      provider Pending; service task holds original environment lock and quota

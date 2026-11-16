@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use golem_common::base_model::durable_stream::StreamConsumerObservation;
 use golem_common::base_model::oplog::attachment::{
@@ -26,7 +30,7 @@ use test_r::test;
 async fn shared_pending_and_started_payloads_rehome_independently() {
     use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
     use golem_common::model::invocation_context::InvocationContextStack;
-    use golem_common::model::{AgentInvocationPayload, IdempotencyKey, Timestamp};
+    use golem_common::model::{AgentInvocationPayload, Timestamp};
 
     let source_id = PayloadId::new();
     let source_hash = vec![7; 16];
@@ -39,7 +43,7 @@ async fn shared_pending_and_started_payloads_rehome_independently() {
     let mut entries = [
         OplogEntry::pending_agent_invocation(
             None,
-            IdempotencyKey::new("shared".to_string()),
+            test_invocation_id("shared".to_string()),
             payload.clone(),
             context.trace_id.clone(),
             context.trace_states.clone(),
@@ -47,7 +51,7 @@ async fn shared_pending_and_started_payloads_rehome_independently() {
         ),
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::new("shared".to_string()),
+            invocation_id: test_invocation_id("shared".to_string()),
             payload,
             trace_id: context.trace_id,
             trace_states: context.trace_states,
@@ -156,7 +160,7 @@ async fn visits_every_stream_payload_and_snapshot_update() {
                     creation_start: OplogIndex::INITIAL,
                     slot: ToolAttachmentSlot::Stdout,
                 },
-                logical_invocation: golem_common::model::IdempotencyKey::new("attachment".into()),
+                logical_invocation: test_invocation_id("attachment".into()),
                 observation: StreamConsumerObservation::Guest {
                     parent_start_index: None,
                 },
@@ -180,11 +184,11 @@ async fn visits_every_stream_payload_and_snapshot_update() {
             active_cards: Vec::new(),
             wallet_generation: 0,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         OplogEntry::stream_registered(None, external(), None),
         OplogEntry::stream_items(None, external(), None),
-        OplogEntry::stream_end(None, external(), None),
-        OplogEntry::stream_cancel(None, external(), None),
+        OplogEntry::stream_terminal(None, external(), None),
         OplogEntry::stream_session(None, external(), None),
         OplogEntry::pending_update(
             UpdateDescription::SnapshotBased {
@@ -247,4 +251,8 @@ async fn failed_copy_leaves_source_reference_intact() {
     .await;
     assert_eq!(result, Err("upload failed".to_string()));
     assert_eq!(payload, original);
+}
+
+fn test_invocation_id(value: String) -> InvocationId {
+    InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }

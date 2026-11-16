@@ -244,7 +244,7 @@ mod tests {
                 dyn std::future::Future<
                         Output = Result<
                             Option<golem_rust::schema::wit::wire::SchemaValueTree>,
-                            String,
+                            golem_rust::agentic::StreamError,
                         >,
                     > + Send
                     + '_,
@@ -403,7 +403,7 @@ mod tests {
                 dyn std::future::Future<
                         Output = Result<
                             Option<golem_rust::schema::wit::wire::SchemaValueTree>,
-                            String,
+                            golem_rust::agentic::StreamError,
                         >,
                     > + Send
                     + '_,
@@ -413,10 +413,11 @@ mod tests {
             Box::pin(async move {
                 self.items
                     .pop_front()
-                    .transpose()?
+                    .transpose()
+                    .map_err(golem_rust::agentic::StreamError::from)?
                     .map(|bytes| {
                         golem_rust::schema::wit::encode_value(&bytes.to_value())
-                            .map_err(|e| e.to_string())
+                            .map_err(|e| golem_rust::agentic::StreamError::from(e.to_string()))
                     })
                     .transpose()
             })
@@ -501,8 +502,8 @@ mod tests {
         }
         assert_eq!(bytes, unhex(case["expect"]["body_hex"].as_str().unwrap()));
         assert_eq!(
-            adapted.body_mut().next().await.unwrap_err(),
-            "stream failure"
+            adapted.body_mut().next().await.unwrap().unwrap_err(),
+            golem_rust::agentic::StreamError::from("stream failure".to_string())
         );
         drop(adapted);
         assert!(

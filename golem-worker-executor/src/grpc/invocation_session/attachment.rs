@@ -46,7 +46,7 @@ pub(super) fn is_attachment_termination(error: &SessionError) -> bool {
 pub(super) fn ends_only_the_attachment(error: &SessionError) -> bool {
     match error {
         SessionError::Unreadable(unreadable) => unreadable.is_transient(),
-        SessionError::Fenced(_) => false,
+        SessionError::Fenced(_) | SessionError::IncompleteOutput(_) => false,
         SessionError::Failed(_) => is_attachment_termination(error),
     }
 }

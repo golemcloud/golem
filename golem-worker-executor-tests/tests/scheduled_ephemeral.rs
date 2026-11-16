@@ -155,7 +155,7 @@ impl SchedulerStorage for DuplicateWakes {
 }
 
 /// The target and invocation key of one schedule call.
-pub(crate) type Schedule = (AgentId, Option<IdempotencyKey>);
+pub(crate) type Schedule = (AgentId, Option<golem_common::model::InvocationId>);
 
 /// Records the freshness of every `inc` target creation and the target and key of every schedule.
 /// The first schedule never returns: the call stays pending until the executor is dropped. With
@@ -171,10 +171,38 @@ pub(crate) struct HoldFirstSchedule {
 
 #[async_trait]
 impl Rpc for HoldFirstSchedule {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -188,6 +216,7 @@ impl Rpc for HoldFirstSchedule {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: golem_common::model::AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: DateTime<Utc>,
         auth_ctx: &AuthCtx,
@@ -209,6 +238,7 @@ impl Rpc for HoldFirstSchedule {
             .schedule_invocation(
                 owned_agent_id,
                 expected_fingerprint,
+                request_key,
                 invocation,
                 scheduled_at,
                 auth_ctx,
@@ -261,6 +291,7 @@ impl Rpc for HoldFirstSchedule {
         environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method: String,
         input: SchemaValue,
         created_by: AccountId,
@@ -277,6 +308,7 @@ impl Rpc for HoldFirstSchedule {
                 environment_id,
                 key,
                 freshness,
+                expected_callee_fingerprint,
                 method,
                 input,
                 created_by,
@@ -296,6 +328,7 @@ impl Rpc for HoldFirstSchedule {
         environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method: String,
         input: SchemaValue,
         created_by: AccountId,
@@ -311,6 +344,7 @@ impl Rpc for HoldFirstSchedule {
                 environment_id,
                 key,
                 freshness,
+                expected_callee_fingerprint,
                 method,
                 input,
                 created_by,
@@ -410,13 +444,11 @@ async fn ephemeral_target(
     Ok(targets.into_iter().next().unwrap())
 }
 
-fn scheduled_key(oplog: &[PublicOplogEntryWithIndex]) -> Option<IdempotencyKey> {
+fn scheduled_key(oplog: &[PublicOplogEntryWithIndex]) -> Option<golem_common::model::InvocationId> {
     oplog.iter().find_map(|entry| match &entry.entry {
         PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
             match &pending.invocation {
-                PublicAgentInvocation::AgentMethodInvocation(method) => {
-                    Some(method.idempotency_key.clone())
-                }
+                PublicAgentInvocation::AgentMethodInvocation(method) => Some(method.invocation_id),
                 _ => None,
             }
         }
@@ -442,7 +474,7 @@ fn shape(oplog: &[PublicOplogEntryWithIndex]) -> Shape {
             matches!(entry, PublicOplogEntry::AgentInvocationStarted(started)
                 if matches!(&started.invocation,
                     PublicAgentInvocation::AgentMethodInvocation(method)
-                        if Some(&method.idempotency_key) == key.as_ref()))
+                        if Some(&method.invocation_id) == key.as_ref()))
         }),
         starts: count(&|entry| matches!(entry, PublicOplogEntry::AgentInvocationStarted(_))),
         cancellations: count(&|entry| {

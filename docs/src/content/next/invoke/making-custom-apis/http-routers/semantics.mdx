@@ -16,7 +16,7 @@ these requests in three ways:
 | --- | --- | --- |
 | Custom handler | Parameterless ephemeral router agent | A streaming handler invocation |
 | Immutable static file | Router's read-only initial files | Gateway reads shared blob storage; no executor call |
-| Live file | Ordinary durable agent | Agent initialization/restoration if needed, then a serialized filesystem read |
+| Live file | Ordinary durable agent that already exists | Agent initialization or restoration if needed, then a serialized filesystem read |
 
 ## Router identity and mounts
 
@@ -135,10 +135,14 @@ non-phantom agent's HTTP mount. Every constructor parameter must occur exactly o
 as a path capture. Header, query, body, or caller identity cannot choose the agent ID.
 For example, `/documents/{owner}` can select the agent whose constructor takes `owner`.
 
-The first GET/HEAD can create and initialize that agent. Constructor-created files
-are immediately serveable; a nonresident agent is restored. File serving invokes
-no exported method, but initialization and replay can execute guest code. Concurrent
-first requests use the normal single-agent initialization lifecycle. Initialization
+A GET/HEAD served by a file mapping never creates that agent. When no agent exists
+for the captured constructor parameters, or it was deleted, every mapping misses and
+the response is the same 404 as for an unknown file. Create the agent through an
+invocation or an explicit create first. Constructor-created files are serveable once
+the agent exists; a nonresident agent is restored, and a created agent whose
+constructor has not run yet is initialized first. File serving invokes no exported
+method, but initialization and replay can execute guest code. Concurrent first
+requests use the normal single-agent initialization lifecycle. Initialization
 failure is a server error, not a missing file.
 
 A read waits for initialization and is serialized against invocations, mutations,

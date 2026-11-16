@@ -224,27 +224,27 @@ impl WorkerProxy for LoopbackCardTransferProxy {
             .await
     }
 
-    async fn start(
+    async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
-        method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
-            .start(
+            .create(
                 owned_agent_id,
-                method_name,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
                 config,
                 principal,
                 auth_ctx,
+                idempotency_key,
             )
             .await
     }
@@ -258,6 +258,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -276,6 +277,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
                 schedule_at,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -354,6 +356,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -361,6 +364,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
+                principal,
                 auth_ctx,
             )
             .await
@@ -392,7 +396,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
@@ -403,7 +407,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
     async fn cancel_scheduled_invocation(
         &self,
         target: &golem_common::model::OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -416,7 +420,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         environment_id: Option<EnvironmentId>,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::InvocationStatus, WorkerProxyError> {
@@ -430,7 +434,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,

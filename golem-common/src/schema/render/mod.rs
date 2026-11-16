@@ -24,7 +24,7 @@ pub mod docs;
 pub mod json_schema;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use cli_text::{
     type_to_cli_text, value_to_cli_text, value_to_cli_text_unredacted,

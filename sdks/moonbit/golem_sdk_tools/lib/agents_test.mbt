@@ -1992,6 +1992,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
             auth: None,
             cors: [],
             durable_streams: None,
+            mode: None,
           }),
           read_only: None,
         },
@@ -2011,6 +2012,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
             auth: None,
             cors: [],
             durable_streams: None,
+            mode: None,
           }),
           read_only: None,
         },
@@ -2094,6 +2096,7 @@ test "generate_agent_registration emits remaining/system path vars, required aut
             auth: Some(true),
             cors: [],
             durable_streams: None,
+            mode: None,
           }),
           read_only: None,
         },
@@ -2160,10 +2163,10 @@ test "durable stream all-options source emits route metadata" {
     #|#derive.mount("/streams")
     #|struct Streams {}
     #|fn Streams::new() -> Streams { {} }
-    #|#derive.endpoint(post="/events")
+    #|#derive.endpoint(post="/events", mode="sse")
     #|#derive.durable_stream_slot(input="input", name="messages")
     #|#derive.durable_stream_slot(output="$result", name="results", content_type="application/vnd.golem.events")
-    #|#derive.durable_streams(allow_external_writes=true, allow_stream_delete=false, allow_invocation_delete=false, max_concurrent_readers_per_stream=8, max_append_requests_per_second_per_stream=25)
+    #|#derive.durable_streams(max_concurrent_readers_per_stream=8, max_append_requests_per_second_per_stream=25)
     #|pub fn Streams::events(self : Self, input : String) -> String { input }
   let agents = parse_agents([("streams.mbt", source)])
   let endpoint = agents[0].methods[0].http_endpoint.unwrap()
@@ -2180,9 +2183,6 @@ test "durable stream all-options source emits route metadata" {
       #|        content_type: Some("application/vnd.golem.events"),
       #|      },
       #|    ],
-      #|    allow_external_writes: Some(true),
-      #|    allow_stream_delete: Some(false),
-      #|    allow_invocation_delete: Some(false),
       #|    max_concurrent_readers_per_stream: Some(8),
       #|    max_append_requests_per_second_per_stream: Some(25),
       #|  },
@@ -2195,14 +2195,14 @@ test "durable stream all-options source emits route metadata" {
   assert_true(
     compact.contains(
       strip_whitespace(
-        "source: @common.DurableStreamSlotSource::Input(\"input\")",
+        "source: @coreHttp.DurableStreamSlotSource::Input(\"input\")",
       ),
     ),
   )
   assert_true(
     compact.contains(
       strip_whitespace(
-        "source: @common.DurableStreamSlotSource::Output(\"$result\")",
+        "source: @coreHttp.DurableStreamSlotSource::Output(\"$result\")",
       ),
     ),
   )
@@ -2211,6 +2211,8 @@ test "durable stream all-options source emits route metadata" {
       strip_whitespace("max_append_requests_per_second_per_stream: Some(25)"),
     ),
   )
+  assert_eq(endpoint.mode, Some("sse"))
+  assert_true(compact.contains("mode:Some(@coreHttp.HttpRouteMode::SSE)"))
 }
 
 ///|

@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         response_lease: ResponseLease,
         scope: &crate::worker::tasks::TaskScope,
     ) {
-        let rejection_identity = (resume.idempotency_key.clone(), resume.agent_id.clone());
+        let rejection_identity = (resume.idempotency_key, resume.agent_id.clone());
         let result = async {
             Self::validate_auth_ctx(&resume.auth_ctx)?;
             let attempt = build_resume_attempt(
@@ -49,7 +49,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )?;
             let lookup = InvocationStart {
                 agent_id: resume.agent_id.clone(),
-                idempotency_key: resume.idempotency_key.clone(),
+                idempotency_key: resume.idempotency_key.map(|key| {
+                    golem_common::model::IdempotencyKey::from_uuid(uuid::Uuid::from(key)).into()
+                }),
                 auth_ctx: resume.auth_ctx.clone(),
                 principal: resume.principal.clone(),
                 environment_id: resume.environment_id,
@@ -57,13 +59,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ..Default::default()
             };
             let (worker, _response_lease) = self
-                .get_or_create_pending_for_lookup(&lookup)
+                .get_or_create_pending_for_lookup(&lookup, None)
                 .await?
                 .ok_or_else(|| {
-                WorkerExecutorError::invalid_request(
-                    "NotFound: durable Stream Session worker was not found",
-                )
-            })?;
+                    WorkerExecutorError::invalid_request(
+                        "NotFound: durable Stream Session worker was not found",
+                    )
+                })?;
             scope
                 .bind(&worker.tasks)
                 .map_err(WorkerExecutorError::runtime)?;
@@ -214,7 +216,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 response: Some(invocation_response::Response::Accepted(
                     InvocationAccepted {
                         agent_id: resume.agent_id.clone(),
-                        idempotency_key: resume.idempotency_key.clone(),
+                        idempotency_key: resume.idempotency_key,
                         component_revision: Some(
                             acceptance
                                 .prepared
@@ -373,7 +375,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     .get(),
                             ),
                             agent_id: resume.agent_id.clone(),
-                            idempotency_key: resume.idempotency_key.clone(),
+                            idempotency_key: resume.idempotency_key,
                             fuel_consumed: None,
                             status: None,
                             oplog_index: None,

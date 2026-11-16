@@ -16,7 +16,7 @@ use crate::benchmarks::{cleanup_user_state, delete_workers, invoke_and_await_age
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
 use golem_common::model::AgentId;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
@@ -213,7 +213,7 @@ impl Benchmark for LatencyMedium {
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    agent_ids: Vec<ParsedAgentId>,
+    agent_ids: Vec<ParsedAgentKey>,
     length: usize,
     env_id: EnvironmentId,
 }

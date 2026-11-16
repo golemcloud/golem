@@ -857,6 +857,7 @@ impl DeploymentContext {
         security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
         errors: &mut Vec<DeployValidationError>,
         warnings: &mut Vec<super::DeployValidationWarning>,
+        stream_limits: &crate::config::DurableStreamRouteLimits,
     ) -> Vec<UnboundCompiledRoute> {
         let mut current_route_id: i32 = 0;
         let mut all_routes = Vec::new();
@@ -963,6 +964,7 @@ impl DeploymentContext {
                             &mut deployment_routes,
                             errors,
                             warnings,
+                            stream_limits,
                         );
                     }
                     if alternative != 0 {

@@ -53,8 +53,11 @@ object StreamSession {
     val state = new StreamSessionState.InputState(replayBytes)
     @volatile var bufferedPull: Future[AgentStreamStep[Any]] = null
     @volatile var naturalEnd = false
-    @volatile var cancelReason: String = null
     val pulling = new AtomicBoolean(false)
+    def stop(): Unit = {
+      state.synchronized { bufferedPull = null; state.cancel() }
+      consumer.foreach(_.cancel())(ExecutionContext.parasitic)
+    }
   }
   private val current = new ThreadLocal[Session]()
 
@@ -259,6 +262,7 @@ object StreamSession {
     @volatile var pendingAttachOperation = "resume"
     @volatile var everAccepted = false
     val idempotencyKey = UUID.randomUUID.toString
+    @volatile var acceptedIdentity: Option[(AgentId, String)] = None
     val reconnecting = new AtomicBoolean(false)
     val reconnectRequested = new AtomicBoolean(false)
     val reconnectAction = new AtomicReference[() => Unit](() => ())
@@ -331,7 +335,8 @@ object StreamSession {
       val frame = StreamSessionProtocol.binary(metadata, payload)
       enqueueSend(_.sendBinary(frame, true))
     }
-    def cancel(channel: Long, reason: String): Future[Unit] = send(StreamSessionProtocol.message("streamCancel", Vector("channel" -> Json.fromLong(channel), "reason" -> Json.string(reason))))
+    def cancel(channel: Long, reason: String): Future[Unit] =
+      send(StreamSessionProtocol.streamEnd(channel, "output", 0, Json.obj("kind" -> Json.string("consumer-cancelled"), "details" -> Json.string(reason))))
     def highWater(mapping: Json): (BigInt, Boolean) = {
       val value = Json.requireField(mapping, "inputHighWater").fold(e => throw BridgeException(e), identity)
       StreamSessionProtocol.validateObject(value, Set("sequence", "terminal"), "inputHighWater")
@@ -421,10 +426,7 @@ object StreamSession {
           replay.foreach { case (pending, mappedChannel) =>
             pending.send(mappedChannel).failed.foreach(_ => reconnectAction.get()())
           }
-          if (terminal) in.cancelReason = null
-          else if (in.cancelReason != null)
-            cancel(mapping.channel, in.cancelReason).failed.foreach(_ => reconnectAction.get()())
-          else if (replay.isEmpty) pumps.add(in)
+          if (!terminal && !in.state.isTerminal && replay.isEmpty) pumps.add(in)
         }
         Option(session.outputs.get(mapping.token)).flatMap(_.remapCancel(reason => cancel(mapping.channel, reason))).foreach(
           _.failed.foreach(_ => reconnectAction.get()())
@@ -432,26 +434,59 @@ object StreamSession {
       }
       pumps.foreach(pump)
     }
-    def sourceUnavailable(input: Input): Unit = {
+    def endInput(input: Input, outcome: Json): Unit = {
+      val first = input.state.nextSequence
+      val bytes = outcome.render.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+      val pending = StreamSessionState.PendingTerminal(first, bytes, ch => send(StreamSessionProtocol.streamEnd(ch, "input", first, outcome)))
+      val (reserved, ch) = try input.state.reserve(pending)
+      catch {
+        case error: Throwable =>
+          input.pulling.set(false)
+          if (!input.state.isTerminal) fatal(error)
+          return
+      }
       input.pulling.set(false)
-      input.cancelReason = "source-unavailable"
-      input.state.cancelLocal()
-      val channel = input.state.currentChannel
-      if (channel > 0) cancel(channel, input.cancelReason).failed.foreach(_ => reconnectAction.get()())
+      if (ch > 0) reserved.send(ch).failed.foreach(_ => reconnectAction.get()())
     }
+    def interrupted(error: Throwable): Json = Json.obj("kind" -> Json.string("failed"), "error" -> Json.obj(
+      "kind" -> Json.string("interrupted"), "message" -> Json.string(Option(error.getMessage).getOrElse(error.toString))))
+    def bufferPull(input: Input, pulled: Future[AgentStreamStep[Any]]): Unit = {
+      input.state.synchronized {
+        if (!input.state.isTerminal) input.bufferedPull = pulled
+      }
+      pulled.onComplete {
+        case Failure(error) =>
+          try input.state.synchronized {
+            if ((input.bufferedPull eq pulled) && !input.state.isTerminal) {
+              input.state.retainFailure(interrupted(error))
+              input.bufferedPull = null
+            }
+          } catch { case problem: Throwable => fatal(problem) }
+        case _ => ()
+      }(ExecutionContext.parasitic)
+    }
+    def sourceUnavailable(input: Input, error: Throwable): Unit =
+      if (input.state.isTerminal) input.pulling.set(false)
+      else endInput(input, interrupted(error))
     def pump(input: Input): Unit = if (input.pulling.compareAndSet(false, true)) {
+      if (input.state.isTerminal) { input.pulling.set(false); return }
       if (input.naturalEnd) {
-        val first = input.state.nextSequence
-        val pending = StreamSessionState.PendingTerminal(first, ch => send(StreamSessionProtocol.message("inputStreamEnd", Vector("channel" -> Json.fromLong(ch), "sequence" -> Json.string(first.toString)))))
-        val (reserved, ch) = input.state.reserve(pending)
-        input.pulling.set(false)
-        if (ch > 0) reserved.send(ch).failed.foreach(_ => reconnectAction.get()())
+        endInput(input, Json.obj("kind" -> Json.string("finished")))
         return
       }
       input.consumer.flatMap { consumer =>
-        val buffered = input.bufferedPull
-        val pulled = if (buffered == null) consumer.pull() else { input.bufferedPull = null; buffered }
-        pulled.map(step => consumer -> step)
+        val (stopped, deferred, buffered) = input.state.synchronized {
+          val value = (input.state.isTerminal, input.state.failureOutcome, input.bufferedPull)
+          input.bufferedPull = null
+          value
+        }
+        if (stopped) Future.successful(consumer -> End)
+        else deferred match {
+          case Some(outcome) => endInput(input, outcome); Future.successful(consumer -> End)
+          case None =>
+            val pulled = if (buffered == null) consumer.pull() else buffered
+            pulled.map(step => consumer -> step)
+        }
       }.onComplete {
         case Success((consumer, Item(value))) =>
           try {
@@ -464,12 +499,11 @@ object StreamSession {
                 var size = 1
                 var filling = true
                 while (filling && size < StreamSessionProtocol.MaxPackedBytes) {
-                  val pulled = consumer.pull()
+                  val pulled = try consumer.pull() catch { case error: Throwable => Future.failed(error) }
                   pulled.value match {
                     case Some(Success(Item(next))) => builder += SchemaValueCodec.asUByte(scoped(session)(input.encode(next))).value.toByte; size += 1
                     case Some(Success(End)) => input.naturalEnd = true; filling = false
-                    case Some(Failure(error)) => throw error
-                    case None => input.bufferedPull = pulled; filling = false
+                    case Some(Failure(_)) | None => bufferPull(input, pulled); filling = false
                   }
                 }
                 val bytes = builder.result()
@@ -494,14 +528,14 @@ object StreamSession {
             val (reserved, ch) = input.state.reserve(pending)
             input.pulling.set(false)
             if (ch > 0) reserved.send(ch).failed.foreach(_ => reconnectAction.get()())
-          } catch { case _: Throwable => sourceUnavailable(input) }
+          } catch {
+            case error: Throwable =>
+              if (input.state.failureOutcome.nonEmpty) fatal(error) else sourceUnavailable(input, error)
+          }
         case Success((_, End)) =>
-          val first = input.state.nextSequence
-          val pending = StreamSessionState.PendingTerminal(first, ch => send(StreamSessionProtocol.message("inputStreamEnd", Vector("channel" -> Json.fromLong(ch), "sequence" -> Json.string(first.toString)))))
-          val (reserved, ch) = input.state.reserve(pending)
-          input.pulling.set(false)
-          if (ch > 0) reserved.send(ch).failed.foreach(_ => reconnectAction.get()())
-        case Failure(_) => sourceUnavailable(input)
+          if (input.state.isTerminal) input.pulling.set(false)
+          else endInput(input, Json.obj("kind" -> Json.string("finished")))
+        case Failure(error) => sourceUnavailable(input, error)
       }
     }
 
@@ -511,7 +545,7 @@ object StreamSession {
       session.outputs.values().asScala.foreach { output =>
         if (!output.isTerminal) output.fail(error)
       }
-      session.inputTokens.values().asScala.foreach(_.consumer.foreach(_.cancel()))
+      session.inputs.values().asScala.foreach(_.stop())
       Option(socket).foreach(_.abort())
     }
 
@@ -569,29 +603,15 @@ object StreamSession {
         ws.request(1); null
       }
       private def handle(json: Json): Unit = {
-        val kind = Json.requireField(json, "type").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-        kind match {
-          case "invocationAccepted" => StreamSessionProtocol.validate(json, kind, Set("attemptId", "idempotencyKey", "mappings", "sessionToken"))
-          case "invocationRejected" => StreamSessionProtocol.validate(json, kind, Set("code", "message", "retryable"), Set("attemptId"))
-          case "invocationResult" => StreamSessionProtocol.validate(json, kind, Set("mappings", "result"))
-          case "outputStreamItem" => StreamSessionProtocol.validate(json, kind, Set("channel", "cursorToken", "mappings", "sequence", "value"))
-          case "outputStreamEnd" => StreamSessionProtocol.validate(json, kind, Set("channel", "outcome", "sequence"), Set("cursorToken"))
-          case "inputStreamAck" => StreamSessionProtocol.validate(json, kind, Set("channel", "highestContiguousSequence", "mappings", "terminal"))
-          case "streamCancel" => StreamSessionProtocol.validate(json, kind, Set("channel", "reason"))
-          case "attachmentRevoked" => StreamSessionProtocol.validate(json, kind, Set("reason"))
-          case "invocationFinished" => StreamSessionProtocol.validate(json, kind, Set("outcome"))
-          case _ => throw BridgeException(s"unsupported stream session message: $kind")
-        }
+        val kind = StreamSessionProtocol.validateServerMessage(json)
         if (!accepted && kind != "invocationAccepted" && kind != "invocationRejected")
           throw BridgeException("message received before invocation acceptance")
         kind match {
           case "invocationAccepted" =>
             if (accepted) throw BridgeException("duplicate invocation acceptance")
-            val attempt = Json.requireField(json, "attemptId").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-            val key = Json.requireField(json, "idempotencyKey").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-            if (attempt != pendingAttempt || key != idempotencyKey) throw BridgeException("acceptance does not match the pending operation")
             val token = Json.requireField(json, "sessionToken").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
             StreamSessionProtocol.validateOpaqueToken(token, "session token")
+            acceptedIdentity = Some(StreamSessionProtocol.acceptanceIdentity(json, pendingAttempt, acceptedIdentity))
             install(json, complete = true)
             sessionToken = token
             accepted = true
@@ -602,10 +622,9 @@ object StreamSession {
             val attempt = Json.field(json, "attemptId").map(value => Json.asString(value).fold(e => throw BridgeException(e), identity))
             if (attempt.exists(_ != pendingAttempt) || (everAccepted && attempt.isEmpty))
               throw BridgeException("rejection does not match the pending operation")
-            val code = Json.requireField(json, "code").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-            val message = Json.requireField(json, "message").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+            val error = StreamSessionProtocol.invocationRejection(json)
+            val code = error.code
             val retryable = Json.requireField(json, "retryable").flatMap(Json.asBoolean).fold(e => throw BridgeException(e), identity)
-            val error = BridgeException(s"$code: $message")
             val pendingAttach = everAccepted && pendingResume && !accepted
             val takeover = pendingAttach && pendingAttachOperation == "resume" && code == "invalid-attachment-state"
             val retry = retryable && code != "invalid-attachment-state"
@@ -644,7 +663,8 @@ object StreamSession {
                 Some(decoded)
               case _ => throw BridgeException("invalid invocation result kind")
             }
-            if (!result.trySuccess(AgentInvocationResult(resolved.agentId.getOrElse(AgentId("", "")), idempotencyKey, value, None)))
+            val (owner, key) = acceptedIdentity.getOrElse(throw BridgeException("invocation result has no accepted identity"))
+            if (!result.trySuccess(AgentInvocationResult(owner, key, value, None)))
               throw BridgeException("duplicate invocation result")
           case "outputStreamItem" =>
             install(json); val ch = StreamSessionProtocol.channel(json)
@@ -672,43 +692,31 @@ object StreamSession {
                 } catch { case error: Throwable => fatal(error); throw error }
               }))
             }
-          case "outputStreamEnd" =>
+          case "stream-end" =>
             val ch = StreamSessionProtocol.channel(json)
-            if (Option(directions.get(ch)) != Some("output")) throw BridgeException("invalid output channel")
-            StreamSessionProtocol.u64(json, "sequence")
-            val outcome = Json.requireField(json, "outcome").toOption.get; val terminal = Json.requireField(outcome, "kind").flatMap(Json.asString).toOption.get
-            terminal match {
-              case "ok" => StreamSessionProtocol.validateObject(outcome, Set("kind"), "output terminal")
-              case "error" => StreamSessionProtocol.validateObject(outcome, Set("kind", "code", "message"), "output terminal")
-              case "cancelled" =>
-                StreamSessionProtocol.validateObject(outcome, Set("kind", "reason"), "output terminal")
-                val reason = Json.requireField(outcome, "reason").flatMap(Json.asString).toOption.get
-                if (!Set("cancelled", "consumer-drop", "transport-detached", "source-unavailable", "producer-deleted", "invocation-failed", "protocol-error").contains(reason))
-                  throw BridgeException("invalid output cancellation reason")
-              case _ => throw BridgeException("invalid output terminal outcome")
-            }
-            val cursor = Json.field(json, "cursorToken").flatMap(v => Json.asString(v).toOption)
-            cursor.foreach(StreamSessionProtocol.validateOpaqueToken(_, "cursor token"))
-            Option(channels.get(ch)).flatMap(token => Option(session.outputs.get(token)).map(token -> _)).foreach { case (token, output) =>
+            val (direction, outcome, cursor) = StreamSessionProtocol.serverStreamEnd(json)
+            if (Option(directions.get(ch)) != Some(direction)) throw BridgeException("invalid stream terminal channel")
+            if (direction == "input") {
+              Option(channels.get(ch)).flatMap(token => Option(session.inputTokens.get(token))).foreach { in =>
+                in.stop()
+              }
+            } else Option(channels.get(ch)).flatMap(token => Option(session.outputs.get(token)).map(token -> _)).foreach { case (token, output) =>
               output.accept(StreamSessionProtocol.u64(json, "sequence"), 0, finish = true)
-              val delivered = () => { cursor.foreach { value => output.checkpoint(StreamSessionProtocol.u64(json, "sequence"), terminal = true); session.cursors.put(token, value) }; End }
-              terminal match {
-                case "ok" => output.offer(0, Right(delivered))
-                case "error" => output.offer(0, Left(() => { delivered(); AgentStreamError(Json.requireField(outcome, "code").flatMap(Json.asString).toOption.get, Json.requireField(outcome, "message").flatMap(Json.asString).toOption.get) }))
-                case "cancelled" => output.offer(0, Left(() => { delivered(); AgentStreamCancelled(Json.requireField(outcome, "reason").flatMap(Json.asString).toOption.get) }))
-                case _ => throw BridgeException("invalid output terminal outcome")
+              val bytes = json.render.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+              if (session.queuedBytes.addAndGet(bytes) > StreamSessionProtocol.MaxSessionQueuedBytes) {
+                session.queuedBytes.addAndGet(-bytes)
+                throw BridgeException("session output queue exceeded the protocol limit")
+              }
+              val delivered = () => {
+                session.queuedBytes.addAndGet(-bytes)
+                cursor.foreach { value => output.checkpoint(StreamSessionProtocol.u64(json, "sequence"), terminal = true); session.cursors.put(token, value) }
+                End
+              }
+              outcome match {
+                case StreamOutcome.Finished => output.offer(bytes, Right(delivered))
+                case other => output.offer(bytes, Left(() => { delivered(); AgentStreamEnded(other) }))
               }
               output.markTerminal()
-            }
-          case "streamCancel" =>
-            val ch = StreamSessionProtocol.channel(json)
-            if (Option(directions.get(ch)) != Some("input")) throw BridgeException("invalid input channel")
-            val reason = Json.requireField(json, "reason").flatMap(Json.asString).toOption.get
-            if (!Set("cancelled", "consumer-drop", "transport-detached", "source-unavailable", "producer-deleted", "invocation-failed", "protocol-error").contains(reason))
-              throw BridgeException("invalid stream cancellation reason")
-            Option(channels.get(ch)).flatMap(token => Option(session.inputTokens.get(token))).foreach { in =>
-              in.state.cancel()
-              in.consumer.foreach(_.cancel())
             }
           case "invocationFinished" =>
             val outcome = Json.requireField(json, "outcome").fold(e => throw BridgeException(e), identity)
@@ -718,13 +726,14 @@ object StreamSession {
                 if (!result.isCompleted) throw BridgeException("invocation finished before its result")
                 if (session.outputs.values().asScala.exists(output => !output.isTerminal)) throw BridgeException("invocation finished before an output terminal")
                 if (!finished.trySuccess(())) throw BridgeException("duplicate invocation finish")
+                session.inputs.values().asScala.foreach(_.stop())
                 closeNormally()
               case "failure" =>
-                StreamSessionProtocol.validateObject(outcome, Set("kind", "code", "message"), "invocation outcome")
-                val error = AgentStreamError(Json.requireField(outcome, "code").flatMap(Json.asString).toOption.get, Json.requireField(outcome, "message").flatMap(Json.asString).toOption.get)
+                val error = StreamSessionProtocol.invocationFailure(outcome)
                 if (session.outputs.values().asScala.exists(output => !output.isTerminal)) throw BridgeException("invocation failure preceded an output terminal")
                 result.tryFailure(error)
                 if (!finished.trySuccess(())) throw BridgeException("duplicate invocation finish")
+                session.inputs.values().asScala.foreach(_.stop())
                 closeNormally()
               case _ => throw BridgeException("invalid invocation outcome")
             }
@@ -978,7 +987,7 @@ object StreamSession {
         session.outputs.values().asScala.foreach { output =>
           if (!output.isTerminal) output.fail(error)
         }
-        session.inputs.values().asScala.foreach(_.consumer.foreach(_.cancel()))
+        session.inputs.values().asScala.foreach(_.stop())
         Option(socket).foreach(_.sendClose(WebSocket.NORMAL_CLOSURE, "cancelled"))
       }
     )

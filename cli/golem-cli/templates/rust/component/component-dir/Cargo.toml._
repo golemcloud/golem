@@ -18,8 +18,8 @@ golem-rust = { GOLEM_RUST_VERSION_OR_PATH, features = ["export_golem_agentic"] }
 serde = { version = "GOLEM_RUST_SERDE_VERSION", features = ["derive"] }
 serde_json = "GOLEM_RUST_SERDE_JSON_VERSION"
 
-# Build the WIT bindings with Golem's forked wit-bindgen, which adds an
-# "outline-lift" optimization that shrinks the giant generated lift/lower
-# wrappers embedded by golem-rust.
+# Build the WIT bindings with the Golem wit-bindgen fork that golem-rust
+# depends on. The fork adds an "outline-lift" optimization that shrinks the
+# giant generated lift/lower wrappers embedded by golem-rust.
 [patch.crates-io]
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0" }
+wit-bindgen = { git = "GOLEM_RUST_WIT_BINDGEN_GIT", rev = "GOLEM_RUST_WIT_BINDGEN_REV", version = "GOLEM_RUST_WIT_BINDGEN_VERSION" }

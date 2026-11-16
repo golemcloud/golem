@@ -110,7 +110,7 @@ media types and direction. Preserve path/query/header bindings and use unique
 path parameter names for the generated session capture. Merge named schemas
 through the existing schema graph and preserve ordinary REST operations.
 
-Use x-golem-route-mode: durable-streams and x-golem-stream-slot metadata.
+Use x-golem-route-mode: durableStreams and x-golem-stream-slot metadata.
 Operation IDs must be stable and unique across families, slots and methods.
 Stream-TTL is a canonical non-negative decimal sliding idle timeout in seconds;
 Stream-Expires-At is a future RFC3339 timestamp. They are mutually exclusive,

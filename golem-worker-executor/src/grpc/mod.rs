@@ -26,7 +26,6 @@ use crate::model::public_oplog::{
     get_public_oplog_page, search_public_oplog_page,
 };
 use crate::model::{LastError, LookupResult};
-use crate::services::events::Event;
 use crate::services::rpc::DurableStreamRemoteError;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
@@ -34,9 +33,9 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplog,
-    HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
-    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasOplog, HasOplogService,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{
     ExportStreamControlResult as DomainExportResult, RetirementReason, Worker, WorkerUpdateMode,
@@ -82,28 +81,25 @@ use golem_common::model::agent::{
     AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, TypedAgentConfigEntry,
 };
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
 use golem_common::model::protobuf::shard_epochs_from_proto;
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor, ShardDeliveryOutcome,
-    ShardEpoch, ShardId, ShardLeaseRevision, Timestamp,
+    AgentStatus, AgentStatusRecord, OwnedAgentId, ScanCursor, ShardDeliveryOutcome, ShardEpoch,
+    ShardId, ShardLeaseRevision, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::clients::shard_manager::ExecutorEndpoint;
 use golem_service_base::error::worker_executor::*;
-use golem_service_base::grpc::{
-    proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
-};
+use golem_service_base::grpc::{proto_agent_id_string, proto_promise_id_string};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
@@ -114,7 +110,6 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};

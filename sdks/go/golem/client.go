@@ -175,6 +175,34 @@ func (a *AgentDefinition[Id, Cfg]) Bind(agentID string) (Client[Id], error) {
 	return bindTypedClient[Id](defs, a.name, agentID)
 }
 
+// BindSelf binds the current durable incarnation without creating it or waiting for initialization.
+//
+// Use this to schedule work on self from inside the constructor. Normal Get reuses an
+// initialized agent without rerunning its constructor, but waits for an unfinished
+// constructor. Calling Get on self from that constructor would therefore deadlock.
+//
+// Scheduled work runs after construction finishes. This does not make awaited self-calls
+// reentrant or bypass method permissions. A different agent type or an ephemeral owner
+// returns an error. Replay preserves the recorded incarnation.
+func (a *AgentDefinition[Id, Cfg]) BindSelf() (Client[Id], error) {
+	return bindSelfClient[Id](a.name)
+}
+
+func bindSelfClient[Id any](name string) (Client[Id], error) {
+	connected, failure := identity.BindSelf(name)
+	if failure != nil {
+		if failure.Stage == identity.ParseStage {
+			return Client[Id]{}, agentErrorToGo(failure.AgentError)
+		}
+		return Client[Id]{}, rpcErrorToGo(name, "<bind-self>", failure.RPCError)
+	}
+	phantom := None[UUID]()
+	if connected.PhantomID.IsSome() {
+		phantom = Some(uuidFromWit(connected.PhantomID.Some()))
+	}
+	return Client[Id]{rpc: connected.RPC, agentType: connected.TypeName, agentID: connected.AgentID, phantomID: phantom}, nil
+}
+
 // AgentID renders the identity of the instance id (and phantom, if any)
 // names, without creating it. It panics on failure, like [AgentDefinition.Get].
 func (a *AgentDefinition[Id, Cfg]) AgentID(id Id, phantom Option[UUID]) string {

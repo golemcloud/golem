@@ -105,6 +105,7 @@ sdks/moonbit/
 │   ├── logging/                       # Structured logging (named loggers, level filtering)
 │   ├── http/                          # HTTP types re-exported from WIT
 │   ├── webhook/                       # Webhook helper (create/await incoming POST via promise)
+│   ├── websocket/                     # Outbound WebSocket client with a reconstruction policy
 │   ├── api/                           # Golem host API re-exports (agents, idempotency, …)
 │   ├── quota/                         # Quota-token helpers
 │   ├── permissions/                   # Typed permission-card API (@permissions)
@@ -222,6 +223,10 @@ The core pattern (in `agents/agents.mbt`):
    `RawAgent::invoke`.
 5. `discover_agent_types()` returns all registered agent types.
 6. `get_definition()` returns the current instance's type.
+
+The guest exports take no principal. The export entry points (`agent-exports`, `tool-exports`,
+`tool-middleware-exports`) read `caller().immediate` from `golem:agent/invocation-context` and pass
+it to `construct`, `RawAgent::invoke`, tool invokers, and middleware invocations.
 
 ### The RawAgent Trait
 

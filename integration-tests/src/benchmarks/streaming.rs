@@ -16,7 +16,7 @@ use crate::benchmarks::{InvokeResult, cleanup_user_state, delete_workers};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
 use golem_common::model::AgentId;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
@@ -42,7 +42,7 @@ pub struct StreamingContext {
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    agent_ids: Vec<ParsedAgentId>,
+    agent_ids: Vec<ParsedAgentKey>,
     chunk_count: u32,
     env_id: EnvironmentId,
 }
@@ -217,7 +217,7 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
 
 async fn invoke_streaming_caller(
     iteration: &IterationContext,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> BenchmarkResultValue<InvokeResult> {
     // Measure the whole request, without retrying or discarding timed-out intervals.
     let started = Instant::now();

@@ -38,7 +38,7 @@ use comfy_table::Color as ComfyColor;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, UpdateRecord};
-use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentId;
@@ -309,11 +309,11 @@ impl AgentMetadata {
     }
 
     pub fn agent_type_name(&self) -> Option<AgentTypeName> {
-        ParsedAgentId::parse_agent_type_name(self.raw_agent_id()).ok()
+        ParsedAgentKey::parse_agent_type_name(self.raw_agent_id()).ok()
     }
 
-    pub fn parsed_agent_id(&self, metadata: &ComponentMetadata) -> Option<ParsedAgentId> {
-        ParsedAgentId::parse(self.raw_agent_id(), metadata).ok()
+    pub fn parsed_agent_id(&self, metadata: &ComponentMetadata) -> Option<ParsedAgentKey> {
+        ParsedAgentKey::parse(self.raw_agent_id(), metadata).ok()
     }
 
     pub fn from(
@@ -392,7 +392,7 @@ pub struct AgentIdMatch {
     pub agent_type_name: AgentTypeName,
     pub agent_id: RawAgentId,
     pub source_language: SourceLanguage,
-    pub parsed_agent_id: Option<ParsedAgentId>,
+    pub parsed_agent_id: Option<ParsedAgentKey>,
 }
 
 impl AgentIdMatch {
@@ -409,7 +409,7 @@ impl AgentIdMatch {
     pub fn with_canonical_and_parsed(
         mut self,
         agent_id: RawAgentId,
-        parsed_agent_id: Option<ParsedAgentId>,
+        parsed_agent_id: Option<ParsedAgentKey>,
     ) -> Self {
         self.agent_id = agent_id;
         self.parsed_agent_id = parsed_agent_id;

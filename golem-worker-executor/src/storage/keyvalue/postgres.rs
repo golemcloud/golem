@@ -128,7 +128,10 @@ impl PostgresKeyValueStorage {
                     agent_id.to_redis_key()
                 )
             }
-            KeyValueStorageNamespace::Promise { .. } => "promises".to_string(),
+            KeyValueStorageNamespace::Promise {
+                agent_id,
+                fingerprint,
+            } => format!("promises:{}:{fingerprint}", agent_id.to_redis_key()),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {
                 environment_id,

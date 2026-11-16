@@ -37,7 +37,7 @@ fn invocation_metadata(
 ) -> InvocationMetadata {
   {
     agent_id: { value: metadata.agent_id, },
-    idempotency_key: metadata.idempotency_key,
+    invocation_id: @rpc.InvocationId::from_host(metadata),
   }
 }
 
@@ -65,6 +65,11 @@ async fn Transport::invoke_value(
   }
   match result {
     Ok(output) => {
+      guard pending.metadata is Some(metadata) else {
+        raise rpc_error(
+          ProtocolError("completed invocation has no invocation metadata"),
+        )
+      }
       let value = match output {
         Some(output) => {
           let decoded = @model_host.schema_value_from_wit(output) catch {
@@ -75,7 +80,7 @@ async fn Transport::invoke_value(
         }
         None => None
       }
-      { metadata: invocation_metadata(pending.metadata), value, }
+      { metadata: invocation_metadata(metadata), value, }
     }
     Err(error) => raise rpc_error(error)
   }

@@ -101,7 +101,7 @@ owns the one replay/tool-generation reset. Acceptance and typed notification are
 | Before `PendingAgentInvocation` commits | nothing | Caller was never told "accepted"; retrying with the same key enqueues once | Acceptance returns only after commit |
 | After `PendingAgentInvocation`, before `AgentInvocationStarted` | pending hint | Status fold sees the pending invocation; the invocation loop runs it | Status is folded from the oplog (`worker/status.rs`) |
 | Mid-invocation | `Started` + prefix of calls | Prefix replays, guest continues live from the tail | Every host input in the prefix is recorded |
-| After `AgentInvocationFinished` commits, before waiters are notified | `Finished` | `lookup_invocation_result(key)` returns the recorded result; the guest does not run | `CommitLevel::Always` before notification |
+| After `AgentInvocationFinished` commits, before waiters are notified | `Finished` | `lookup_invocation_result(invocation_id)` returns the recorded result; the guest does not run | `CommitLevel::Always` before notification |
 | Spawned store task still active at finish | must not happen | `tail_work.rs` blocks `Finished` until no task is active (bounded by tail-drain timeout) | `AgentInvocationFinished` is the last *positional* entry of the invocation; hints (stream session completion) may follow |
 
 ## Durable RPC (`durable_host/rpc/mod.rs`)
@@ -234,7 +234,7 @@ stages do not.
 |---|---|---|---|
 | HTTP request | Between send and `End` | Call-local re-execution policy via `DurableFunctionType`; an `idempotency-key` header derived from the call's own `Start` (`http/policy.rs`, on unless the guest set one) or minted via `golem:api/host.generate-idempotency-key` | A peer that deduplicates on the key; otherwise a safe-to-retry design |
 | TCP connection | Any reconstruction | Recreated socket; recorded bytes replay to the guest | Reconnect / resume protocol |
-| WebSocket connection | Suspend, restart, or crash | Recorded outcomes replay unchanged; optional third connect parameter defaults to `reconnect-automatically`, or `report-connection-loss` terminalizes a reconstructed successful handle with `SessionLost` at live access without a handshake | Reconnect / resume protocol, or supervise a new guest session generation with explicit connect and initialization; loss is not proof an earlier send was undelivered |
+| WebSocket connection | Suspend, restart, or crash | Recorded outcomes replay unchanged; optional third connect parameter defaults to `report-connection-loss`, which terminalizes a reconstructed successful handle with `SessionLost` at live access without a handshake; an explicit `reconnect-automatically` reconnects with the same URL and headers | Reconnect / resume protocol, or supervise a new guest session generation with explicit connect and initialization; loss is not proof an earlier send was undelivered |
 | Filesystem, stdio | Any crash | Recorded stream chunks replay; live tail continues | Nothing for replay; effects outside the worker filesystem are the app's problem |
 | Key-value / blob store | Between write and `End` | Same as HTTP; writes are re-executable when idempotent by construction | Value-level idempotency for non-idempotent writes |
 

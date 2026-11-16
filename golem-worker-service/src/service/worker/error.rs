@@ -140,6 +140,14 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                     code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
                 })
             }
+            WorkerServiceError::GolemError(WorkerExecutorError::InvalidRequest { ref details })
+                if details.starts_with("IdempotencyConflict:") =>
+            {
+                Self::BadRequest(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                    code: api::error_code::IDEMPOTENCY_CONFLICT.to_string(),
+                })
+            }
 
             WorkerServiceError::BadFileType(_) => Self::BadRequest(ErrorsBody {
                 errors: vec![error.to_safe_string()],

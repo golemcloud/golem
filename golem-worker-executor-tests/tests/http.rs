@@ -37,6 +37,7 @@ use tokio::time::{Duration, timeout};
 use tracing::Instrument;
 
 mod concurrent_recovery;
+mod sse_source_recovery;
 mod transition_probe;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -846,6 +847,29 @@ impl std::fmt::Debug for PartitionedStarts {
             .field("ended", &self.ended)
             .field("incomplete", &self.incomplete)
             .finish()
+    }
+}
+
+async fn wait_for_oplog(
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    description: &str,
+    predicate: impl Fn(&[golem_common::model::oplog::PublicOplogEntryWithIndex]) -> bool,
+) -> anyhow::Result<Vec<golem_common::model::oplog::PublicOplogEntryWithIndex>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        // A pending chunk's Start can follow the guest's last commit. Flush the resident
+        // buffer so this checkpoint observes a durable prefix, not the commit race.
+        executor.commit_oplog(worker_id).await?;
+        let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+        if predicate(&oplog) {
+            return Ok(oplog);
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the oplog to show {description}: {oplog:#?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -3690,7 +3714,11 @@ async fn outgoing_http_contains_idempotency_key(
     // physical host-call `Start` index. Derive the expectation from that persisted index rather
     // than from a fixed position, because unrelated invocation bookkeeping may add or remove
     // entries before the send without changing this contract.
-    let expected_key = IdempotencyKey::derived(&key, sends.ended[0]);
+    let stored_key = executor
+        .external_invocation_key(&worker_id, &key, "run")
+        .await?;
+    let expected_key =
+        IdempotencyKey::derived(&IdempotencyKey::new(stored_key.to_string()), sends.ended[0]);
     let expected_response = format!(
         "200 ExampleResponse {{ percentage: 0.0, message: Some(\"{}\") }}",
         expected_key.value

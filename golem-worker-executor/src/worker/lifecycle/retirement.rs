@@ -211,7 +211,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let unload_reason = interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt);
         self.stop_internal(
-            false,
+            StopOrigin::External,
             None,
             UnloadRequest::ordinary(unload_reason),
             FinalWorkerState::Unloaded {
@@ -220,7 +220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             PendingLiveInvocationDisposition::Fail,
         )
         .await;
-        if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
+        if let WorkerInstance::CleanupFailed(error) = self.instance.lock().await.state() {
             return Err(error.clone());
         }
         self.owner_execution

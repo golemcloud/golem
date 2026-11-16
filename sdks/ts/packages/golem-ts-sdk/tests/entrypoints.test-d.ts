@@ -17,6 +17,7 @@
 
 import {
   ComponentId,
+  InvocationId,
   ParsedAgentId,
   Uuid,
   defineAgentClient,
@@ -104,7 +105,7 @@ ephemeralDefinition.client
   .ping()
   .then(({ metadata, value }) => {
     metadata.agentId satisfies string;
-    metadata.idempotencyKey satisfies string;
+    metadata.invocationId satisfies InvocationId;
     value satisfies string;
   });
 

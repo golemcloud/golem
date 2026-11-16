@@ -442,39 +442,46 @@ fn get_agent_type_with_remote_client(
                     quote! { (#k.to_string(), #v.to_string()) }
                 });
 
+                let mode = parsed.mode.as_deref().map_or_else(|| quote! { None }, |mode| {
+                    let variant = match mode {
+                        "durableStreams" => quote! { DurableStreams },
+                        "plain" => quote! { Plain },
+                        "sse" => quote! { Sse },
+                        "webSocket" => quote! { WebSocket },
+                        _ => unreachable!("validated route mode"),
+                    };
+                    quote! { Some(golem_rust::golem_schema::http::wit::wire::HttpRouteMode::#variant) }
+                });
+
                 let durable_streams = if let Some(options) = &parsed.durable_streams {
                     let slots = options.slots.iter().map(|slot| {
                         let selector = &slot.slot;
                         let source = match slot.source {
                             ParsedDurableStreamSlotSource::Input => quote! {
-                                golem_rust::golem_agentic::golem::agent::common::DurableStreamSlotSource::Input(#selector.to_string())
+                                golem_rust::golem_schema::http::wit::wire::DurableStreamSlotSource::Input(#selector.to_string())
                             },
                             ParsedDurableStreamSlotSource::Output => quote! {
-                                golem_rust::golem_agentic::golem::agent::common::DurableStreamSlotSource::Output(#selector.to_string())
+                                golem_rust::golem_schema::http::wit::wire::DurableStreamSlotSource::Output(#selector.to_string())
                             },
                         };
                         let name = slot.name.as_ref().map_or_else(|| quote! { None }, |value| quote! { Some(#value.to_string()) });
                         let content_type = slot.content_type.as_ref().map_or_else(|| quote! { None }, |value| quote! { Some(#value.to_string()) });
                         quote! {
-                            golem_rust::golem_agentic::golem::agent::common::DurableStreamSlotOptions {
+                            golem_rust::golem_schema::http::wit::wire::DurableStreamSlotOptions {
                                 source: #source,
                                 name: #name,
                                 content_type: #content_type,
                             }
                         }
                     });
-                    let bool_option = |value: Option<bool>| value.map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
                     let u32_option = |value: Option<u32>| value.map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
-                    let allow_external_writes = bool_option(options.allow_external_writes);
-                    let allow_stream_delete = bool_option(options.allow_stream_delete);
-                    let allow_invocation_delete = bool_option(options.allow_invocation_delete);
                     let has_load = options.max_concurrent_readers_per_stream.is_some()
                         || options.max_append_requests_per_second_per_stream.is_some();
                     let readers = u32_option(options.max_concurrent_readers_per_stream);
                     let appends = u32_option(options.max_append_requests_per_second_per_stream);
                     let load = if has_load {
                         quote! {
-                            Some(golem_rust::golem_agentic::golem::agent::common::DurableStreamRouteLoadOptions {
+                            Some(golem_rust::golem_schema::http::wit::wire::DurableStreamRouteLoadOptions {
                                 max_concurrent_readers_per_stream: #readers,
                                 max_append_requests_per_second_per_stream: #appends,
                             })
@@ -483,11 +490,8 @@ fn get_agent_type_with_remote_client(
                         quote! { None }
                     };
                     quote! {
-                        Some(golem_rust::golem_agentic::golem::agent::common::DurableStreamRouteOptions {
+                        Some(golem_rust::golem_schema::http::wit::wire::DurableStreamRouteOptions {
                             slots: vec![#(#slots),*],
-                            allow_external_writes: #allow_external_writes,
-                            allow_stream_delete: #allow_stream_delete,
-                            allow_invocation_delete: #allow_invocation_delete,
                             load: #load,
                         })
                     }
@@ -495,16 +499,18 @@ fn get_agent_type_with_remote_client(
                     quote! { None }
                 };
 
-                quote! {
-                    golem_rust::agentic::get_http_endpoint_details(
+                quote! {{
+                    let mut endpoint = golem_rust::agentic::get_http_endpoint_details(
                         #method,
                         #path,
                         #auth,
                         vec![#(#cors_options_tokens),*],
                         vec![#(#header_vars_tokens),*],
                         #durable_streams,
-                    ).expect("Invalid HTTP endpoint configuration")
-                }
+                    ).expect("Invalid HTTP endpoint configuration");
+                    endpoint.mode = #mode;
+                    endpoint
+                }}
             });
 
             let endpoint_details = quote! {

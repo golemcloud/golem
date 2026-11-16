@@ -56,9 +56,6 @@ const durableStreams: Http.DurableStreamOptions = {
     { source: "input", slot: "input", name: "messages" },
     { source: "output", slot: "$result", contentType: "application/json" },
   ],
-  allowExternalWrites: false,
-  allowStreamDelete: false,
-  allowInvocationDelete: false,
   load: {
     maxConcurrentReadersPerStream: 8,
     maxAppendRequestsPerSecondPerStream: 25,
@@ -68,8 +65,8 @@ void Http.post("/streams", { durableStreams })
 void Http.endpoint("POST", "/streams", { durableStreams })
 void Http.post("/streams").pipe(Http.withDurableStreams(durableStreams))
 
-// @ts-expect-error slots are required
-void Http.post("/streams", { durableStreams: { allowExternalWrites: true } })
+// @ts-expect-error operation switches are not route options
+void Http.post("/streams", { durableStreams: { slots: [], allowExternalWrites: true } })
 // @ts-expect-error source is a closed input/output discriminator
 void Http.post("/streams", { durableStreams: { slots: [{ source: "result", slot: "x" }] } })
 // @ts-expect-error canonical slot is required

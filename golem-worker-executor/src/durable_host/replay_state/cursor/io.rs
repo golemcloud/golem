@@ -64,12 +64,12 @@ impl ReplayCursor {
         self.replay_target.get()
     }
 
-    pub(in crate::durable_host::replay_state) fn is_live(&self) -> bool {
+    pub(in crate::durable_host::replay_state) fn at_replay_tail(&self) -> bool {
         self.last_replayed_index() == self.replay_target()
     }
 
-    pub(in crate::durable_host::replay_state) fn is_replay(&self) -> bool {
-        !self.is_live()
+    pub(in crate::durable_host::replay_state) fn has_replay_remaining(&self) -> bool {
+        !self.at_replay_tail()
     }
 
     pub(in crate::durable_host::replay_state) async fn read_oplog(

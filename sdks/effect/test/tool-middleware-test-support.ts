@@ -119,7 +119,7 @@ export const startMiddleware = <I extends (...args: any[]) => Promise<any>>(
       return terminal
     },
   }
-  if (args.length === 10) args.splice(8, 0, undefined)
+  if (args.length === 9) args.splice(8, 0, undefined)
   args[7] = writer as Streams.ToolOutputWriter
   return { completion: invoke(...(args as Parameters<I>)), stdout }
 }

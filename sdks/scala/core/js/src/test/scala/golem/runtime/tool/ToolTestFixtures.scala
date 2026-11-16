@@ -30,12 +30,30 @@ import golem.schema.{
 import golem.tool._
 
 import scala.collection.immutable.ListMap
+import scala.scalajs.js
 
 /**
  * Shared `ExtendedToolType` builders for the tool registry / guest / interop
  * specs.
  */
 object ToolTestFixtures {
+
+  /**
+   * Runs `call` while the test host's `invocation-context.caller` reports
+   * `immediate` as the immediate principal. Guest exports read the caller
+   * synchronously at their entry point.
+   */
+  def withImmediateCaller[A](immediate: js.Dynamic)(call: => A): A = {
+    val global                       = js.Dynamic.global.globalThis
+    val previous                     = global.selectDynamic("__golemScalaTestHost")
+    val caller: js.Function0[js.Any] = () =>
+      js.Dynamic.literal("original" -> js.Dynamic.literal("tag" -> "anonymous"), "immediate" -> immediate)
+    global.updateDynamic("__golemScalaTestHost")(
+      js.Dynamic.global.Object.assign(js.Dynamic.literal(), previous, js.Dynamic.literal("caller" -> caller))
+    )
+    try call
+    finally global.updateDynamic("__golemScalaTestHost")(previous)
+  }
 
   def doc(summary: String): Doc = Doc(summary, "")
 

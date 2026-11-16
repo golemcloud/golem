@@ -23,14 +23,13 @@ use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use golem_common::model::AgentFingerprint;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::OwnedInvocationId;
 use golem_common::model::RetryProperties;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::card::PermissionTarget;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
@@ -80,20 +79,10 @@ pub struct CancellationTokenEntry {
     pub recipient: OwnedAgentId,
 }
 
-struct OutboundRpcDenial {
-    error: RpcError,
-    activation_decision: Option<IdempotencyKey>,
-}
-
-enum RpcTargetAdmission {
-    Recorded,
-    LiveOnly(Box<PermissionTarget>),
-}
-
 #[derive(Clone)]
 struct PreparedRpcInvocation {
     logical_remote_agent_id: OwnedAgentId,
-    ephemeral_logical_agent_id: Option<ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
     connection_span_id: SpanId,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
@@ -125,6 +114,7 @@ struct TaskRetryParams<Ctx: WorkerCtx> {
     worker: Arc<crate::worker::Worker<Ctx>>,
     retry_point: OplogIndex,
     entity_parent_start_index: Option<OplogIndex>,
+    invocation_id: Option<golem_common::model::InvocationId>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 }
 
@@ -147,7 +137,7 @@ struct DurableStreamingTaskParams {
 
 pub struct WasmRpcEntryPayload {
     pub remote_agent_id: OwnedAgentId,
-    pub ephemeral_logical_agent_id: Option<ParsedAgentId>,
+    pub ephemeral_logical_agent_id: Option<ParsedAgentKey>,
     pub span_id: SpanId,
     /// Absent for snapshot-created resources whose span opening was not persisted.
     pub creation_index: Option<OplogIndex>,
@@ -167,10 +157,6 @@ pub enum WasmRpcTargetActivation {
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
     },
-    DeferredDurable {
-        env: Vec<(String, String)>,
-        config: Vec<AgentConfigEntryDto>,
-    },
     Activated {
         #[allow(dead_code)]
         demand: Box<dyn RpcDemand>,
@@ -187,7 +173,7 @@ pub enum WasmRpcTargetActivation {
 
 #[derive(Clone)]
 struct RpcTargetActivation {
-    target_fingerprint: Option<AgentFingerprint>,
+    target_fingerprint: AgentFingerprint,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
 }
@@ -225,10 +211,14 @@ enum FutureInvokeResultState {
         task: Option<FutureInvokeTaskHandle>,
         streaming: Option<DurableStreamingTaskParams>,
         request: HostRequestGolemRpcInvoke,
+        invocation_id: OwnedInvocationId,
         remote_agent_id: OwnedAgentId,
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
         deferred_activation: Option<RpcTargetActivation>,
+        /// The incarnation each scalar dispatch of the call is pinned to. `None` for an ephemeral
+        /// target, and for a streaming call, which carries the fingerprint in `streaming`.
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         span_id: SpanId,
         cancel_token: tokio_util::sync::CancellationToken,
     },

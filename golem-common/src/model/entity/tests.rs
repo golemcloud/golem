@@ -451,27 +451,41 @@ fn invocation_scope_protobuf_roundtrip_preserves_activation_fingerprint() {
             agent_id: owner.agent_id,
         }),
         InvocationExecutionMode::ReplayingCompleted,
-        IdempotencyKey::new("scope-protobuf-seed".to_string()),
+        InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543210)),
         true,
-        IdempotencyKey::new("scope-stream-seed".to_string()),
+        InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543211)),
     )
     .unwrap();
 
     let protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope =
         scope.clone().into();
+    let execution_id = protobuf.idempotency_key.as_ref().unwrap();
+    assert_eq!(execution_id.high_bits, 0x0123456789abcdef);
+    assert_eq!(execution_id.low_bits, 0xfedcba9876543210);
+    let session_id = protobuf.stream_session_idempotency_key.as_ref().unwrap();
+    assert_eq!(session_id.high_bits, 0x0123456789abcdef);
+    assert_eq!(session_id.low_bits, 0xfedcba9876543211);
     let decoded: EntityInvocationScope = protobuf.try_into().unwrap();
     let json = serde_json::to_string(&scope).unwrap();
     let json_decoded: EntityInvocationScope = serde_json::from_str(&json).unwrap();
 
     assert_eq!(decoded, scope);
     assert_eq!(json_decoded, scope);
-    assert_eq!(scope.idempotency_key().value, "scope-protobuf-seed");
     assert_eq!(
-        scope.stream_session_idempotency_key().value,
-        "scope-stream-seed"
+        scope.idempotency_key().0.as_u128(),
+        0x0123456789abcdef_fedcba9876543210
+    );
+    assert_eq!(
+        scope.stream_session_idempotency_key().0.as_u128(),
+        0x0123456789abcdef_fedcba9876543211
     );
     assert_eq!(scope.mode(), InvocationExecutionMode::ReplayingCompleted);
     assert!(scope.logical_key_positions());
+    for field in ["idempotencyKey", "streamSessionIdempotencyKey"] {
+        let mut invalid = serde_json::to_value(&scope).unwrap();
+        invalid[field] = serde_json::json!("arbitrary-session-seed");
+        assert!(serde_json::from_value::<EntityInvocationScope>(invalid).is_err());
+    }
 }
 
 #[test]
@@ -492,9 +506,9 @@ fn invocation_scope_protobuf_requires_idempotency_key() {
             agent_id: owner.agent_id,
         }),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("required-protobuf-seed".to_string()),
+        InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543212)),
         false,
-        IdempotencyKey::new("required-stream-seed".to_string()),
+        InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543213)),
     )
     .unwrap();
     let mut protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope = scope.into();
@@ -525,9 +539,9 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
             agent_id: owner.agent_id.clone(),
         }),
         InvocationExecutionMode::ReplayingIncomplete,
-        IdempotencyKey::new("middleware-roundtrip-seed".to_string()),
+        InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543214)),
         true,
-        IdempotencyKey::new("middleware-stream-seed".to_string()),
+        InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543215)),
     )
     .unwrap();
     let request = EntityInvocationRequest {
@@ -697,9 +711,9 @@ fn mcp_activation_is_pinned_and_bound_to_bridge_revision_and_owner_environment()
                 agent_id: owner.agent_id,
             }),
             InvocationExecutionMode::ReplayingCompleted,
-            IdempotencyKey::new("mcp-activation-scope-seed".to_string()),
+            InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543216)),
             true,
-            IdempotencyKey::new("mcp-activation-stream-seed".to_string()),
+            InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543217)),
         )
     };
     assert!(make_scope(owner.clone()).is_ok());
@@ -889,9 +903,9 @@ fn invocation_scope_rejects_parent_that_does_not_precede_invocation_start() {
             activation.clone(),
             principal.clone(),
             InvocationExecutionMode::Live,
-            IdempotencyKey::new("invalid-parent-scope-seed".to_string()),
+            InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543218)),
             true,
-            IdempotencyKey::new("invalid-parent-stream-seed".to_string()),
+            InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543219)),
         );
 
         assert!(
@@ -933,5 +947,36 @@ fn activation_rejects_executable_that_differs_from_binding_source() {
     assert_eq!(
         result.unwrap_err(),
         "Entity executable does not match the tool binding source"
+    );
+}
+
+#[test]
+fn entity_tool_middleware_name_desert_decodes_and_re_encodes_stored_names() {
+    // Older versions stored names as sent, so a stored name may break the rules.
+    assert!(ToolMiddlewareName::try_from("Audit_Log").is_err());
+    let stored = desert_rust::serialize_to_byte_vec(&"Audit_Log".to_string()).unwrap();
+    let decoded = desert_rust::deserialize::<ToolMiddlewareName>(&stored).unwrap();
+    assert_eq!(decoded.as_str(), "Audit_Log");
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&decoded).unwrap(),
+        stored
+    );
+
+    let valid = ToolMiddlewareName::try_from("audit-log").unwrap();
+    let valid_bytes = desert_rust::serialize_to_byte_vec(&"audit-log".to_string()).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<ToolMiddlewareName>(&valid_bytes).unwrap(),
+        valid
+    );
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&valid).unwrap(),
+        valid_bytes
+    );
+
+    let entity = AgentEntity::ToolMiddleware(valid);
+    let bytes = desert_rust::serialize_to_byte_vec(&entity).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<AgentEntity>(&bytes).unwrap(),
+        entity
     );
 }

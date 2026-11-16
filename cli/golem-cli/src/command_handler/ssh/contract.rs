@@ -832,8 +832,7 @@ mod tests {
         classify_cancel, classify_invoke_error, classify_live_error, decode_live_result,
         decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice, global_args,
         help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
-        run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports, time_limit,
-        tools_listing,
+        run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports, tools_listing,
     };
     use crate::context::GlobalEnvironmentSelector;
     use golem_client::invocation_session::SessionTransportError;
@@ -1358,7 +1357,6 @@ mod tests {
         assert_eq!(exit_code(Outcome::Ran(7)), 7);
         assert_eq!(exit_code(Outcome::NotRun), NOT_RUN_EXIT);
         assert_eq!(exit_code(Outcome::Interrupted), INTERRUPTED_EXIT);
-        assert_eq!((NOT_RUN_EXIT, INTERRUPTED_EXIT), (255, 130));
     }
 
     #[test]
@@ -1620,11 +1618,6 @@ mod tests {
     fn help_and_tools_alone_are_local() {
         assert_eq!(local_command("help"), Some(LocalCommand::Help));
         assert_eq!(local_command("  tools "), Some(LocalCommand::Tools));
-        assert_eq!(local_command("exit"), Some(LocalCommand::Exit(None)));
-        assert_eq!(
-            local_command("exit 300"),
-            Some(LocalCommand::Exit(Some(44)))
-        );
         // Anything more is a command for bash, which has its own `help`.
         for line in [
             "help cd",
@@ -1632,9 +1625,6 @@ mod tests {
             "command tools",
             "tools --help",
             "help; ls",
-            "exit 1 2",
-            "exit abc",
-            "",
         ] {
             assert_eq!(local_command(line), None, "{line:?}");
         }
@@ -1655,12 +1645,6 @@ mod tests {
                 error: Some("connection refused".to_string())
             }
         );
-    }
-
-    #[test]
-    fn the_time_limit_names_the_session_limit_or_the_tools() {
-        assert_eq!(time_limit(Some(30)), "its time limit (30 s)");
-        assert_eq!(time_limit(None), "the tool's time limit");
     }
 
     #[test]

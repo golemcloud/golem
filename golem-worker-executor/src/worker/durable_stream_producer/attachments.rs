@@ -149,7 +149,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut first_error = None;
         for (key, metadata) in sessions {
             let session_reference = if metadata.prepared_position().is_some() {
-                StreamRegistrationInvocation::Local(key.idempotency_key.clone())
+                StreamRegistrationInvocation::Local(key.idempotency_key)
             } else {
                 StreamRegistrationInvocation::Remote(key.clone())
             };
@@ -235,7 +235,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     || attached.epoch == 0
                     || attached.attachment_id != prepared.attempt.attachment_id
                     || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
-                        OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == key.idempotency_key)
+                        OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == key.idempotency_key)
                 {
                     return Err(WorkerExecutorError::runtime(
                         "durable Attached record does not exactly identify its Prepared attempt and pending invocation",
@@ -391,30 +391,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             })?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
-        let consumer_status = if let StreamAttachmentControlOperation::Cancel {
-            role,
-            reason,
-            details,
-            ..
-        } = &request.operation
-        {
-            let intent = golem_common::model::durable_stream::StreamConsumerCancelIntentRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Remote(key.session_key.clone()),
-                consumer_invocation: key.consumer_invocation.idempotency_key.clone(),
-                source: StreamRecordReference::Foreign(mapping.handle.clone()),
-                epoch: key.epoch,
-                role: *role,
-                reason: *reason,
-                details: details.clone(),
-            };
-            probe
-                .committed_cancellation_status(key, mapping, &intent)
-                .await
-        } else {
-            probe.status_exact(key, Some(mapping)).await
-        }
-        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        let consumer_status =
+            if let StreamAttachmentControlOperation::Cancel { cancellation, .. } =
+                &request.operation
+            {
+                let intent =
+                    golem_common::model::durable_stream::StreamConsumerCancelIntentRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: StreamRegistrationInvocation::Remote(key.session_key.clone()),
+                        consumer_invocation: key.consumer_invocation.idempotency_key,
+                        source: StreamRecordReference::Foreign(mapping.handle.clone()),
+                        epoch: key.epoch,
+                        cancellation: cancellation.clone(),
+                    };
+                probe
+                    .committed_cancellation_status(key, mapping, &intent)
+                    .await
+            } else {
+                probe.status_exact(key, Some(mapping)).await
+            }
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let authorized = match &request.operation {
             StreamAttachmentControlOperation::Prepare { .. } => matches!(
                 consumer_status,
@@ -451,39 +447,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             StreamAttachmentControlOperation::Detach { key } => {
                 producer.detach_attachment(&key).await.map(|_| false)
             }
-            StreamAttachmentControlOperation::Cancel {
-                key,
-                role,
-                reason,
-                details,
-            } => {
-                let role_matches = match mapping.role.direction() {
-                    SessionStreamRole::Input => matches!(
-                        role,
-                        golem_common::model::durable_stream::StreamCancelRole::InputProducer
-                            | golem_common::model::durable_stream::StreamCancelRole::InputConsumer
-                    ),
-                    SessionStreamRole::Output => matches!(
-                        role,
-                        golem_common::model::durable_stream::StreamCancelRole::OutputProducer
-                            | golem_common::model::durable_stream::StreamCancelRole::OutputConsumer
-                    ),
-                    SessionStreamRole::ToolStdin
-                    | SessionStreamRole::ToolStdout
-                    | SessionStreamRole::ToolStderr => unreachable!(),
-                };
-                if !role_matches {
+            StreamAttachmentControlOperation::Cancel { key, cancellation } => {
+                if mapping.role.direction() != cancellation.direction {
                     return Err(WorkerExecutorError::invalid_request(
                         "durable stream cancellation role does not match its session mapping",
                     )
                     .into());
                 }
                 let source = &mapping.handle.source_invocation;
-                if matches!(
-                    role,
-                    golem_common::model::durable_stream::StreamCancelRole::OutputConsumer
-                        | golem_common::model::durable_stream::StreamCancelRole::InputConsumer
-                ) && source.callee_environment_id == self.owned_agent_id.environment_id
+                if cancellation.side
+                    == golem_common::model::durable_stream::StreamEndpointSide::Consumer
+                    && source.callee_environment_id == self.owned_agent_id.environment_id
                     && source.callee == self.owned_agent_id.agent_id
                     && source.callee_fingerprint == self.initial_worker_metadata.fingerprint
                     && producer
@@ -518,7 +492,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         });
                 }
                 producer
-                    .cancel_open(None, key.stream_id, role, reason, details)
+                    .cancel_open(
+                        None,
+                        key.stream_id,
+                        cancellation.authored_by,
+                        cancellation.terminal,
+                    )
                     .await
                     .map(|_| false)
             }

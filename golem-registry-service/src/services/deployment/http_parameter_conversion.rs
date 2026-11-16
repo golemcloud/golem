@@ -582,6 +582,7 @@ mod test {
             })],
             query_vars: vec![],
             header_vars: vec![],
+            mode: None,
             durable_streams: None,
         };
 
@@ -806,6 +807,7 @@ mod test {
                 variable_name: "page_size".into(),
             }],
             header_vars: vec![],
+            mode: None,
             durable_streams: None,
         };
 
@@ -840,6 +842,7 @@ mod test {
                 variable_name: "pageSize".into(),
             }],
             header_vars: vec![],
+            mode: None,
             durable_streams: None,
         };
 
@@ -874,6 +877,7 @@ mod test {
                 header_name: "x-api-key".into(),
                 variable_name: "x_api_key".into(),
             }],
+            mode: None,
             durable_streams: None,
         };
 
@@ -967,6 +971,7 @@ mod test {
             path_suffix: vec![],
             query_vars: vec![],
             header_vars: vec![],
+            mode: None,
             durable_streams: None,
         }
     }

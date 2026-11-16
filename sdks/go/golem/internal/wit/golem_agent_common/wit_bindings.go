@@ -33,6 +33,7 @@
 package golem_agent_common
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
@@ -44,6 +45,8 @@ type MetadataEnvelope = golem_core_types.MetadataEnvelope
 type AgentId = golem_core_types.AgentId
 type AccountId = golem_core_types.AccountId
 type ComponentId = golem_core_types.ComponentId
+type HttpRouteMode = golem_core_http.HttpRouteMode
+type DurableStreamRouteOptions = golem_core_http.DurableStreamRouteOptions
 type Duration = uint64
 
 const (
@@ -287,59 +290,6 @@ type CorsOptions struct {
 }
 
 const (
-	DurableStreamSlotSourceInput  uint8 = 0
-	DurableStreamSlotSourceOutput uint8 = 1
-)
-
-type DurableStreamSlotSource struct {
-	tag   uint8
-	value any
-}
-
-func (self DurableStreamSlotSource) Tag() uint8 {
-	return self.tag
-}
-
-func (self DurableStreamSlotSource) Input() string {
-	if self.tag != DurableStreamSlotSourceInput {
-		panic("tag mismatch")
-	}
-	return self.value.(string)
-}
-func (self DurableStreamSlotSource) Output() string {
-	if self.tag != DurableStreamSlotSourceOutput {
-		panic("tag mismatch")
-	}
-	return self.value.(string)
-}
-
-func MakeDurableStreamSlotSourceInput(value string) DurableStreamSlotSource {
-	return DurableStreamSlotSource{DurableStreamSlotSourceInput, value}
-}
-func MakeDurableStreamSlotSourceOutput(value string) DurableStreamSlotSource {
-	return DurableStreamSlotSource{DurableStreamSlotSourceOutput, value}
-}
-
-type DurableStreamSlotOptions struct {
-	Source      DurableStreamSlotSource
-	Name        witTypes.Option[string]
-	ContentType witTypes.Option[string]
-}
-
-type DurableStreamRouteLoadOptions struct {
-	MaxConcurrentReadersPerStream       witTypes.Option[uint32]
-	MaxAppendRequestsPerSecondPerStream witTypes.Option[uint32]
-}
-
-type DurableStreamRouteOptions struct {
-	Slots                 []DurableStreamSlotOptions
-	AllowExternalWrites   witTypes.Option[bool]
-	AllowStreamDelete     witTypes.Option[bool]
-	AllowInvocationDelete witTypes.Option[bool]
-	Load                  witTypes.Option[DurableStreamRouteLoadOptions]
-}
-
-const (
 	HttpMethodGet     uint8 = 0
 	HttpMethodHead    uint8 = 1
 	HttpMethodPost    uint8 = 2
@@ -505,7 +455,8 @@ type HttpEndpointDetails struct {
 	QueryVars      []QueryVariable
 	AuthDetails    witTypes.Option[AuthDetails]
 	CorsOptions    CorsOptions
-	DurableStreams witTypes.Option[DurableStreamRouteOptions]
+	Mode           witTypes.Option[golem_core_http.HttpRouteMode]
+	DurableStreams witTypes.Option[golem_core_http.DurableStreamRouteOptions]
 }
 
 type AgentMethod struct {
@@ -585,6 +536,14 @@ func MakePrincipalGolemUser(value GolemUserPrincipal) Principal {
 }
 func MakePrincipalAnonymous() Principal {
 	return Principal{PrincipalAnonymous, nil}
+}
+
+// The principals that caused an invocation.
+type Caller struct {
+	// The principal at the root of the call tree.
+	Original Principal
+	// The principal that made this call.
+	Immediate Principal
 }
 
 type AgentConstructor struct {

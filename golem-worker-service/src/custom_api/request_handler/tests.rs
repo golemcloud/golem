@@ -613,6 +613,7 @@ fn durable_stream_routes() -> CompiledRoutes {
         route_mode: AgentRouteMode::DurableStreams,
         base_path_variables: 0,
         durable_streams: Some(DurableStreamRoutePolicy {
+            family_id: 1,
             slots: vec![
                 DurableStreamSlot {
                     canonical_name: "$result".into(),
@@ -666,7 +667,8 @@ fn durable_stream_routes() -> CompiledRoutes {
     let cors = CorsOptions {
         allowed_patterns: vec![OriginPattern("https://client.example".to_string())],
     };
-    let route_family = |prefix: &str, route_id_offset: i32, behaviour: CallAgentBehaviour| {
+    let route_family = |prefix: &str, route_id_offset: i32, mut behaviour: CallAgentBehaviour| {
+        behaviour.durable_streams.as_mut().unwrap().family_id = route_id_offset + 1;
         let session_path = vec![
             PathSegment::Literal {
                 value: prefix.into(),
@@ -774,6 +776,13 @@ fn durable_stream_routes() -> CompiledRoutes {
             route(
                 route_id_offset + 7,
                 HttpMethod::Put(Empty {}),
+                fork_slot_path.clone(),
+                RequestBodySchema::Unused,
+                behaviour.clone(),
+            ),
+            route(
+                route_id_offset + 8,
+                HttpMethod::Delete(Empty {}),
                 fork_slot_path,
                 RequestBodySchema::Unused,
                 behaviour,
@@ -1039,6 +1048,16 @@ async fn durable_stream_operation_policy_is_isolated_per_route_family() {
     let control = controls[0].export_control.as_ref().unwrap();
     assert_eq!(control.session, session);
     assert_eq!(control.slot.as_deref(), Some("$result"));
+    let (environment, revision, route): (String, String, String) =
+        serde_json::from_str(&control.route_scope).unwrap();
+    let expected_environment: EnvironmentId = controls[0]
+        .producer_environment_id
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(environment, expected_environment.to_string());
+    assert_eq!(revision, DeploymentRevision::INITIAL.to_string());
+    assert_eq!(route, "11");
 
     let response = handler.handle_request(request("stream")).await.unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
@@ -1118,8 +1137,8 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let source_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
-    let named_fork = |root: &str, name: &str| {
-        let hash = blake3::hash(format!("{root}\0{name}").as_bytes());
+    let named_fork = |root: &str, scope: &str, name: &str| {
+        let hash = blake3::hash(&serde_json::to_vec(&(root, scope, name)).unwrap());
         let mut bytes: [u8; 16] = hash.as_bytes()[..16].try_into().unwrap();
         bytes[6] = (bytes[6] & 15) | 64;
         bytes[8] = (bytes[8] & 63) | 128;
@@ -1250,14 +1269,14 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 assert_eq!(
                     forks[0].source_agent_id.as_ref().unwrap().name,
                     if nested {
-                        named_fork(&root_id, &source_fork)
+                        named_fork(&root_id, &forks[0].route_scope, &source_fork)
                     } else {
                         root_id.clone()
                     }
                 );
                 assert_eq!(
                     forks[0].target_agent_id.as_ref().unwrap().name,
-                    named_fork(&root_id, &target_fork)
+                    named_fork(&root_id, &forks[0].route_scope, &target_fork)
                 );
                 assert_eq!(forks[0].source_path, source);
             }
@@ -1452,6 +1471,26 @@ async fn durable_stream_successful_fork_preserves_partial_utf8_byte_prefix() {
         response.into_body().into_bytes().await.unwrap().as_ref(),
         [0xe2, 0x82]
     );
+
+    let response = handler
+        .handle_request(
+            Request::builder()
+                .method(http::Method::DELETE)
+                .uri(format!("http://ds.example{fork_path}").parse().unwrap())
+                .header(http::header::HOST, "ds.example")
+                .header("x-golem-session", "{}")
+                .finish(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let controls = harness.recorded_durable_stream_controls();
+    assert_eq!(controls.len(), 1);
+    assert_eq!(controls[0].producer_agent_id, forks[0].target_agent_id);
+    let control = controls[0].export_control.as_ref().unwrap();
+    assert_eq!(control.route_scope, forks[0].route_scope);
+    assert_eq!(control.session, session);
+    assert_eq!(control.slot.as_deref(), Some("input"));
 }
 
 #[test]

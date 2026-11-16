@@ -180,8 +180,7 @@ pub(super) fn calculate_latest_worker_status(
             OplogEntry::ToolAttachmentRead { .. } => {}
             OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately

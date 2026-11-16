@@ -95,7 +95,7 @@ impl DurableStreamsHandler {
             let route_key = route_stream_load_key(
                 route.route.environment_id,
                 route.route.deployment_revision,
-                route.route.route_id,
+                super::route_family_id(route),
                 agent_id,
                 &session,
                 &slot,
@@ -143,7 +143,7 @@ impl DurableStreamsHandler {
                 head.next_offset = head.head_offset.clone();
                 head.up_to_date = true;
                 let from = head.head_offset.clone();
-                pinned_invocation_key = head.invocation_key.clone();
+                pinned_invocation_key = head.invocation_key;
                 tail = Some(head);
                 from
             }
@@ -209,6 +209,7 @@ impl DurableStreamsHandler {
                 agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(route.route.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
+                route_scope: super::route_scope(route),
                 session,
                 slot,
                 from_offset: Vec::new(),
@@ -217,7 +218,7 @@ impl DurableStreamsHandler {
                 wait_millis: wait,
                 expected_method: route_method(route).to_owned(),
                 admission: StreamSlotReadAdmission::Continuation as i32,
-                invocation_key: read.invocation_key.clone(),
+                invocation_key: read.invocation_key,
             };
             result.body = ResponseBody::PoemBody {
                 body: sse_body(

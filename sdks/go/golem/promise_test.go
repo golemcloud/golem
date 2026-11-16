@@ -67,14 +67,15 @@ func TestPromisePayloadNamedBytesUsesJSON(t *testing.T) {
 }
 
 // TestPromiseIDRoundTrip — PromiseID survives conversion to the host wire form
-// and back, and String() renders the component/agent/oplog form.
+// and back, and String() renders the agent-id/fingerprint/oplog form.
 func TestPromiseIDRoundTrip(t *testing.T) {
 	id := PromiseID{
 		AgentID: AgentID{
 			ComponentID: UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
 			AgentID:     "Approval(\"order-7\")",
 		},
-		OplogIndex: 42,
+		Fingerprint: UUID{0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff},
+		OplogIndex:  42,
 	}
 
 	got := promiseIDFromWit(id.toWit())
@@ -82,7 +83,7 @@ func TestPromiseIDRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip = %+v, want %+v", got, id)
 	}
 
-	want := "00010203-0405-0607-0809-0a0b0c0d0e0f/Approval(\"order-7\")/42"
+	want := "00010203-0405-0607-0809-0a0b0c0d0e0f/Approval(\"order-7\")/f0f1f2f3-f4f5-f6f7-f8f9-fafbfcfdfeff/42"
 	if id.String() != want {
 		t.Fatalf("String() = %q, want %q", id.String(), want)
 	}
@@ -95,7 +96,8 @@ func TestPromiseIDFromWit(t *testing.T) {
 			ComponentId: types.ComponentId{Uuid: types.Uuid{HighBits: 0x0001020304050607, LowBits: 0x08090a0b0c0d0e0f}},
 			AgentId:     "Shop(\"acme\")",
 		},
-		OplogIdx: 99,
+		Fingerprint: types.Uuid{HighBits: 0x1011121314151617, LowBits: 0x18191a1b1c1d1e1f},
+		OplogIdx:    99,
 	}
 
 	id := promiseIDFromWit(w)
@@ -104,6 +106,9 @@ func TestPromiseIDFromWit(t *testing.T) {
 	}
 	if id.AgentID.ComponentID != (UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) {
 		t.Fatalf("component uuid not mapped: %v", id.AgentID.ComponentID)
+	}
+	if id.Fingerprint != (UUID{16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}) {
+		t.Fatalf("fingerprint not mapped: %v", id.Fingerprint)
 	}
 }
 

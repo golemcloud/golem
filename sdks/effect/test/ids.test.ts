@@ -13,7 +13,11 @@ const componentId = { uuid }
 const agentId = { componentId, agentId: 'Counter("canonical")' }
 const accountId = { uuid: Ids.Uuid.make("00000000-0000-0003-0000-000000000004") }
 const environmentId = { uuid: Ids.Uuid.make("00000000-0000-0005-0000-000000000006") }
-const promiseId = { agentId, oplogIdx: 7n }
+const promiseId = {
+  agentId,
+  fingerprint: Ids.Uuid.make("00000000-0000-0007-0000-000000000008"),
+  oplogIdx: 7n,
+}
 
 const roundTripWit = <S extends Schema.Codec<any, any, never, never>>(
   schema: S,

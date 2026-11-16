@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn etag_token_is_url_encoded_to_survive_commas_and_quotes() {
-        // ParsedAgentId rendering can include commas, parentheses and quotes;
+        // ParsedAgentKey rendering can include commas, parentheses and quotes;
         // the etag token must encode them so the comma-delimited
         // `If-None-Match` parser still round-trips.
         let agent_id = AgentId {

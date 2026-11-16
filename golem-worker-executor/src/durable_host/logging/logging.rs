@@ -30,7 +30,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Level::Debug => LogLevel::Debug,
             Level::Trace => LogLevel::Trace,
         };
-        let event = InternalWorkerEvent::log(log_level, &context, &message);
+        let event = InternalWorkerEvent::log(
+            log_level,
+            &context,
+            &message,
+            self.current_invocation_id().map(|id| id.id()),
+        );
         self.emit_log_event(event).await;
         Ok(())
     }

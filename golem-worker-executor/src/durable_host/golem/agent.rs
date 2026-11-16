@@ -28,7 +28,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentTypeName, ParsedAgentId, ResolvedOwnerContext,
+    AgentConfigSource, AgentTypeName, ParsedAgentKey, ResolvedOwnerContext,
     typed_constructor_parameters,
 };
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
@@ -79,7 +79,7 @@ fn encode_registered_agent_type_schema_wire(
 
 /// Convert a guest-supplied `golem:core/types@2.0.0` `schema-value-tree`
 /// (whose root encodes the constructor's parameter list) into the
-/// schema-native constructor parameter payload stored in [`ParsedAgentId`].
+/// schema-native constructor parameter payload stored in [`ParsedAgentKey`].
 ///
 /// The decoded value is validated directly against the constructor's
 /// [`AgentTypeSchema`] before being paired with that same schema graph. This
@@ -570,7 +570,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             let result = loop {
                 let result: anyhow::Result<Option<RegisteredAgentTypeSchema>> = async {
-                    let Ok(agent_type_name) = ParsedAgentId::parse_agent_type_name(&agent_id)
+                    let Ok(agent_type_name) = ParsedAgentKey::parse_agent_type_name(&agent_id)
                     else {
                         return Ok(None);
                     };
@@ -749,7 +749,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 self,
             ) {
                 Ok(input) => {
-                    let agent_id = ParsedAgentId::try_new(
+                    let agent_id = ParsedAgentKey::try_new(
                         AgentTypeName(agent_type_name),
                         input,
                         phantom_id.map(|id| id.into()),
@@ -778,7 +778,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
-        let agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_id) {
+        let agent_type_name = match ParsedAgentKey::parse_agent_type_name(&agent_id) {
             Ok(name) => name,
             Err(error) => return Ok(Err(wire::AgentError::InvalidAgentId(error))),
         };
@@ -798,7 +798,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 "Agent type not found: {agent_type_name}"
             ))));
         };
-        match ParsedAgentId::parse(agent_id, &agent_type) {
+        match ParsedAgentKey::parse(agent_id, &agent_type) {
             Ok(agent_id) => {
                 let wire_typed = encode_typed(&agent_id.parameters)
                     .map_err(|e| anyhow!("Failed to encode agent id parameters: {e}"))?;

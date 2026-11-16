@@ -21,6 +21,7 @@ import {
   isGuestPermissionCardHandleOfKind,
 } from "./internal/schema-model/permissionCardHandle.js"
 import { GuestSecretHandle, isGuestSecretHandle } from "./internal/schema-model/secretHandle.js"
+import type { StreamError } from "./internal/schema-model/errors.js"
 
 /**
  * Annotation key used by the codec to override the default WIT primitive
@@ -463,11 +464,11 @@ export const PolymorphicPermissionCard = native(
 
 /** Agent stream capability schema. @since 1.6.0 @category schemas */
 export const AgentStream = <S extends Schema.Top>(element: S) =>
-  Schema.declareConstructor<Stream.Stream<S["Type"], unknown>>()(
+  Schema.declareConstructor<Stream.Stream<S["Type"], StreamError>>()(
     [element],
     () => (u, ast) =>
       Stream.isStream(u)
-        ? Effect.succeed(u as Stream.Stream<S["Type"], unknown>)
+        ? Effect.succeed(u as Stream.Stream<S["Type"], StreamError>)
         : Effect.fail(new SchemaIssue.InvalidType(ast, Option.some(u))),
   ).pipe(
     Schema.annotate({ [witSchemaNodeAnnotationKey]: { tag: "stream", elementSchema: element } }),

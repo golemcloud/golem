@@ -15,7 +15,7 @@
 use crate::Tracing;
 use crate::oplog_blob_archive::new_s3_test;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
@@ -854,7 +854,7 @@ async fn check_the_root_container_names(
 async fn probe_the_root_container_names(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     container: &str,
 ) -> anyhow::Result<Vec<(&'static str, &'static str, Result<(), String>)>> {
     let mut results = Vec::new();

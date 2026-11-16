@@ -153,6 +153,18 @@ async fn test_ts_http_router_deployed() {
         .unwrap();
     assert_eq!(asset.status(), 200);
     assert_eq!(asset.text().await.unwrap(), "immutable asset");
+    // A live file read never creates its agent.
+    let missing = client
+        .get(format!("{base}/files/alice/value"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    assert!(
+        ctx.cli([cmd::AGENT, cmd::NEW, "Files(\"alice\")"])
+            .await
+            .success_or_dump()
+    );
     let initial = client
         .get(format!("{base}/files/alice/value"))
         .send()

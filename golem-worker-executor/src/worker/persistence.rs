@@ -82,6 +82,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_last_known_status(&self) -> Arc<AgentStatusRecord> {
         self.state_actor.status().await
     }
+    /// [`Self::get_last_known_status`] for a caller that has not bound its task scope to this
+    /// generation, whose status actor a deletion may already have stopped. That read fails
+    /// instead of panicking: with the deletion's refusal when a deletion retired the generation,
+    /// as a failed deletion leaves it resident, and with the routing miss when the shard was lost.
+    pub(crate) async fn try_get_last_known_status(
+        &self,
+    ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        match self.state_actor.try_status().await {
+            Err(_) if self.retired_for_lost_shard() => Err(self.retirement_error()),
+            Err(_) if self.deletion_owns_retirement().await => Err(
+                WorkerExecutorError::invalid_request("Worker is being deleted"),
+            ),
+            result => result,
+        }
+    }
+    /// [`Self::get_latest_worker_metadata`] that reads the status as
+    /// [`Self::try_get_last_known_status`] does.
+    pub(crate) async fn try_get_latest_worker_metadata(
+        &self,
+    ) -> Result<AgentMetadata, WorkerExecutorError> {
+        let updated_status = self.try_get_last_known_status().await?.as_ref().clone();
+        Ok(AgentMetadata {
+            last_known_status: updated_status,
+            ..self.get_initial_worker_metadata()
+        })
+    }
     /// The projection as [`Self::get_last_known_status`] gives it, rebuilt first when a failed
     /// rebuild left it detached. A rebuild that fails again gives the refusal, reported as in
     /// [`Self::commit_oplog_and_update_state`].
@@ -96,6 +122,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Whether the published status is detached from the oplog: a rebuild runs, or one failed.
     pub(crate) fn last_known_status_detached(&self) -> bool {
         self.last_known_status_detached.load(Ordering::Acquire)
+    }
+    /// The status of a generation that a caller pinned by its fingerprint. A deletion, even one
+    /// that later fails, can stop the state actor of a generation that is still cached, so such
+    /// a generation is refused as a deleting one instead of read, and answered as not found once
+    /// its deletion has removed the durable state.
+    pub(crate) async fn get_pinned_status(
+        &self,
+    ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        let status = match self.state_actor.try_status().await {
+            Err(_) if self.deletion_owns_retirement().await => Err(
+                WorkerExecutorError::invalid_request("Worker is being deleted"),
+            ),
+            status => status,
+        };
+        self.deleted_incarnation_as_not_found(
+            Some(self.initial_worker_metadata.fingerprint),
+            status,
+        )
+        .await
     }
     pub(crate) async fn get_export_fork_status(
         &self,
@@ -431,7 +476,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// entry must not report it as accepted.
     pub(in crate::worker) async fn add_and_commit_oplog_internal(
         &self,
-        instance_guard: &MutexGuard<'_, WorkerInstance>,
+        instance_guard: &WorkerLifecycle,
         entry: OplogEntry,
         wakeup: Option<WorkerCommand>,
     ) -> Result<OplogIndex, OplogError> {
@@ -444,7 +489,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|refusal| self.refused_by(refusal))?;
 
         if let Some(wakeup) = wakeup
-            && let WorkerInstance::Running(running) = &**instance_guard
+            && let WorkerInstance::Running(running) = instance_guard.state()
         {
             running.sender.send(wakeup).unwrap();
         };

@@ -15,10 +15,10 @@
 use test_r::test;
 
 mod tool_attachment {
+    use crate::base_model::OplogIndex;
     use crate::base_model::durable_stream::StreamConsumerObservation;
     use crate::base_model::oplog::attachment::*;
     use crate::base_model::regions::{DeletedRegions, OplogRegion};
-    use crate::base_model::{IdempotencyKey, OplogIndex};
     use crate::model::oplog::payload::tool_attachment::*;
     use test_r::test;
 
@@ -39,7 +39,7 @@ mod tool_attachment {
         );
         let read = ToolAttachmentReadObservation {
             attachment,
-            logical_invocation: IdempotencyKey::new("owner-invocation".into()),
+            logical_invocation: uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into(),
             observation: StreamConsumerObservation::Guest {
                 parent_start_index: Some(index(3)),
             },
@@ -861,7 +861,7 @@ use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
     HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestFileSystemPermissionCheck,
     HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
-    HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
+    HostRequestGolemApiOplogRead, HostRequestGolemToolGetTool,
     HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
     HostRequestGolemToolResponseSecretHoldAdmission, HostRequestKVCacheKey,
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
@@ -871,7 +871,7 @@ use crate::model::oplog::{
     HostRequestSocketsTcpConnectPermissionCheck, HostResponse,
     HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
     HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
-    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
+    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit,
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
     HostResponseGolemToolInvokeResult, HostResponseGolemToolResponseSecretHoldAdmission,
     HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
@@ -887,7 +887,7 @@ use crate::model::oplog::{
     HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
     host_functions,
 };
-use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OplogIndex};
 use crate::model::{ScanCursor, Timestamp};
 use crate::schema::tool::{CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Tool};
 use crate::schema::{
@@ -995,7 +995,9 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
             component_id: ComponentId::new(),
             agent_id: "target".to_string(),
         },
-        idempotency_key: IdempotencyKey::new("scope-card-call".to_string()),
+        request_key: crate::model::InvocationRequestKey::Internal(IdempotencyKey::new(
+            "scope-card-call".to_string(),
+        )),
         method_name: "run".to_string(),
         input: SchemaValue::Tuple {
             elements: Vec::new(),
@@ -1007,7 +1009,7 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
                 agent_id: "original-caller".to_string(),
             },
             callee_fingerprint: AgentFingerprint(uuid::Uuid::from_u128(3)),
-            idempotency_key: IdempotencyKey::new("source-invocation".to_string()),
+            idempotency_key: uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
         }),
         remote_agent_type: None,
         remote_agent_parameters: None,
@@ -1042,24 +1044,34 @@ fn async_rpc_rejection_request_roundtrips_stable_identity() {
 }
 
 #[test]
-fn scheduled_invocation_typed_result_preserves_legacy_success_payload() {
+fn scheduled_invocation_typed_result_preserves_final_receipt() {
     let schedule_id = SerializableScheduleId {
         id: uuid::Uuid::from_u128(0x123456789abcdef00123456789abcdef),
     };
-    let legacy: HostResponse = HostResponseGolemRpcScheduledInvocation {
+    let invocation_id = crate::model::OwnedInvocationId::internal(
+        AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "target".to_string(),
+        },
+        AgentFingerprint(uuid::Uuid::from_u128(42)),
+        "run",
+        &IdempotencyKey::from("child"),
+    );
+    let response: HostResponse = HostResponseGolemRpcScheduledInvocation {
         schedule_id: schedule_id.clone(),
+        invocation_id: invocation_id.clone(),
     }
     .into();
     let compatible: HostResponse = HostResponseGolemRpcScheduledInvocationCompat {
-        result: Ok(schedule_id.clone()),
+        result: Ok((schedule_id.clone(), invocation_id.clone())),
     }
     .into();
 
-    assert_eq!(compatible, legacy);
+    assert_eq!(compatible, response);
     assert_eq!(
-        HostResponseGolemRpcScheduledInvocationCompat::try_from(legacy).unwrap(),
+        HostResponseGolemRpcScheduledInvocationCompat::try_from(response).unwrap(),
         HostResponseGolemRpcScheduledInvocationCompat {
-            result: Ok(schedule_id),
+            result: Ok((schedule_id, invocation_id)),
         }
     );
 
@@ -1356,9 +1368,9 @@ fn entity_invocation_host_payload_pair_roundtrips() {
         HostRequestEntityInvocation {
             metadata: vec![1, 2, 3],
             input: empty_value(),
-            stream_session_idempotency_key: IdempotencyKey::new(
-                "entity-stream-session".to_string(),
-            ),
+            stream_session_idempotency_key: InvocationId(uuid::Uuid::from_u128(
+                0x0123456789abcdef_fedcba9876543210,
+            )),
         },
         HostResponseEntityInvocation {
             result: Ok(empty_value()),
@@ -1947,19 +1959,49 @@ fn cli_environment_host_payload_pair_roundtrips() {
 }
 
 #[test]
-fn durable_rpc_activation_payload_pair_roundtrips() {
-    let target_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(42));
-    assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcActivate>(
-        HostRequestGolemRpcActivate {
+fn durable_rpc_create_outcomes_roundtrip() {
+    use crate::model::oplog::{HostRequestGolemRpcCreate, HostResponseGolemRpcCreate};
+
+    for result in [
+        Ok(AgentFingerprint(uuid::Uuid::from_u128(42))),
+        Err(SerializableRpcError::RemoteInternalError {
+            details: "constructor rejected child".to_string(),
+        }),
+        Err(SerializableRpcError::Denied {
+            details: "whole-agent invocation required".to_string(),
+        }),
+    ] {
+        assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcNew>(
+            HostRequestGolemRpcCreate {
+                remote_agent_id: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "child-agent".to_string(),
+                },
+            },
+            HostResponseGolemRpcCreate {
+                result,
+                target_environment_id: EnvironmentId::new(),
+            },
+        );
+    }
+}
+
+#[test]
+fn durable_rpc_preparation_payload_pair_roundtrips() {
+    assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcPrepareInvocation>(
+        super::HostRequestGolemRpcPrepareInvocation {
+            invocation_start_index: crate::model::OplogIndex::from_u64(42),
             remote_agent_id: AgentId {
                 component_id: ComponentId::new(),
-                agent_id: "target-agent".to_string(),
+                agent_id: "target".to_string(),
             },
             method_name: "run".to_string(),
-            decision: Ok(()),
+            request_key: crate::model::InvocationRequestKey::Internal(IdempotencyKey::from(
+                "child",
+            )),
         },
-        HostResponseGolemRpcActivate {
-            result: Ok(target_fingerprint),
+        super::HostResponseGolemRpcPrepareInvocation {
+            result: Ok(AgentFingerprint(uuid::Uuid::from_u128(43))),
         },
     );
 }
@@ -2605,9 +2647,9 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
             request: SerializableToolPositionalRequest::RemoveRetryPolicy,
         },
         SerializableToolAdmissionRefusal::BeforeInputRead {
-            session: StreamRegistrationInvocation::Local(crate::base_model::IdempotencyKey::new(
-                "input-owner".into(),
-            )),
+            session: StreamRegistrationInvocation::Local(
+                uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into(),
+            ),
             binding: Box::new(StreamBindingRecord {
                 transport_stream_id: 7,
                 source: StreamRecordReference::Local(LocalStreamId(

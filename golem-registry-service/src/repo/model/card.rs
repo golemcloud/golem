@@ -236,7 +236,7 @@ mod tests {
     use golem_common::model::card::{
         CardManagedByRuntimeDerived, default_agent_initial_permission_grants,
     };
-    use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
+    use golem_common::model::{AgentId, InvocationId, OplogIndex};
     use test_r::test;
 
     fn runtime_derived_provenance() -> CardManagedByRuntimeDerived {
@@ -246,7 +246,7 @@ mod tests {
                 component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
                 agent_id: "source-agent".to_string(),
             },
-            invocation_key: IdempotencyKey::new("source-invocation".to_string()),
+            invocation_key: InvocationId(Uuid::from_u128(1)),
             oplog_index: OplogIndex::from_u64(42),
         }
     }

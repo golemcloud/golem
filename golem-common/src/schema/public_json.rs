@@ -108,8 +108,14 @@ pub fn decode_public_schema_value_with_charge(
         charge: 0,
     };
     let value = decoder.decode(ty, json)?;
-    validate_value(graph, ty, &value).map_err(|_| {
-        PublicSchemaValueError::validation("value does not satisfy the selected schema")
+    validate_value(graph, ty, &value).map_err(|errors| {
+        PublicSchemaValueError::validation(
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
     })?;
     Ok((value, decoder.charge as usize))
 }
@@ -137,8 +143,14 @@ pub fn encode_public_schema_value_with_charge(
     ) -> Result<PublicStreamReference, PublicSchemaValueError>,
 ) -> Result<(Value, usize), PublicSchemaValueError> {
     inspect_schema_value(value, 0)?;
-    validate_value(graph, ty, value).map_err(|_| {
-        PublicSchemaValueError::validation("value does not satisfy the selected schema")
+    validate_value(graph, ty, value).map_err(|errors| {
+        PublicSchemaValueError::validation(
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
     })?;
     let mut encoder = Encoder {
         graph,
@@ -1732,6 +1744,64 @@ mod tests {
             "validation-error" => PublicErrorCode::ValidationError,
             "stream-already-consumed" => PublicErrorCode::StreamAlreadyConsumed,
             other => panic!("unknown fixture error code {other}"),
+        }
+    }
+
+    #[test]
+    fn schema_restriction_errors_keep_their_path_and_bound() {
+        use crate::schema::schema_type::{NumericBound, NumericRestrictions};
+
+        let bounded = SchemaType::U8 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Unsigned(3)),
+                max: Some(NumericBound::Unsigned(10)),
+                unit: None,
+            }),
+            metadata: Default::default(),
+        };
+        let schema = SchemaType::record(vec![NamedFieldType {
+            name: "bounded".to_string(),
+            body: bounded,
+            metadata: Default::default(),
+        }]);
+        let graph = SchemaGraph::anonymous(schema.clone());
+        for (input, detail) in [(2, "below minimum 3"), (11, "above maximum 10")] {
+            let error = decode(
+                &schema,
+                json!({
+                    "kind": "record",
+                    "value": { "fields": [{ "kind": "u8", "value": input }] }
+                }),
+                PublicStreamReferencePolicy::None,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, PublicErrorCode::ValidationError);
+            assert!(error.message.contains(".field(\"bounded\")"), "{error}");
+            assert!(error.message.contains(detail), "{error}");
+
+            let value = SchemaValue::Record {
+                fields: vec![SchemaValue::U8(input)],
+            };
+            let error = encode_public_schema_value(&graph, &schema, &value, |_, _| {
+                panic!("record has no streams")
+            })
+            .unwrap_err();
+            assert_eq!(error.code, PublicErrorCode::ValidationError);
+            assert!(error.message.contains(".field(\"bounded\")"), "{error}");
+            assert!(error.message.contains(detail), "{error}");
+        }
+        for input in [3, 10] {
+            assert!(
+                decode(
+                    &schema,
+                    json!({
+                        "kind": "record",
+                        "value": { "fields": [{ "kind": "u8", "value": input }] }
+                    }),
+                    PublicStreamReferencePolicy::None,
+                )
+                .is_ok()
+            );
         }
     }
 

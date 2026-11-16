@@ -287,7 +287,7 @@ fn call_agent_route(
         route_match: test_route_match(method),
         path,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
-            route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
+            route_mode: golem_service_base::custom_api::AgentRouteMode::Plain,
             base_path_variables: 0,
             durable_streams: None,
             component_id: ComponentId::new(),
@@ -400,6 +400,7 @@ fn test_durable_stream_policy(call: &CallAgentBehaviour) -> DurableStreamRoutePo
         }
     }
     DurableStreamRoutePolicy {
+        family_id: 0,
         slots,
         allow_external_writes: true,
         allow_stream_delete: true,
@@ -981,8 +982,13 @@ fn durable_stream_routes_do_not_break_rest_openapi() {
     }
     let spec = spec_for(routes);
     assert!(spec["paths"]["/rest"]["get"].is_object());
+    assert_eq!(spec["paths"]["/rest"]["get"]["x-golem-route-mode"], "plain");
     assert!(spec["paths"]["/rest"]["options"].is_object());
     assert!(spec["paths"]["/rest"]["put"].is_object());
+    assert_eq!(
+        spec["paths"]["/rest"]["put"]["x-golem-route-mode"],
+        "durableStreams"
+    );
     assert!(spec["paths"]["/stream"]["put"].is_object());
     assert!(spec["paths"]["/stream"]["options"].is_null());
 }
@@ -1100,9 +1106,10 @@ fn durable_stream_operations_have_concrete_typed_slots() {
     }
     let mut ids = std::collections::HashSet::new();
     for item in paths.values() {
-        assert_eq!(item["x-golem-route-mode"], "durable-streams");
+        assert_eq!(item["x-golem-route-mode"], "durableStreams");
         for method in ["put", "get", "head", "post", "delete"] {
             if let Some(operation) = item.get(method) {
+                assert_eq!(operation["x-golem-route-mode"], "durableStreams");
                 assert!(ids.insert(operation["operationId"].as_str().unwrap()));
                 assert!(operation["responses"]["503"]["headers"]["Retry-After"].is_object());
             }
@@ -1154,6 +1161,7 @@ fn durable_stream_custom_policy_shapes_public_openapi() {
         SchemaType::stream(Some(SchemaType::u8())),
     )]);
     call.durable_streams = Some(DurableStreamRoutePolicy {
+        family_id: 0,
         slots: vec![
             DurableStreamSlot {
                 canonical_name: "payload".into(),
@@ -1220,6 +1228,7 @@ fn durable_stream_concrete_preflights_are_not_emitted_as_openapi_operations() {
         };
         call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
         call.durable_streams = Some(DurableStreamRoutePolicy {
+            family_id: 0,
             slots: vec![DurableStreamSlot {
                 canonical_name: "$result".into(),
                 public_name: "events".into(),
@@ -1752,7 +1761,7 @@ fn durable_stream_concrete_slot_yields_to_explicit_rest_route() {
         );
         let item = &spec["paths"][&canonical];
         assert_eq!(item["get"]["description"], "Explicit REST route");
-        assert_eq!(item["get"]["x-golem-route-mode"], "rest");
+        assert_eq!(item["get"]["x-golem-route-mode"], "plain");
         assert_eq!(item["get"]["parameters"][0]["name"], "session");
         assert!(item["get"]["responses"]["204"].is_object());
         assert!(item["get"]["responses"]["200"].is_null());

@@ -26,7 +26,7 @@
 //! with `role = Multimodal` on the inner element type; no separate enum
 //! case is needed.
 //!
-//! [`ParsedAgentId`] is the typed identifier for an instantiated agent. The
+//! [`ParsedAgentKey`] is the typed identifier for an instantiated agent. The
 //! constructor parameters travel as a self-contained [`TypedSchemaValue`]
 //! pair so receivers do not need an external schema registry to interpret
 //! the value tree.
@@ -356,7 +356,7 @@ pub enum AutoInjectedKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct ParsedAgentId {
+pub struct ParsedAgentKey {
     /// Agent type identifier (e.g. `"weather-agent"`).
     pub agent_type: AgentTypeName,
     /// Constructor parameters, paired with their self-contained schema graph.
@@ -367,7 +367,7 @@ pub struct ParsedAgentId {
     pub phantom_id: Option<Uuid>,
 }
 
-impl ParsedAgentId {
+impl ParsedAgentKey {
     pub fn new(
         agent_type: AgentTypeName,
         parameters: TypedSchemaValue,
@@ -866,6 +866,7 @@ pub mod bindings {
           anyhow: true,
           with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
           },
           wasmtime_crate: ::wasmtime

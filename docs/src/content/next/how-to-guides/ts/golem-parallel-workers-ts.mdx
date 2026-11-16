@@ -83,7 +83,8 @@ function arrayChunks<T>(arr: T[], size: number): T[][] {
 ### Fire-and-Forget with Promise Collection
 
 For long-running work, trigger children with `.trigger()` and collect results via
-Golem promises. A `PromiseId` is a nested record of bigints, so ship it across the
+Golem promises. A `PromiseId` is a nested record that holds bigints (the agent ID, the fingerprint
+of the agent incarnation that created it, and the oplog index), so ship it across the
 agent boundary as a bigint-aware JSON string:
 
 ```typescript

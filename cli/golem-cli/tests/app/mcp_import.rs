@@ -1,5 +1,4 @@
 use crate::app::{Output, TestContext, cmd, flag};
-use crate::workspace_path;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::IntoResponse;
 use golem_cli::{fs, versions};
@@ -74,7 +73,7 @@ async fn mcp_import_selectors_target_the_matching_deployment() {
     assert!(refresh.success_or_dump());
     assert!(refresh.stdout_contains("first-lookup"));
     assert_eq!(*listings.lock().unwrap(), ["/first"]);
-    let unresolved = "- url: '{{ GOL_875_MISSING_REVIEW_URL }}'";
+    let unresolved = "- url: '{{ DEFINITELY_MISSING_REVIEW_URL }}'";
     for imports in [
         format!("{unresolved}\n      {second}\n      {first}"),
         format!("{first}\n      {second}\n      {unresolved}"),
@@ -205,14 +204,6 @@ async fn mcp_import_parse_errors_do_not_log_url_secrets() {
 #[test]
 #[timeout("20 minutes")]
 async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_offline() {
-    let contract: Value = serde_json::from_str(
-        &std::fs::read_to_string(workspace_path().join("test-data/gol-40/mcp-projection-v1.json"))
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(contract["contract"], "GOL-40-CONTRACT-2");
-    let mut contract_failures = Vec::new();
-
     let effects = Arc::new(Mutex::new(Vec::<String>::new()));
     let effect_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let effect_port = effect_listener.local_addr().unwrap().port();
@@ -349,14 +340,12 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
     );
     assert!(render["inputSchema"]["properties"]["_stdin"]["contentEncoding"].is_null());
     assert_eq!(render["outputSchema"]["type"], "object");
-    if !render["outputSchema"]["properties"]["id"].is_object()
-        || !render["outputSchema"]["properties"]["value"].is_null()
-    {
-        contract_failures.push(format!(
-            "CONTRACT-2 record results must expose fields directly without a value wrapper: {}",
-            render["outputSchema"]
-        ));
-    }
+    assert!(
+        render["outputSchema"]["properties"]["id"].is_object()
+            && render["outputSchema"]["properties"]["value"].is_null(),
+        "record results must expose fields directly without a value wrapper: {}",
+        render["outputSchema"]
+    );
     assert!(
         render["description"]
             .as_str()
@@ -372,14 +361,6 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
     )
     .await;
     assert_exported_result(&direct, "direct", "AAEC/w==");
-    if !direct["structuredContent"]["id"].is_string()
-        || !direct["structuredContent"]["value"].is_null()
-    {
-        contract_failures.push(format!(
-            "CONTRACT-2 record results must expose fields directly in structuredContent: {}",
-            direct["structuredContent"]
-        ));
-    }
     let rejected = mcp_request(
         &client,
         &mcp_url,
@@ -418,11 +399,10 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
             format!("{}\n{}", deployed.stdout_text(), deployed.stderr_text())
         };
         for fragment in expected_fragments {
-            if !diagnostic.contains(fragment) {
-                contract_failures.push(format!(
-                    "unsupported {command} export did not report {fragment:?}: {diagnostic}"
-                ));
-            }
+            assert!(
+                diagnostic.contains(fragment),
+                "unsupported {command} export did not report {fragment:?}: {diagnostic}"
+            );
         }
     }
 
@@ -548,12 +528,6 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
         6,
         "a failed fresh invocation must not manufacture provider or middleware effects"
     );
-    assert!(
-        contract_failures.is_empty(),
-        "CONTRACT-2 failures:\n{}",
-        contract_failures.join("\n")
-    );
-
     effect_server.shutdown().await;
 }
 
@@ -1049,7 +1023,7 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
                 flag::YES,
                 cmd::AGENT,
                 cmd::INVOKE,
-                "TypeScriptMcpConsumer(\"contract-2\")",
+                "TypeScriptMcpConsumer(\"projection\")",
                 "call",
                 &serde_json::to_string(item_id).unwrap(),
                 if include_history { "true" } else { "false" },
@@ -2035,11 +2009,11 @@ async fn mcp_response(client: &reqwest::Client, url: &str, method: &str, params:
 
 fn assert_exported_result(result: &Value, item_id: &str, stdout: &str) {
     assert_eq!(result["isError"], false);
-    let structured = if result["structuredContent"]["value"].is_object() {
-        &result["structuredContent"]["value"]
-    } else {
-        &result["structuredContent"]
-    };
+    let structured = &result["structuredContent"];
+    assert!(
+        structured["value"].is_null(),
+        "record results must expose fields directly in structuredContent: {structured}"
+    );
     assert_eq!(structured["id"], item_id);
     assert_eq!(structured["revision"], "23");
     assert_eq!(structured["principal"], "anonymous");
@@ -2059,34 +2033,6 @@ fn assert_exported_result(result: &Value, item_id: &str, stdout: &str) {
         result["content"][2]["_meta"]["golem.cloud/tool-channel"],
         "stderr"
     );
-}
-
-#[test]
-fn exported_result_assertion_accepts_contract_2_record_shape() {
-    let structured = json!({
-        "id": "direct",
-        "revision": "23",
-        "principal": "anonymous"
-    });
-    let result = json!({
-        "isError": false,
-        "structuredContent": structured,
-        "content": [
-            {"type": "text", "text": structured.to_string()},
-            {
-                "type": "text",
-                "text": "AAEC/w==",
-                "_meta": {"golem.cloud/tool-channel": "stdout"}
-            },
-            {
-                "type": "text",
-                "text": "warning:direct",
-                "_meta": {"golem.cloud/tool-channel": "stderr"}
-            }
-        ]
-    });
-
-    assert_exported_result(&result, "direct", "AAEC/w==");
 }
 
 fn generated_source_text(root: &std::path::Path) -> String {

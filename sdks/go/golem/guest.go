@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	guestExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_agent_guest"
@@ -173,11 +174,11 @@ func beginAgent(agentType string, input types.SchemaValueTree, principal Princip
 }
 
 func init() {
-	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
-		return initializeAgent(agentType, input, principalFromWit(principal))
+	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree) witTypes.Result[witTypes.Unit, common.AgentError] {
+		return initializeAgent(agentType, input, principalFromWit(immediateCaller()))
 	}
 
-	guestExports.Exports.Invoke = func(methodName string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
+	guestExports.Exports.Invoke = func(methodName string, input types.SchemaValueTree) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
 		// The input's cards are this component's: the ones the decode did not
 		// take go back to the host however the invocation ends.
 		defer engine.ReleaseCardsIn(input.ValueNodes, releaseCard)
@@ -191,7 +192,13 @@ func init() {
 		if m == nil {
 			return fail(common.MakeAgentErrorInvalidMethod("unknown method: " + methodName))
 		}
-		out, err := m.invoke(active, principalFromWit(principal), input)
+		// The caller is read only for a method that injects it: the read allocates, and an
+		// allocation can start a garbage collection whose clock reads the oplog records.
+		var principal Principal
+		if slices.ContainsFunc(m.inFields, func(f engine.Field) bool { return f.AutoInjected }) {
+			principal = principalFromWit(immediateCaller())
+		}
+		out, err := m.invoke(active, principal, input)
 		if err != nil {
 			return fail(toAgentError(err))
 		}

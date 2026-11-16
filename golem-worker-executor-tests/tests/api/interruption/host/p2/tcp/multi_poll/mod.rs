@@ -135,7 +135,11 @@ async fn pending_multi_poll(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "tcp_inputs_poll_p2",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -151,6 +155,9 @@ async fn pending_multi_poll(
         Principal::anonymous(),
     )
     .await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "tcp_inputs_poll_p2")
+        .await?;
     let listeners = listeners().await?;
     let first_port = listeners[0].local_addr()?.port();
     let second_port = listeners[1].local_addr()?.port();
@@ -175,11 +182,11 @@ async fn pending_multi_poll(
     let result = async {
         let mut effects = PeerEffects::default();
         let mut peers = accept_pair(&listeners, &mut effects).await?;
-        wait_for_input_poll(&executor, &id, &key, 2).await?;
+        wait_for_input_poll(&executor, &id, &stored_key, 2).await?;
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let poll_start = input_poll(&entries, &key, 2, None)?;
-        assert_invocation(&entries, &key, 0)?;
+        let poll_start = input_poll(&entries, &stored_key, 2, None)?;
+        assert_invocation(&entries, &stored_key, 0)?;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
         let initial = worker
             .owner_runtime_resources()
@@ -255,8 +262,8 @@ async fn pending_multi_poll(
             assert_storage_deleted(&owned)?;
         }
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(input_poll(&stopped, &key, 2, None)? == poll_start);
-        assert_invocation(&stopped, &key, 0)?;
+        ensure!(input_poll(&stopped, &stored_key, 2, None)? == poll_start);
+        assert_invocation(&stopped, &stored_key, 0)?;
         let entries = worker
             .oplog()
             .read_exact(
@@ -352,7 +359,7 @@ async fn pending_multi_poll(
             ensure!(
                 input_poll(
                     &executor.get_oplog(&id, OplogIndex::INITIAL).await?,
-                    &key,
+                    &stored_key,
                     2,
                     None
                 )? == poll_start
@@ -371,9 +378,9 @@ async fn pending_multi_poll(
                 effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]
             );
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(input_poll(&recovered, &key, 2, Some(&[1]))? == poll_start);
+            ensure!(input_poll(&recovered, &stored_key, 2, Some(&[1]))? == poll_start);
             ensure!(poll_starts(&recovered) == poll_starts(&stopped));
-            assert_invocation(&recovered, &key, 1)?;
+            assert_invocation(&recovered, &stored_key, 1)?;
             settled_history(&recovered)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let cached = executor
@@ -394,10 +401,13 @@ async fn pending_multi_poll(
             );
             assert_invocation(
                 &executor.get_oplog(&id, OplogIndex::INITIAL).await?,
-                &key,
+                &stored_key,
                 1,
             )?;
             let fresh_key = IdempotencyKey::fresh();
+            let stored_fresh_key = executor
+                .external_invocation_key(&id, &fresh_key, "tcp_inputs_poll_p2")
+                .await?;
             let fresh = executor.invoke_and_await_agent_with_key(
                 &component,
                 &name,
@@ -420,10 +430,10 @@ async fn pending_multi_poll(
                 effects.accepts == [3, 3] && effects.closed == [3, 3] && effects.sent == [0, 2]
             );
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(input_poll(&history, &key, 2, Some(&[1]))? == poll_start);
-            input_poll(&history, &fresh_key, 2, Some(&[1]))?;
-            assert_invocation(&history, &key, 1)?;
-            assert_invocation(&history, &fresh_key, 1)?;
+            ensure!(input_poll(&history, &stored_key, 2, Some(&[1]))? == poll_start);
+            input_poll(&history, &stored_fresh_key, 2, Some(&[1]))?;
+            assert_invocation(&history, &stored_key, 1)?;
+            assert_invocation(&history, &stored_fresh_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
             settled_history(&history)?;
         } else {
@@ -441,8 +451,8 @@ async fn pending_multi_poll(
             );
             ensure!(!worker.is_loaded().await);
             let unchanged = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(input_poll(&unchanged, &key, 2, None)? == poll_start);
-            assert_invocation(&unchanged, &key, 0)?;
+            ensure!(input_poll(&unchanged, &stored_key, 2, None)? == poll_start);
+            assert_invocation(&unchanged, &stored_key, 0)?;
             // Public tracing attributes are rendered from maps in arbitrary order.
             let raw_after = worker
                 .oplog()
@@ -462,7 +472,11 @@ async fn pending_multi_poll(
             let fresh_key = IdempotencyKey::fresh();
             let fresh_physical = name
                 .clone()
-                .with_ephemeral_invocation_phantom(&fresh_key)
+                .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                    &executor,
+                    &fresh_key,
+                    "tcp_inputs_poll_p2",
+                ))
                 .unwrap();
             let fresh_id = AgentId::from_agent_id(component.id, &fresh_physical).unwrap();
             ensure!(fresh_id != id);
@@ -478,6 +492,9 @@ async fn pending_multi_poll(
             )
             .await?;
             cleanup.push((fresh_id.clone(), fresh_worker.clone()));
+            let stored_fresh_key = executor
+                .external_invocation_key(&fresh_id, &fresh_key, "tcp_inputs_poll_p2")
+                .await?;
             let fresh = executor.invoke_and_await_agent_with_key(
                 &component,
                 &name,
@@ -497,8 +514,8 @@ async fn pending_multi_poll(
             .await??;
             ensure!(fresh.into_typed::<Result<Vec<u32>, String>>()? == Ok(vec![1]));
             let history = executor.get_oplog(&fresh_id, OplogIndex::INITIAL).await?;
-            input_poll(&history, &fresh_key, 2, Some(&[1]))?;
-            assert_invocation(&history, &fresh_key, 1)?;
+            input_poll(&history, &stored_fresh_key, 2, Some(&[1]))?;
+            assert_invocation(&history, &stored_fresh_key, 1)?;
             settled_history(&history)?;
             ensure!(
                 effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]

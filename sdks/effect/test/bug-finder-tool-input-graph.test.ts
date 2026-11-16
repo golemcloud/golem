@@ -59,7 +59,7 @@ describe("tool input graph validation", () => {
         }),
       ),
     }
-    await invokeRegistered("recursive", [], input, undefined, undefined, undefined, {})
+    await invokeRegistered("recursive", [], input, undefined, undefined, undefined)
     expect(handler).toHaveBeenCalledOnce()
     expect(handler.mock.calls[0]?.[0]).toEqual({
       message: "hello",
@@ -83,7 +83,6 @@ describe("tool input graph validation", () => {
       undefined,
       undefined,
       undefined,
-      {},
     )
     expect(handler.mock.calls[0]?.[0]).toEqual({ verbosity: 3 })
   })
@@ -107,7 +106,6 @@ describe("tool input graph validation", () => {
         undefined,
         undefined,
         undefined,
-        {},
       ),
     ).rejects.toMatchObject({ tag: "invalid-input" })
     expect(handler).not.toHaveBeenCalled()
@@ -140,7 +138,6 @@ describe("tool input graph validation", () => {
         undefined,
         undefined,
         undefined,
-        {},
       ),
     ).rejects.toMatchObject({ tag: "invalid-input" })
     expect(handler).not.toHaveBeenCalled()
@@ -151,7 +148,6 @@ describe("tool input graph validation", () => {
       undefined,
       undefined,
       undefined,
-      {},
     )
     expect(handler).toHaveBeenCalledOnce()
   })
@@ -173,7 +169,6 @@ describe("tool input graph validation", () => {
       undefined,
       undefined,
       undefined,
-      {},
     )
     expect(handler).toHaveBeenCalledOnce()
   })
