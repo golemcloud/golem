@@ -19,9 +19,10 @@ use std::task::{Context, Poll};
 use crate::durable_host::TcpSocketStreamDirection;
 use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
-    DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource,
-    ScopeReplayRecovery, access_invocation_id, closed_demand, deliver_demand, demand_channel,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
+    DeferredCallReplayOutcome, DemandDelivery, DemandDeliveryMode, DurableCallSession,
+    DurableDemandItem, DurableDemandStream, InvocationIdSource, ScopeReplayRecovery,
+    access_invocation_id, closed_demand, deliver_demand, demand_channel,
     reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
@@ -30,7 +31,7 @@ use crate::durable_host::durability::{
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, run_deniable_access, run_read_access, wasi_sockets_view,
+    observe_function_call_store, run_deniable_access, wasi_sockets_view,
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasWorker;
@@ -1346,7 +1347,7 @@ async fn tcp_acquire_stream<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket_rep: u32,
     direction: TcpSocketStreamDirection,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
+) -> wasmtime::Result<(Result<(), types::ErrorCode>, CompletionDelivery)>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1371,7 +1372,7 @@ async fn tcp_run_acquire<Ctx, U, Pair>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket_rep: u32,
     direction: TcpSocketStreamDirection,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
+) -> wasmtime::Result<(Result<(), types::ErrorCode>, CompletionDelivery)>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1382,12 +1383,31 @@ where
     // an incomplete replay. The actual byte transmission is a `WriteRemote` call. The
     // recorded outcome is still persisted and replayed for determinism, exactly
     // like the clock `ReadLocal` calls.
-    let response = run_read_access::<_, _, Ctx, Pair, _>(
+    let call = DurableCallSession::<Pair, Cancellable>::start_access(
         accessor,
+        durable_worker_ctx::<Ctx, U>,
         HostRequestNoInput {},
         DurableFunctionType::ReadLocal,
-        || async {
-            accessor.with(
+    )
+    .await?;
+    let (call, replayed) = if call.is_live() {
+        (Some(call), None)
+    } else {
+        match call
+            .replay_access_deferred(accessor, durable_worker_ctx::<Ctx, U>)
+            .await?
+        {
+            DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                (None, Some((response, delivery)))
+            }
+            DeferredCallReplayOutcome::Incomplete(call) => (Some(call), None),
+        }
+    };
+    // The acquire is observed only when the send/receive host function returns its
+    // handles. Keep delivery deferred while that function starts its durable task.
+    let (response, delivery) = if let Some(mut call) = call {
+        let response = accessor
+            .with(
                 |mut access| -> wasmtime::Result<HostResponseP3SocketsTcpAcquire> {
                     // Read-only connectivity probe: `remote-address` succeeds only when
                     // the socket is connected, mirroring the precondition the native
@@ -1416,9 +1436,12 @@ where
                     Ok(HostResponseP3SocketsTcpAcquire { result })
                 },
             )
-        },
-    )
-    .await?;
+            .map_err(|error| wasmtime::Error::from_anyhow(call.trap(error)))?;
+        call.complete_access_deferred(accessor, durable_worker_ctx::<Ctx, U>, response)
+            .await?
+    } else {
+        replayed.expect("a completed acquire retains its delivery")
+    };
 
     // Reapply the recorded outcome to the shadow so replay rehydrates the taken
     // flag before any later live call runs (idempotent on the live path, where
@@ -1430,7 +1453,7 @@ where
         });
     }
 
-    Ok(deserialize_tcp_stream_result(response.result))
+    Ok((deserialize_tcp_stream_result(response.result), delivery))
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for DurableP3<Ctx> {
@@ -1506,14 +1529,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         // socket is not connected) this returns an error, which we surface
         // without invoking the native send, mirroring the native `take_send_stream`
         // contract while keeping replay deterministic.
-        if let Err(error) =
+        let (acquired, delivery) =
             tcp_acquire_stream::<Ctx, U>(accessor, socket.rep(), TcpSocketStreamDirection::Send)
-                .await?
-        {
-            return accessor.with(|mut store| {
+                .await?;
+        if let Err(error) = acquired {
+            let future = accessor.with(|mut store| {
                 data.close(&mut store)?;
                 FutureReader::new(&mut store, async move { wasmtime::error::Ok(Err(error)) })
-            });
+            })?;
+            delivery.deliver_at_accessor_terminal(accessor).await?;
+            return Ok(future);
         }
 
         let call = DurableCallSession::<P3SocketsTypesTcpSocketSend, Cancellable>::start_access_with_options(
@@ -1529,7 +1554,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         .await?;
         let (result_tx, result_rx) = oneshot::channel();
 
-        if call.is_live() {
+        let future = if call.is_live() {
             if call.is_persisted() {
                 // Fence the original send Start before any bytes can reach the socket.
                 let public_state = accessor.with(|mut store| {
@@ -1572,7 +1597,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 store.spawn(async move |store| task.run(store).await)?;
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })
-        }
+        }?;
+        delivery.deliver_at_accessor_terminal(accessor).await?;
+        Ok(future)
     }
 
     async fn receive(
@@ -1591,16 +1618,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         // socket is not connected) this returns an error, surfaced as an empty
         // stream plus an immediately-failing result future, mirroring the native
         // `take_receive_stream` contract while keeping replay deterministic.
-        if let Err(error) =
+        let (acquired, delivery) =
             tcp_acquire_stream::<Ctx, U>(accessor, socket.rep(), TcpSocketStreamDirection::Receive)
-                .await?
-        {
-            return accessor.with(|mut store| {
-                Ok((
+                .await?;
+        if let Err(error) = acquired {
+            let handles = accessor.with(|mut store| {
+                wasmtime::error::Ok((
                     StreamReader::new(&mut store, std::iter::empty::<u8>())?,
                     FutureReader::new(&mut store, async move { wasmtime::error::Ok(Err(error)) })?,
                 ))
-            });
+            })?;
+            delivery.deliver_at_accessor_terminal(accessor).await?;
+            return Ok(handles);
         }
 
         // Capacity 1 suffices (and bounds memory as defense in depth): the
@@ -1612,7 +1641,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         // task appends the `receive` `Start`; the guest cannot poll either handle
         // until this host call returns, so spawning first would risk committing a
         // `Start` with no terminal if a later handle construction fails.
-        accessor.with(|mut store| {
+        let handles = accessor.with(|mut store| {
             let mut stream =
                 StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
             let future = match FutureReader::new(&mut store, wait_tcp_receive_result(result_rx)) {
@@ -1635,7 +1664,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             );
             store.spawn(async move |store| task.run(store).await)?;
             Ok((stream, future))
-        })
+        })?;
+        delivery.deliver_at_accessor_terminal(accessor).await?;
+        Ok(handles)
     }
 }
 

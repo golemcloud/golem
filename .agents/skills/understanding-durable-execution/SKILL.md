@@ -1027,7 +1027,7 @@ that setting. A fixture without this opt-in can return access-denied before reac
 native wait. Check the actual error rather than assuming the intended wait was reached.
 
 P3 UDP `receive` in `durable_host/p3/sockets/udp/mod.rs` selects the same typed signal only
-around the native live receive. `run_read_access` leaves an interrupted
+around the native live receive. Its durable call session leaves an interrupted
 `P3SocketsTypesUdpSocketReceive` Start incomplete; its call-owned trap context preserves the
 `InterruptKind` root cause. Replay resolution, End persistence, accessor delivery and native
 bind/drop remain outside the select. The call remains `ReadRemote` and repairs its original Start.
@@ -3254,6 +3254,8 @@ delivery must be the tail operation of a host function. Tests: `tests/concurrent
 (bare Wasmtime: guest initiation order is stable across re-execution while host completion order
 is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
+
+P3 TCP `send` and `receive` record their one-shot stream acquisition before creating the guest-facing handles. The acquisition's `CompletionDelivery` stays deferred while the host starts the send call or spawns the receive task. Only the final host return arms its terminal observer, including when acquisition failed. Replay restores the recorded taken flag before building the handles, then delivers at that same boundary. The built-in `node:net` regression `builtin_node_tcp_replays_after_restart` checks successful traffic with sockets enabled, denial with sockets disabled, and completed tool replay without reconnecting in both cases.
 
 For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
 cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
