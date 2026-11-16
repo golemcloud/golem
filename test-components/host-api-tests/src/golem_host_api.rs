@@ -828,6 +828,7 @@ impl GolemHostApi for GolemHostApiImpl {
             .map_err(|error| format!("{error:?}"))?
             .collect()
             .await
+            .map_err(|error| format!("{error:?}"))
     }
 
     fn read_own_oplog_result(&self) -> Result<(), String> {
