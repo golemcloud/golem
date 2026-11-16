@@ -37,7 +37,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut builder = tonic_prost_build::configure()
         .build_server(true)
-        .include_file("mod.rs");
+        .include_file("mod.rs")
+        // Span attributes are kept sorted by key, so that a public oplog entry always lists them
+        // in the same order.
+        .btree_map(".golem.worker.LocalInvocationSpan.attributes")
+        .btree_map(".golem.worker.SpanStarted.attributes")
+        .btree_map(".golem.worker.SpanAttributes.attributes");
 
     for file in &schema_file_descriptors.file {
         let package = file.package();

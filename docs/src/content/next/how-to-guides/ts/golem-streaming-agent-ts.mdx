@@ -89,11 +89,10 @@ must not overlap. Do not collect a potentially large stream into an array merely
   guarantee; consume them concurrently if one could block the other through back-pressure.
 - Clean EOF, explicit `return()`/drop, an aborted call, transport disconnect, and fatal invocation
   failure are different outcomes.
-- P3 agent streams do not carry a recoverable terminal error. Model recoverable failures as items,
-  for example `s.stream(s.result(valueSchema, errorSchema))`.
-- A source iterator or cleanup rejection fails the active production or invocation session rather
-  than becoming clean EOF. Reader drop is cooperative and cannot interrupt an arbitrary pending
-  source `next()`.
+- The reader awaits a completion outcome after item EOF. A failure rejects `next()` once with `StreamError`; later reads end. `error.failure` distinguishes `failed`, `trapped`, `cancelled`, `abandoned`, `interrupted`, and `resource-exhausted`. Cancellation uses the standard `AbortError` name.
+- Throw `StreamError.failed({ graph, value })` from a source iterator for a declared typed failure. Ordinary iterator errors become a typed string failure. Guests may author only success or `failed`; the host selects the other outcomes. An unsettled writer is abandoned on normal body completion, or trapped when its body traps.
+- Catch a failure around `for await` to keep unrelated sibling streams usable. Per-item `s.result(valueSchema, errorSchema)` values remain items and do not end the stream. Forward an unread stream directly to preserve its original outcome.
+- Reader drop is cooperative and cannot interrupt an arbitrary pending source `next()`. Early `return()` closes without waiting for completion.
 
 ## Calling Through Agent RPC
 

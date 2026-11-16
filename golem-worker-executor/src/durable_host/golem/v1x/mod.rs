@@ -112,6 +112,7 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
     match err {
         WorkerExecutorError::InvalidRequest { .. }
         | WorkerExecutorError::AgentAlreadyExists { .. }
+        | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
         | WorkerExecutorError::AgentNotFound { .. }
         | WorkerExecutorError::PromiseNotFound { .. }
         | WorkerExecutorError::PromiseDropped { .. }

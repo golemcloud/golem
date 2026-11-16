@@ -78,6 +78,12 @@ private[golem] object WasmRpcApi {
     catch { case js.JavaScriptException(error) => Left(decodeRpcError(error)) }
   }
 
+  def bindSelf(): Either[RpcError, (String, WasmRpcClient)] =
+    try {
+      val bound = RawWasmRpc.bindSelf()
+      Right((bound._1, new WasmRpcClient(bound._2)))
+    } catch { case js.JavaScriptException(error) => Left(decodeRpcError(error)) }
+
   private def datetimeToJs(datetime: Datetime): JsDatetime = {
     val totalMs            = datetime.epochMillis
     val truncatedWholeMs   = if (totalMs < 0.0) Math.ceil(totalMs) else Math.floor(totalMs)
@@ -123,6 +129,13 @@ private[golem] object WasmRpcApi {
   }
 
   final class WasmRpcClient private[host] (private val underlying: js.Object) {
+    def drop(): Unit = {
+      val symbol = js.Dynamic.global.Symbol.selectDynamic("dispose")
+      val drop   = js.Dynamic.global.Reflect.applyDynamic("get")(underlying, symbol)
+      drop.applyDynamic("call")(underlying)
+      ()
+    }
+
     private def metadata(raw: RawInvocationMetadata): InvocationMetadata =
       InvocationMetadata(raw.agentId, InvocationId(raw.agentId, JsUuid.toUuid(raw.invocationId.id)))
 
@@ -305,6 +318,7 @@ private[golem] object WasmRpcApi {
   @js.native
   @JSImport("golem:agent/host@2.0.0", "WasmRpc")
   private object RawWasmRpc extends js.Object {
+    def bindSelf(): js.Tuple2[String, RawWasmRpc] = js.native
     def create(
       agentTypeName: String,
       constructorPayload: JsSchemaValueTree,

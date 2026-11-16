@@ -172,6 +172,9 @@ message InvokeAgentRequest {
   repeated golem.worker.AgentConfigEntryDto config = 12;
   optional golem.worker.EncodedScopeCard scope_card = 13;
   golem.worker.InvocationRequestKey request_key = 14;
+  // The incarnation the caller expects. A missing agent or another incarnation fails as not
+  // found before anything is enqueued.
+  optional golem.common.UUID expected_callee_fingerprint = 15;
 }
 
 enum InvocationFreshnessDisposition {

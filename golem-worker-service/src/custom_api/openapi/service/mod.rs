@@ -26,6 +26,7 @@ use golem_common::model::agent::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, AgentInvocationResult};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
+use golem_service_base::custom_api::MountTarget;
 use golem_service_base::model::auth::AuthCtx;
 use serde_json::Value;
 use std::sync::Arc;
@@ -131,6 +132,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
                 Principal::anonymous().into(),
                 Some(call.environment_id),
                 None,
+                None,
             )
             .await
             .map_err(|_| OpenApiError::new("provider-invocation"))?;
@@ -173,7 +175,7 @@ impl OpenApiService {
         inputs: Arc<OpenApiInputs>,
     ) -> Result<Arc<OpenApiDocument>, OpenApiError> {
         let providers = inputs.routes.iter().filter(|route| matches!(
-            &route.behavior, RichRouteBehaviour::HttpRouter(router) if router.openapi_provider_method.is_some()
+            &route.behavior, RichRouteBehaviour::Mount(mount) if mount.openapi_provider.is_some()
         )).cloned().collect::<Vec<_>>();
         let documents = stream::iter(providers)
             .map(|route| {
@@ -204,19 +206,21 @@ impl OpenApiService {
                 .unwrap_or_default();
             let mut contributions = Vec::with_capacity(documents.len());
             for (route, text) in documents {
-                let RichRouteBehaviour::HttpRouter(router) = &route.behavior else {
+                let RichRouteBehaviour::Mount(mount) = &route.behavior else {
                     unreachable!()
                 };
+                let MountTarget::AgentMethod(provider) = mount.openapi_provider.as_ref().unwrap();
+                let agent = &provider.agent;
                 let mount = render_full_path(&route.path);
-                let identity = format!("{}:{}:{mount}", router.component_id, router.agent_type.0);
+                let identity = format!("{}:{}:{mount}", agent.component_id, agent.agent_type.0);
                 let document = provider_document::parse(&identity, &text)?;
                 let security = build_security(&route.security, &mut schemes, &inputs.public_origin)
                     .map_err(|_| OpenApiError::new("mount-security"))?;
                 contributions.push(ProviderContribution {
                     router: identity,
                     mount,
-                    router_type: router.agent_type.0.clone(),
-                    component_id: router.component_id,
+                    router_type: agent.agent_type.0.clone(),
+                    component_id: agent.component_id,
                     document,
                     mount_security: serde_json::from_value(security)
                         .map_err(|_| OpenApiError::new("mount-security"))?,
@@ -238,36 +242,31 @@ impl OpenApiService {
 }
 
 fn prepare_call(route: &RichCompiledRoute) -> Result<ProviderCall, OpenApiError> {
-    let RichRouteBehaviour::HttpRouter(router) = &route.behavior else {
+    let RichRouteBehaviour::Mount(mount) = &route.behavior else {
         unreachable!()
     };
+    let MountTarget::AgentMethod(provider) = mount.openapi_provider.as_ref().unwrap();
+    let agent = &provider.agent;
     let key = golem_common::model::InvocationRequestKey::external(None, None);
     let logical = ParsedAgentKey::try_new(
-        router.agent_type.clone(),
+        agent.agent_type.clone(),
         TypedSchemaValue::new(
-            router.constructor_input.graph.clone(),
+            agent.constructor_input.graph.clone(),
             SchemaValue::Record { fields: vec![] },
         ),
         None,
     )
     .map_err(|_| OpenApiError::new("provider-input"))?;
     let identity = logical
-        .with_ephemeral_invocation_phantom(
-            &key.owner_key(&router.openapi_provider_method.as_ref().unwrap().method_name),
-        )
+        .with_ephemeral_invocation_phantom(&key.owner_key(&provider.method.method_name))
         .map_err(|_| OpenApiError::new("provider-input"))?;
     Ok(ProviderCall {
         agent_id: AgentId {
-            component_id: router.component_id,
+            component_id: agent.component_id,
             agent_id: identity.to_string(),
         },
         key,
-        method: router
-            .openapi_provider_method
-            .as_ref()
-            .unwrap()
-            .method_name
-            .clone(),
+        method: provider.method.method_name.clone(),
         environment_id: route.environment_id,
     })
 }

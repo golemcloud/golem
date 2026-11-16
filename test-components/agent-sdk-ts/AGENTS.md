@@ -49,6 +49,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-custom-snapshot-ts` | Enabling snapshotting and custom snapshot save/load functions |
 | `golem-retry-policies-ts` | Configuring semantic retry policies |
 | `golem-quota-ts` | Adding resource quotas (rate limiting, capacity, concurrency) |
+| `golem-permission-card-ts` | Managing permission cards: wallet, derive, inspect, revoke, install, and scope cards on RPC calls |
 | `golem-add-postgres-ts` | Connecting to PostgreSQL with `golem:rdbms/postgres` |
 | `golem-add-mysql-ts` | Connecting to MySQL with `golem:rdbms/mysql` |
 | `golem-add-ignite-ts` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` |
@@ -281,6 +282,15 @@ Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 - `durable(spec, request, body)` — run a non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy.
 - Sagas — `compensable(run, compensate)` steps composed with `fallibleSaga(...)` / `infallibleSaga(...)` for transactional compensation.
 - Promises (human-in-the-loop) — `createPromise()`, `await awaitPromise(id)`, `completePromise(id, bytes)`.
+
+**Custom durability is sequential-only.** `durable` supports properly nested calls and an async
+body that awaits host calls when no unrelated guest work runs during the wait. Do not overlap it
+with other promises or callbacks, including ordinary host calls: sibling effects can acquire the
+wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably detected.
+Await each nested operation; do not detach work. Stop and join outstanding work before the body
+exits, including on failure. `Promise.all` rejection does not join surviving siblings, and joining
+at the end does not make concurrent custom operations supported. Ordinary built-in durability is
+not subject to this restriction when no custom operation is active.
 
 ## Available Libraries
 

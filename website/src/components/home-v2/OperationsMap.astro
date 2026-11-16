@@ -1,0 +1,26 @@
+---
+import Icon from "./Icon.astro";
+---
+
+<figure
+  class="operations-map"
+  aria-label="Users and existing applications call into Golem. Your interface, functions, actors and private data run on the Golem runtime. Run the same application locally, on your infrastructure or in Golem Cloud."
+>
+  <div class="operations-flow">
+    <div class="operations-client">
+      <Icon name="apps" size={26} />
+      <strong>Users &amp; existing apps</strong>
+      <span>HTTP + generated clients</span>
+    </div>
+    <div class="operations-call" aria-hidden="true"><span>Call</span><b>→</b></div>
+    <div class="operations-runtime">
+      <div class="operations-runtime-label"><strong>Golem runtime</strong></div>
+      <div class="operations-app">
+        <span class="micro">YOUR COMPLETE APPLICATION</span>
+        <strong>UI serving · Functions · Actors</strong>
+        <span>Actor memory, files and databases</span>
+      </div>
+    </div>
+  </div>
+  <figcaption>Same application. Run locally, self-hosted or on Golem Cloud.</figcaption>
+</figure>

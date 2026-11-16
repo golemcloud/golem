@@ -22,6 +22,7 @@ describe("DynamicClient", () => {
       }
       const identityError = { tag: "invalid-input", val: "malformed agent ID" }
       const unusedRpc = Layer.succeed(RpcClient, {
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: () => Effect.die("parse failure must not connect"),
       })
       const parsed = yield* parse("bad").pipe(
@@ -41,6 +42,7 @@ describe("DynamicClient", () => {
       })
 
       const rpc = Layer.succeed(RpcClient, {
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: () => Effect.fail(new RpcHostError(structured, "WasmRpc.create")),
       })
       const identity = yield* parse("valid").pipe(Effect.provide(hostLayer()))
@@ -81,7 +83,10 @@ describe("DynamicClient", () => {
         }),
         drop: () => undefined,
       } as unknown as RpcConnection
-      const rpc = Layer.succeed(RpcClient, { connect: () => Effect.succeed(connection) })
+      const rpc = Layer.succeed(RpcClient, {
+        bindSelf: () => Effect.die("unexpected self binding"),
+        connect: () => Effect.succeed(connection),
+      })
 
       yield* Effect.scoped(
         Effect.gen(function* () {

@@ -930,9 +930,10 @@ fn collector_call_abandoned_by_entity(
 
 #[test]
 fn collector_abandonment_requires_the_owning_entity_cancellation() {
+    use golem_common::model::Timestamp;
     use golem_common::model::oplog::PublicDurableFunctionType;
     use golem_common::model::oplog::public_oplog_entry::{CancelledParams, EndParams, StartParams};
-    use golem_common::model::{Empty, Timestamp};
+    use golem_schema::Empty;
 
     let entry = |index, entry| PublicOplogEntryWithIndex {
         oplog_index: OplogIndex::from_u64(index),

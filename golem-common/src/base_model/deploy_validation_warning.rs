@@ -160,17 +160,20 @@ impl fmt::Display for DeployValidationWarning {
 }
 
 fn render_http_method(method: &HttpMethod) -> &'static str {
+    use golem_schema::http as schema_http;
     match method {
-        HttpMethod::Get(_) => "GET",
-        HttpMethod::Head(_) => "HEAD",
-        HttpMethod::Post(_) => "POST",
-        HttpMethod::Put(_) => "PUT",
-        HttpMethod::Delete(_) => "DELETE",
-        HttpMethod::Connect(_) => "CONNECT",
-        HttpMethod::Options(_) => "OPTIONS",
-        HttpMethod::Trace(_) => "TRACE",
-        HttpMethod::Patch(_) => "PATCH",
-        HttpMethod::Custom(_) => "<custom>",
+        HttpMethod::Method(method) => match method {
+            schema_http::HttpMethod::Get(_) => "GET",
+            schema_http::HttpMethod::Head(_) => "HEAD",
+            schema_http::HttpMethod::Post(_) => "POST",
+            schema_http::HttpMethod::Put(_) => "PUT",
+            schema_http::HttpMethod::Delete(_) => "DELETE",
+            schema_http::HttpMethod::Connect(_) => "CONNECT",
+            schema_http::HttpMethod::Options(_) => "OPTIONS",
+            schema_http::HttpMethod::Trace(_) => "TRACE",
+            schema_http::HttpMethod::Patch(_) => "PATCH",
+            schema_http::HttpMethod::Custom(_) => "<custom>",
+        },
         HttpMethod::Any(_) => "<any>",
     }
 }

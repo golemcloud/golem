@@ -71,6 +71,7 @@ mod gc_timed_cleanup;
 mod held_response_restart;
 mod hint_before_rpc_start;
 mod input_gc;
+mod kept_handle_deleting_child;
 mod replay_barrier_probe;
 mod websocket_crash_probe;
 
@@ -2087,17 +2088,25 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                 Some(invocation_response::Response::Finished(completion)) => {
                     match completion.outcome {
                         Some(invocation_session_completion::Outcome::Success(_)) => {
-                            assert_eq!(terminal, StreamTerminal::Finished);
-                            assert_eq!(observed, Some(SchemaValue::U64(1)));
+                            let expected = match &terminal {
+                                StreamTerminal::Finished => {
+                                    SchemaValue::Result(ResultValuePayload::Ok {
+                                        value: Some(Box::new(SchemaValue::U64(1))),
+                                    })
+                                }
+                                StreamTerminal::Failed(error) => {
+                                    SchemaValue::Result(ResultValuePayload::Err {
+                                        value: Some(Box::new(SchemaValue::String(format!(
+                                            "{error:?}"
+                                        )))),
+                                    })
+                                }
+                                _ => unreachable!(),
+                            };
+                            assert_eq!(observed, Some(expected), "restart={restart}");
                         }
                         Some(invocation_session_completion::Outcome::Failure(failure)) => {
-                            assert_ne!(terminal, StreamTerminal::Finished);
-                            assert!(observed.is_none(), "failed native read must not return EOF");
-                            assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
-                            assert!(
-                                failure.message.contains("stream terminated: Failed("),
-                                "wrong failure for {terminal:?}, restart={restart}: {failure:?}"
-                            );
+                            anyhow::bail!("stream outcome must be catchable: {failure:?}");
                         }
                         None => anyhow::bail!("terminal observation has no completion outcome"),
                     }
@@ -9787,6 +9796,56 @@ async fn generated_rust_client_streaming_rpc_e2e(
 }
 
 #[test]
+#[timeout("3 minutes")]
+async fn guest_stream_outcomes_preserve_prefix_forwarding_and_replayed_effects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    for (kind, outcome) in [(0u8, 73u32), (1, 1), (2, 2), (3, 2)] {
+        let name = format!("outcome-{kind}");
+        let caller_id = agent_id!("StreamingRpcCaller", name.clone());
+        let caller = executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &caller_id,
+                "catch_producer_outcome",
+                data_value!(kind),
+            )
+            .await?
+            .into_typed::<Vec<u32>>()?;
+        assert_eq!(result, vec![17, 29, outcome, 1]);
+
+        executor.simulated_crash(&caller).await?;
+        // A fresh call reconstructs the completed reading invocation, including its outcome
+        // observation and the effect that was conditional on that outcome.
+        executor
+            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
+            .await?;
+        let effect_id = agent_id!("StreamingRpcTarget", format!("{name}-outcome-effect"));
+        let count = executor
+            .invoke_and_await_agent(&component, &effect_id, "scalar_value", data_value!())
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(
+            count, 1,
+            "outcome-dependent effect repeated for kind {kind}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
 async fn rpc_suspension_retries_after_concurrent_http_wait_finishes(
@@ -11125,6 +11184,292 @@ async fn completed_fire_and_forget_rpc_replays_span_before_result(
         .await?
         .into_typed::<u32>()?;
     assert_eq!(after_replay, 3);
+
+    Ok(())
+}
+
+const KEPT_RPC_CALLS: [&str; 3] = [
+    "kept_agent_rpc_invoke_and_await_result",
+    "kept_agent_rpc_async_invoke_and_await_result",
+    "kept_agent_rpc_invoke_result",
+];
+
+async fn assert_kept_rpc_call_is_not_found(
+    executor: &TestWorkerExecutor,
+    caller_component: &ComponentDto,
+    caller: &ParsedAgentKey,
+    method: &str,
+) -> anyhow::Result<()> {
+    let result = executor
+        .invoke_and_await_agent(caller_component, caller, method, data_value!("increment"))
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert!(
+        matches!(&result, Err(error) if error.starts_with("RpcError::NotFound(")),
+        "{method} through a handle to a deleted incarnation must fail as not found: {result:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn rpc_handle_does_not_reach_a_recreated_child(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let counter_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "kept-handle-recreated-caller");
+    let counter = agent_id!("Counter", "kept-handle-recreated-child");
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+
+    let kept = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "keep_agent_rpc",
+            data_value!("Counter", "kept-handle-recreated-child", "increment"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(kept, Ok(()));
+
+    let counter_worker =
+        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&counter_worker).await?;
+    let recreated = executor
+        .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(recreated, 1);
+
+    for method in KEPT_RPC_CALLS {
+        assert_kept_rpc_call_is_not_found(&executor, &caller_component, &caller, method).await?;
+    }
+
+    let after = executor
+        .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(
+        after, 2,
+        "calls through the old handle must not reach the new incarnation"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn rpc_handle_does_not_recreate_a_deleted_child_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let counter_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "kept-handle-deleted-caller");
+    let counter = agent_id!("Counter", "kept-handle-deleted-child");
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+
+    let kept = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "keep_agent_rpc",
+            data_value!("Counter", "kept-handle-deleted-child", "increment"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(kept, Ok(()));
+
+    let counter_worker =
+        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&counter_worker).await?;
+    let mut executor = executor;
+
+    // Each call kind runs after its own restart, so each one re-activates the recorded target.
+    for method in KEPT_RPC_CALLS {
+        drop(executor);
+        executor = start(deps, &context).await?;
+        assert_kept_rpc_call_is_not_found(&executor, &caller_component, &caller, method).await?;
+        assert!(
+            executor
+                .get_worker_metadata_opt(&counter_worker)
+                .await?
+                .is_none(),
+            "re-activating a recorded RPC target in {method} must not create the deleted child"
+        );
+    }
+
+    Ok(())
+}
+
+// A kept handle is answered for its pinned incarnation before the method is validated, so a
+// deleted child stays not found even when the deployed revision no longer has the method.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn rpc_handle_to_a_deleted_child_is_not_found_after_its_component_changes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let counter_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "kept-handle-updated-caller");
+    let counter = agent_id!("Counter", "kept-handle-updated-child");
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+
+    let kept = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "keep_agent_rpc",
+            data_value!("Counter", "kept-handle-updated-child", "increment"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(kept, Ok(()));
+
+    let counter_worker =
+        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&counter_worker).await?;
+    // The new deployed revision still has a `Counter` agent type, but without `increment`.
+    executor
+        .update_component(&counter_component.id, &agent_rpc_rust.wasm_name)
+        .await?;
+
+    for method in KEPT_RPC_CALLS {
+        assert_kept_rpc_call_is_not_found(&executor, &caller_component, &caller, method).await?;
+    }
+
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn rpc_handle_does_not_recreate_a_deleted_child_through_a_streaming_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const STREAMING_CALL: &str = "kept_agent_rpc_invoke_and_await_u64_stream_result";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let target_component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "kept-handle-streaming-caller");
+    let target = agent_id!("StreamingRpcTarget", "kept-handle-streaming-child");
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+
+    let kept = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "keep_agent_rpc",
+            data_value!("StreamingRpcTarget", "kept-handle-streaming-child", "ping"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(kept, Ok(()));
+
+    let streamed = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            STREAMING_CALL,
+            data_value!("increment_stream"),
+        )
+        .await?
+        .into_typed::<Result<Vec<u64>, String>>()?;
+    assert_eq!(streamed, Ok(vec![1]));
+
+    let target_worker =
+        AgentId::from_agent_id(target_component.id, &target).map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&target_worker).await?;
+    let mut executor = executor;
+
+    for restarted in [false, true] {
+        if restarted {
+            drop(executor);
+            executor = start(deps, &context).await?;
+        }
+        let result = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &caller,
+                STREAMING_CALL,
+                data_value!("increment_stream"),
+            )
+            .await?
+            .into_typed::<Result<Vec<u64>, String>>()?;
+        assert!(
+            matches!(&result, Err(error) if error.starts_with("RpcError::NotFound(")),
+            "a streaming call through a handle to a deleted child must fail as not found \
+             (restarted: {restarted}): {result:?}"
+        );
+        assert!(
+            executor
+                .get_worker_metadata_opt(&target_worker)
+                .await?
+                .is_none(),
+            "a streaming call through a handle to a deleted child must not create it \
+             (restarted: {restarted})"
+        );
+    }
 
     Ok(())
 }

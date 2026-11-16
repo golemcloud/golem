@@ -1,0 +1,2 @@
+*.json text eol=lf
+*.body -text whitespace=-blank-at-eof
