@@ -125,9 +125,22 @@ const capabilityIds = ["budget", "journal", "coordinate", "operate"];
             </p>
           </div><Primitives /><div class="primitive-access">
             <div class="primitive-interfaces">
-              <span>Interfaces</span>
+              <h3>{t(2, "Interfaces heading")}</h3>
               <ul aria-label="Available interfaces">
-                {lines(t(2, "Interfaces")).map((name) => <li>{name}</li>)}
+                {
+                  lines(t(2, "Interfaces")).map((entry, i) => {
+                    const [name, purpose] = entry.split(" | ");
+                    return (
+                      <li>
+                        <Icon name={["web", "plug", "messages", "terminal"][i]} size={24} />
+                        <div>
+                          <strong>{name}</strong>
+                          <span>{purpose}</span>
+                        </div>
+                      </li>
+                    );
+                  })
+                }
               </ul>
             </div><a class="primitive-cta" href={links.primitives}>
               <span>{t(2, "Link").replace(/\s*→$/, "")}</span>{" "}<span aria-hidden="true">→</span>
