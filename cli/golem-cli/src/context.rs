@@ -87,7 +87,11 @@ pub struct Context {
     manifest_version_source: Option<AppVersionSource>,
     manifest_local_server: Option<ResolvedLocalServer>,
     app_context_config: Option<ApplicationContextConfig>,
-    app_source_mode: ApplicationSourceMode,
+    /// How the global flags select the manifests: the root manifest, the search for it, or none.
+    manifest_discovery: ApplicationSourceMode,
+    /// The directory that the manifest search at start began in, when it found the manifests.
+    /// A tool call of `golem mcp serve` searches again from it.
+    manifest_search_dir: Option<PathBuf>,
     http_batch_size: u64,
     http_parallelism: usize,
     agent_stream_ping_interval: Duration,
@@ -206,8 +210,12 @@ impl Context {
             )?;
         }
 
-        let preloaded_app =
-            ApplicationContext::preload_application(app_source_mode, global_flags.dev_mode)?;
+        let manifest_discovery = app_source_mode.clone();
+        let preloaded_app = ApplicationContext::preload_application(
+            app_source_mode,
+            &crate::fs::current_dir_lexical()?,
+            global_flags.dev_mode,
+        )?;
 
         if preloaded_app.loaded_with_warnings
             && log_output_for_help.is_none()
@@ -217,6 +225,10 @@ impl Context {
         }
 
         let app_source_mode = preloaded_app.source_mode;
+        let manifest_search_dir = match &app_source_mode {
+            ApplicationSourceMode::Preloaded(loaded) => Some(loaded.calling_working_dir.clone()),
+            _ => None,
+        };
         let manifest_local_server = preloaded_app.resolved_local_server;
         let application_preload = preloaded_app.application_preload;
 
@@ -428,9 +440,10 @@ impl Context {
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 SHOULD_COLORIZE.should_colorize(),
-                app_source_mode.clone(),
+                app_source_mode,
             )),
-            app_source_mode,
+            manifest_discovery,
+            manifest_search_dir,
             caches: Caches::new(),
             cancellation: Cancellation::default(),
         })
@@ -438,8 +451,11 @@ impl Context {
 
     /// The context of one tool call of `golem mcp serve`, made from the server's context: the
     /// same profile, server, manifest selection and settings, without a new selection of the
-    /// profile or the manifest environment. Only the profile's login token is read again from
-    /// the config, so that a login in a terminal applies to the next call. It works only in
+    /// profile or the manifest environment. Only the profile's login token and the manifests are
+    /// read again: the token from the config, so that a login in a terminal applies to the next
+    /// call, and the manifests from the same root and directory as at start, so that a call
+    /// selects the components that the manifests have now. The application, its environments and
+    /// their deployment settings stay as at start. It works only in
     /// `environment`, the server's environment. It confirms a command only when the call
     /// confirms, so neither `--yes` nor the manifest's `cli.autoConfirm` confirms a command. The
     /// questions about the manifest itself keep the answer that the server got at start.
@@ -458,6 +474,17 @@ impl Context {
             });
         };
         profile.profile.auth = stored.profile.auth;
+        let app_source_mode = match &self.manifest_search_dir {
+            Some(search_dir) => {
+                ApplicationContext::preload_application(
+                    self.manifest_discovery.clone(),
+                    search_dir,
+                    self.dev_mode,
+                )?
+                .source_mode
+            }
+            None => ApplicationSourceMode::None,
+        };
         Ok(Self {
             config_dir: self.config_dir.clone(),
             format: self.format,
@@ -475,7 +502,8 @@ impl Context {
             manifest_version_source: self.manifest_version_source.clone(),
             manifest_local_server: self.manifest_local_server.clone(),
             app_context_config: self.app_context_config.clone(),
-            app_source_mode: self.app_source_mode.clone(),
+            manifest_discovery: self.manifest_discovery.clone(),
+            manifest_search_dir: self.manifest_search_dir.clone(),
             http_batch_size: self.http_batch_size,
             http_parallelism: self.http_parallelism,
             agent_stream_ping_interval: self.agent_stream_ping_interval,
@@ -492,7 +520,7 @@ impl Context {
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 self.yes,
                 self.should_colorize,
-                self.app_source_mode.clone(),
+                app_source_mode,
             )),
             caches: Caches::new(),
             cancellation,

@@ -523,6 +523,23 @@ async fn mcp_serve_works_on_the_current_deployment() {
     structured(&updated);
     let get = call(&client, "agent_get", json!({"agent_id": agent})).await;
     assert_eq!(structured(&get)["metadata"]["componentRevision"], json!(1));
+
+    // Each call reads the manifests again: a component renamed in golem.yaml is the one that a
+    // call selects, also without a deployment.
+    let manifest = std::fs::read_to_string(ctx.cwd_path_join("golem.yaml")).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        manifest.replace("it:agent-counters:", "it:agent-renamed:"),
+    )
+    .unwrap();
+    let renamed = call(&client, "agent_list", json!({})).await;
+    assert_eq!(error_code(&renamed), "command-failed", "{renamed:?}");
+    let message = error_message(&renamed);
+    assert!(message.contains("it:agent-renamed"), "{message}");
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), manifest).unwrap();
+    let listed = call(&client, "agent_list", json!({})).await;
+    let listed = structured(&listed).to_string();
+    assert!(listed.contains("mcp-update"), "{listed}");
     client.cancel().await.unwrap();
 }
 
