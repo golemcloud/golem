@@ -12,33 +12,129 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro::TokenStream;
-use syn::{DeriveInput, Fields, Ident, parse_macro_input};
+use std::collections::HashSet;
+use syn::ext::IdentExt;
+use syn::{DeriveInput, Fields, Ident, LitStr, parse_macro_input};
 
-pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> TokenStream {
-    let ast = parse_macro_input!(input as DeriveInput);
+struct ConfigField<'a> {
+    ident: &'a Ident,
+    ty: &'a syn::Type,
+    name: String,
+    secret: bool,
+    nested: bool,
+    default: Option<LitStr>,
+}
 
-    // Only structs with named fields are supported
+fn config_fields(ast: &DeriveInput) -> syn::Result<Vec<ConfigField<'_>>> {
+    let mut rename_all = "camelCase".to_string();
+    for attr in &ast.attrs {
+        if attr.path().is_ident("config_schema") {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("rename_all") {
+                    rename_all = meta.value()?.parse::<LitStr>()?.value();
+                    Ok(())
+                } else {
+                    Err(meta.error("expected rename_all"))
+                }
+            })?;
+        }
+    }
+    let rename: fn(&str) -> String = match rename_all.as_str() {
+        "preserve" => str::to_string,
+        "camelCase" => str::to_lower_camel_case,
+        "PascalCase" => str::to_upper_camel_case,
+        "snake_case" => str::to_snake_case,
+        "kebab-case" => str::to_kebab_case,
+        "SCREAMING_SNAKE_CASE" => str::to_shouty_snake_case,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                ast,
+                "unsupported config rename_all strategy",
+            ));
+        }
+    };
     let fields = match &ast.data {
         syn::Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => &fields.named,
             _ => {
-                return syn::Error::new_spanned(
-                    &ast.ident,
+                return Err(syn::Error::new_spanned(
+                    ast,
                     "ConfigSchema only supports structs with named fields",
-                )
-                .to_compile_error()
-                .into();
+                ));
             }
         },
         _ => {
-            return syn::Error::new_spanned(
-                &ast.ident,
+            return Err(syn::Error::new_spanned(
+                ast,
                 "ConfigSchema can only be derived for structs",
-            )
-            .to_compile_error()
-            .into();
+            ));
         }
+    };
+    let mut names = HashSet::new();
+    let mut result = Vec::new();
+    for field in fields {
+        let ident = field.ident.as_ref().unwrap();
+        let mut config = ConfigField {
+            ident,
+            ty: &field.ty,
+            name: rename(&ident.unraw().to_string()),
+            secret: false,
+            nested: false,
+            default: None,
+        };
+        for attr in &field.attrs {
+            if attr.path().is_ident("config_schema") {
+                attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("secret") {
+                        config.secret = true;
+                    } else if meta.path.is_ident("nested") {
+                        config.nested = true;
+                    } else if meta.path.is_ident("rename") {
+                        config.name = meta.value()?.parse::<LitStr>()?.value();
+                    } else if meta.path.is_ident("default") {
+                        config.default = Some(meta.value()?.parse::<LitStr>()?);
+                    } else {
+                        return Err(meta.error(
+                            "expected secret, nested, rename or default (canonical JSON string)",
+                        ));
+                    }
+                    Ok(())
+                })?;
+            }
+        }
+        if config.name.is_empty() || config.name.contains('.') || config.name.starts_with('$') {
+            return Err(syn::Error::new_spanned(
+                field,
+                "config fields must have nonempty names without '.' or a leading '$'",
+            ));
+        }
+        if !names.insert(config.name.clone()) {
+            return Err(syn::Error::new_spanned(
+                field,
+                "duplicate canonical config field name",
+            ));
+        }
+        if config.secret && config.nested
+            || config.default.is_some() && (config.secret || config.nested)
+        {
+            return Err(syn::Error::new_spanned(
+                field,
+                "secret and nested fields cannot have defaults or combine their kinds",
+            ));
+        }
+        result.push(config);
+    }
+    Ok(result)
+}
+
+pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+
+    let fields = match config_fields(&ast) {
+        Ok(fields) => fields,
+        Err(error) => return error.to_compile_error().into(),
     };
 
     let struct_name = &ast.ident;
@@ -48,11 +144,11 @@ pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) 
         struct_name,
         &rpc_struct_name,
         golem_rust_crate_ident,
-        fields,
+        &fields,
     );
-    let rpc_struct = generate_rpc_struct(&rpc_struct_name, golem_rust_crate_ident, fields);
+    let rpc_struct = generate_rpc_struct(&rpc_struct_name, golem_rust_crate_ident, &fields);
     let as_rpc_impl =
-        generate_into_rpc_config_param_impl(&rpc_struct_name, golem_rust_crate_ident, fields);
+        generate_into_rpc_config_param_impl(&rpc_struct_name, golem_rust_crate_ident, &fields);
 
     let expanded = quote::quote! {
         #rpc_struct
@@ -67,23 +163,30 @@ fn generate_config_schema_impl(
     struct_name: &Ident,
     rpc_struct_name: &Ident,
     golem_rust_crate_ident: &Ident,
-    fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
+    fields: &[ConfigField<'_>],
 ) -> proc_macro2::TokenStream {
     let mut append_config_entries = Vec::new();
     let mut append_wire_entries = Vec::new();
     let mut load_entries = Vec::new();
 
     for field in fields {
-        let field_ident = field.ident.as_ref().unwrap();
-        let field_name_str = field_ident.to_string();
-        let field_ty = &field.ty;
+        let field_ident = field.ident;
+        let field_name_str = &field.name;
+        let field_ty = field.ty;
+        let default_value = match &field.default {
+            Some(json) => quote::quote! {
+                Some(#golem_rust_crate_ident::agentic::static_config_default::<#field_ty>(#json)
+                    .expect(concat!("invalid code default for config field ", #field_name_str)))
+            },
+            None => quote::quote! { None },
+        };
 
-        let wire_entry = if has_nested_attr(field) {
+        let wire_entry = if field.nested {
             quote::quote! {
                 config_entries.extend(<#field_ty as #golem_rust_crate_ident::agentic::ConfigSchema>::describe_wire_config(&field_path, builder));
             }
         } else {
-            let (source, value_type) = if has_secret_attr(field) {
+            let (source, value_type) = if field.secret {
                 (
                     quote::quote! { Secret },
                     quote::quote! {{
@@ -104,7 +207,7 @@ fn generate_config_schema_impl(
                     source: #golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigSource::#source,
                     path: field_path,
                     value_type: #value_type,
-                    default_value: None,
+                    default_value: #default_value,
                 });
             }
         };
@@ -114,7 +217,7 @@ fn generate_config_schema_impl(
             #wire_entry
         }});
 
-        if has_nested_attr(field) {
+        if field.nested {
             append_config_entries.push(quote::quote! {
                 {
                     let mut field_path = path.to_vec();
@@ -130,7 +233,7 @@ fn generate_config_schema_impl(
                     <#field_ty as #golem_rust_crate_ident::agentic::ConfigSchema>::load(&field_path)?
                 }
             });
-        } else if has_secret_attr(field) {
+        } else if field.secret {
             append_config_entries.push(quote::quote! {
                 {
                     let mut field_path = path.to_vec();
@@ -162,7 +265,7 @@ fn generate_config_schema_impl(
                         path: field_path,
                         value_type: #golem_rust_crate_ident::schema::try_into_schema_graph::<#field_ty>()
                             .expect("failed to build config schema graph"),
-                        default_value: None,
+                        default_value: #default_value,
                     };
                     config_entries.push(config_entry);
                 }
@@ -212,17 +315,17 @@ fn generate_config_schema_impl(
 fn generate_rpc_struct(
     rpc_struct_name: &Ident,
     golem_rust_crate_ident: &Ident,
-    fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
+    fields: &[ConfigField<'_>],
 ) -> proc_macro2::TokenStream {
     let mut rpc_fields = Vec::new();
 
     for field in fields {
-        let field_ident = field.ident.as_ref().unwrap();
-        let field_ty = &field.ty;
+        let field_ident = field.ident;
+        let field_ty = field.ty;
 
-        if has_secret_attr(field) {
+        if field.secret {
             continue; // secrets are omitted
-        } else if has_nested_attr(field) {
+        } else if field.nested {
             rpc_fields.push(quote::quote! {
                 pub #field_ident: <#field_ty as #golem_rust_crate_ident::agentic::ConfigSchema>::RpcType
             });
@@ -244,18 +347,18 @@ fn generate_rpc_struct(
 fn generate_into_rpc_config_param_impl(
     rpc_struct_name: &Ident,
     golem_rust_crate_ident: &Ident,
-    fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
+    fields: &[ConfigField<'_>],
 ) -> proc_macro2::TokenStream {
     let mut field_processes = Vec::new();
 
     for field in fields {
-        let field_ident = field.ident.as_ref().unwrap();
-        let field_name_str = field_ident.to_string();
-        let field_ty = &field.ty;
+        let field_ident = field.ident;
+        let field_name_str = &field.name;
+        let field_ty = field.ty;
 
-        if has_secret_attr(field) {
+        if field.secret {
             continue; // secrets omitted
-        } else if has_nested_attr(field) {
+        } else if field.nested {
             field_processes.push(quote::quote! {
                 {
                     let mut field_path = path.to_vec();
@@ -268,7 +371,7 @@ fn generate_into_rpc_config_param_impl(
         } else {
             field_processes.push(quote::quote! {
                 {
-                    if let Some(value) = self.#field_ident.clone() {
+                    if let Some(value) = self.#field_ident {
                         let mut field_path = path.to_vec();
                         field_path.push(#field_name_str.to_string());
 
@@ -297,22 +400,48 @@ fn generate_into_rpc_config_param_impl(
     }
 }
 
-fn has_secret_attr(field: &syn::Field) -> bool {
-    field.attrs.iter().any(|attr| {
-        attr.path().is_ident("config_schema")
-            && attr
-                .parse_args::<Ident>()
-                .map(|i| i == "secret")
-                .unwrap_or(false)
-    })
-}
+#[cfg(test)]
+mod tests {
+    use super::config_fields;
+    use test_r::test;
 
-fn has_nested_attr(field: &syn::Field) -> bool {
-    field.attrs.iter().any(|attr| {
-        attr.path().is_ident("config_schema")
-            && attr
-                .parse_args::<Ident>()
-                .map(|i| i == "nested")
-                .unwrap_or(false)
-    })
+    #[test]
+    fn config_schema_rejects_invalid_static_declarations() {
+        for (source, diagnostic) in [
+            (
+                r#"struct Config { #[config_schema(default = factory)] value: u32 }"#,
+                "expected string literal",
+            ),
+            (
+                r#"struct Config { #[config_schema(secret, default = "null")] value: Secret<String> }"#,
+                "cannot have defaults",
+            ),
+            (
+                r#"struct Config { #[config_schema(nested, default = "{}")] value: Nested }"#,
+                "cannot have defaults",
+            ),
+            (
+                r#"struct Config { #[config_schema(rename = "$reserved")] value: u32 }"#,
+                "leading '$'",
+            ),
+            (
+                r#"struct Config { #[config_schema(rename = "a.b")] value: u32 }"#,
+                "without '.'",
+            ),
+            (
+                r#"#[config_schema(rename_all = "camelCase")] struct Config { max_chars: u32, maxChars: u32 }"#,
+                "duplicate canonical",
+            ),
+            (
+                r#"#[config_schema(rename_all = "unknown")] struct Config {}"#,
+                "unsupported config rename_all",
+            ),
+        ] {
+            let ast = syn::parse_str(source).unwrap();
+            let error = config_fields(&ast)
+                .err()
+                .expect("declaration must be rejected");
+            assert!(error.to_string().contains(diagnostic), "{source}: {error}");
+        }
+    }
 }

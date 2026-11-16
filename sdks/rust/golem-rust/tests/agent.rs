@@ -2308,12 +2308,12 @@ mod tests {
                 ),
                 (
                     AgentConfigSource::Secret,
-                    vec!["nested".to_string(), "nested_secret".to_string(),],
+                    vec!["nested".to_string(), "nestedSecret".to_string(),],
                     "Secret(SchemaTypeBody::BoolType)".to_string()
                 ),
                 (
                     AgentConfigSource::Secret,
-                    vec!["api_key".to_string()],
+                    vec!["apiKey".to_string()],
                     "Secret(SchemaTypeBody::StringType)".to_string()
                 )
             ]

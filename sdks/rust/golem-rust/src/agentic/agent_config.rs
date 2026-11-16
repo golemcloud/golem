@@ -85,6 +85,45 @@ pub trait ConfigSchema: Sized {
     fn load(path: &[String]) -> Result<Self, ConfigValueError>;
 }
 
+/// Validates and exports data for a derived static config default.
+#[doc(hidden)]
+pub fn static_config_default<T: WireSchema>(json: &str) -> Result<String, String> {
+    use crate::schema::render::{from_untrusted_json_value, to_json_value};
+    use crate::schema::validation::{validate_graph, validate_value};
+    use crate::schema::wit::wire::SchemaTypeBody;
+
+    let wire = direct::schema::<T>();
+    for node in &wire.type_nodes {
+        match &node.body {
+            SchemaTypeBody::SecretType(_)
+            | SchemaTypeBody::QuotaTokenType(_)
+            | SchemaTypeBody::PermissionCardType(_)
+            | SchemaTypeBody::StreamType(_)
+            | SchemaTypeBody::FutureType(_) => {
+                return Err(
+                    "code defaults contain static data, not capabilities, streams or futures"
+                        .to_string(),
+                );
+            }
+            SchemaTypeBody::RecordType(fields)
+                if fields.iter().any(|field| field.name.starts_with('$')) =>
+            {
+                return Err("config schema field names cannot start with '$'".to_string());
+            }
+            _ => {}
+        }
+    }
+    let graph = crate::decode_schema_graph(&wire).map_err(|error| error.to_string())?;
+    validate_graph(&graph).map_err(|errors| format!("{errors:?}"))?;
+    let json = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let value =
+        from_untrusted_json_value(&graph, &graph.root, &json).map_err(|error| error.to_string())?;
+    validate_value(&graph, &graph.root, &value).map_err(|errors| format!("{errors:?}"))?;
+    let canonical =
+        to_json_value(&graph, &graph.root, &value).map_err(|error| error.to_string())?;
+    serde_json::to_string(&canonical).map_err(|error| error.to_string())
+}
+
 impl ConfigSchema for () {
     type RpcType = ();
 
