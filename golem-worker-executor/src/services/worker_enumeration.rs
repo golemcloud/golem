@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn and_with_no_mode_constraint_defaults_to_durable() {
-        let f = AgentFilter::new_and(vec![AgentFilter::new_name(
+        let f = AgentFilter::new_and(vec![AgentFilter::new_key(
             StringFilterComparator::Equal,
             "x".to_string(),
         )]);
@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn and_with_single_mode_equal_uses_it() {
         let f = AgentFilter::new_and(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "x".to_string()),
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
         ]);
         assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Ephemeral));
@@ -487,12 +487,12 @@ mod tests {
 
     #[test]
     fn and_with_nested_or_containing_mode_returns_none() {
-        // And([ Or([ Mode(Equal, Ephemeral), Name(Equal, "x") ]) ])
+        // And([ Or([ Mode(Equal, Ephemeral), Key(Equal, "x") ]) ])
         // The Or can be satisfied by Ephemeral agents, so we must not narrow
         // the scan to Durable just because there's no top-level Mode child.
         let f = AgentFilter::new_and(vec![AgentFilter::new_or(vec![
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
-            AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "x".to_string()),
         ])]);
         assert_eq!(modes_from_filter(&Some(f)), None);
     }
@@ -513,32 +513,32 @@ mod tests {
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
             AgentFilter::new_or(vec![
                 AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
-                AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+                AgentFilter::new_key(StringFilterComparator::Equal, "x".to_string()),
             ]),
         ]);
         assert_eq!(modes_from_filter(&Some(f)), None);
     }
 
     #[test]
-    fn name_only_filter_defaults_to_durable() {
+    fn key_only_filter_defaults_to_durable() {
         // A filter that doesn't reference Mode at all defaults to Durable,
         // matching the no-filter behaviour.
-        let f = AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string());
+        let f = AgentFilter::new_key(StringFilterComparator::Equal, "x".to_string());
         assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
     }
 
     #[test]
     fn or_without_mode_defaults_to_durable() {
         let f = AgentFilter::new_or(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "a".to_string()),
-            AgentFilter::new_name(StringFilterComparator::Equal, "b".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "a".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "b".to_string()),
         ]);
         assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
     }
 
     #[test]
     fn not_without_mode_defaults_to_durable() {
-        let f = AgentFilter::new_not(AgentFilter::new_name(
+        let f = AgentFilter::new_not(AgentFilter::new_key(
             StringFilterComparator::Equal,
             "x".to_string(),
         ));

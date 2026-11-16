@@ -897,7 +897,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let affected_wallets = if wallet_changed {
             vec![CardHolder::Agent(AgentCardHolder {
                 environment_id: self.owned_agent_id.environment_id,
-                agent_id: self.owned_agent_id.agent_id.clone(),
+                agent_id: self.owned_agent_id.agent_id,
             })]
         } else {
             Vec::new()
@@ -1013,7 +1013,7 @@ pub(crate) fn agent_monomorphization_context(
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
         agent: golem_common::model::card::owner::AgentOwnerLeaf {
-            agent_id: owned_agent_id.agent_id.clone(),
+            agent_id: owned_agent_id.agent_id,
             agent_type: Some(agent_id.agent_type.clone()),
         },
         owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
@@ -1032,7 +1032,7 @@ fn component_baseline_monomorphization_context(
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
         agent: golem_common::model::card::owner::AgentOwnerLeaf {
-            agent_id: owned_agent_id.agent_id.clone(),
+            agent_id: owned_agent_id.agent_id,
             agent_type: None,
         },
         owner:
@@ -1552,7 +1552,10 @@ mod tests {
             application: "shop".try_into().unwrap(),
             environment: "prod".try_into().unwrap(),
             component: golem_common::model::component::ComponentName("migrations".into()),
-            agent_name: "Migrator(test)".into(),
+            agent: golem_common::model::card::owner::AgentOwnerLeaf {
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
+                agent_type: Some(AgentTypeName("Migrator".into())),
+            },
             owner: RecipientOwnerContext::AgentType(AgentTypeName("Migrator".into())),
         };
         let defaults = StoredCard::Polymorphic(PolymorphicCard {

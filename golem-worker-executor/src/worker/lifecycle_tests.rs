@@ -21,10 +21,7 @@ async fn entity_fence_keeps_attached_store_and_registration_until_the_body_exits
     }
     let owner = OwnedAgentId::new(
         golem_common::model::environment::EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "fenced-body".into(),
-        },
+        &AgentId::from_parts(7, 1),
     );
     let activation = Arc::new(
         EntityActivation::new(
@@ -51,7 +48,7 @@ async fn entity_fence_keeps_attached_store_and_registration_until_the_body_exits
         OplogIndex::from_u64(1),
         activation,
         Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
+            agent_id: owner.agent_id,
         }),
         InvocationExecutionMode::Live,
         InvocationId(Uuid::new_v4()),

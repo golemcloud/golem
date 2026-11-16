@@ -559,7 +559,7 @@ impl EntityInvocationDurability {
                 .unwrap_or_default(),
         );
         let calling_principal = Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
+            agent_id: owner.agent_id,
         });
         let idempotency_key = uuid::Uuid::new_v5(
             &key_context.caller_key.0,
@@ -1714,10 +1714,7 @@ mod tests {
     fn invocation() -> EntityInvocationId {
         let owner = golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".to_string(),
-            },
+            &AgentId::from_parts(7, 1),
         );
         EntityInvocationId::new(
             OwnedAgentEntityId {

@@ -850,6 +850,7 @@ mod tests {
         FaultInjectingKeyValueStorage, KeyValueStorageFaults,
     };
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use golem_common::model::AgentId;
     use proptest::prelude::*;
     use std::sync::Arc;
     use test_r::test;
@@ -927,7 +928,14 @@ mod tests {
         let weak = handle.downgrade();
         drop(handle);
         service.cleanup().await;
-        assert!(service.registry.lock().await.get(&id).is_some());
+        assert!(
+            service
+                .registry
+                .lock()
+                .await
+                .get(&(environment_id(), id.clone()))
+                .is_some()
+        );
 
         drop(second_handle);
         assert!(weak.upgrade().is_none());
@@ -1012,9 +1020,11 @@ mod tests {
     async fn local_completion_updates_handle_before_returning() {
         let promise_id = promise_id();
         let mut registry = PromiseRegistry::new();
-        let handle = registry.get_or_insert(&promise_id);
+        let handle = registry.get_or_insert(&(environment_id(), promise_id.clone()));
 
-        let completion_handle = registry.get(&promise_id).unwrap();
+        let completion_handle = registry
+            .get(&(environment_id(), promise_id.clone()))
+            .unwrap();
         let _ = completion_handle.complete(vec![1]).await;
 
         assert_eq!(handle.get().await, Some(vec![1]));
@@ -1045,10 +1055,20 @@ mod tests {
             )
             .await
             .unwrap();
-        let handle = service_b.poll(id.clone()).await.unwrap();
+        let handle = service_b.poll(environment_id(), id.clone()).await.unwrap();
 
-        assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());
-        assert!(!service_b.complete(id, vec![2]).await.unwrap());
+        assert!(
+            service_a
+                .complete(environment_id(), id.clone(), vec![1])
+                .await
+                .unwrap()
+        );
+        assert!(
+            !service_b
+                .complete(environment_id(), id, vec![2])
+                .await
+                .unwrap()
+        );
         assert_eq!(handle.get().await, Some(vec![1]));
     }
 
@@ -1088,11 +1108,11 @@ mod tests {
             )
             .await
             .unwrap();
-        let handle_a = service_a.poll(id.clone()).await.unwrap();
-        let handle_b = service_b.poll(id.clone()).await.unwrap();
+        let handle_a = service_a.poll(environment_id(), id.clone()).await.unwrap();
+        let handle_b = service_b.poll(environment_id(), id.clone()).await.unwrap();
         assert!(
             service_a
-                .complete_without_wakeup(id.clone(), vec![1])
+                .complete_without_wakeup(environment_id(), id.clone(), vec![1])
                 .await
                 .unwrap()
         );
@@ -1103,7 +1123,7 @@ mod tests {
         assert!(futures::FutureExt::now_or_never(waiting.as_mut()).is_none());
         assert!(
             !service_b
-                .complete_without_wakeup(id.clone(), vec![2])
+                .complete_without_wakeup(environment_id(), id.clone(), vec![2])
                 .await
                 .unwrap()
         );
@@ -1112,7 +1132,12 @@ mod tests {
             .unwrap();
         assert_eq!(handle_b.get().await, Some(vec![1]));
         // Ordinary completion still propagates activation failures, including on duplicates.
-        assert!(service_b.complete(id, vec![3]).await.is_err());
+        assert!(
+            service_b
+                .complete(environment_id(), id, vec![3])
+                .await
+                .is_err()
+        );
         assert_eq!(handle_b.get().await, Some(vec![1]));
     }
 
@@ -1144,7 +1169,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(completer.complete(id.clone(), vec![1]).await.unwrap());
+        assert!(
+            completer
+                .complete(environment_id(), id.clone(), vec![1])
+                .await
+                .unwrap()
+        );
 
         // The first poll registers the handle, then pauses in its result read, which will fail.
         let gate = faults.gate_next(

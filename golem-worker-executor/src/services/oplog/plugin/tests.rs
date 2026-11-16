@@ -162,10 +162,7 @@ impl RecordingOplogProcessorPlugin {
             sends: async_lock::Mutex::new(Vec::new()),
             lookups: async_lock::Mutex::new(Vec::new()),
             send_gate: None,
-            target_agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "mock-target".to_string(),
-            },
+            target_agent_id: AgentId::from_parts(7, 1),
             resolve_count: std::sync::atomic::AtomicUsize::new(0),
             failed_sends_remaining: std::sync::atomic::AtomicUsize::new(0),
             target_is_local: std::sync::atomic::AtomicBool::new(true),
@@ -201,7 +198,7 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
     ) -> Result<AgentId, WorkerExecutorError> {
         self.resolve_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(self.target_agent_id.clone())
+        Ok(self.target_agent_id)
     }
 
     async fn send(
@@ -213,7 +210,7 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
         entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError> {
         self.sends.lock().await.push(RecordedSend {
-            target_agent_id: target_agent_id.clone(),
+            target_agent_id: *target_agent_id,
             initial_oplog_index,
             entry_count: entries.len(),
             entries,
@@ -873,11 +870,11 @@ fn test_worker_metadata(
     };
 
     let metadata = AgentMetadata {
-        component_id: agent_id.component_id,
+        component_id: ComponentId(uuid::Uuid::from_u128(1)),
         agent_type_name: Some(golem_common::model::agent::AgentTypeName(
             "TestPlugin".into(),
         )),
-        canonical_key: Some(agent_id.agent_id.clone()),
+        canonical_key: Some("TestPlugin()".to_string()),
         agent_id,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
@@ -888,7 +885,7 @@ fn test_worker_metadata(
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: status.clone(),
-        original_phantom_id: None,
+        constructor_parameters: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
         create_request: golem_common::model::oplog::CreateRequest::new(
@@ -993,7 +990,7 @@ async fn a_fenced_checkpoint_stops_later_flushes_before_they_write() {
     in_memory.add(grow_memory(2)).await.unwrap();
     in_memory.commit(CommitLevel::Always).await.unwrap();
     in_memory.arm_fence(OplogFence {
-        agent_id: metadata.agent_id.clone(),
+        agent_id: metadata.agent_id,
         expected_epoch: ShardEpoch(1),
         actual_epoch: Some(ShardEpoch(2)),
     });
@@ -1575,7 +1572,7 @@ async fn reactivation_checkpoint_resumes_with_cached_suffix() {
     oplog.add(grow_memory(1)).await.unwrap();
     oplog.add(grow_memory(2)).await.unwrap();
 
-    let target = recording_plugin.target_agent_id.clone();
+    let target = recording_plugin.target_agent_id;
     publish_status(
         &status_writer,
         HashSet::from([grant_id]),

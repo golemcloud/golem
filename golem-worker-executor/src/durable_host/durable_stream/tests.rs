@@ -31,7 +31,7 @@ use crate::services::oplog::{
 };
 use async_trait::async_trait;
 use futures::FutureExt;
-use golem_common::base_model::component::{ComponentId, ComponentRevision};
+use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, ExternalProducerId,
     InputStreamHighWater, LocalStreamId, LocalStreamReaderId, MAX_DURABLE_STREAM_ITEM_SIZE,
@@ -70,10 +70,10 @@ fn local_registration_record_is_owner_relative_and_remote_attribution_is_stable(
     let first = identity();
     let mut second = identity();
     second.environment_id = EnvironmentId(Uuid::from_u128(901));
-    second.agent_id.agent_id = "copied-owner".into();
+    second.agent_id = crate::test_agent_id("copied-owner");
     second.fingerprint = AgentFingerprint(Uuid::from_u128(902));
     second.invocation.callee_environment_id = second.environment_id;
-    second.invocation.callee = second.agent_id.clone();
+    second.invocation.callee = second.agent_id;
     second.invocation.callee_fingerprint = second.fingerprint;
     let index = OplogIndex::from_u64(17);
     let local_request = |invocation: &StreamInvocationId| ProducerRegistrationRequest {
@@ -101,7 +101,7 @@ fn local_registration_record_is_owner_relative_and_remote_attribution_is_stable(
     let first_record = registration_record(
         index,
         first.environment_id,
-        first.agent_id.clone(),
+        first.agent_id,
         first.fingerprint,
         local_request(&first.invocation),
         None,
@@ -109,7 +109,7 @@ fn local_registration_record_is_owner_relative_and_remote_attribution_is_stable(
     let second_record = registration_record(
         index,
         second.environment_id,
-        second.agent_id.clone(),
+        second.agent_id,
         second.fingerprint,
         local_request(&second.invocation),
         None,
@@ -146,7 +146,7 @@ fn local_registration_record_is_owner_relative_and_remote_attribution_is_stable(
     let explicitly_remote_record = registration_record(
         index,
         first.environment_id,
-        first.agent_id.clone(),
+        first.agent_id,
         first.fingerprint,
         ProducerRegistrationRequest {
             source_invocation: StreamRegistrationInvocation::Remote(first.invocation.clone()),
@@ -185,14 +185,14 @@ fn local_registration_record_is_owner_relative_and_remote_attribution_is_stable(
 
     let remote = StreamInvocationId {
         callee_environment_id: EnvironmentId(Uuid::from_u128(903)),
-        callee: second.agent_id.clone(),
+        callee: second.agent_id,
         callee_fingerprint: AgentFingerprint(Uuid::from_u128(904)),
         idempotency_key: uuid::Uuid::from_u128(101).into(),
     };
     let remote_record = registration_record(
         index,
         first.environment_id,
-        first.agent_id.clone(),
+        first.agent_id,
         first.fingerprint,
         ProducerRegistrationRequest {
             source_invocation: StreamRegistrationInvocation::Remote(remote.clone()),
@@ -220,7 +220,7 @@ async fn local_registration_rejects_foreign_coordinate_without_committing() {
     let StreamRegistrationCoordinate::Root { invocation_id, .. } = &mut request.coordinate else {
         unreachable!()
     };
-    invocation_id.callee.agent_id = "different-owner".into();
+    invocation_id.callee = crate::test_agent_id("different-owner");
     assert_eq!(
         store.register(None, request.clone()).await,
         Err(StreamStoreError::RegistrationDivergence),
@@ -1185,7 +1185,7 @@ async fn session_finish_holds_its_lock_and_reserves_terminal_batch_bytes() {
     let live = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -1408,14 +1408,11 @@ pub(crate) struct TestIdentity {
 
 pub(crate) fn identity() -> TestIdentity {
     let environment_id = EnvironmentId(Uuid::from_u128(1));
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::from_u128(2)),
-        agent_id: "producer".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let fingerprint = AgentFingerprint(Uuid::from_u128(3));
     TestIdentity {
         environment_id,
-        agent_id: agent_id.clone(),
+        agent_id,
         fingerprint,
         invocation: StreamInvocationId {
             callee_environment_id: environment_id,
@@ -1459,14 +1456,11 @@ pub(crate) fn attachment_key(
     stream_id: golem_common::base_model::durable_stream::StreamId,
 ) -> StreamAttachmentKey {
     let consumer_environment_id = EnvironmentId(Uuid::from_u128(11));
-    let consumer = AgentId {
-        component_id: ComponentId(Uuid::from_u128(12)),
-        agent_id: "consumer".to_string(),
-    };
+    let consumer = AgentId::from_parts(7, 2);
     let expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(13));
     let consumer_invocation = StreamInvocationId {
         callee_environment_id: consumer_environment_id,
-        callee: consumer.clone(),
+        callee: consumer,
         callee_fingerprint: expected_consumer_fingerprint,
         idempotency_key: uuid::Uuid::from_u128(103).into(),
     };
@@ -1481,7 +1475,7 @@ pub(crate) fn attachment_key(
         epoch: 1,
         session_key: consumer_invocation.clone(),
         producer_environment_id: identity.environment_id,
-        producer: identity.agent_id.clone(),
+        producer: identity.agent_id,
         expected_producer_fingerprint: identity.fingerprint,
         consumer_environment_id,
         consumer,
@@ -1682,7 +1676,7 @@ async fn consumer_observation_commits_only_past_the_published_horizon() {
     let producer = DurableStreamStore::load_with_commit(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         owner.fingerprint,
         None,
         commit,
@@ -1760,7 +1754,7 @@ async fn consumer_reobservation_retains_progress_and_nested_reader_identity() {
     let handle = registered_stream(
         OplogIndex::from_u64(5),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         owner.fingerprint,
         root_registration(&owner),
     )
@@ -1889,7 +1883,7 @@ async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
     let handle = registered_stream(
         OplogIndex::from_u64(5),
         source_identity.environment_id,
-        source_identity.agent_id.clone(),
+        source_identity.agent_id,
         source_identity.fingerprint,
         root_registration(&source_identity),
     )
@@ -1899,7 +1893,7 @@ async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
     let consumer = DurableStreamStore::load(
         oplog.clone(),
         key.consumer_environment_id,
-        key.consumer.clone(),
+        key.consumer,
         key.expected_consumer_fingerprint,
         None,
     )
@@ -2159,7 +2153,7 @@ async fn producer(
     DurableStreamStore::load(
         oplog,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         capacity,
     )
@@ -2719,13 +2713,10 @@ async fn absent_attachment_consumer_finalization_is_a_durable_epoch_tombstone() 
 
     let mut tombstone = sibling.clone();
     tombstone.consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
-    tombstone.consumer = AgentId {
-        component_id: ComponentId(Uuid::from_u128(22)),
-        agent_id: "abandoned-fork-reader".to_string(),
-    };
+    tombstone.consumer = AgentId::from_parts(7, 3);
     tombstone.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(23));
     tombstone.consumer_invocation.callee_environment_id = tombstone.consumer_environment_id;
-    tombstone.consumer_invocation.callee = tombstone.consumer.clone();
+    tombstone.consumer_invocation.callee = tombstone.consumer;
     tombstone.consumer_invocation.callee_fingerprint = tombstone.expected_consumer_fingerprint;
     tombstone.epoch = 5;
 
@@ -2783,8 +2774,8 @@ async fn absent_attachment_consumer_finalization_is_a_durable_epoch_tombstone() 
     );
 
     let mut absent_other_reason = tombstone.clone();
-    absent_other_reason.consumer.agent_id = "other-absent-reader".to_string();
-    absent_other_reason.consumer_invocation.callee = absent_other_reason.consumer.clone();
+    absent_other_reason.consumer = crate::test_agent_id("other-absent-reader");
+    absent_other_reason.consumer_invocation.callee = absent_other_reason.consumer;
     assert_eq!(
         live.finalize_attachment(
             absent_other_reason,
@@ -2956,13 +2947,10 @@ async fn attachment_slots_are_isolated_by_consumer_identity() {
     let first = attachment_key(&identity, handle.stream_id);
     let mut second = first.clone();
     second.consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
-    second.consumer = AgentId {
-        component_id: ComponentId(Uuid::from_u128(22)),
-        agent_id: "second-consumer".to_string(),
-    };
+    second.consumer = AgentId::from_parts(7, 4);
     second.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(23));
     second.consumer_invocation.callee_environment_id = second.consumer_environment_id;
-    second.consumer_invocation.callee = second.consumer.clone();
+    second.consumer_invocation.callee = second.consumer;
     second.consumer_invocation.callee_fingerprint = second.expected_consumer_fingerprint;
 
     for key in [&first, &second] {
@@ -3066,13 +3054,10 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     .unwrap();
     let mut second = first.clone();
     second.consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
-    second.consumer = AgentId {
-        component_id: ComponentId(Uuid::from_u128(22)),
-        agent_id: "second-consumer".to_string(),
-    };
+    second.consumer = AgentId::from_parts(7, 4);
     second.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(23));
     second.consumer_invocation.callee_environment_id = second.consumer_environment_id;
-    second.consumer_invocation.callee = second.consumer.clone();
+    second.consumer_invocation.callee = second.consumer;
     second.consumer_invocation.callee_fingerprint = second.expected_consumer_fingerprint;
 
     assert!(!live.has_reconcilable_attachments().await);
@@ -3650,7 +3635,7 @@ async fn reobserved_input_allows_source_loss_overlay() {
     let key = attachment_key(&source_identity, handle.stream_id);
     let consumer_identity = TestIdentity {
         environment_id: key.consumer_environment_id,
-        agent_id: key.consumer.clone(),
+        agent_id: key.consumer,
         fingerprint: key.expected_consumer_fingerprint,
         invocation: key.consumer_invocation.clone(),
     };
@@ -3787,7 +3772,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
     let key = attachment_key(&source_identity, handle.stream_id);
     let consumer_identity = TestIdentity {
         environment_id: key.consumer_environment_id,
-        agent_id: key.consumer.clone(),
+        agent_id: key.consumer,
         fingerprint: key.expected_consumer_fingerprint,
         invocation: key.consumer_invocation.clone(),
     };
@@ -3905,7 +3890,7 @@ async fn consumer_deleting_intent_fences_prepared_and_activated_topology() {
     let key = attachment_key(&source_identity, handle.stream_id);
     let consumer_identity = TestIdentity {
         environment_id: key.consumer_environment_id,
-        agent_id: key.consumer.clone(),
+        agent_id: key.consumer,
         fingerprint: key.expected_consumer_fingerprint,
         invocation: key.consumer_invocation.clone(),
     };
@@ -4237,7 +4222,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
     let producer = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -4952,7 +4937,7 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
         let live = DurableStreamStore::load_with_commit(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
             commit,
@@ -5101,7 +5086,7 @@ async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
     let live = DurableStreamStore::load_with_commit(
         oplog,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -5182,7 +5167,7 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
     let live = DurableStreamStore::load_with_commit(
         oplog,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -5284,7 +5269,7 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
     let live = DurableStreamStore::load_with_commit(
         oplog,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -6278,7 +6263,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
     let live_producer = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -6424,9 +6409,9 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
 
     let mut source_identity = identity();
     let identity = identity();
-    source_identity.agent_id.agent_id = "input-source".to_string();
+    source_identity.agent_id = crate::test_agent_id("input-source");
     source_identity.fingerprint = AgentFingerprint(Uuid::new_v4());
-    source_identity.invocation.callee = source_identity.agent_id.clone();
+    source_identity.invocation.callee = source_identity.agent_id;
     source_identity.invocation.callee_fingerprint = source_identity.fingerprint;
     let source = producer(Arc::new(TestOplog::default()), &source_identity, None).await;
     let handle = source
@@ -6453,7 +6438,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     let live = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -7085,7 +7070,7 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
         let recovered = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -7408,7 +7393,7 @@ async fn rejected_nested_item_batch_does_not_partially_mutate_the_stream_index()
     let root = registered_stream(
         root_index,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         root_registration(&identity),
     );
@@ -7428,7 +7413,7 @@ async fn rejected_nested_item_batch_does_not_partially_mutate_the_stream_index()
     let nested = registration_record(
         nested_index,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         registration(
             &identity,
@@ -7447,8 +7432,7 @@ async fn rejected_nested_item_batch_does_not_partially_mutate_the_stream_index()
         &identity.agent_id,
         identity.fingerprint,
         nested_index,
-    )
-    .unwrap();
+    );
     let item_index = nested_index.next();
     let error = index
         .apply_item_batch(
@@ -7495,7 +7479,7 @@ async fn history_rebuild_rejects_duplicate_nested_stream_ownership() {
     let parent_stream_id = parent.value.stream_id;
     let parent_local_stream_id = LocalStreamId(oplog.current_oplog_index().await);
     let environment_id = identity.environment_id;
-    let agent_id = identity.agent_id.clone();
+    let agent_id = identity.agent_id;
     let producer_fingerprint = identity.fingerprint;
     let nested = registration(
         &identity,
@@ -7567,7 +7551,7 @@ async fn history_rebuild_rejects_nested_registration_without_enclosing_item() {
         .unwrap();
     let parent_local_stream_id = LocalStreamId(oplog.current_oplog_index().await);
     let environment_id = identity.environment_id;
-    let agent_id = identity.agent_id.clone();
+    let agent_id = identity.agent_id;
     let producer_fingerprint = identity.fingerprint;
     let nested = registration(
         &identity,
@@ -7780,7 +7764,7 @@ async fn rejects_out_of_range_join_capacity_before_registration() {
             DurableStreamStore::load(
                 oplog.clone(),
                 identity.environment_id,
-                identity.agent_id.clone(),
+                identity.agent_id,
                 identity.fingerprint,
                 Some(invalid_capacity),
             )
@@ -7832,10 +7816,7 @@ async fn foreign_mappings_are_deduplicated_and_count_toward_the_session_limit() 
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 stream_id: StreamId(Uuid::from_u128(10_000 + position as u128)),
                 producer_environment_id: EnvironmentId(Uuid::from_u128(41)),
-                producer: AgentId {
-                    component_id: ComponentId(Uuid::from_u128(42)),
-                    agent_id: "foreign-producer".to_string(),
-                },
+                producer: AgentId::from_parts(7, 5),
                 expected_producer_fingerprint: AgentFingerprint(Uuid::from_u128(43)),
                 producer_generation: OplogIndex::NONE,
                 source_invocation: identity.invocation.clone(),
@@ -7902,8 +7883,8 @@ async fn forwarded_inline_input_defers_completion_until_terminal_after_recovery(
         let live = producer(oplog.clone(), &owner, None).await;
         let mut source = identity();
         if !local {
-            source.agent_id.agent_id = "remote-source".into();
-            source.invocation.callee = source.agent_id.clone();
+            source.agent_id = crate::test_agent_id("remote-source");
+            source.invocation.callee = source.agent_id;
         }
         let source_store = if local {
             live.clone()
@@ -8134,7 +8115,7 @@ async fn producer_answering_fenced_commits(
     DurableStreamStore::load_with_commit(
         oplog,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -8455,7 +8436,7 @@ async fn restart_recovers_registration_committed_before_caller_observation() {
     let live = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -8486,7 +8467,6 @@ async fn restart_recovers_registration_committed_before_caller_observation() {
             identity.fingerprint,
             OplogIndex::INITIAL,
         )
-        .unwrap()
     );
     assert_eq!(oplog.committed_length(), 1);
     assert!(restarted.register(None, request).await.unwrap().replayed);
@@ -8654,7 +8634,7 @@ async fn stream_terminals_wake_session_recovery_after_fold_but_items_do_not() {
         let live = DurableStreamStore::load_with_commit(
             oplog,
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
             commit,
@@ -8750,7 +8730,7 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
         let live = DurableStreamStore::load_with_commit(
             oplog,
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             Some(1),
             commit,
@@ -9970,10 +9950,7 @@ fn a_session_error_renders_its_cause() {
     use crate::services::oplog::{OplogReadError, UnreadableOplog};
 
     let unreadable = UnreadableOplog {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "unreadable".to_string(),
-        },
+        agent_id: golem_common::model::AgentId::from_parts(7, 6),
         error: OplogReadError::Gap {
             start: OplogIndex::INITIAL,
             end: OplogIndex::from_u64(2),
@@ -9995,10 +9972,7 @@ fn an_unreadable_oplog_keeps_its_type_through_stream_and_session_errors() {
     use golem_service_base::error::worker_executor::WorkerExecutorError;
 
     let unreadable = UnreadableOplog {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "unreadable".to_string(),
-        },
+        agent_id: golem_common::model::AgentId::from_parts(7, 7),
         error: OplogReadError::Gap {
             start: OplogIndex::INITIAL,
             end: OplogIndex::from_u64(2),

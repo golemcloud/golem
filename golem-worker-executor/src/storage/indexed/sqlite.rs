@@ -978,19 +978,19 @@ impl DBIdValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::AgentId;
     use golem_common::model::agent::AgentMode;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::{AgentId, OwnedAgentId};
     use sqlx::sqlite::SqliteConnectOptions;
     use sqlx::{Connection, Executor};
     use test_r::test;
 
     fn oplog_namespace(agent_id: &str) -> IndexedStorageNamespace {
         IndexedStorageNamespace::OpLog {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: agent_id.to_string(),
-            },
+            owned_agent_id: OwnedAgentId::new(
+                EnvironmentId(uuid::Uuid::from_u128(1)),
+                &crate::test_agent_id(agent_id),
+            ),
             agent_mode: AgentMode::Durable,
         }
     }
@@ -1017,17 +1017,17 @@ mod tests {
         for _ in 0..8 {
             stores.push(sqlite_storage(database.clone()).await);
         }
-        let agent = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "publication-contention".into(),
-        };
+        let agent = OwnedAgentId::new(
+            EnvironmentId(uuid::Uuid::from_u128(1)),
+            &AgentId::from_parts(7, 1),
+        );
         let mode = AgentMode::Durable;
         let staged = IndexedStorageNamespace::StagedOpLog {
-            agent_id: agent.clone(),
+            owned_agent_id: agent.clone(),
             agent_mode: mode,
         };
         let visible = IndexedStorageNamespace::OpLog {
-            agent_id: agent.clone(),
+            owned_agent_id: agent.clone(),
             agent_mode: mode,
         };
         for same_target in [true, false] {

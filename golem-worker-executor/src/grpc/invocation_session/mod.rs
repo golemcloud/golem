@@ -46,9 +46,7 @@ use golem_common::base_model::durable_stream::{
     StreamTerminalAuthor,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
-};
+use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{

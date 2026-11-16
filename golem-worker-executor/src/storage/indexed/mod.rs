@@ -1101,9 +1101,8 @@ mod tests {
         memory::InMemoryIndexedStorage, scan_prefix_upper_bound, stable_scan_key_bounds,
     };
     use futures::FutureExt;
-    use golem_common::model::AgentId;
     use golem_common::model::agent::AgentMode;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::{AgentId, OwnedAgentId};
     use golem_common::serialization::{DecodeError, serialize};
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
@@ -1116,10 +1115,10 @@ mod tests {
         let storage = InMemoryIndexedStorage::new();
         let labelled = storage.with_entity("test", "decode", "entry");
         let namespace = IndexedStorageNamespace::OpLog {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "decode-errors".to_string(),
-            },
+            owned_agent_id: OwnedAgentId::new(
+                golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
+                &AgentId::from_parts(7, 1),
+            ),
             agent_mode: AgentMode::Durable,
         };
         for (key, bytes, expected) in [

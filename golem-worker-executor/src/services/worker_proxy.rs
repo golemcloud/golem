@@ -1249,7 +1249,6 @@ mod tests {
         invocation_session_result,
     };
     use golem_common::model::InvocationId;
-    use golem_common::model::agent::AgentTarget;
     use golem_common::model::component::ComponentId;
     use golem_schema::proto::golem::schema::{
         SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
@@ -1262,8 +1261,89 @@ mod tests {
     use tonic::{Request, Response, Status};
     use uuid::Uuid;
 
+    /// A keyed target reaches another executor as its key, which derives the same ID there; an
+    /// unkeyed target as its pre-allocated ID with the constructor; an existing-only target is
+    /// never created.
+    #[test]
+    fn launch_target_carries_the_identity_the_receiver_derives() {
+        let environment_id = golem_common::model::environment::EnvironmentId::new();
+        let component_id = ComponentId(Uuid::from_u128(3));
+        let type_id = golem_common::model::type_id::TypeId::try_from(7u32).unwrap();
+        let constructor = golem_common::model::agent::ParsedAgentKey::try_new(
+            golem_common::model::agent::AgentTypeName("counter".to_string()),
+            golem_common::data_value!("first"),
+        )
+        .unwrap();
+
+        let keyed = crate::worker::target::keyed_target(
+            environment_id,
+            type_id,
+            component_id,
+            constructor.clone(),
+        )
+        .unwrap();
+        let (launched_component, key, unkeyed_id) = launch_target(&keyed).unwrap();
+        assert_eq!(launched_component, component_id);
+        assert_eq!(unkeyed_id, None);
+        let key = golem_common::model::agent::AgentKey::try_from(key).unwrap();
+        assert_eq!(
+            AgentId::keyed(environment_id, type_id, &key),
+            keyed.owned_agent_id.agent_id
+        );
+
+        let allocated = AgentId::from_parts(7, 42);
+        let unkeyed = crate::worker::target::unkeyed_target(
+            environment_id,
+            allocated,
+            component_id,
+            constructor.clone(),
+            golem_common::model::agent::AgentMode::Durable,
+        );
+        let (launched_component, key, unkeyed_id) = launch_target(&unkeyed).unwrap();
+        assert_eq!(launched_component, component_id);
+        assert_eq!(
+            unkeyed_id.map(AgentId::try_from).transpose().unwrap(),
+            Some(allocated)
+        );
+        let key = golem_common::model::agent::AgentKey::try_from(key).unwrap();
+        assert_eq!(
+            golem_common::model::agent::ParsedAgentKey::from(key),
+            constructor
+        );
+
+        let existing = ResolvedTarget::existing(OwnedAgentId::new(environment_id, &allocated));
+        assert!(launch_target(&existing).is_err());
+    }
+
     fn accepted_invocation_id() -> InvocationId {
         InvocationId(Uuid::from_u128(18))
+    }
+
+    /// A target that creates the keyed agent `owned_agent_id` when it is missing.
+    fn creating_target(owned_agent_id: OwnedAgentId) -> ResolvedTarget {
+        let constructor = golem_common::model::agent::ParsedAgentKey::try_new(
+            golem_common::model::agent::AgentTypeName("counter".to_string()),
+            golem_common::data_value!("constructor"),
+        )
+        .unwrap();
+        ResolvedTarget {
+            owned_agent_id,
+            new_owner: Some(crate::worker::NewOwner::keyed(
+                ComponentId(Uuid::from_u128(5)),
+                constructor,
+            )),
+            agent_mode: Some(golem_common::model::agent::AgentMode::Durable),
+        }
+    }
+
+    /// The agent ID of the ID target of an invocation `Start`.
+    fn start_agent_id(
+        start: &golem_api_grpc::proto::golem::worker::InvocationStart,
+    ) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
+        match start.target.as_ref()?.target.as_ref()? {
+            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id) => Some(id.clone()),
+            golem_api_grpc::proto::golem::worker::agent_target::Target::Key(_) => None,
+        }
     }
 
     #[derive(Clone, Default)]
@@ -1433,7 +1513,7 @@ mod tests {
                     let accepted = InvocationResponse {
                         response: Some(invocation_response::Response::Accepted(
                             InvocationAccepted {
-                                agent_id: start.agent_id.clone(),
+                                agent_id: start_agent_id(&start),
                                 idempotency_key: Some(accepted_invocation_id().into()),
                                 component_revision: Some(0),
                                 attachment_id: (!self.joined_origin_observer)
@@ -1459,7 +1539,7 @@ mod tests {
                                         ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap(),
                                     )),
                                     component_revision: Some(0),
-                                    agent_id: start.agent_id,
+                                    agent_id: start_agent_id(&start),
                                     idempotency_key: Some(accepted_invocation_id().into()),
                                     agent_fingerprint: start.expected_callee_fingerprint,
                                     ..Default::default()
@@ -1586,11 +1666,8 @@ mod tests {
 
         let service = FlakyWorkerService::default();
         let requests = service.created_workers.clone();
-        let caller = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "caller".to_string(),
-        };
-        let target = OwnedAgentId::new(EnvironmentId::new(), &caller);
+        let caller = AgentId::from_parts(7, 1);
+        let target = creating_target(OwnedAgentId::new(EnvironmentId::new(), &caller));
         let fingerprint = AgentFingerprint::new();
         let creation_error =
             WorkerExecutorError::worker_creation_failed(caller.clone(), "constructor failed");
@@ -1654,6 +1731,7 @@ mod tests {
             let result = proxy
                 .create(
                     &target,
+                    false,
                     &caller,
                     HashMap::new(),
                     InvocationContextStack::fresh(),
@@ -1722,11 +1800,8 @@ mod tests {
         config.client_config.retries_on_unavailable.min_delay = std::time::Duration::from_millis(1);
         config.client_config.retries_on_unavailable.max_delay = std::time::Duration::from_millis(1);
         let proxy = RemoteWorkerProxy::new(&config);
-        let caller = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "caller".to_string(),
-        };
-        let target = OwnedAgentId::new(EnvironmentId::new(), &caller);
+        let caller = AgentId::from_parts(7, 2);
+        let target = creating_target(OwnedAgentId::new(EnvironmentId::new(), &caller));
         let key = IdempotencyKey::fresh();
         assert_eq!(
             proxy
@@ -2152,14 +2227,12 @@ mod tests {
             port,
             ..Default::default()
         });
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "retry-freshness".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 3);
+        let environment_id = EnvironmentId::new();
 
         proxy
             .invoke_agent(
-                &agent_id,
+                &ResolvedTarget::existing(OwnedAgentId::new(environment_id, &agent_id)),
                 "run".to_string(),
                 SchemaValue::Tuple { elements: vec![] },
                 AgentInvocationMode::Await,
@@ -2172,7 +2245,7 @@ mod tests {
                 InvocationContextStack::fresh(),
                 vec![],
                 Principal::anonymous(),
-                EnvironmentId::new(),
+                environment_id,
                 &AuthCtx::System,
                 Some(ScopeCard {
                     scope_card_id: CardId::new(),
@@ -2225,20 +2298,13 @@ mod tests {
             ..Default::default()
         }));
         let rpc = RemoteInvocationRpc::new(proxy, Arc::new(ShardServiceDefault::new()));
-        let callee = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "pinned-callee".to_string(),
-        };
-        let caller = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "caller".to_string(),
-        };
+        let callee = AgentId::from_parts(7, 4);
+        let caller = AgentId::from_parts(7, 5);
         let fingerprint = AgentFingerprint(uuid::Uuid::new_v4());
 
         // The first attempt fails as unavailable, so the fire-and-forget call is sent twice.
         rpc.invoke(
-            AgentTarget::Current(callee.clone()),
-            EnvironmentId::new(),
+            ResolvedTarget::existing(OwnedAgentId::new(EnvironmentId::new(), &callee)),
             Some(IdempotencyKey::fresh()),
             InvocationFreshnessDisposition::MayExist,
             Some(fingerprint),
@@ -2254,8 +2320,7 @@ mod tests {
         .await
         .unwrap();
         rpc.invoke_and_await(
-            AgentTarget::Current(callee),
-            EnvironmentId::new(),
+            ResolvedTarget::existing(OwnedAgentId::new(EnvironmentId::new(), &callee)),
             Some(IdempotencyKey::fresh()),
             InvocationFreshnessDisposition::MayExist,
             Some(fingerprint),
@@ -2342,14 +2407,8 @@ mod tests {
             ..Default::default()
         }));
         let rpc = RemoteInvocationRpc::new(proxy, Arc::new(ShardServiceDefault::new()));
-        let callee = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "remote-callee".to_string(),
-        };
-        let caller = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "local-caller".to_string(),
-        };
+        let callee = AgentId::from_parts(7, 6);
+        let caller = AgentId::from_parts(7, 7);
         let caller_environment = EnvironmentId::new();
         let caller_fingerprint = AgentFingerprint::new();
         let input = ProtoSchemaValue {
@@ -2389,8 +2448,7 @@ mod tests {
         let (accepted_sender, accepted_receiver) = tokio::sync::oneshot::channel();
         let result = rpc
             .invoke_and_await_streaming(
-                AgentTarget::Current(callee.clone()),
-                EnvironmentId::new(),
+                ResolvedTarget::existing(OwnedAgentId::new(EnvironmentId::new(), &callee)),
                 IdempotencyKey::fresh(),
                 "streaming-method".to_string(),
                 input,
@@ -2430,7 +2488,7 @@ mod tests {
         };
         assert_eq!(first_start, replayed_start);
         assert_eq!(first_start.origin_invocation, Some(origin));
-        assert_eq!(accepted.agent_id, first_start.agent_id);
+        assert_eq!(accepted.agent_id, start_agent_id(&first_start));
         assert_eq!(
             accepted.idempotency_key,
             Some(accepted_invocation_id().into())
@@ -2464,7 +2522,7 @@ mod tests {
             panic!("third request was not ResumeAttach");
         };
         assert_eq!(resume.idempotency_key, accepted.idempotency_key);
-        assert_eq!(resume.agent_id, first_start.agent_id);
+        assert_eq!(resume.agent_id, start_agent_id(&first_start));
         assert_eq!(resume.environment_id, first_start.environment_id);
         assert_eq!(
             resume.expected_callee_fingerprint,

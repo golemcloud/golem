@@ -735,18 +735,11 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::CreateParameters;
 
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::from_u128(0x11112222333344445555666677778888)),
-        agent_id: "created-agent".to_string(),
-    };
-    let parent = AgentId {
-        component_id: ComponentId(Uuid::from_u128(0x9999aaaabbbbccccddddeeeeffff1234)),
-        agent_id: "parent-agent".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
+    let parent = AgentId::from_parts(7, 2);
     let environment_id = EnvironmentId(Uuid::from_u128(0x123456789abcdef0fedcba9876543210));
     let created_by = AccountId(Uuid::from_u128(0x23456789abcdef01edcba9876543210f));
     let instance_id = Uuid::from_u128(0x3456789abcdef012dcba9876543210fe);
-    let phantom_id = Uuid::from_u128(0x456789abcdef0123cba9876543210fed);
     let env = vec![
         ("second".to_string(), "2".to_string()),
         ("first".to_string(), "1".to_string()),
@@ -762,19 +755,19 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
                 component_id: ComponentId::new(),
                 agent_type_name: None,
                 canonical_key: None,
-                agent_id: agent_id.clone(),
+                agent_id,
                 owner_kind,
                 agent_mode: AgentMode::Ephemeral,
                 component_revision: ComponentRevision::new(23).unwrap(),
                 env: env.clone(),
                 environment_id,
                 created_by,
-                parent: Some(parent.clone()),
+                parent: Some(parent),
                 component_size: 317,
                 initial_total_linear_memory_size: 941,
                 initial_active_plugins: Default::default(),
                 local_agent_config: Vec::new(),
-                original_phantom_id: Some(phantom_id),
+                constructor_parameters: None,
                 instance_id,
                 create_request: golem_common::model::oplog::CreateRequest::new(
                     golem_common::model::oplog::CreateRequestKind::GetOrCreate,
@@ -792,11 +785,11 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         assert_eq!(encoded.timestamp.seconds, 1_700_000_123);
         assert_eq!(encoded.timestamp.nanoseconds, 456_000_000);
         assert_eq!(
-            golem_common::model::AgentId::from(encoded.agent_id.clone()),
+            golem_common::model::AgentId::from(encoded.agent_id),
             agent_id
         );
         assert_eq!(
-            golem_common::model::AgentId::from(encoded.parent.clone().unwrap()),
+            golem_common::model::AgentId::from(encoded.parent.unwrap()),
             parent
         );
         assert!(matches!(
@@ -831,11 +824,6 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
             Uuid::from_u64_pair(encoded.instance_id.high_bits, encoded.instance_id.low_bits),
             instance_id
         );
-        let encoded_phantom = encoded.original_phantom_id.as_ref().unwrap();
-        assert_eq!(
-            Uuid::from_u64_pair(encoded_phantom.high_bits, encoded_phantom.low_bits),
-            phantom_id
-        );
 
         encoded.component_revision = 29;
         encoded.component_size = 419;
@@ -853,7 +841,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         assert_eq!(timestamp, Timestamp::from(1_700_000_123_456));
         assert_eq!(parameters.agent_id, agent_id);
         assert_eq!(parameters.owner_kind, owner_kind);
-        assert_eq!(parameters.parent, Some(parent.clone()));
+        assert_eq!(parameters.parent, Some(parent));
         assert_eq!(
             parameters.component_revision,
             ComponentRevision::new(29).unwrap()
@@ -863,7 +851,6 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         assert_eq!(parameters.env, env);
         assert_eq!(parameters.environment_id, environment_id);
         assert_eq!(parameters.created_by, created_by);
-        assert_eq!(parameters.original_phantom_id, Some(phantom_id));
         assert_eq!(parameters.instance_id, instance_id);
     }
 }

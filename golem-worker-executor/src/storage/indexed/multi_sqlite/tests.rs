@@ -15,17 +15,17 @@
 use super::*;
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use test_r::test;
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 fn oplog_namespace(name: &str) -> IndexedStorageNamespace {
     IndexedStorageNamespace::OpLog {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: name.to_string(),
-        },
+        owned_agent_id: OwnedAgentId::new(
+            EnvironmentId(Uuid::from_u128(1)),
+            &crate::test_agent_id(name),
+        ),
         agent_mode: AgentMode::Durable,
     }
 }
@@ -57,7 +57,7 @@ async fn cancelled_warm_read_poisons_before_exclusive_admission() {
         )
         .await
         .unwrap();
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     let file = FileLifetime::get(storage.root.root_dir.join(&db));
     let cached = storage.root.cache.get(&db).await.unwrap();
     let connection = cached.hold_connection_for_test().await;
@@ -127,7 +127,7 @@ async fn cancelled_warm_read_poisons_before_exclusive_admission() {
         storage
             .root
             .root_dir
-            .join(storage.namespace_to_db(&other).await),
+            .join(MultiSqliteIndexedStorage::namespace_to_db(&other)),
     );
     assert!(!other_file.is_poisoned());
     storage
@@ -159,7 +159,7 @@ async fn cancelling_read_before_admission_does_not_poison() {
         storage
             .root
             .root_dir
-            .join(storage.namespace_to_db(&ns).await),
+            .join(MultiSqliteIndexedStorage::namespace_to_db(&ns)),
     );
     let lease = file.gate.clone().write_owned().await;
     let mut read = Box::pin(storage.length("test", "read", ns.clone(), "key"));
@@ -268,7 +268,7 @@ async fn retirement_wait_includes_earlier_evicted_generation() {
             )
             .await
             .unwrap();
-        let db = storage.namespace_to_db(&ns).await;
+        let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
         let file = FileLifetime::get(storage.root.root_dir.join(&db));
         let cached = storage.root.cache.get(&db).await.unwrap();
         // A real acquired connection holds SQLx graceful close, with no cleanup gate involved.
@@ -613,14 +613,14 @@ async fn staging_publication_and_fencing_survive_reclamation() {
     let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
     let visible = oplog_namespace("staged");
     let IndexedStorageNamespace::OpLog {
-        agent_id,
+        owned_agent_id,
         agent_mode,
     } = visible.clone()
     else {
         unreachable!()
     };
     let stage = IndexedStorageNamespace::StagedOpLog {
-        agent_id,
+        owned_agent_id,
         agent_mode,
     };
     storage
@@ -661,7 +661,7 @@ async fn staging_publication_and_fencing_survive_reclamation() {
             .await,
         Err(IndexedStorageError::Fenced { .. })
     ));
-    let db = storage.namespace_to_db(&visible).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&visible);
     assert!(!FileLifetime::get(storage.root.root_dir.join(&db)).is_poisoned());
     storage
         .delete_with_epoch("test", "delete", visible, "key", Some(ShardEpoch(7)))
@@ -678,14 +678,14 @@ async fn failed_staging_move_rolls_back_and_later_drain_reclaims() {
         let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
         let visible = oplog_namespace("invalid-move");
         let IndexedStorageNamespace::OpLog {
-            agent_id,
+            owned_agent_id,
             agent_mode,
         } = visible.clone()
         else {
             unreachable!()
         };
         let stage = IndexedStorageNamespace::StagedOpLog {
-            agent_id,
+            owned_agent_id,
             agent_mode,
         };
         for id in [1, 3] {
@@ -703,7 +703,7 @@ async fn failed_staging_move_rolls_back_and_later_drain_reclaims() {
                 .await
                 .unwrap();
         }
-        let db = storage.namespace_to_db(&stage).await;
+        let db = MultiSqliteIndexedStorage::namespace_to_db(&stage);
         let file = FileLifetime::get(storage.root.root_dir.join(&db));
         if cold {
             storage.root.cache.remove(&db).await;
@@ -758,14 +758,14 @@ async fn reclamation_churn_does_not_retain_empty_epoch_snapshots() {
         let mut ns = oplog_namespace(&format!("churn-{agent}"));
         if agent % 3 == 2 {
             let IndexedStorageNamespace::OpLog {
-                agent_id,
+                owned_agent_id,
                 agent_mode,
             } = ns
             else {
                 unreachable!()
             };
             ns = IndexedStorageNamespace::CompressedOpLog {
-                agent_id,
+                owned_agent_id,
                 agent_mode,
                 level: 1,
             };
@@ -790,7 +790,7 @@ async fn reclamation_churn_does_not_retain_empty_epoch_snapshots() {
             )
             .await
             .unwrap();
-        let db = storage.namespace_to_db(&ns).await;
+        let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
         match agent % 3 {
             0 => storage.delete("test", "drain", ns, "key").await.unwrap(),
             1 => storage
@@ -852,7 +852,7 @@ async fn deleting_last_snapshot_epoch_cleans_residual_files_before_metadata() {
             )
             .await
             .unwrap();
-        let db = storage.namespace_to_db(&ns).await;
+        let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
         let file = FileLifetime::get(storage.root.root_dir.join(&db));
         storage.root.cache.remove(&db).await;
         file.wait_retired().await;
@@ -904,7 +904,7 @@ async fn trailing_read_cleans_empty_snapshot_after_interrupted_unlink_handoff() 
         let dir = tempfile::tempdir().unwrap();
         let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
         let ns = oplog_namespace("empty-handoff");
-        let db = storage.namespace_to_db(&ns).await;
+        let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
         if residual_file {
             storage
                 .append(
@@ -982,14 +982,14 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
     let storage = MultiSqliteIndexedStorage::new(dir.path(), 2, false);
     let ns = oplog_namespace("drain");
     let IndexedStorageNamespace::OpLog {
-        agent_id,
+        owned_agent_id,
         agent_mode,
     } = ns.clone()
     else {
         unreachable!()
     };
     let stage = IndexedStorageNamespace::StagedOpLog {
-        agent_id,
+        owned_agent_id,
         agent_mode,
     };
     storage
@@ -1013,7 +1013,7 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
         )
         .await
         .unwrap();
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     let path = storage.root.root_dir.join(&db);
     let file = FileLifetime::get(path.clone());
     let cached = storage.root.cache.get(&db).await.unwrap();
@@ -1182,14 +1182,14 @@ async fn staged_rows_other_keys_and_presence_markers_prevent_reclamation() {
     let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
     let ns = oplog_namespace("presence");
     let IndexedStorageNamespace::OpLog {
-        agent_id,
+        owned_agent_id,
         agent_mode,
     } = ns.clone()
     else {
         unreachable!()
     };
     let stage = IndexedStorageNamespace::StagedOpLog {
-        agent_id,
+        owned_agent_id,
         agent_mode,
     };
     for (namespace, key, bytes) in [
@@ -1202,7 +1202,7 @@ async fn staged_rows_other_keys_and_presence_markers_prevent_reclamation() {
             .await
             .unwrap();
     }
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     let path = storage.root.root_dir.join(&db);
     storage
         .delete("test", "delete", ns.clone(), "visible")
@@ -1239,14 +1239,14 @@ async fn compressed_prefix_reclaims_and_retains_writer_epoch() {
     let dir = tempfile::tempdir().unwrap();
     let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
     let IndexedStorageNamespace::OpLog {
-        agent_id,
+        owned_agent_id,
         agent_mode,
     } = oplog_namespace("compressed")
     else {
         unreachable!()
     };
     let ns = IndexedStorageNamespace::CompressedOpLog {
-        agent_id,
+        owned_agent_id,
         agent_mode,
         level: 3,
     };
@@ -1267,7 +1267,7 @@ async fn compressed_prefix_reclaims_and_retains_writer_epoch() {
         )
         .await
         .unwrap();
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     storage
         .drop_prefix("test", "prefix", ns.clone(), "key", 5, Some(ShardEpoch(17)))
         .await
@@ -1336,7 +1336,7 @@ async fn snapshots_are_authoritative_over_leftovers_including_empty_and_partial_
         let dir = tempfile::tempdir().unwrap();
         let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
         let ns = oplog_namespace("interrupted");
-        let db = storage.namespace_to_db(&ns).await;
+        let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
         storage
             .append(
                 "test",
@@ -1418,7 +1418,7 @@ async fn poisoned_successful_delete_leaves_empty_file_and_failed_mutation_never_
         .set_key_epoch("test", "epoch", ns.clone(), "key", ShardEpoch(29))
         .await
         .unwrap();
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     let file = FileLifetime::get(storage.root.root_dir.join(&db));
     assert!(matches!(
         storage
@@ -1465,7 +1465,7 @@ async fn absent_destructive_access_never_materializes_and_validates_snapshot_epo
     let dir = tempfile::tempdir().unwrap();
     let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
     let ns = oplog_namespace("absent");
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     let path = storage.root.root_dir.join(&db);
     storage
         .delete("test", "delete", ns.clone(), "key")
@@ -1589,7 +1589,7 @@ async fn committed_snapshot_save_error_evicts_cache_and_keeps_snapshot_authority
         )
         .await
         .unwrap();
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     let cached = storage.root.cache.get(&db).await.unwrap();
     storage.root.snapshot_failure.store(1, Ordering::Release);
     assert!(
@@ -1654,7 +1654,7 @@ async fn restored_snapshot_delete_failures_do_not_publish_or_append() {
         let dir = tempfile::tempdir().unwrap();
         let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
         let ns = oplog_namespace("snapshot-delete");
-        let db = storage.namespace_to_db(&ns).await;
+        let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
         let file = FileLifetime::get(storage.root.root_dir.join(&db));
         let records = vec![(
             SqliteIndexedStorage::namespace(ns.clone()),
@@ -1785,7 +1785,7 @@ async fn metadata_save_failure_evicts_before_poison_and_never_unlinks() {
         )
         .await
         .unwrap();
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     storage.root.epoch_storage().await.unwrap().close().await;
     assert!(storage.delete("test", "delete", ns, "key").await.is_err());
     assert!(storage.root.cache.get(&db).await.is_none());
@@ -1800,7 +1800,7 @@ async fn restoration_failure_keeps_snapshot_and_registered_unpublished_pools() {
     let dir = tempfile::tempdir().unwrap();
     let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
     let ns = oplog_namespace("restore-failure");
-    let db = storage.namespace_to_db(&ns).await;
+    let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     let file = FileLifetime::get(storage.root.root_dir.join(&db));
     let record = (
         SqliteIndexedStorage::namespace(ns.clone()),

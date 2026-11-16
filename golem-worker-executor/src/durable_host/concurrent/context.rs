@@ -543,13 +543,7 @@ mod tests {
 
     #[test]
     fn shared_context_drops_before_its_registration() {
-        let owner = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".into(),
-            },
-        );
+        let owner = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
         let activation = Arc::new(
             EntityActivation::new(
                 ExecutableTarget::new(ComponentId::new(), 1_u64.try_into().unwrap()),

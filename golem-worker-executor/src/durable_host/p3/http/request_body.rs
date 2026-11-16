@@ -2516,13 +2516,10 @@ mod tests {
         use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
         use golem_service_base::error::worker_executor::WorkerExecutorError;
 
-        let agent_id = golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "request-body".to_string(),
-        };
+        let agent_id = golem_common::model::AgentId::from_parts(7, 1);
         let archive_write = RecordedFrameError::from(OplogError::ArchiveWrite(
             crate::services::oplog::ArchiveWriteFailure {
-                agent_id: agent_id.clone(),
+                agent_id,
                 level: 1,
                 details: "archive refused the write".to_string(),
             },

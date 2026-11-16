@@ -17,7 +17,7 @@ use golem_common::model::InvocationId;
 use super::*;
 use golem_common::model::Timestamp;
 use golem_common::model::card::{AccountCardHolder, CardHolder, CardId};
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecord, StreamSessionRecord,
 };
@@ -90,10 +90,7 @@ fn stream_entry() -> OplogEntry {
             StreamConsumerDeletingRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
-                consumer: AgentId {
-                    component_id: ComponentId(Uuid::from_u128(2)),
-                    agent_id: "consumer".to_string(),
-                },
+                consumer: AgentId::from_parts(7, 1),
                 consumer_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
                 deleting_at_millis: 100,
             },

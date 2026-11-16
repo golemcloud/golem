@@ -14,7 +14,6 @@ use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_service_base::model::MonthlyResourcePolicy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -83,15 +82,8 @@ impl Fixture {
         let scheduler = Arc::new(ConcurrentAgentsScheduler::new());
         let account = AccountId(Uuid::new_v4());
         scheduler.register_account(account, entry.clone()).await;
-        let permit: ConcurrentAgentPermit = scheduler
-            .acquire(
-                account,
-                AgentId {
-                    component_id: ComponentId(Uuid::new_v4()),
-                    agent_id: "rate-wake".into(),
-                },
-            )
-            .await;
+        let permit: ConcurrentAgentPermit =
+            scheduler.acquire(account, AgentId::from_parts(7, 1)).await;
         let window = open_window(&meter, permit).await.unwrap();
         memory.reconcile(GIB, Instant::now());
         Self {

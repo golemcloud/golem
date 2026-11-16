@@ -1030,7 +1030,6 @@ impl Debug for InvocationContext {
 mod tests {
     use super::*;
     use crate::worker::RetryDecision;
-    use golem_common::model::component::ComponentId;
     use test_r::test;
 
     #[test]
@@ -1069,7 +1068,6 @@ mod tests {
         );
     }
     use tracing::info;
-    use uuid::Uuid;
 
     #[test]
     fn wrapped_replay_jump_remains_an_interrupt() {
@@ -1107,10 +1105,7 @@ mod tests {
     #[test]
     fn a_fenced_oplog_write_escaping_a_host_call_classifies_as_shard_lost() {
         let fence = crate::services::oplog::OplogFence {
-            agent_id: golem_common::model::AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "fenced-host-call".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
         };
@@ -1150,10 +1145,7 @@ mod tests {
 
     fn fence_for(agent_id: &str) -> crate::services::oplog::OplogFence {
         crate::services::oplog::OplogFence {
-            agent_id: golem_common::model::AgentId {
-                component_id: ComponentId::new(),
-                agent_id: agent_id.to_string(),
-            },
+            agent_id: crate::test_agent_id(agent_id),
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
         }
@@ -1361,10 +1353,7 @@ mod tests {
 
     #[test]
     fn a_fenced_oplog_write_is_a_lost_shard_and_is_never_retried() {
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "fenced".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 2);
         let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
             golem_service_base::error::worker_executor::WorkerExecutorError::oplog_fenced(
                 agent_id,
@@ -1651,16 +1640,10 @@ mod tests {
 
     #[test]
     fn test_hash() {
-        let uuid = Uuid::parse_str("96c12379-4fff-4fa2-aa09-a4d96c029ac2").unwrap();
-
-        let component_id = ComponentId(uuid);
-        let agent_id = AgentId {
-            component_id,
-            agent_id: "instanceName".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 0x2C1_2379_4FFF_4FA2_AA09_A4D9);
         let hash = ShardId::hash_agent_id(&agent_id);
         info!("hash: {:?}", hash);
-        assert_eq!(hash, -6692039695739768661);
+        assert_eq!(hash, 6351323600677106773);
     }
 
     #[test]

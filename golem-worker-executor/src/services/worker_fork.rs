@@ -543,9 +543,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let owned_target_agent_id = OwnedAgentId::new(environment_id, target_agent_id);
 
         if source_agent_id == target_agent_id {
-            return Err(WorkerExecutorError::worker_already_exists(
-                target_agent_id.clone(),
-            ));
+            return Err(WorkerExecutorError::worker_already_exists(*target_agent_id));
         }
         OwnerKind::ComponentAgent
             .validate_agent_id(target_agent_id)
@@ -567,9 +565,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .worker_service
             .get(&owned_source_agent_id)
             .await?
-            .ok_or(WorkerExecutorError::worker_not_found(
-                source_agent_id.clone(),
-            ))?;
+            .ok_or(WorkerExecutorError::worker_not_found(*source_agent_id))?;
         if source_metadata.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
             return Err(WorkerExecutorError::invalid_request(
                 "Only component-agent owners can be forked",
@@ -623,7 +619,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             )
             .await?;
 
-        let target_agent_id = owned_target_agent_id.agent_id.clone();
+        let target_agent_id = owned_target_agent_id.agent_id;
         let environment_id = owned_target_agent_id.environment_id;
 
         let source = self
@@ -668,7 +664,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // preserves the source's `created_by`), and that resource consumption
         // is attributed to the component owner, not the caller.
         let target_worker_metadata = AgentMetadata {
-            agent_id: target_agent_id.clone(),
+            agent_id: target_agent_id,
             component_id: initial_source_worker_metadata.component_id,
             agent_type_name: initial_source_worker_metadata.agent_type_name.clone(),
             canonical_key: None,
@@ -1019,7 +1015,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             let producer = DurableStreamStore::load(
                 new_oplog.clone(),
                 environment_id,
-                target_agent_id.clone(),
+                target_agent_id,
                 AgentFingerprint(instance_id),
                 None,
             )
@@ -1089,7 +1085,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .worker_service
             .get(source)
             .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(source.agent_id.clone()))?
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(source.agent_id))?
             .initial_worker_metadata;
         let hash =
             publication::request_hash(source, source_metadata.fingerprint, cut, None, guest_result)
@@ -1130,7 +1126,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .resume(&target, true, auth_ctx)
             .await
             .map_err(|error| {
-                WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), error.into())
+                WorkerExecutorError::failed_to_resume_worker(*target_agent_id, error.into())
             })
     }
 
@@ -1253,7 +1249,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 timestamp,
                 mut parameters,
             } => {
-                parameters.agent_id = agent_id.clone();
+                parameters.agent_id = *agent_id;
                 parameters.instance_id = instance_id;
                 parameters.canonical_key = None;
                 parameters.create_request = fork_request;
@@ -1278,7 +1274,7 @@ fn rewrite_forked_agent_holder(
     {
         *holder = CardHolder::Agent(AgentCardHolder {
             environment_id: target_agent_id.environment_id,
-            agent_id: target_agent_id.agent_id.clone(),
+            agent_id: target_agent_id.agent_id,
         });
     }
 }
@@ -1292,7 +1288,7 @@ fn rewrite_forked_oplog_entry(
         OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
             wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
                 environment_id: target_agent_id.environment_id,
-                agent_id: target_agent_id.agent_id.clone(),
+                agent_id: target_agent_id.agent_id,
             })
             .wallet_id_hash();
         }
@@ -1532,16 +1528,27 @@ mod tests {
     use test_r::test;
 
     fn agent_id(name: &str) -> AgentId {
-        AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: name.to_string(),
-        }
+        crate::test_agent_id(name)
+    }
+
+    fn owned_agent_id(name: &str) -> OwnedAgentId {
+        OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId(Uuid::from_u128(1)),
+            &agent_id(name),
+        )
+    }
+
+    fn holder(owned_agent_id: &OwnedAgentId) -> CardHolder {
+        CardHolder::Agent(AgentCardHolder {
+            environment_id: owned_agent_id.environment_id,
+            agent_id: owned_agent_id.agent_id,
+        })
     }
 
     #[test]
     fn fork_rewrites_invocation_wallet_identity() {
-        let source = agent_id("source");
-        let target = agent_id("target");
+        let source = owned_agent_id("source");
+        let target = owned_agent_id("target");
         let entry = OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: test_invocation_id("fork-wallet-pin".to_string()),
@@ -1556,10 +1563,7 @@ mod tests {
             invocation_context: Vec::new(),
             wallet_pin: Box::new(InvocationWalletPin {
                 wallet_token: WalletVersionToken {
-                    wallet_id_hash: CardHolder::Agent(AgentCardHolder {
-                        agent_id: source.clone(),
-                    })
-                    .wallet_id_hash(),
+                    wallet_id_hash: holder(&source).wallet_id_hash(),
                     generation: 7,
                 },
                 pinned_card_ids: Vec::new(),
@@ -1570,7 +1574,7 @@ mod tests {
         match rewrite_forked_oplog_entry(entry, &source, &target) {
             OplogEntry::AgentInvocationStarted { wallet_pin, .. } => assert_eq!(
                 wallet_pin.wallet_token.wallet_id_hash,
-                CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
+                holder(&target).wallet_id_hash()
             ),
             other => panic!("expected pinned invocation start, got {other:?}"),
         }
@@ -1601,8 +1605,8 @@ mod tests {
             &InvocationContextStack::fresh_rounded(),
         );
         let entry = OplogEntry::create(Box::new(CreateParameters {
-            agent_id: source.clone(),
-            component_id: source.component_id,
+            agent_id: source,
+            component_id: ComponentId(Uuid::from_u128(2)),
             agent_type_name: None,
             canonical_key: None,
             owner_kind: OwnerKind::ComponentAgent,
@@ -1616,7 +1620,7 @@ mod tests {
             initial_total_linear_memory_size: 100,
             initial_active_plugins: HashSet::new(),
             local_agent_config: vec![],
-            original_phantom_id: None,
+            constructor_parameters: None,
             instance_id: Uuid::new_v4(),
             create_request: source_request,
         }));
@@ -1639,20 +1643,16 @@ mod tests {
 
     #[test]
     fn fork_rewrites_only_local_transfer_holders() {
-        let source = agent_id("source");
-        let target = agent_id("target");
-        let remote = agent_id("remote");
+        let source = owned_agent_id("source");
+        let target = owned_agent_id("target");
+        let remote = owned_agent_id("remote");
         let entry = OplogEntry::CardTransferStarted {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             card_id: CardId::new(),
-            source_holder: CardHolder::Agent(AgentCardHolder {
-                agent_id: source.clone(),
-            }),
-            target_holder: CardHolder::Agent(AgentCardHolder {
-                agent_id: remote.clone(),
-            }),
+            source_holder: holder(&source),
+            target_holder: holder(&remote),
             source_wallet_generation: 8,
         };
 
@@ -1662,14 +1662,8 @@ mod tests {
                 target_holder,
                 ..
             } => {
-                assert_eq!(
-                    source_holder,
-                    CardHolder::Agent(AgentCardHolder { agent_id: target })
-                );
-                assert_eq!(
-                    target_holder,
-                    CardHolder::Agent(AgentCardHolder { agent_id: remote })
-                );
+                assert_eq!(source_holder, holder(&target));
+                assert_eq!(target_holder, holder(&remote));
             }
             other => panic!("expected transfer start, got {other:?}"),
         }

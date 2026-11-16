@@ -209,10 +209,7 @@ async fn failed_parent_replay_resolution_does_not_warn_on_drop() {
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "parent-replay-failure-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
         },
         oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),

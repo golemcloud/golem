@@ -20,13 +20,11 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
-    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
+    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, LogLevel,
+    OplogEntry, OplogIndex, OplogScopeProjection,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, ForkResult, OwnedAgentId, Timestamp,
-};
+use golem_common::model::{AgentInvocationPayload, AgentInvocationResult, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
 use std::collections::{HashMap, HashSet, VecDeque};

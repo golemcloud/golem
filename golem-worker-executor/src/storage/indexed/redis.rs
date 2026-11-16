@@ -916,9 +916,8 @@ impl IndexedStorage for RedisIndexedStorage {
 mod tests {
     use super::*;
     use fred::prelude::{Config, Pool, ReconnectPolicy};
-    use golem_common::model::AgentId;
     use golem_common::model::agent::AgentMode;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::{AgentId, OwnedAgentId};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -1113,10 +1112,10 @@ mod tests {
 
     fn blob_manifest() -> IndexedStorageNamespace {
         IndexedStorageNamespace::BlobOplogManifest {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "lost-reply".to_string(),
-            },
+            owned_agent_id: OwnedAgentId::new(
+                golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
+                &AgentId::from_parts(7, 1),
+            ),
             agent_mode: AgentMode::Durable,
             level: 1,
         }

@@ -2008,13 +2008,7 @@ async fn environment_locks_serialize_only_matching_environments() {
 fn registered_blob_entity(
     environment_id: EnvironmentId,
 ) -> (Arc<EntitySlot>, EntitySlotRegistration) {
-    let owner = OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "blob-owner".into(),
-        },
-    );
+    let owner = OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 1));
     let activation = Arc::new(
         EntityActivation::new(
             ExecutableTarget::new(ComponentId::new(), 1_u64.try_into().unwrap()),
@@ -2032,7 +2026,7 @@ fn registered_blob_entity(
         .unwrap(),
     );
     let principal = Principal::Agent(golem_common::model::agent::AgentPrincipal {
-        agent_id: owner.agent_id.clone(),
+        agent_id: owner.agent_id,
     });
     let entity = OwnedAgentEntityId {
         owner,

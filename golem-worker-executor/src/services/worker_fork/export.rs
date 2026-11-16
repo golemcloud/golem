@@ -105,12 +105,10 @@ async fn execute<Ctx: WorkerCtx>(
 ) -> Result<ForkStreamSlotSuccess, Error> {
     let source_id: AgentId = request
         .source_agent_id
-        .clone()
         .and_then(|id| id.try_into().ok())
         .ok_or_else(|| WorkerExecutorError::invalid_request("missing source agent"))?;
     let target_id: AgentId = request
         .target_agent_id
-        .clone()
         .and_then(|id| id.try_into().ok())
         .ok_or_else(|| WorkerExecutorError::invalid_request("missing target agent"))?;
     let environment_id = request
@@ -291,7 +289,7 @@ async fn execute<Ctx: WorkerCtx>(
         }
         let admission = worker
             .reserve_export_fork(
-                target_id.clone(),
+                target_id,
                 hash.to_vec(),
                 candidate.clone(),
                 request.max_forks_per_session,
@@ -381,7 +379,7 @@ async fn execute<Ctx: WorkerCtx>(
         };
         candidate.target_session_key = prepared
             .finalize(
-                target_id.clone(),
+                target_id,
                 target_fingerprint,
                 &candidate.export.expected_method,
             )
@@ -583,7 +581,7 @@ async fn resume<Ctx: WorkerCtx>(
             | WorkerExecutorError::PreviousInvocationExited,
         )) => Ok(()),
         Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-            target.agent_id.clone(),
+            target.agent_id,
             error.into(),
         )),
     }
@@ -841,7 +839,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         .await?;
     Ok(Candidate {
         export: StreamExportFork {
-            source: source.agent_id.clone(),
+            source: source.agent_id,
             source_environment_id: source.environment_id,
             source_fingerprint: fingerprint,
             source_path: request.source_path.clone(),
@@ -1124,10 +1122,7 @@ mod tests {
 
     /// A creation receipt of no export, which is `live` or not.
     fn receipt(live: bool) -> CreationReceipt {
-        let agent = AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "target".to_string(),
-        };
+        let agent = AgentId::from_parts(7, 1);
         CreationReceipt {
             cut: StreamForkCutRecord {
                 format_version: 1,
@@ -1176,10 +1171,7 @@ mod tests {
     #[test]
     fn a_receipt_that_is_not_live_gives_its_reason_and_a_live_one_of_another_request_conflicts() {
         let request = ForkStreamSlotRequest::default();
-        let source = AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "source".to_string(),
-        };
+        let source = AgentId::from_parts(7, 2);
 
         assert_eq!(
             [
@@ -1213,10 +1205,7 @@ mod tests {
     #[test]
     fn only_a_missing_snapshot_of_the_source_baseline_refuses_and_a_receipt_gives_its_answer() {
         let request = ForkStreamSlotRequest::default();
-        let source = AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "source".to_string(),
-        };
+        let source = AgentId::from_parts(7, 3);
         let name = FilesystemSnapshotName::update();
         let answer = |checked: Option<(&FilesystemSnapshotName, bool)>,
                       receipt: Option<&CreationReceipt>| {
@@ -1260,10 +1249,7 @@ mod tests {
     #[test]
     fn a_missing_baseline_without_a_receipt_names_the_cut_and_a_receipt_gives_its_answer() {
         let request = ForkStreamSlotRequest::default();
-        let source = AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "source".to_string(),
-        };
+        let source = AgentId::from_parts(7, 4);
         let name = FilesystemSnapshotName::update();
         let answer = |receipt: Option<&CreationReceipt>| match missing_baseline_answer(
             receipt,

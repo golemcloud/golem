@@ -26,11 +26,10 @@ async fn pending_admission_preserves_queued_signal() {
 
 use super::*;
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::AgentId;
 use golem_common::model::agent::{
     AgentMode, AgentPrincipal, AgentTypeName, CachePolicy, ReadOnlyConfig, Snapshotting,
 };
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::RawSnapshotData;
 use golem_common::schema::UnionValuePayload;
@@ -86,10 +85,7 @@ fn metadata_with_one_agent_type(
 }
 
 fn principal(seed: u128) -> Principal {
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::from_u128(seed)),
-        agent_id: format!("agent-{seed}"),
-    };
+    let agent_id = crate::test_agent_id(&format!("agent-{seed}"));
     Principal::Agent(AgentPrincipal { agent_id })
 }
 

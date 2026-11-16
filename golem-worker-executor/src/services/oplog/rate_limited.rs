@@ -731,7 +731,6 @@ mod tests {
     use async_trait::async_trait;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::AgentMode;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{
@@ -743,7 +742,6 @@ mod tests {
     use std::sync::RwLock;
     use std::time::Instant;
     use test_r::test;
-    use uuid::Uuid;
 
     test_r::enable!();
 
@@ -753,7 +751,7 @@ mod tests {
         environment_id: EnvironmentId,
     ) -> AgentMetadata {
         AgentMetadata {
-            component_id: agent_id.component_id,
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
             canonical_key: None,
             agent_id,
@@ -766,7 +764,7 @@ mod tests {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: AgentStatusRecord::default(),
-            original_phantom_id: None,
+            constructor_parameters: None,
             fingerprint: AgentFingerprint::new(),
             agent_mode: AgentMode::Durable,
             create_request: golem_common::model::oplog::CreateRequest::new(
@@ -837,10 +835,7 @@ mod tests {
 
         let account_id = AccountId::new();
         let env_id = EnvironmentId::new();
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "test".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         let owned = OwnedAgentId::new(env_id, &agent_id);
 
         let last_known_status = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(

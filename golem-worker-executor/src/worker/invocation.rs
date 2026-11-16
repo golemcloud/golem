@@ -2497,10 +2497,7 @@ mod tests {
                 kind: InterruptKind::ShardLost,
             },
             WorkerExecutorError::OplogFenced {
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId::new(),
-                    agent_id: "fenced".into(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
                 expected_epoch: 1,
                 actual_epoch: Some(2),
             },
@@ -2791,7 +2788,7 @@ mod tests {
             SchemaGraph::anonymous(SchemaType::record(Vec::new())),
             SchemaValue::Record { fields: Vec::new() },
         );
-        ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+        ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters)
     }
 
     fn method_invocation(input: SchemaValue) -> AgentInvocation {
@@ -3223,10 +3220,7 @@ mod tests {
 
     /// The agent whose guest calls the tests settle.
     fn own_agent_id() -> AgentId {
-        AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-            agent_id: "own".to_string(),
-        }
+        AgentId::from_parts(7, 2)
     }
 
     /// A host call whose oplog read failed fails the agent, not the guest call: the read failure,
@@ -3264,10 +3258,7 @@ mod tests {
     /// this agent with the cause of the other.
     #[test]
     fn an_unreadable_oplog_of_another_agent_fails_only_the_call() {
-        let other = AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-            agent_id: "other".to_string(),
-        };
+        let other = AgentId::from_parts(7, 3);
         let unreadable = |error| UnreadableOplog {
             agent_id: other.clone(),
             error,

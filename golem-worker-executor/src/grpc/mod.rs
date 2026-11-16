@@ -84,7 +84,7 @@ use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::{CardId, StoredCard};
-use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
+use golem_common::model::component::{CanonicalFilePath, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::oplog::types::AgentMetadataForGuests;
@@ -316,8 +316,7 @@ fn extract_owned_agent_id<T>(
         .as_ref()
         .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
 
-    let agent_id = agent_id
-        .clone()
+    let agent_id = (*agent_id)
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 

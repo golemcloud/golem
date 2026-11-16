@@ -385,7 +385,6 @@ mod tests {
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
                 SchemaValue::Record { fields: vec![] },
             ),
-            None,
         );
         let mut agent_secrets = HashMap::new();
         agent_secrets.insert(
@@ -465,7 +464,6 @@ mod tests {
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
                 SchemaValue::Record { fields: vec![] },
             ),
-            None,
         );
         let mut agent_secrets = HashMap::new();
         agent_secrets.insert(
@@ -561,7 +559,6 @@ mod tests {
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
                 SchemaValue::Record { fields: vec![] },
             ),
-            None,
         );
         let mut agent_secrets = HashMap::new();
         agent_secrets.insert(
