@@ -264,6 +264,12 @@ pub(super) fn rejection_worker_error(error: &SessionError) -> Option<WorkerExecu
         SessionError::Unreadable(unreadable) => {
             Some(WorkerExecutorError::from(unreadable.clone()).into())
         }
+        error @ SessionError::IncompleteOutput(_) => Some(
+            error
+                .clone()
+                .into_worker_executor_error(WorkerExecutorError::runtime)
+                .into(),
+        ),
         SessionError::Failed(_) => None,
     }
 }
@@ -285,6 +291,13 @@ pub(super) async fn send_protocol_failure(
         }
         SessionError::Unreadable(unreadable) => {
             send_worker_failure(responses, WorkerExecutorError::from(unreadable)).await
+        }
+        error @ SessionError::IncompleteOutput(_) => {
+            send_worker_failure(
+                responses,
+                error.into_worker_executor_error(WorkerExecutorError::runtime),
+            )
+            .await
         }
         SessionError::Failed(details) => {
             send_failure(
