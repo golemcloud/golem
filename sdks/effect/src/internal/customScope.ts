@@ -56,16 +56,20 @@ export const closeScope = (
   closedScopes.set(token, parent)
 }
 
-// The nearest open ancestor, so that restoring a frame never installs a closed scope. The runtime
-// resolves a closed token the same way but reports it as escaped work.
-const swapBack = (client: CustomInvocationContextClientShape, token: CustomScopeToken): void => {
+// The nearest open ancestor of a token, as the runtime resolves it. Restoring a frame installs it,
+// because the runtime reports every install of a closed token as escaped work.
+const nearestOpen = (token: CustomScopeToken): CustomScopeToken => {
   let open = token
   let parent = closedScopes.get(open)
   while (parent !== undefined) {
     open = parent
     parent = closedScopes.get(open)
   }
-  client.swap(open)
+  return open
+}
+
+const swapBack = (client: CustomInvocationContextClientShape, token: CustomScopeToken): void => {
+  client.swap(nearestOpen(token))
 }
 
 const leave = (client: CustomInvocationContextClientShape, frame: Frame): void => {
@@ -170,14 +174,18 @@ export class CustomScopeHookMissingError extends Error {
   }
 }
 
-/** The current fiber's scope. Dies when the fiber runs without the scope hook. */
+/**
+ * The current fiber's scope, or its nearest open ancestor when the fiber outlived it, so that a new
+ * operation registers with the parent the runtime enters it under. Dies when the fiber runs without
+ * the scope hook.
+ */
 export const currentCustomScope: Effect.Effect<CustomScopeToken> = Effect.flatMap(
   Effect.tracer,
   (tracer) =>
     Effect.withFiber((fiber) => {
       const token = fiber.getRef(CurrentCustomScope)
       return token !== undefined && isComposed(tracer)
-        ? Effect.succeed(token)
+        ? Effect.succeed(nearestOpen(token))
         : Effect.die(new CustomScopeHookMissingError())
     }),
 )

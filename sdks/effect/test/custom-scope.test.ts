@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Tracer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, SchemaGetter, Tracer } from "effect"
 import * as Durability from "../src/Durability.js"
 import * as Tracing from "../src/Tracing.js"
 import {
@@ -275,5 +275,81 @@ describe("custom durability scopes", () => {
         timeout.mockRestore()
       }
     }).pipe(provide),
+  )
+
+  // Replay of a completed operation skips its response encoding, so the encoder's calls belong to it.
+  it.effect("encodes success and typed failure responses in the operation's scope", () =>
+    Effect.gen(function* () {
+      const scopes: string[] = []
+      const traced = Schema.String.pipe(
+        Schema.decodeTo(Schema.String, {
+          decode: SchemaGetter.passthrough(),
+          encode: SchemaGetter.transformEffect((value: string) =>
+            Effect.sync(() => {
+              scopes.push(Runtime.__current())
+              return value
+            }),
+          ),
+        }),
+      )
+      const options = (name: string) => ({
+        iface: "",
+        function: name,
+        functionType: Durability.FunctionType.writeRemote,
+        requestSchema: Schema.Struct({}),
+        success: traced,
+        error: traced,
+      })
+      yield* Durability.wrap(options("succeeding"), {}, Effect.succeed("value"))
+      yield* Effect.exit(Durability.wrap(options("failing"), {}, Effect.fail("error")))
+      expect(scopes).toEqual(["succeeding", "failing"])
+    }).pipe(provide),
+  )
+
+  it.effect(
+    "registers an operation started from a closed scope under its nearest open ancestor",
+    () =>
+      Effect.gen(function* () {
+        const resume = yield* Deferred.make<void>()
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const finished = yield* Deferred.make<void>()
+        const outer = yield* Effect.forkChild(
+          op(
+            "outer",
+            Effect.gen(function* () {
+              yield* op(
+                "inner",
+                Effect.forkDetach(
+                  Deferred.await(resume).pipe(
+                    Effect.andThen(
+                      op(
+                        "late",
+                        Deferred.succeed(started, undefined).pipe(
+                          Effect.andThen(Deferred.await(release)),
+                        ),
+                      ),
+                    ),
+                    Effect.ensuring(Deferred.succeed(finished, undefined)),
+                  ),
+                ),
+              )
+              // inner has closed; its detached fiber now opens an operation.
+              yield* Deferred.succeed(resume, undefined)
+              yield* Deferred.await(started)
+            }),
+          ),
+        )
+        yield* Deferred.await(started)
+        for (let i = 0; i < 10; i++) yield* Effect.yieldNow
+        const premature = outer.pollUnsafe()
+        yield* Deferred.succeed(release, undefined)
+        yield* Deferred.await(finished)
+        const exit = yield* Fiber.await(outer)
+        expect(premature).toBeUndefined()
+        expect(Exit.isSuccess(exit)).toBe(true)
+        expect(new Map(Runtime.__entered()).get("late")).toBe("outer")
+        expect(Runtime.__open()).toBe(0)
+      }).pipe(provide),
   )
 })

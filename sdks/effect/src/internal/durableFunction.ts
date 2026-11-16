@@ -206,12 +206,12 @@ const runLive = <A, E, R, RF>(
       }
       const exit = awaited.value
       yield* awaitChildren(token)
-      const response = yield* finishWith(exit)
-      if (response !== undefined) {
-        yield* tryHostPromise(() => client.finishAsync(live, response, forcedCommit)).pipe(
-          Effect.provideService(CurrentCustomScope, token),
-        )
-      }
+      // Replay of a completed operation skips the response encoding, so it runs in the scope.
+      yield* Effect.gen(function* () {
+        const response = yield* finishWith(exit)
+        if (response !== undefined)
+          yield* tryHostPromise(() => client.finishAsync(live, response, forcedCommit))
+      }).pipe(Effect.provideService(CurrentCustomScope, token))
       return yield* exit
     }).pipe(Effect.ensuring(cleanup))
   })

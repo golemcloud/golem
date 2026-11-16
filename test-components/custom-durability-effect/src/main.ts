@@ -1,4 +1,4 @@
-import { Deferred, Effect, Schema } from "effect";
+import { Deferred, Effect, Schema, SchemaGetter } from "effect";
 import { defineAgent, Durability, method } from "@golemcloud/effect-golem";
 
 const Port = { port: Schema.Number };
@@ -65,6 +65,7 @@ const Spec = defineAgent({
     concurrentTimerBodies: method({ input: Port, success: Results }),
     concurrentNested: method({ input: Port, success: Results }),
     outsideScopeCall: method({ input: Port, success: Results }),
+    encoderCall: method({ input: Port, success: Results }),
     concurrentFirstFinishes: method({ input: Port, success: Results }),
     failureAndInterruption: method({ input: Port, success: Results }),
     escapedWork: method({ input: Port, success: Results }),
@@ -118,6 +119,27 @@ Spec.implement({
       Effect.all([generator(port, "held"), get(port, "outside")], unbounded),
 
     // The completed sibling's body waits on a timer, whose sleep belongs to that sibling.
+    // The response encoder makes a host call; replay of the completed operation skips it.
+    encoderCall: ({ port }) =>
+      Durability.wrapInfallible(
+        {
+          iface: "golem-it",
+          function: "test-generator",
+          functionType: Durability.FunctionType.writeRemote,
+          requestSchema: NoInput,
+          success: Schema.String.pipe(
+            Schema.decodeTo(Schema.String, {
+              decode: SchemaGetter.passthrough(),
+              encode: SchemaGetter.transformEffect((value: string) =>
+                get(port, "encoded").pipe(Effect.as(value)),
+              ),
+            }),
+          ),
+        },
+        {},
+        get(port, "encoder-body"),
+      ).pipe(Effect.map((result) => [result])),
+
     concurrentFirstFinishes: ({ port }) =>
       Effect.all(
         [

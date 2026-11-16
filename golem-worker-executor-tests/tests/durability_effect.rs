@@ -340,6 +340,7 @@ async fn effect_custom_durability_isolates_concurrent_fibers_and_replays_complet
         vec!["10-nested-a", "8-nested-b"]
     );
     assert_eq!(invoke!("outsideScopeCall"), vec!["12-held", "11-outside"]);
+    assert_eq!(invoke!("encoderCall"), vec!["13-encoder-body"]);
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
@@ -410,6 +411,16 @@ async fn effect_custom_durability_isolates_concurrent_fibers_and_replays_complet
         1,
         "the unscoped sibling call stays a root call"
     );
+
+    let encoder_anchor = anchor(&oplog, "encoderCall");
+    let encoder = custom_calls(&oplog, encoder_anchor);
+    assert_eq!(encoder.len(), 1);
+    assert_eq!(
+        owned_sends(&oplog, encoder[0].index),
+        2,
+        "the response encoder's call belongs to the operation"
+    );
+    assert_eq!(root_sends(&oplog, encoder_anchor), vec![]);
 
     let history = server.history();
     let custom_starts = calls(&oplog)

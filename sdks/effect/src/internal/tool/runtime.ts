@@ -4,6 +4,7 @@ import type * as Streams from "golem:tool/streams@0.1.0"
 import { Cause, Effect, Layer, Stream } from "effect"
 import { HostLive } from "../../host/HostLive.js"
 import { immediateCaller } from "../../host/InvocationContextClient.js"
+import { CustomInvocationContextLive } from "../../host/CustomInvocationContextClient.js"
 import { withCustomScopes } from "../customScope.js"
 import { findCommand, implementationAt, registeredTools, ToolInvokeError } from "./model.js"
 
@@ -194,12 +195,11 @@ export async function invokeRegistered(
     const runtimeLayer = registered.layer
       ? registered.layer.pipe(Layer.provideMerge(HostLive))
       : HostLive
+    // The scope hook also covers the acquisition and release of the registered layer.
     const result = await Effect.runPromise(
-      Effect.scoped(Effect.provide(withCustomScopes(program), runtimeLayer)) as Effect.Effect<
-        Common.InvocationResult,
-        unknown,
-        never
-      >,
+      withCustomScopes(Effect.scoped(Effect.provide(program, runtimeLayer))).pipe(
+        Effect.provide(CustomInvocationContextLive),
+      ) as Effect.Effect<Common.InvocationResult, unknown, never>,
     )
     await settleOutputs("finish")
     return result
