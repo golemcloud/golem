@@ -872,3 +872,102 @@ async fn ts_custom_durability_recovers_a_request_cancelled_inside_an_open_operat
     server.abort();
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn ts_custom_durability_parent_admits_children_until_it_stops_waiting(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let (port, history) = start_callback_server().await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_ts)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurabilityTs", "late-children");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "lateChildren",
+            data_value!(port as f64),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0], "parent");
+    assert!(result[1].ends_with("-late"), "{result:?}");
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let (anchor, entries) = invocation_entries(&oplog, "lateChildren");
+    let starts = custom_starts(entries, anchor);
+    let parent = starts
+        .iter()
+        .find(|start| start.function_name == GENERATOR_PARENT)
+        .expect("parent Start");
+    assert_eq!(parent.parent, None);
+    let children: Vec<_> = starts
+        .iter()
+        .filter(|start| start.parent == Some(parent.index))
+        .map(|start| start.index)
+        .collect();
+    assert_eq!(
+        children.len(),
+        2,
+        "early and ready are children of the parent"
+    );
+    let roots: Vec<_> = starts
+        .iter()
+        .filter(|start| start.function_name == GENERATOR && start.parent.is_none())
+        .collect();
+    assert_eq!(roots.len(), 1, "late starts outside the parent");
+    assert!(roots[0].index > children[1]);
+    let parent_end = ends_of(entries, parent.index);
+    assert_eq!(parent_end.len(), 1);
+    for child in &children {
+        let end = ends_of(entries, *child);
+        assert_eq!(end.len(), 1);
+        assert!(end[0] < parent_end[0], "the parent ends after its children");
+    }
+    assert_eq!(ends_of(entries, roots[0].index).len(), 1);
+    let owners = http_send_owners(entries);
+    for owner in children.iter().chain([&roots[0].index]) {
+        assert_eq!(owned_sends(&owners, *owner), 1);
+    }
+    assert_eq!(owned_sends(&owners, parent.index), 0);
+
+    let before_crash = history.lock().unwrap().clone();
+    let mut sorted = before_crash.clone();
+    sorted.sort();
+    assert_eq!(sorted, vec!["early", "late", "ready"]);
+
+    executor.simulated_crash(&worker_id).await?;
+    let after_recovery = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "callback",
+            data_value!(port as f64, "after"),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert!(after_recovery.ends_with("-after"));
+    let mut expected = before_crash;
+    expected.push("after".to_string());
+    assert_eq!(
+        *history.lock().unwrap(),
+        expected,
+        "replay must not repeat completed effects"
+    );
+    Ok(())
+}

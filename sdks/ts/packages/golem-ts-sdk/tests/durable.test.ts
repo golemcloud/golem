@@ -490,6 +490,27 @@ describe('durableAsync()', () => {
     ]);
   });
 
+  it('begins an operation started after its parent stopped waiting in the enclosing scope', async () => {
+    const { durableAsync, FunctionType } = await load();
+    let late: Promise<string> | undefined;
+
+    // The getter runs while the parent encodes its result, after it stopped waiting for children.
+    const out = await durableAsync(baseSpec(FunctionType), { symbol: 'X' }, async () => ({
+      symbol: 'X',
+      get price() {
+        late ??= durableAsync(opSpec(FunctionType, 'late'), 'l', async () => 'l');
+        return 7;
+      },
+    }));
+
+    expect(out.price).toBe(7);
+    expect(await late).toBe('l');
+    expect(events).toContain('begin:late@root');
+    expect(events).toContain('enter:late@root');
+    expect(scope.current).toBe(root);
+    expect(root.openChildren).toBe(0);
+  });
+
   it('persists and replays a fallible Result', async () => {
     const { durableAsync, FunctionType, Result } = await load();
     const spec = { ...opSpec(FunctionType, 'maybe'), error: z.object({ code: z.string() }) };

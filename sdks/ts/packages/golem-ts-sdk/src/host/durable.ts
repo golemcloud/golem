@@ -117,8 +117,10 @@ export function durable(
  * an `await`, in timers or in callbacks it registers, belong to this operation, and operations it
  * starts are its children. Concurrent operations and unrelated work running during the wait keep
  * their own scopes. The operation finishes only after the operations that started inside it have
- * finished, also when the body did not await them. Work that the body detaches and that runs after
- * the operation finished belongs to the nearest enclosing open operation, or to the invocation.
+ * finished, also when the body did not await them. An operation that starts after that wait
+ * ended begins in the nearest enclosing operation that still waits for its children, or in the
+ * invocation. Other work that the body detaches and that runs after the operation finished belongs
+ * to the nearest enclosing open operation, or to the invocation.
  */
 export function durableAsync<Req, Ok>(
   spec: DurableSpec<Req, Ok>,
@@ -137,18 +139,19 @@ export async function durableAsync(
   body: () => Promise<unknown>,
 ): Promise<unknown> {
   const operation = prepare(spec, request);
-  const parentToken = scopes.capture();
+  const { token: parentToken, operation: parent } = admittingScope(scopes.capture());
   // Register with the enclosing operation before admission, so the parent cannot finish while
   // this operation still waits for it.
-  const parent = openOperation(parentToken);
   let settle!: () => void;
   const settled = new Promise<void>((resolve) => (settle = resolve));
   parent?.children.add(settled);
   try {
-    const invocation = await beginCustomDurableInvocationAsync(
-      operation.functionName,
-      operation.request,
-      spec.functionType,
+    const invocation = await scopes.run(parentToken, () =>
+      beginCustomDurableInvocationAsync(
+        operation.functionName,
+        operation.request,
+        spec.functionType,
+      ),
     );
     if (invocation.tag === 'replayed') return operation.replay(invocation.val);
     return await runLive(operation, spec.forcedCommit ?? false, parentToken, invocation.val, body);
@@ -158,20 +161,30 @@ export async function durableAsync(
   }
 }
 
-/** An open live operation of {@link durableAsync}: its parent and the children it waits for. */
+/** A live operation of {@link durableAsync}: the scope it started in and the children it waits for. */
 interface OpenOperation {
-  readonly parent: OpenOperation | undefined;
+  readonly outer: scopes.Token;
   readonly children: Set<Promise<void>>;
-  closed: boolean;
+  /** Set when the operation stops waiting for children; later operations start outside it. */
+  sealed: boolean;
 }
 
 const openOperations = new WeakMap<scopes.Token, OpenOperation>();
 
-/** The open operation that `token` stands for: its own, else the nearest open ancestor. */
-function openOperation(token: scopes.Token): OpenOperation | undefined {
+/**
+ * The innermost scope, from `token` outwards, that still admits new operations, and its operation.
+ * The scope of the invocation has no operation and always admits.
+ */
+function admittingScope(token: scopes.Token): {
+  token: scopes.Token;
+  operation: OpenOperation | undefined;
+} {
   let operation = openOperations.get(token);
-  while (operation?.closed) operation = operation.parent;
-  return operation;
+  while (operation?.sealed) {
+    token = operation.outer;
+    operation = openOperations.get(token);
+  }
+  return { token, operation };
 }
 
 async function runLive(
@@ -183,11 +196,7 @@ async function runLive(
 ): Promise<unknown> {
   // Enter in the parent's scope, so the child scope does not stay current in the parent.
   const token = scopes.run(parentToken, () => scopes.enterLive(live));
-  const open: OpenOperation = {
-    parent: openOperation(parentToken),
-    children: new Set(),
-    closed: false,
-  };
+  const open: OpenOperation = { outer: parentToken, children: new Set(), sealed: false };
   openOperations.set(token, open);
   try {
     let outcome: { ok: true; value: unknown } | { ok: false; error: unknown };
@@ -197,6 +206,8 @@ async function runLive(
       outcome = { ok: false, error };
     }
     while (open.children.size > 0) await Promise.allSettled([...open.children]);
+    // An operation started from now on would still be open when this one closes.
+    open.sealed = true;
     if (!outcome.ok) throw outcome.error;
     // Encoding reads the result, so getters it calls belong to this operation.
     const response = scopes.run(token, () => operation.encode(outcome.value));
@@ -207,7 +218,6 @@ async function runLive(
   } finally {
     // An unfinished drop leaves the invocation incomplete, so recovery re-runs the body.
     scopes.run(token, () => dispose(live));
-    open.closed = true;
     scopes.close(token);
   }
 }

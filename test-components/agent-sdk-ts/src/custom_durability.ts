@@ -36,6 +36,11 @@ const generatorParent = {
   success: z.string(),
 };
 
+const generatorParentRecord = {
+  ...generatorParent,
+  success: z.object({ value: z.string() }),
+};
+
 async function callback(port: number, payload: string): Promise<string> {
   const response = await fetch(
     `http://localhost:${port}/callback?payload=${encodeURIComponent(payload)}`,
@@ -92,6 +97,10 @@ export const CustomDurabilityTs = defineAgent({
       returns: z.array(z.string()),
     }),
     cancelledCall: method({
+      input: { port: z.number() },
+      returns: z.array(z.string()),
+    }),
+    lateChildren: method({
       input: { port: z.number() },
       returns: z.array(z.string()),
     }),
@@ -195,6 +204,25 @@ export const CustomDurabilityTsImpl = CustomDurabilityTs.implement({
         },
       );
       return [scoped, await callback(port, "after-cancel")];
+    },
+
+    // `ready` starts in a continuation that is already queued when `early` settles, so the parent
+    // waits for it. `late` starts while the parent encodes its result, after the parent stopped
+    // waiting for children.
+    async lateChildren({ port }) {
+      let late: Promise<string> | undefined;
+      const parent = await durableAsync(generatorParentRecord, {}, async () => {
+        void durableCallback(port, "early").then(() =>
+          durableCallback(port, "ready"),
+        );
+        return {
+          get value() {
+            late ??= durableCallback(port, "late");
+            return "parent";
+          },
+        };
+      });
+      return [parent.value, await late!];
     },
   },
 });
