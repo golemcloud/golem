@@ -7,5 +7,6 @@ struct Audit {
 }
 
 fn main() {
-    let _ = |audit: &Audit| audit.who.kind();
+    let _ = golem_rust::schema::try_into_schema_graph::<Audit>();
+    let _ = golem_rust::schema::wit::direct::schema::<Audit>();
 }

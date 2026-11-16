@@ -661,3 +661,77 @@ impl<T: ?Sized> Rule8<T> {
     #[doc(hidden)]
     pub const REJECTED: () = panic!(rule_8_message!());
 }
+
+/// Ends the build with the message, in the crate that instantiates it. It is generic so that the
+/// message is not raised while this crate is compiled.
+#[inline]
+fn reject_live_value<T: ?Sized>() -> ! {
+    let () = Rule8::<T>::REJECTED;
+    unreachable!()
+}
+
+/// Gives a live value every schema and wire trait, so that a use of one as data, in a method
+/// result or inside a value type, ends the build with the same message as a parameter does. Every
+/// body refers to [`Rule8::REJECTED`], and no value of these types is ever encoded or decoded.
+/// Every method is `#[inline]` so that it is compiled only in a crate that uses it, which is where
+/// the message belongs, and never in this crate itself.
+macro_rules! reject_as_data {
+    ($($live:ty),+ $(,)?) => {$(
+        impl IntoSchema for $live {
+            #[inline]
+            fn type_id() -> crate::schema::TypeId {
+                reject_live_value::<Self>()
+            }
+
+            #[inline]
+
+            fn register_in(_builder: &mut crate::schema::SchemaBuilder) -> crate::schema::SchemaType {
+                reject_live_value::<Self>()
+            }
+
+            #[inline]
+
+            fn to_value(&self) -> crate::schema::SchemaValue {
+                reject_live_value::<Self>()
+            }
+        }
+
+        impl FromSchema for $live {
+            #[inline]
+            fn from_value(_value: &crate::schema::SchemaValue) -> Result<Self, crate::schema::FromSchemaError> {
+                reject_live_value::<Self>()
+            }
+        }
+
+        impl WireSchema for $live {
+            #[inline]
+            fn append_schema(
+                _builder: &mut crate::schema::wit::direct::WireSchemaBuilder,
+            ) -> crate::schema::wit::wire::TypeNodeIndex {
+                reject_live_value::<Self>()
+            }
+        }
+
+        impl FromWire for $live {
+            #[inline]
+            fn read_wire(
+                _reader: &mut crate::schema::wit::direct::WireReader,
+                _index: crate::schema::wit::wire::ValueNodeIndex,
+            ) -> Result<Self, crate::schema::wit::direct::WireError> {
+                reject_live_value::<Self>()
+            }
+        }
+
+        impl IntoWire for $live {
+            #[inline]
+            fn write_wire(
+                &self,
+                _writer: &mut crate::schema::wit::direct::WireWriter,
+            ) -> Result<crate::schema::wit::wire::ValueNodeIndex, crate::schema::wit::direct::WireError> {
+                reject_live_value::<Self>()
+            }
+        }
+    )+};
+}
+
+reject_as_data!(Principal, Caller, TokenProvenance);

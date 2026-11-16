@@ -2,9 +2,9 @@ error[E0080]: evaluation panicked: Principal and Caller cannot appear in a metho
  --> $RUST/core/src/panic.rs
   |
   |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
-  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `golem_rust::agentic::caller::Rule8::<golem_rust::agentic::Principal>::REJECTED` failed here
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `golem_rust::caller::Rule8::<golem_rust::caller::Principal>::REJECTED` failed here
   |
- ::: src/agentic/caller.rs
+ ::: src/caller.rs
   |
   |     pub const REJECTED: () = panic!(rule_8_message!());
   |                              ------------------------- in this macro invocation
@@ -15,7 +15,7 @@ note: erroneous constant encountered
   |         let () = Rule8::<T>::REJECTED;
   |                  ^^^^^^^^^^^^^^^^^^^^
 
-note: the above error was encountered while instantiating `fn <&golem_rust::agentic::AgentParameterProbe<golem_rust::agentic::Principal> as golem_rust::agentic::AgentParameterSchema>::parameter_schema`
+note: the above error was encountered while instantiating `fn <&golem_rust::agentic::AgentParameterProbe<golem_rust::caller::Principal> as golem_rust::agentic::AgentParameterSchema>::parameter_schema`
  --> tests/ui/fail/principal_in_parameter.rs:4:1
   |
 4 | #[agent_definition]

@@ -1,0 +1,27 @@
+error[E0080]: evaluation panicked: Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.caller() (golem_rust::agentic::InvocationContext), and store ctx.caller().original().principal_ref() as a PrincipalRef.
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `golem_rust::caller::Rule8::<golem_rust::caller::Principal>::REJECTED` failed here
+  |
+ ::: src/caller.rs
+  |
+  |     pub const REJECTED: () = panic!(rule_8_message!());
+  |                              ------------------------- in this macro invocation
+
+note: erroneous constant encountered
+ --> src/caller.rs
+  |
+  |     let () = Rule8::<T>::REJECTED;
+  |              ^^^^^^^^^^^^^^^^^^^^
+
+note: the above error was encountered while instantiating `fn caller::reject_live_value::<golem_rust::caller::Principal>`
+ --> src/caller.rs
+  |
+  |                 reject_live_value::<Self>()
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  | reject_as_data!(Principal, Caller, TokenProvenance);
+  | --------------------------------------------------- in this macro invocation
+  |
+  = note: this note originates in the macro `reject_as_data` (in Nightly builds, run with -Z macro-backtrace for more info)

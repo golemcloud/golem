@@ -1,102 +1,27 @@
-error[E0277]: the trait bound `golem_rust::agentic::Principal: IntoWire` is not satisfied
- --> tests/ui/fail/principal_in_record_field.rs:6:10
+error[E0080]: evaluation panicked: Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.caller() (golem_rust::agentic::InvocationContext), and store ctx.caller().original().principal_ref() as a PrincipalRef.
+ --> $RUST/core/src/panic.rs
   |
-6 |     who: Principal,
-  |          ^^^^^^^^^ the trait `IntoWire` is not implemented for `golem_rust::agentic::Principal`
+  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `golem_rust::caller::Rule8::<golem_rust::caller::Principal>::REJECTED` failed here
   |
-  = help: the following other types implement trait `IntoWire`:
-            &T
-            ()
-            (A, B)
-            (A, B, C)
-            (A, B, C, D)
-            (A, B, C, D, E)
-            (A, B, C, D, E, F)
-            (A, B, C, D, E, F, G)
-          and $N others
+ ::: src/caller.rs
+  |
+  |     pub const REJECTED: () = panic!(rule_8_message!());
+  |                              ------------------------- in this macro invocation
 
-error[E0277]: the trait bound `golem_rust::agentic::Principal: IntoWire` is not satisfied
- --> tests/ui/fail/principal_in_record_field.rs:4:34
+note: erroneous constant encountered
+ --> src/caller.rs
   |
-4 | #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
-  |                                  ^^^^^^^^ the trait `IntoWire` is not implemented for `golem_rust::agentic::Principal`
-  |
-  = help: the following other types implement trait `IntoWire`:
-            &T
-            ()
-            (A, B)
-            (A, B, C)
-            (A, B, C, D)
-            (A, B, C, D, E)
-            (A, B, C, D, E, F)
-            (A, B, C, D, E, F, G)
-          and $N others
-  = note: this error originates in the derive macro `IntoWire` (in Nightly builds, run with -Z macro-backtrace for more info)
+  |     let () = Rule8::<T>::REJECTED;
+  |              ^^^^^^^^^^^^^^^^^^^^
 
-error[E0277]: the trait bound `golem_rust::agentic::Principal: IntoSchema` is not satisfied
- --> tests/ui/fail/principal_in_record_field.rs:6:10
+note: the above error was encountered while instantiating `fn caller::reject_live_value::<golem_rust::caller::Principal>`
+ --> src/caller.rs
   |
-6 |     who: Principal,
-  |          ^^^^^^^^^ the trait `IntoSchema` is not implemented for `golem_rust::agentic::Principal`
+  |                 reject_live_value::<Self>()
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  | reject_as_data!(Principal, Caller, TokenProvenance);
+  | --------------------------------------------------- in this macro invocation
   |
-  = help: the following other types implement trait `IntoSchema`:
-            &T
-            ()
-            (T0, T1)
-            (T0, T1, T2)
-            (T0, T1, T2, T3)
-            (T0, T1, T2, T3, T4)
-            (T0, T1, T2, T3, T4, T5)
-            (T0, T1, T2, T3, T4, T5, T6)
-          and $N others
-
-error[E0277]: the trait bound `golem_rust::agentic::Principal: FromSchema` is not satisfied
- --> tests/ui/fail/principal_in_record_field.rs:6:10
-  |
-6 |     who: Principal,
-  |          ^^^^^^^^^ the trait `FromSchema` is not implemented for `golem_rust::agentic::Principal`
-  |
-  = help: the following other types implement trait `FromSchema`:
-            ()
-            (T0, T1)
-            (T0, T1, T2)
-            (T0, T1, T2, T3)
-            (T0, T1, T2, T3, T4)
-            (T0, T1, T2, T3, T4, T5)
-            (T0, T1, T2, T3, T4, T5, T6)
-            (T0, T1, T2, T3, T4, T5, T6, T7)
-          and $N others
-
-error[E0277]: the trait bound `golem_rust::agentic::Principal: FromWire` is not satisfied
- --> tests/ui/fail/principal_in_record_field.rs:6:10
-  |
-6 |     who: Principal,
-  |          ^^^^^^^^^ the trait `FromWire` is not implemented for `golem_rust::agentic::Principal`
-  |
-  = help: the following other types implement trait `FromWire`:
-            ()
-            (A, B)
-            (A, B, C)
-            (A, B, C, D)
-            (A, B, C, D, E)
-            (A, B, C, D, E, F)
-            (A, B, C, D, E, F, G)
-            (A, B, C, D, E, F, G, H)
-          and $N others
-
-error[E0277]: the trait bound `golem_rust::agentic::Principal: WireSchema` is not satisfied
- --> tests/ui/fail/principal_in_record_field.rs:6:10
-  |
-6 |     who: Principal,
-  |          ^^^^^^^^^ the trait `WireSchema` is not implemented for `golem_rust::agentic::Principal`
-  |
-  = help: the following other types implement trait `WireSchema`:
-            &T
-            ()
-            (A, B)
-            (A, B, C)
-            (A, B, C, D)
-            (A, B, C, D, E)
-            (A, B, C, D, E, F)
-            (A, B, C, D, E, F, G)
-          and $N others
+  = note: this note originates in the macro `reject_as_data` (in Nightly builds, run with -Z macro-backtrace for more info)
