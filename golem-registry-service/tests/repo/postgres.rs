@@ -228,7 +228,7 @@ async fn check_if_postgres_ready(info: &DbPostgresConfig) -> Result<(), sqlx::Er
     Ok(())
 }
 
-async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
+pub async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
     db::postgres::migrate(
         config,
         MigrationsDir::new("db/migration".into()).postgres_migrations(),
@@ -1317,4 +1317,9 @@ async fn test_notifier_replays_after_listener_reconnect(db: &PostgresDb) {
 #[test]
 async fn test_notifier_resets_cache_after_journal_gap(db: &PostgresDb) {
     crate::repo::notifier_reconnect::test_notifier_resets_cache_after_journal_gap(db).await;
+}
+
+#[test]
+async fn test_notifier_resets_cache_after_journal_expiry(db: &PostgresDb) {
+    crate::repo::notifier_reconnect::test_notifier_resets_cache_after_journal_expiry(db).await;
 }

@@ -18,9 +18,14 @@
 //! the proxied connections cleanly, so the listener sees end of stream and reconnects on its
 //! own. The proxy holds the reconnect until the test has committed a change, so the change's
 //! notification is lost and no later write notifies again.
+//!
+//! The journal expiry test empties the journal, so it uses its own schema: other tests share
+//! the database but not its tables. Notifications are database-wide, so the listener still
+//! receives theirs.
 
-use crate::repo::postgres::PostgresDb;
+use crate::repo::postgres::{PostgresDb, make_pool};
 use futures::FutureExt;
+use golem_common::config::DbPostgresConfig;
 use golem_common::model::account_path::{AccountPath, AccountSegment};
 use golem_registry_service::repo::account_tree::{AccountTreeRepo, DbAccountTreeRepo};
 use golem_registry_service::repo::model::account_tree::{
@@ -28,7 +33,8 @@ use golem_registry_service::repo::model::account_tree::{
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent,
+    RegistryChangeRepo,
 };
 use golem_registry_service::services::account_tree_cache::AccountTreeCache;
 use golem_registry_service::services::registry_change_notifier::{
@@ -42,7 +48,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 struct CuttableProxy {
@@ -134,6 +140,7 @@ struct Fixture {
     cache: Arc<AccountTreeCache>,
     acme: AccountNodeRecord,
     leaf: AccountNodeRecord,
+    events: broadcast::Receiver<RegistryChangeEvent>,
     _tasks: tokio::task::JoinSet<Result<(), anyhow::Error>>,
     _invalidation: tokio::task::JoinHandle<()>,
 }
@@ -190,19 +197,20 @@ fn spawn_cache_invalidation(
 
 /// A warm cache behind a notifier whose listener goes through the proxy, with the listener
 /// shown to be live.
-async fn fixture(db: &PostgresDb) -> Fixture {
-    let proxy = CuttableProxy::start(db.config.port).await;
-    let mut proxied = db.config.clone();
+async fn fixture(config: &DbPostgresConfig, pool: &PostgresPool) -> Fixture {
+    let proxy = CuttableProxy::start(config.port).await;
+    let mut proxied = config.clone();
     proxied.port = proxy.port;
 
-    let journal: Arc<dyn RegistryChangeRepo> = Arc::new(DbRegistryChangeRepo::new(db.pool.clone()));
+    let journal: Arc<dyn RegistryChangeRepo> = Arc::new(DbRegistryChangeRepo::new(pool.clone()));
     let notifier = PostgresRegistryChangeNotifier::new(4096, journal.clone(), &proxied);
     let mut tasks = tokio::task::JoinSet::new();
     notifier.start_background_tasks(&mut tasks);
 
-    let tree: Arc<dyn AccountTreeRepo> = Arc::new(DbAccountTreeRepo::new(db.pool.clone()));
+    let tree: Arc<dyn AccountTreeRepo> = Arc::new(DbAccountTreeRepo::new(pool.clone()));
     let cache = Arc::new(AccountTreeCache::new(tree.clone(), 64));
     let invalidation = spawn_cache_invalidation(cache.clone(), &notifier);
+    let events = notifier.subscribe();
 
     let root = root(&tree).await;
     let top = segment(&format!("n{}", new_repo_uuid().simple()));
@@ -260,6 +268,7 @@ async fn fixture(db: &PostgresDb) -> Fixture {
         cache,
         acme,
         leaf,
+        events,
         _tasks: tasks,
         _invalidation: invalidation,
     }
@@ -281,7 +290,7 @@ async fn becomes_suspended(cache: &AccountTreeCache, leaf: Uuid, timeout: Durati
 /// A change committed while the listener is disconnected reaches the warm cache after the
 /// listener reconnects, without any later write.
 pub async fn test_notifier_replays_after_listener_reconnect(db: &PostgresDb) {
-    let fixture = fixture(db).await;
+    let mut fixture = fixture(&db.config, &db.pool).await;
     fixture.proxy.cut_and_hold().await;
     suspend(&fixture.tree, &fixture.acme).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -296,12 +305,32 @@ pub async fn test_notifier_replays_after_listener_reconnect(db: &PostgresDb) {
         .await,
         "the cache kept the state from before the disconnect"
     );
+    // Subscribers other than the cache, such as invalidation streams, receive the lost event.
+    let acme = fixture.acme.account_id;
+    let delivered = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match fixture.events.recv().await {
+                Ok(RegistryChangeEvent::AccountChanged { account_id, .. })
+                    if account_id == acme =>
+                {
+                    break;
+                }
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => panic!("notifier closed"),
+            }
+        }
+    })
+    .await;
+    assert!(
+        delivered.is_ok(),
+        "the notifier did not broadcast the lost event"
+    );
 }
 
 /// When the change committed during the disconnect is no longer in the journal but a later
 /// event is, the notifier cannot replay it and the cache resets instead.
 pub async fn test_notifier_resets_cache_after_journal_gap(db: &PostgresDb) {
-    let fixture = fixture(db).await;
+    let fixture = fixture(&db.config, &db.pool).await;
     fixture.proxy.cut_and_hold().await;
     suspend(&fixture.tree, &fixture.acme).await;
     let lost = fixture
@@ -337,6 +366,58 @@ pub async fn test_notifier_resets_cache_after_journal_gap(db: &PostgresDb) {
         .await,
         "the cache kept the state from before the disconnect"
     );
+}
+
+/// When retention cleanup removed every journal row, including the change committed during the
+/// disconnect, the journal can neither replay the change nor show that one was lost. The cache
+/// must not keep its state from before the disconnect.
+pub async fn test_notifier_resets_cache_after_journal_expiry(db: &PostgresDb) {
+    let mut config = db.config.clone();
+    config.schema = Some(format!("notifier_{}", Uuid::new_v4().simple()));
+    let pool = make_pool(&config).await;
+    let fixture = fixture(&config, &pool).await;
+    let leaf_path = AccountPath::from_str(&format!("/{}/leaf", fixture.acme.segment)).unwrap();
+    assert!(
+        AccountLocalState::effective(&fixture.cache.resolve(&leaf_path).await.unwrap().unwrap())
+            == AccountLocalState::Active
+    );
+
+    fixture.proxy.cut_and_hold().await;
+    suspend(&fixture.tree, &fixture.acme).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let removed = fixture.journal.cleanup_old_events(0).await.unwrap();
+    assert!(removed > 0);
+    assert!(
+        fixture
+            .journal
+            .get_latest_event_id()
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        fixture
+            .journal
+            .get_events_since(ChangeEventId(0))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    fixture.proxy.release();
+
+    assert!(
+        becomes_suspended(
+            &fixture.cache,
+            fixture.leaf.account_id,
+            Duration::from_secs(10)
+        )
+        .await,
+        "the cache kept the state from before the disconnect"
+    );
+    let by_path = fixture.cache.resolve(&leaf_path).await.unwrap().unwrap();
+    assert!(by_path.last().unwrap().account_id == fixture.leaf.account_id);
+    assert!(AccountLocalState::effective(&by_path) == AccountLocalState::Suspended);
 }
 
 async fn record_unrelated_event(db: &PostgresDb) {

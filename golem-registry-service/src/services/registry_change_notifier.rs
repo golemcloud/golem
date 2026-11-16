@@ -211,11 +211,16 @@ impl PostgresRegistryChangeNotifier {
 /// resync first when the outbox has no event directly after the cursor although newer events
 /// exist. Gaps in the event id sequence also come from rolled back inserts, so this signal is
 /// conservative.
+///
+/// After a lost connection (`reconnected`), an outbox with no event after the cursor cannot
+/// show that nothing was missed: retention cleanup may have removed the events of the outage,
+/// and with them every newer event id. The notifier then signals a resync too.
 async fn catch_up(
     repo: &dyn RegistryChangeRepo,
     sender: &broadcast::Sender<RegistryChangeEvent>,
     resyncs: &watch::Sender<u64>,
     last_processed_event_id: &mut ChangeEventId,
+    reconnected: bool,
 ) -> golem_service_base::repo::RepoResult<()> {
     let events = repo.get_events_since(*last_processed_event_id).await?;
     let first_available = match events.first() {
@@ -237,6 +242,12 @@ async fn catch_up(
         if events.is_empty() {
             *last_processed_event_id = first_available;
         }
+    } else if reconnected && events.is_empty() {
+        tracing::info!(
+            last_processed_event_id = last_processed_event_id.0,
+            "Registry change journal has no event after the cursor after a reconnect, signalling resync"
+        );
+        resyncs.send_modify(|generation| *generation += 1);
     }
     for event in events {
         *last_processed_event_id = event.event_id();
@@ -269,6 +280,7 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
 
         join_set.spawn(async move {
             let mut last_processed_event_id = ChangeEventId(0);
+            let mut connected_before = false;
             let mut backoff = std::time::Duration::from_millis(100);
             let max_backoff = std::time::Duration::from_secs(30);
 
@@ -294,6 +306,7 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
                             &sender,
                             &resyncs,
                             &mut last_processed_event_id,
+                            connected_before,
                         )
                         .await
                         {
@@ -304,6 +317,7 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
                             backoff = (backoff * 2).min(max_backoff);
                             continue;
                         }
+                        connected_before = true;
 
                         loop {
                             // `try_recv` returns `Ok(None)` once it has replaced a lost
@@ -317,6 +331,7 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
                                         &sender,
                                         &resyncs,
                                         &mut last_processed_event_id,
+                                        false,
                                     )
                                     .await
                                     {
@@ -332,6 +347,7 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
                                         &sender,
                                         &resyncs,
                                         &mut last_processed_event_id,
+                                        true,
                                     )
                                     .await
                                     {
