@@ -4872,6 +4872,7 @@ impl TestCaseBuilder {
                             &golem_common::model::invocation_context::InvocationContextStack::fresh(
                             ),
                         ),
+                        never_live: false,
                     },
                 )),
                 expected_status: status.clone(),

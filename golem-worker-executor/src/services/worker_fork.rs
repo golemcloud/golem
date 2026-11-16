@@ -1610,6 +1610,7 @@ mod tests {
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
             create_request: source_request,
+            never_live: false,
         }));
         let instance_id = Uuid::new_v4();
 

@@ -463,6 +463,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     original_phantom_id,
                     instance_id,
                     create_request,
+                    never_live,
                 } = *parameters;
                 Entry::Create(RawCreateParameters {
                     component_id: Some(component_id.into()),
@@ -493,6 +494,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     original_phantom_id: original_phantom_id.map(Into::into),
                     instance_id: Some(instance_id.into()),
                     create_request: Some(create_request_to_proto(create_request)),
+                    never_live,
                 })
             }
             OplogEntry::Start {
@@ -1149,6 +1151,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         create_request: create_request_from_proto(
                             p.create_request.ok_or("Missing create_request")?,
                         )?,
+                        never_live: p.never_live,
                     }),
                 })
             }

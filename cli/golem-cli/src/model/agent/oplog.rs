@@ -334,6 +334,9 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(parent) = params.parent.as_ref() {
                     logln(format!("{pad}parent:            {}", format_id(parent)));
                 }
+                if params.never_live {
+                    logln(format!("{pad}never live:         {}", format_id(&true)));
+                }
                 logln(format!("{pad}initial active plugins:"));
                 for plugin in &params.initial_active_plugins {
                     logln(format!(

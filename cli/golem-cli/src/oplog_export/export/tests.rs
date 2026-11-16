@@ -307,6 +307,7 @@ fn create() -> FakeEntry {
             local_agent_config: vec![],
             original_phantom_id: None,
             instance_id: instance(1),
+            never_live: false,
         }),
     )
 }

@@ -101,6 +101,7 @@ fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry
             golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
+        never_live: false,
     }))
 }
 

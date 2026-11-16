@@ -1623,6 +1623,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         original_phantom_id: initial_worker_metadata.original_phantom_id,
                         instance_id,
                         create_request: initial_worker_metadata.create_request.clone(),
+                        never_live: false,
                     }));
 
                 let initial_status = Arc::new(arc_swap::ArcSwap::from_pointee(initial_status));

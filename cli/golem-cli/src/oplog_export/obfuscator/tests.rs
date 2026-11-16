@@ -3766,6 +3766,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             }],
             original_phantom_id: Some(secret_uuid(8)),
             instance_id: Uuid::from_u128(0xF1F2),
+            never_live: false,
         }),
         PublicOplogEntry::Start(StartParams {
             timestamp: ts(),

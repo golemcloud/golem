@@ -599,6 +599,9 @@ pub struct AgentStatusRecord {
     /// any of its guest code runs, so a set bit means the agent may have executed and must never
     /// be started again.
     pub ephemeral_execution_begun: bool,
+    /// The never-live mark of the `Create` entry. The fold sets it from `Create` and never
+    /// changes it.
+    pub never_live: bool,
     pub pending_durable_stream_cancellations: HashMap<
         (crate::model::durable_stream::StreamRecordReference, u64),
         Vec<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
@@ -676,6 +679,7 @@ impl Default for AgentStatusRecord {
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             ephemeral_execution_begun: false,
+            never_live: false,
             pending_durable_stream_cancellations: HashMap::new(),
             current_idempotency_key: None,
             current_invocation_started_at: None,

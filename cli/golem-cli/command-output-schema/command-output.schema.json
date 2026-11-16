@@ -6760,7 +6760,7 @@
     },
     "PublicOplogEntryCreate": {
       "type": "object",
-      "required": ["type", "timestamp", "agentId", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
+      "required": ["type", "timestamp", "agentId", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId", "neverLive"],
       "properties": {
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
@@ -6777,7 +6777,8 @@
         "initialTotalLinearMemorySize": { "type": "integer", "minimum": 0 },
         "initialActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } },
         "originalPhantomId": { "type": ["string", "null"] },
-        "instanceId": { "type": "string" }
+        "instanceId": { "type": "string" },
+        "neverLive": { "type": "boolean" }
       },
       "additionalProperties": false
     },

@@ -162,6 +162,11 @@ declare module 'golem:api/oplog@1.5.0' {
     localAgentConfig: LocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
     instanceId: Uuid;
+    /**
+     * Whether the agent is a never-live sandbox. A marked agent reports the
+     * `sandboxed` status.
+     */
+    neverLive: boolean;
   };
   /**
    * Identifies a durable call by its place in a call order.
@@ -911,6 +916,11 @@ declare module 'golem:api/oplog@1.5.0' {
     localAgentConfig: RawLocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
     instanceId: Uuid;
+    /**
+     * Whether the agent is a never-live sandbox. A marked agent reports the
+     * `sandboxed` status.
+     */
+    neverLive: boolean;
   };
   export type RawStartParameters = {
     timestamp: Datetime;

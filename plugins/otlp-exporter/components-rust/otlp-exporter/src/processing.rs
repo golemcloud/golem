@@ -1323,6 +1323,7 @@ mod tests {
             local_agent_config: Vec::new(),
             original_phantom_id: None,
             instance_id: uuid(instance),
+            never_live: false,
         })
     }
 

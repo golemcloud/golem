@@ -872,6 +872,7 @@ fn create_serialization_poem_serde_equivalence() {
         }]),
         original_phantom_id: None,
         instance_id: Uuid::new_v4(),
+        never_live: true,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -907,6 +908,7 @@ fn create_serialization_poem_serde_equivalence() {
         assert!(super::OplogEnrichmentEntry::try_from(proto).is_err());
     }
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto.clone()).unwrap(), entry);
     let projected = super::OplogEnrichmentEntry::try_from(proto).unwrap();
     assert_eq!(
         projected,
@@ -925,6 +927,7 @@ fn create_serialization_poem_serde_equivalence() {
     assert_eq!(timestamp, supplied.timestamp);
     assert_eq!(parameters.agent_id, supplied.agent_id);
     assert_eq!(parameters.instance_id, supplied.instance_id);
+    assert!(parameters.never_live);
     assert_eq!(parameters.component_revision, supplied.component_revision);
     assert_eq!(
         parameters.local_agent_config[0].path,
@@ -1012,6 +1015,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     original_phantom_id: None,
                     instance_id: Uuid::new_v4(),
                     create_request: requests.next().unwrap(),
+                    never_live: agent_type_name.is_some(),
                 }),
             };
             let bytes = crate::serialization::serialize(&entry).unwrap();
@@ -1022,6 +1026,12 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             let mut proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
                 entry.clone().try_into().unwrap();
             assert_eq!(OplogEntry::try_from(proto.clone()).unwrap(), entry);
+            let OplogEnrichmentEntry::CreateProjection { parameters, .. } =
+                OplogEnrichmentEntry::from(entry.clone())
+            else {
+                unreachable!()
+            };
+            assert_eq!(parameters.never_live, agent_type_name.is_some());
             for owner_kind in [
                 OwnerKind::ComponentAgent,
                 OwnerKind::EphemeralExternalTool,

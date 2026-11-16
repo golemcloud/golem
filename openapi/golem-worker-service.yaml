@@ -11109,6 +11109,7 @@ components:
       - initialActivePlugins
       - localAgentConfig
       - instanceId
+      - neverLive
       properties:
         timestamp:
           type: string
@@ -11154,6 +11155,8 @@ components:
         instanceId:
           type: string
           format: uuid
+        neverLive:
+          type: boolean
     r#CreateResourceParams:
       type: object
       title: r#CreateResourceParams

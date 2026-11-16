@@ -838,6 +838,7 @@ impl Walker<'_, '_> {
                 local_agent_config,
                 original_phantom_id,
                 instance_id,
+                never_live,
             }) => Fields::new()
                 .add("agentId", self.agent(agent_id))
                 .add("ownerKind", name(owner_kind))
@@ -889,6 +890,7 @@ impl Walker<'_, '_> {
                     original_phantom_id.as_ref().map(|id| self.tok(id)),
                 )
                 .add("instanceId", text(instance_id.to_string()))
+                .add("neverLive", self.boolean(*never_live))
                 .build(),
             PublicOplogEntry::Start(StartParams {
                 timestamp: _,

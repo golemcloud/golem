@@ -487,6 +487,7 @@ async fn get_recovers_non_agent_external_tool_owner() {
                 golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }),
     };
     let shard_service = Arc::new(ShardServiceDefault::new());
@@ -900,6 +901,7 @@ fn sample_status() -> AgentStatusRecord {
         status: AgentStatus::Running,
         oplog_idx: OplogIndex::from_u64(42),
         component_revision: ComponentRevision::new(3).unwrap(),
+        never_live: true,
         ..AgentStatusRecord::default()
     };
     status
@@ -2709,6 +2711,7 @@ fn test_create_entry(
             golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
+        never_live: false,
     }))
 }
 
