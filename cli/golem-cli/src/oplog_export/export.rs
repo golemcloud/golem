@@ -116,8 +116,10 @@ pub struct OplogExportSession<R: OplogReads> {
     options: OplogExportOptions,
     fingerprint: Uuid,
     root: ReportAgentRef,
-    /// The function name of each `Start` index that the session read; `None` when the `Start`
-    /// is unknown (not read, failed to read, or not a `Start`).
+    /// The function name of each `Start` index that the session read and whose `End` or
+    /// `Cancelled` it has not rendered yet; `None` when the `Start` is unknown (not read, failed
+    /// to read, or not a `Start`). The `End` or `Cancelled` removes the entry, so the map holds
+    /// only open invocations.
     start_functions: HashMap<u64, Option<String>>,
 }
 
@@ -285,15 +287,14 @@ impl<R: OplogReads> OplogExportSession<R> {
         rendered.entry
     }
 
-    /// The function name of the `Start` at `start_index`. The session reads each `Start` at most
-    /// once, with no query, and reads an omitted `Start` only within `--max-entry-bytes`.
+    /// The function name of the `Start` at `start_index`, for its `End` or `Cancelled`. The
+    /// session takes it from the map, or reads the `Start` with no query, and reads an omitted
+    /// `Start` only within `--max-entry-bytes`.
     async fn start_function(&mut self, start_index: u64) -> Option<String> {
-        if let Some(known) = self.start_functions.get(&start_index) {
-            return known.clone();
+        match self.start_functions.remove(&start_index) {
+            Some(known) => known,
+            None => self.read_start_function(start_index).await,
         }
-        let function = self.read_start_function(start_index).await;
-        self.start_functions.insert(start_index, function.clone());
-        function
     }
 
     async fn read_start_function(&self, start_index: u64) -> Option<String> {

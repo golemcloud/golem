@@ -235,7 +235,7 @@ Oplog pages omit an entry whose encoded form is larger than a server limit (1 Mi
 
 A larger `--max-entry-bytes` reads larger entries and uses more memory on your machine. Each read stays one ordinary request with the limits of the server.
 
-An `End` or `Cancelled` entry needs the host function of its `Start` for table A. The CLI reads the `Start` of each invocation at most once. When the `Start` stays unknown (it is above `--max-entry-bytes`, or its read fails), the whole response is customer data and becomes tokens, and the coverage document lists the entry in `startUnknown`.
+An `End` or `Cancelled` entry needs the host function of its `Start` for table A. The CLI keeps the host function of each open invocation and forgets it when it renders the `End` or `Cancelled` entry. When the CLI renders that entry again, for example when `--serve` serves its page again, it reads the `Start` again. When the `Start` stays unknown (it is above `--max-entry-bytes`, or its read fails), the whole response is customer data and becomes tokens, and the coverage document lists the entry in `startUnknown`.
 
 The coverage document has these fields:
 

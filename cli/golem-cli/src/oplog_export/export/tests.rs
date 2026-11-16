@@ -628,7 +628,6 @@ async fn start_outside_the_read_is_read_once() {
         omitted(start_entry(3, "custom:pkg/iface.{other}", None), MAX + 1),
         end_entry(4, 2, string_value("x")),
         end_entry(5, 3, string_value("y")),
-        end_entry(6, 2, string_value("z")),
     ]);
     let mut options = options();
     options.from = Some(4);
