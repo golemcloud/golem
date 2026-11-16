@@ -94,7 +94,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
         ));
         assert!(matches!(
             payload_download_failure(SnapshotReplayPurpose::None, *lost, "down".to_string()),
-            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. }, _)
         ));
     });
     assert!(matches!(
@@ -103,7 +103,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
             false,
             "blob store unavailable".to_string()
         ),
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. }, _)
     ));
     assert!(matches!(
         payload_download_failure(
@@ -111,11 +111,11 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
             true,
             "referenced oplog payload is missing".to_string()
         ),
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. }, _)
     ));
     assert!(matches!(
         unavailable,
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. }, _)
     ));
     assert!(matches!(
         decide(&unavailable),
@@ -161,6 +161,7 @@ fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_
         timed_out: false,
         retry_from: OplogIndex::INITIAL,
         semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
     };
     let retry = |result: &InvokeResult| {
         DurableWorkerCtx::<crate::workerctx::default::Context>::load_retry(result)
@@ -306,7 +307,7 @@ fn a_snapshot_record_that_is_unavailable_is_a_recovery_not_a_failed_load() {
     ));
     assert!(matches!(
         unavailable,
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. }, _)
     ));
     let corrupt = snapshot_entry_read_failure(UnreadableOplog::new(
         &agent_id,
@@ -314,7 +315,7 @@ fn a_snapshot_record_that_is_unavailable_is_a_recovery_not_a_failed_load() {
     ));
     assert!(matches!(
         corrupt,
-        SnapshotRecoveryResult::Failed(WorkerExecutorError::OplogFailed { .. })
+        SnapshotRecoveryResult::Failed(WorkerExecutorError::OplogFailed { .. }, _)
     ));
 }
 
@@ -452,7 +453,7 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
             .expect("ephemeral restart is terminal");
         assert!(matches!(&converted,
             TrapType::Error { error: AgentError::InternalError(error), retry_from,
-                semantic_trap_retry_override: None }
+                semantic_trap_retry_override: None, .. }
             if error == message && *retry_from == start_index));
         assert!(matches!(converted.as_golem_error(""),
             Some(WorkerExecutorError::InvocationFailed { error: AgentError::InternalError(error), .. })
@@ -467,6 +468,7 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
             error: AgentError::OutOfMemory,
             retry_from: start_index,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
         },
     ] {
         assert!(ephemeral_terminal_trap(AgentMode::Ephemeral, &trap, start_index).is_none());
@@ -484,8 +486,7 @@ fn ephemeral_active_suspend_becomes_an_invocation_failure() {
         TrapType::Error {
             error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError { reason }),
             retry_from,
-            semantic_trap_retry_override: None,
-        } if reason == "suspended while an invocation was active" && *retry_from == start_index));
+            semantic_trap_retry_override: None, .. } if reason == "suspended while an invocation was active" && *retry_from == start_index));
     assert_eq!(
         DurableWorkerCtx::<crate::workerctx::default::Context>::fixed_decision_for_trap_type(
             &converted

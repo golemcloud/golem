@@ -24,6 +24,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, ReplayFailure> {
         let mut diverged = false;
+        let mut provenance = None;
         let result = async {
         let mut number_of_replayed_functions = 0;
 
@@ -380,10 +381,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             // out-of-memory under the memory admission, keeps its
                                             // retry: it says nothing about the replay.
                                             TrapType::Error { .. } if let Some(retry) = Self::speculative_retry(&trap_type) => Some(retry),
-                                            TrapType::Error { error, .. } => break Err(divergence_error.unwrap_or_else(|| WorkerExecutorError::InvocationFailed {
-                                                error,
-                                                stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
-                                            })),
+                                            TrapType::Error { error, provenance: failed, .. } => {
+                                                provenance = Some(failed);
+                                                break Err(divergence_error.unwrap_or_else(|| WorkerExecutorError::InvocationFailed {
+                                                    error,
+                                                    stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
+                                                }))
+                                            }
                                             TrapType::Interrupt(kind) => {
                                                 // `on_invocation_failure` is skipped on this path,
                                                 // so a lost shard is recorded here: its `None`
@@ -392,7 +396,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                 worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
                                                 Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind))
                                             }
-                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during a speculative replay")),
+                                            TrapType::Exit => {
+                                                provenance = Some(FailureProvenance::TargetReturned);
+                                                break Err(WorkerExecutorError::runtime("Process exited during a speculative replay"))
+                                            }
                                         }
                                     }
                                     Some(trap_type) => {
@@ -448,11 +455,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
+                                                    provenance = Some(FailureProvenance::TargetReturned);
                                                     break Err(
                                                         WorkerExecutorError::PreviousInvocationExited,
                                                     );
                                                 }
-                                                TrapType::Error { error, .. } => {
+                                                TrapType::Error { error, provenance: failed, .. } => {
+                                                    provenance = Some(failed);
                                                     let stderr = store
                                                         .as_context()
                                                         .data()
@@ -516,7 +525,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 store, error, true,
             )));
         }
-        result.map_err(|error| ReplayFailure { error, diverged })
+        result.map_err(|error| ReplayFailure {
+            error,
+            diverged,
+            provenance,
+        })
     }
 
     /// Begins the bootstrap phase of the primary Store, before its core initializer runs.
@@ -687,9 +700,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 AttemptFailure::Replay(ReplayFailure {
                                                     error,
                                                     diverged,
+                                                    provenance,
                                                 }) => start_outcome::RawStartError::Replay {
                                                     error,
                                                     diverged: *diverged,
+                                                    provenance: *provenance,
                                                 },
                                             };
                                             store
@@ -820,8 +835,8 @@ impl AttemptFailure {
     fn into_error(self) -> WorkerExecutorError {
         match self {
             Self::Load(
-                SnapshotRecoveryResult::Failed(error)
-                | SnapshotRecoveryResult::Unavailable(error)
+                SnapshotRecoveryResult::Failed(error, _)
+                | SnapshotRecoveryResult::Unavailable(error, _)
                 | SnapshotRecoveryResult::Lost(error),
             )
             | Self::Replay(ReplayFailure { error, .. }) => error,

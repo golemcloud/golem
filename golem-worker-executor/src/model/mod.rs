@@ -329,6 +329,20 @@ impl ExecutionStatus {
     }
 }
 
+/// Where a failure of guest code came from, decided while the Wasmtime error chain still
+/// exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureProvenance {
+    /// A Wasm instruction trap of the guest, such as a panic.
+    TargetInstruction,
+    /// The guest returned an agent error.
+    TargetReturned,
+    /// The host failed: a host error, an executor error, a resource limit or a deadline.
+    Host,
+    /// The execution was interrupted or exited.
+    Lifecycle,
+}
+
 /// Describes the various reasons a worker can run into a trap
 #[derive(Clone, Debug)]
 pub enum TrapType {
@@ -350,6 +364,8 @@ pub enum TrapType {
         /// Always `None` for guest-originated traps and for non-host failures.
         semantic_trap_retry_override:
             Option<crate::durable_host::durability::SemanticTrapRetryOverride>,
+        /// Where the failure came from.
+        provenance: FailureProvenance,
     },
 }
 
@@ -388,6 +404,7 @@ impl TrapType {
                 error: AgentError::PermissionDenied(details),
                 retry_from: fallback_retry_from,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::Host,
             },
             error => {
                 Self::from_error::<Ctx>(&anyhow::Error::new(error), fallback_retry_from, agent_mode)
@@ -425,10 +442,12 @@ impl TrapType {
             .unwrap_or(fallback_retry_from);
         // Single constructor for every `TrapType::Error` arm below, so the call-owned/fallback
         // classification is applied uniformly and adding fields stays a one-line change.
+        let provenance = crate::worker::invocation::failure_provenance(error);
         let make_error = |error: AgentError| TrapType::Error {
             error,
             retry_from,
             semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+            provenance,
         };
 
         match error.root_cause().downcast_ref::<InterruptKind>() {
@@ -1424,6 +1443,7 @@ mod tests {
             error,
             retry_from: OplogIndex::INITIAL,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
         };
         let retry = |trap: &TrapType| {
             crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::speculative_retry(trap)

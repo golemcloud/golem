@@ -181,7 +181,7 @@ use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, HydratedUpdate, InvocationContext, LastError,
+    AgentConfig, ExecutionStatus, FailureProvenance, HydratedUpdate, InvocationContext, LastError,
     SnapshotReplayPurpose, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
@@ -1060,6 +1060,8 @@ struct ReplayFailure {
     /// Whether the replay after an application snapshot diverged from the oplog with a typed
     /// divergence while the start still replayed it.
     diverged: bool,
+    /// Where the failure of the replayed invocation came from, when an invocation failed.
+    provenance: Option<FailureProvenance>,
 }
 
 /// Why a pending automatic update did not reach the end of its replay.

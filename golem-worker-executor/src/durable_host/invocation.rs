@@ -1382,6 +1382,7 @@ pub(in crate::durable_host) fn ephemeral_terminal_trap(
             )),
             retry_from,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Lifecycle,
         }),
         _ => None,
     }
@@ -1400,6 +1401,7 @@ pub(crate) fn ephemeral_suspend_trap(
                 }),
                 retry_from,
                 semantic_trap_retry_override: None,
+                provenance: crate::model::FailureProvenance::Lifecycle,
             })
         }
         _ => None,

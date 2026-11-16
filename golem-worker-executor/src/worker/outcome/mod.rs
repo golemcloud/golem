@@ -44,6 +44,7 @@ pub(super) fn monthly_failure<Ctx: WorkerCtx>(
             }),
             retry_from,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
         });
     }
     match trap {
@@ -1179,6 +1180,7 @@ impl InvocationResult {
                             error,
                             retry_from,
                             semantic_trap_retry_override: None,
+                            provenance: crate::model::FailureProvenance::Host,
                         },
                         stderr,
                     })

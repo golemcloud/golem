@@ -21,7 +21,7 @@ use crate::durable_host::durability::{
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
-use crate::model::TrapType;
+use crate::model::{FailureProvenance, TrapType};
 use crate::preview2::exports::golem::agent::guest as guest_exports;
 use crate::preview2::exports::golem::api1_5_0::load_snapshot as load_snapshot_exports;
 use crate::preview2::exports::golem::api1_5_0::save_snapshot as save_snapshot_exports;
@@ -790,6 +790,7 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
                 )),
                 retry_from,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::Host,
             })
         }
         other => other,
@@ -811,36 +812,84 @@ pub(crate) enum GuestCallSettlementError {
 }
 
 /// Permanent guest instruction failures and uncaught wasm exceptions that a tool boundary can
-/// record as its own terminal.
-/// Host-call markers take precedence over an underlying Wasmtime trap. A Wasm backtrace alone
-/// does not establish guest origin. Agent and tool classification share the instruction predicate.
+/// record as its own terminal: the failures whose provenance is
+/// [`FailureProvenance::TargetInstruction`]. Agent and tool classification share the predicate.
 pub(crate) fn permanent_tool_guest_trap(error: &wasmtime::Error) -> Option<String> {
-    fn has_cause<T: std::error::Error + Send + Sync + 'static>(error: &wasmtime::Error) -> bool {
-        // Typed anyhow context is downcastable but is not an item in the source chain.
-        error.downcast_ref::<T>().is_some() || error.chain().any(|cause| cause.is::<T>())
-    }
-
-    if has_cause::<GolemSpecificWasmTrap>(error)
-        || has_cause::<ClassifiedHostError>(error)
-        || has_cause::<SemanticTrapRetryOverrideMarker>(error)
-        || has_cause::<DurableCallTrapContextMarker>(error)
-        || has_cause::<DurableRecoveryFailure>(error)
-        || has_cause::<UnreadableOplog>(error)
-        || has_cause::<WorkerExecutorError>(error)
-        || has_cause::<InterruptKind>(error)
-        || has_cause::<wasmtime_wasi::I32Exit>(error)
-    {
-        return None;
-    }
-
-    let permanent = crate::model::deterministic_guest_trap(error.root_cause());
-    permanent.then(|| {
+    (failure_provenance(error) == FailureProvenance::TargetInstruction).then(|| {
         error
             .chain()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(": ")
     })
+}
+
+/// An error whose causes [`failure_provenance`] reads. Both `anyhow::Error` and
+/// `wasmtime::Error` keep typed context outside the source chain, so a cause is either the typed
+/// context or an item of the chain.
+pub(crate) trait FailureCauses {
+    fn causes<T: std::error::Error + Send + Sync + 'static>(&self) -> impl Iterator<Item = &T>;
+    fn root(&self) -> &(dyn std::error::Error + 'static);
+}
+
+impl FailureCauses for anyhow::Error {
+    fn causes<T: std::error::Error + Send + Sync + 'static>(&self) -> impl Iterator<Item = &T> {
+        self.downcast_ref::<T>()
+            .into_iter()
+            .chain(self.chain().filter_map(|cause| cause.downcast_ref::<T>()))
+    }
+
+    fn root(&self) -> &(dyn std::error::Error + 'static) {
+        self.root_cause()
+    }
+}
+
+impl FailureCauses for wasmtime::Error {
+    fn causes<T: std::error::Error + Send + Sync + 'static>(&self) -> impl Iterator<Item = &T> {
+        self.downcast_ref::<T>()
+            .into_iter()
+            .chain(self.chain().filter_map(|cause| cause.downcast_ref::<T>()))
+    }
+
+    fn root(&self) -> &(dyn std::error::Error + 'static) {
+        self.root_cause()
+    }
+}
+
+/// The provenance of the failure `error`. An interrupt or an exit is `Lifecycle`. Any host
+/// marker, executor error, Golem-specific trap or classified host error is `Host`; host-call
+/// markers take precedence over an underlying Wasmtime trap. Only then is a deterministic guest
+/// trap at the root, such as a Wasm instruction trap or an uncaught Wasm exception,
+/// `TargetInstruction`; a Wasm backtrace alone does not establish guest origin, and every other
+/// failure is `Host`.
+pub(crate) fn failure_provenance(error: &impl FailureCauses) -> FailureProvenance {
+    fn has<T: std::error::Error + Send + Sync + 'static>(error: &impl FailureCauses) -> bool {
+        error.causes::<T>().next().is_some()
+    }
+
+    if has::<InterruptKind>(error)
+        || has::<wasmtime_wasi::I32Exit>(error)
+        || error
+            .causes::<WorkerExecutorError>()
+            .any(|error| matches!(error, WorkerExecutorError::Interrupted { .. }))
+    {
+        return FailureProvenance::Lifecycle;
+    }
+    if has::<GolemSpecificWasmTrap>(error)
+        || has::<ClassifiedHostError>(error)
+        || has::<SemanticTrapRetryOverrideMarker>(error)
+        || has::<DurableCallTrapContextMarker>(error)
+        || has::<DurableRecoveryFailure>(error)
+        || has::<UnreadableOplog>(error)
+        || has::<WorkerExecutorError>(error)
+    {
+        return FailureProvenance::Host;
+    }
+    if crate::model::deterministic_guest_trap(error.root()) {
+        FailureProvenance::TargetInstruction
+    } else {
+        FailureProvenance::Host
+    }
 }
 
 fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
@@ -1888,6 +1937,8 @@ pub enum InvokeResult {
         /// post-trap recovery path can honour it.
         semantic_trap_retry_override:
             Option<crate::durable_host::durability::SemanticTrapRetryOverride>,
+        /// Where the failure came from.
+        provenance: FailureProvenance,
     },
     /// The invoked function succeeded and produced a result
     Succeeded {
@@ -1920,6 +1971,7 @@ impl InvokeResult {
                 timed_out: false,
                 retry_from: OplogIndex::INITIAL,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::TargetReturned,
             }
         }
     }
@@ -1935,12 +1987,14 @@ impl InvokeResult {
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
             } => Self::Failed {
                 consumed_fuel,
                 timed_out: false,
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
             },
         }
     }
@@ -1961,12 +2015,14 @@ impl InvokeResult {
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
             } => InvokeResult::Failed {
                 consumed_fuel,
                 timed_out: false,
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
             },
         }
     }
@@ -2002,11 +2058,13 @@ impl InvokeResult {
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
                 ..
             } => Some(TrapType::Error {
                 error: error.clone(),
                 retry_from: *retry_from,
                 semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+                provenance: *provenance,
             }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
                 Some(TrapType::Interrupt(*interrupt_kind))
@@ -2599,6 +2657,7 @@ mod tests {
                 verdict: SemanticTrapRetryVerdict::GiveUp,
                 retry_policy_state: RetryPolicyState::Counter(3),
             }),
+            provenance: crate::model::FailureProvenance::Host,
         });
         retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("cleanup")));
         let Ok(InvokeResult::Failed {
@@ -2607,6 +2666,7 @@ mod tests {
             error,
             retry_from,
             semantic_trap_retry_override: Some(policy),
+            ..
         }) = result
         else {
             panic!("cleanup replaced the original failure");
@@ -2754,6 +2814,7 @@ mod tests {
                 timed_out,
                 retry_from: OplogIndex::INITIAL,
                 semantic_trap_retry_override: None,
+                provenance: crate::model::FailureProvenance::Host,
             };
             assert_eq!(
                 result.is_snapshot_replay_divergence(),
@@ -3821,6 +3882,151 @@ mod tests {
                 .unwrap_err();
             assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_some());
             assert_eq!(permanent_tool_guest_trap(&error), None, "{error:#}");
+        }
+    }
+
+    /// A guest instruction trap, with or without a Wasm backtrace, is a target failure; every
+    /// host failure that a host call raises is `Host`, also with a Wasm backtrace; an interrupt
+    /// or an exit is `Lifecycle`. `TrapType::from_error` and the failed invoke result carry the
+    /// same provenance.
+    #[test]
+    fn failure_provenance_separates_target_traps_from_host_failures() {
+        use crate::durable_host::durability::HostFailureKind;
+        use crate::model::FailureProvenance as Provenance;
+        use crate::workerctx::default::Context;
+
+        let engine = wasmtime::Engine::default();
+        let guest = wasmtime::Module::new(&engine, r#"(module (func (export "run") unreachable))"#)
+            .unwrap();
+        let mut store = wasmtime::Store::new(&engine, ());
+        let instance = wasmtime::Instance::new(&mut store, &guest, &[]).unwrap();
+        let guest_trap = instance
+            .get_typed_func::<(), ()>(&mut store, "run")
+            .unwrap()
+            .call(&mut store, ())
+            .unwrap_err();
+        assert!(
+            guest_trap
+                .downcast_ref::<wasmtime::WasmBacktrace>()
+                .is_some()
+        );
+
+        let host = wasmtime::Module::new(
+            &engine,
+            r#"(module
+                (import "host" "fail" (func $fail))
+                (func (export "run") call $fail))"#,
+        )
+        .unwrap();
+        let host_call_failure = |failure: anyhow::Error| {
+            let failure = std::sync::Mutex::new(Some(failure));
+            let mut linker = wasmtime::Linker::new(&engine);
+            linker
+                .func_wrap("host", "fail", move || -> wasmtime::Result<()> {
+                    Err(wasmtime::Error::from_anyhow(
+                        failure.lock().unwrap().take().unwrap(),
+                    ))
+                })
+                .unwrap();
+            let mut store = wasmtime::Store::new(&engine, ());
+            let instance = linker.instantiate(&mut store, &host).unwrap();
+            let error = instance
+                .get_typed_func::<(), ()>(&mut store, "run")
+                .unwrap()
+                .call(&mut store, ())
+                .unwrap_err();
+            assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_some());
+            error
+        };
+
+        let cases = [
+            (guest_trap, Provenance::TargetInstruction),
+            (
+                wasmtime::Error::from_anyhow(
+                    anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached)
+                        .context("guest-requested trap: panic"),
+                ),
+                Provenance::TargetInstruction,
+            ),
+            (
+                host_call_failure(anyhow::anyhow!("unclassified host failure")),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(anyhow::Error::new(ClassifiedHostError {
+                    kind: HostFailureKind::Transient,
+                    message: "transient".into(),
+                })),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(anyhow::Error::new(ClassifiedHostError {
+                    kind: HostFailureKind::Permanent,
+                    message: "permanent".into(),
+                })),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(GolemSpecificWasmTrap::WorkerOutOfMemory.into()),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into()),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(InterruptKind::Restart.into()),
+                Provenance::Lifecycle,
+            ),
+            (
+                host_call_failure(
+                    WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Restart,
+                    }
+                    .into(),
+                ),
+                Provenance::Lifecycle,
+            ),
+            (
+                host_call_failure(wasmtime_wasi::I32Exit(1).into()),
+                Provenance::Lifecycle,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(failure_provenance(&error), expected, "{error:#}");
+            let error: anyhow::Error = error.into();
+            if let InvokeResult::Failed { provenance, .. } = InvokeResult::from_error::<Context>(
+                0,
+                &error,
+                OplogIndex::INITIAL,
+                AgentMode::Durable,
+            ) {
+                assert_eq!(provenance, expected, "{error:#}");
+                let TrapType::Error {
+                    provenance: from_trap,
+                    ..
+                } = TrapType::from_error::<Context>(
+                    &error,
+                    OplogIndex::INITIAL,
+                    AgentMode::Durable,
+                )
+                else {
+                    panic!("a failed invoke result comes from a trap error");
+                };
+                assert_eq!(from_trap, expected, "{error:#}");
+                let trap = TrapType::Error {
+                    error: OplogAgentError::Unknown("kept".into()),
+                    retry_from: OplogIndex::INITIAL,
+                    semantic_trap_retry_override: None,
+                    provenance: expected,
+                };
+                assert!(matches!(
+                    InvokeResult::from_trap_type(0, trap),
+                    InvokeResult::Failed { provenance, .. } if provenance == expected
+                ));
+            } else {
+                assert_eq!(expected, Provenance::Lifecycle, "{error:#}");
+            }
         }
     }
 
