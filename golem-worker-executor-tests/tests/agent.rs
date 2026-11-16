@@ -749,6 +749,7 @@ async fn method_failure_classification_keeps_constructors_and_rust_panics_fatal(
     #[tagged_as("tool_streaming_moonbit")] moonbit_fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use golem_common::model::{AgentStatus, oplog::OplogErrorKind};
+    use std::time::Duration;
 
     let context = TestContext::new(last_unique_id);
     let mut executor = start(deps, &context).await?;
@@ -808,15 +809,13 @@ async fn method_failure_classification_keeps_constructors_and_rust_panics_fatal(
             .store()
             .await?;
         let agent = agent_id!(agent_type, name);
-        let worker = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
-        let mut gate = executor.gate_next_invocation_started_append(&worker).await;
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
-        gate.entered().await;
+        if name == "fail-constructor" {
+            executor
+                .wait_for_status(&worker, AgentStatus::Failed, Duration::from_secs(10))
+                .await?;
+        }
         let key = IdempotencyKey::fresh();
-        executor
-            .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
-            .await?;
-        drop(gate);
         let failure = executor
             .invoke_and_await_agent_with_key(&component, &agent, &key, method, data_value!())
             .await

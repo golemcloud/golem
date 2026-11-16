@@ -276,7 +276,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 }
                 if self.uses_streams {
                     let parent = self.parent.clone();
-                    let key = invocation_idempotency_key.clone();
+                    let key = invocation_idempotency_key;
                     let result = self
                         .store
                         .run_concurrent(async move |_accessor| {

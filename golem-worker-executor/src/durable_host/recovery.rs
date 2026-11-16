@@ -287,7 +287,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 }
                                 if uses_streams && store.as_context().data().durable_ctx().is_live() {
                                     let worker = worker.clone();
-                                    let key = idempotency_key.clone();
+                                    let key = idempotency_key;
                                     let result = store.run_concurrent(async move |_accessor| {
                                         worker.fail_durable_streaming_session(&key, error.message().to_owned()).await
                                     }).await;
