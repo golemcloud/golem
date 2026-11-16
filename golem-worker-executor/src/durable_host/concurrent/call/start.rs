@@ -918,12 +918,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
         ctx.idempotency_key_position(self.execution_scope.logical_key_position)
     }
 
-    pub fn agent_auth_ctx(&self) -> &AuthCtx {
-        self.agent_auth_ctx
-            .as_ref()
-            .expect("agent authority context requested from a call without live agent authority")
-    }
-
     /// Second phase on the live path: upload the request and append the eager host-call `Start`
     /// (or, while snapshotting, persist nothing).
     pub(crate) async fn start_live(

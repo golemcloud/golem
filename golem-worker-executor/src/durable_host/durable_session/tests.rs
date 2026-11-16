@@ -3047,6 +3047,21 @@ struct AttachedProducerRpc {
 
 #[async_trait::async_trait]
 impl Rpc for AttachedProducerRpc {
+    async fn create_and_initialize(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
+        _self_created_by: AccountId,
+        _self_agent_id: &AgentId,
+        _self_env: &[(String, String)],
+        _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _config: Vec<AgentConfigEntryDto>,
+        _auth_ctx: &AuthCtx,
+        _idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        unreachable!("test RPC only serves attached stream segments")
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,

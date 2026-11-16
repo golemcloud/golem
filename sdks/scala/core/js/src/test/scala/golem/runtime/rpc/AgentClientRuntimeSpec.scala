@@ -103,7 +103,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     },
     test("awaited calls carry the default scope card, a per-call card overrides it, and the card stays usable") {
       val invoker   = new RecordingRpcInvoker
-      val wire      = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val wire      = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", invoker))
       val method    = wire.methodByName[SampleInput, SampleOutput]("rpcCall")
       val default   = scopeCard("default")
       val perCall   = scopeCard("per-call")
@@ -132,7 +132,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     },
     test("fire-and-forget and scheduled calls never carry the default scope card") {
       val invoker = new RecordingRpcInvoker
-      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", invoker))
         .withScopeCard(scopeCard("d"))
       val method = wire.methodByName[String, Unit]("fireAndForget")
       ZIO.fromFuture { implicit ec =>
@@ -164,7 +164,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     test("a scope card moved before the call fails it without consuming an argument card") {
       val invoker = new RecordingRpcInvoker
       val scope   = scopeCard("moved-before")
-      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", invoker))
         .withScopeCard(scope)
       val method   = wire.methodByName[PermissionCard, Boolean]("sendCard")
       val argument = permissionCard("argument")
@@ -180,7 +180,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     test("a scope card moved while the input is lowered gives the argument card back") {
       val invoker = new RecordingRpcInvoker
       val scope   = scopeCard("moved-during")
-      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", invoker))
         .withScopeCard(scope)
       val method   = wire.methodByName[PermissionCard, Boolean]("sendCard")
       val raw      = scala.scalajs.js.Dynamic.literal(name = "argument")
@@ -318,8 +318,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     agentType: AgentType[RpcParityAgent, Any],
     invoker: RpcInvoker
   ): RemoteAgentClient =
-    // The `metadata` field is not read on the awaitable / fire-and-forget path.
-    RemoteAgentClient(agentType.typeName, "agent-1", null, invoker)
+    RemoteAgentClient(agentType.typeName, "agent-1", invoker)
 
   /** Encode a single-output method result as the host `some(tree)`. */
   private def encodeResult[A](value: A)(implicit into: IntoSchema[A]): Option[JsSchemaValueTree] =

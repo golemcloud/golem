@@ -29,6 +29,7 @@ function makeWasmRpc() {
 }
 
 const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
+  bindSelf: vi.fn(),
   create: vi.fn(makeWasmRpc),
 });
 
