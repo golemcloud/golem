@@ -3590,8 +3590,14 @@ mod public_tests {
         assert!(completed.blocking_recv().is_err());
     }
 
+    /// The tests that use the process-wide output capture run one at a time.
+    static CAPTURE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_writer_of_an_ended_call_writes_nothing_into_the_next_call() {
+        let _serial = CAPTURE_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         fn write(tx: &mpsc::Sender<QueuedOutput>, text: &str) {
             let (written, completed) = oneshot::channel();
             tx.blocking_send(QueuedOutput {
@@ -3612,7 +3618,7 @@ mod public_tests {
         }
 
         let capture = crate::log::OutputCapture::new();
-        capture.start_call();
+        capture.start_call(CancellationToken::new());
         let (tx, rx) = mpsc::channel(1);
         let ticket = crate::log::stdout_capture_ticket();
         let writer = std::thread::spawn(move || write_output(rx, Format::Json, false, ticket));
@@ -3621,13 +3627,13 @@ mod public_tests {
         assert_eq!(stdout(&capture), "previous 1\n");
 
         // The server starts the next call while the writer of the cancelled call still runs.
-        capture.start_call();
+        capture.start_call(CancellationToken::new());
         print("next 1");
         write(&tx, "previous 2");
         assert_eq!(stdout(&capture), "next 1\n");
 
         // The call after it, once the next call took its result.
-        capture.start_call();
+        capture.start_call(CancellationToken::new());
         print("next 2");
         write(&tx, "previous 3");
         drop(tx);
@@ -3726,5 +3732,30 @@ mod public_tests {
             .await
             .expect("the signal did not interrupt the invocation");
         assert!(!parent.is_cancelled());
+    }
+
+    #[test]
+    fn a_call_that_prints_more_than_the_limit_is_stopped() {
+        let _serial = CAPTURE_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let capture = crate::log::OutputCapture::new();
+        let overflow = CancellationToken::new();
+        capture.start_call(overflow.clone());
+        let ticket = crate::log::stdout_capture_ticket();
+        let line = vec![b'x'; 1024 * 1024];
+        for _ in 0..4 {
+            assert!(crate::log::capture_stdout(ticket, &line));
+        }
+        assert!(!overflow.is_cancelled());
+        assert!(!capture.overflowed());
+        assert!(crate::log::capture_stdout(ticket, b"y"));
+        assert!(overflow.is_cancelled());
+        assert!(capture.overflowed());
+        assert_eq!(capture.take().0.len(), crate::log::OUTPUT_CAPTURE_LIMIT);
+
+        // The next call starts within the limit.
+        capture.start_call(CancellationToken::new());
+        assert!(!capture.overflowed());
     }
 }

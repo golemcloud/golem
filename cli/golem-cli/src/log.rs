@@ -23,6 +23,7 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
+use tokio_util::sync::CancellationToken;
 
 use terminal_size::terminal_size;
 use textwrap::WordSplitter;
@@ -515,12 +516,34 @@ impl StandardStream {
     }
 }
 
+/// The most stdout that an [`OutputCapture`] keeps for one call.
+pub const OUTPUT_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
+
 #[derive(Default)]
 struct CapturedOutput {
     /// The number of the call that the capture keeps output for.
     call: u64,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
+    /// The call printed more than [`OUTPUT_CAPTURE_LIMIT`] to stdout.
+    overflowed: bool,
+    /// Cancelled when the call overflows.
+    on_overflow: CancellationToken,
+}
+
+impl CapturedOutput {
+    fn keep(&mut self, stream: StandardStream, bytes: &[u8]) {
+        let kept = match stream {
+            StandardStream::Stdout => &mut self.stdout,
+            StandardStream::Stderr => &mut self.stderr,
+        };
+        if kept.len() + bytes.len() <= OUTPUT_CAPTURE_LIMIT {
+            kept.extend_from_slice(bytes);
+        } else if matches!(stream, StandardStream::Stdout) && !self.overflowed {
+            self.overflowed = true;
+            self.on_overflow.cancel();
+        }
+    }
 }
 
 static OUTPUT_CAPTURE: std::sync::Mutex<Option<CapturedOutput>> = std::sync::Mutex::new(None);
@@ -549,14 +572,25 @@ impl OutputCapture {
     }
 
     /// Starts to keep the output of a new call: drops what is kept, and drops what a writer of an
-    /// earlier call writes from now on.
-    pub fn start_call(&self) {
+    /// earlier call writes from now on. When the call prints more than [`OUTPUT_CAPTURE_LIMIT`]
+    /// to stdout, the capture keeps no more of it and cancels `on_overflow`.
+    pub fn start_call(&self, on_overflow: CancellationToken) {
         let mut capture = OUTPUT_CAPTURE.lock().unwrap();
         let captured = capture.as_mut().expect("output capture is active");
         *captured = CapturedOutput {
             call: captured.call + 1,
+            on_overflow,
             ..CapturedOutput::default()
         };
+    }
+
+    /// Whether the current call printed more than [`OUTPUT_CAPTURE_LIMIT`] to stdout.
+    pub fn overflowed(&self) -> bool {
+        OUTPUT_CAPTURE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|captured| captured.overflowed)
     }
 }
 
@@ -591,7 +625,7 @@ pub(crate) fn capture_stdout(ticket: StdoutCaptureTicket, bytes: &[u8]) -> bool 
     if let Some(captured) = OUTPUT_CAPTURE.lock().unwrap().as_mut()
         && captured.call == call
     {
-        captured.stdout.extend_from_slice(bytes);
+        captured.keep(StandardStream::Stdout, bytes);
     }
     true
 }
@@ -599,16 +633,10 @@ pub(crate) fn capture_stdout(ticket: StdoutCaptureTicket, bytes: &[u8]) -> bool 
 /// Keeps the bytes in the active [`OutputCapture`]. Returns `true` when they must not be written.
 fn capture(stream: StandardStream, bytes: &[u8]) -> bool {
     match OUTPUT_CAPTURE.lock().unwrap().as_mut() {
-        Some(captured) => match stream {
-            StandardStream::Stdout => {
-                captured.stdout.extend_from_slice(bytes);
-                true
-            }
-            StandardStream::Stderr => {
-                captured.stderr.extend_from_slice(bytes);
-                false
-            }
-        },
+        Some(captured) => {
+            captured.keep(stream, bytes);
+            matches!(stream, StandardStream::Stdout)
+        }
         None => false,
     }
 }

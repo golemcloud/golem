@@ -944,7 +944,9 @@ async fn mcp_serve_reports_and_cancels_streaming_invocations() {
               http: http.mount('/counters/{name}'),
               methods: {
                 explode: method({ input: {}, returns: s.stream(z.number()) }),
+                count: method({ input: {}, returns: s.stream(z.number()) }),
                 endless: method({ input: {}, returns: s.stream(z.number()) }),
+                flood: method({ input: {}, returns: s.stream(z.string()) }),
                 value: method({ input: {}, returns: z.number() }),
               },
             });
@@ -956,11 +958,30 @@ async fn mcp_serve_reports_and_cancels_streaming_invocations() {
                   console.error('intentional stream stderr');
                   throw new Error('intentional stream failure');
                 },
+                count() {
+                  return AgentStream.from(
+                    (async function* () {
+                      for (let i = 0; i < 3; i++) {
+                        yield i;
+                      }
+                    })(),
+                  );
+                },
                 endless() {
                   return AgentStream.from(
                     (async function* () {
                       for (let i = 0; ; i++) {
+                        await new Promise((resolve) => setTimeout(resolve, 10));
                         yield i;
+                      }
+                    })(),
+                  );
+                },
+                flood() {
+                  return AgentStream.from(
+                    (async function* () {
+                      for (;;) {
+                        yield 'x'.repeat(16 * 1024);
                       }
                     })(),
                   );
@@ -1012,6 +1033,76 @@ async fn mcp_serve_reports_and_cancels_streaming_invocations() {
             .any(|event| event["outcome"] == "invocation-failed")),
         "{payload}"
     );
+
+    // A stream that ends returns all of its events in one result, as the CLI prints them.
+    let count = r#"CounterAgent("mcp-count")"#;
+    let streamed = call(
+        &client,
+        "agent_invoke",
+        json!({"agent_id": count, "function_name": "count"}),
+    )
+    .await;
+    let events = structured(&streamed)["items"].as_array().unwrap().clone();
+    let values = events
+        .iter()
+        .filter(|event| event["kind"] == "item")
+        .map(|event| event["value"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(values.len(), 3, "{events:?}");
+    assert_eq!(events.last().unwrap()["kind"], "finished", "{events:?}");
+    let printed = cli_json(
+        &ctx,
+        &[cmd::AGENT, cmd::INVOKE, count, "count", "--no-stream"],
+    )
+    .await;
+    // The idempotency key and the stream IDs differ between two invocations.
+    let without_ids = |events: &[Value]| {
+        events
+            .iter()
+            .map(|event| {
+                let mut event = comparable(event);
+                let event_fields = event.as_object_mut().unwrap();
+                event_fields.remove("idempotencyKey");
+                event_fields.remove("streamId");
+                if let Some(Value::Object(value)) = event_fields.get_mut("value") {
+                    value.remove("$stream");
+                }
+                event
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(without_ids(&events), without_ids(&printed));
+
+    // A stream whose events outgrow the limit of a tool result ends the call with an error and
+    // is cancelled, so the agent takes the next invocation.
+    let flood = r#"CounterAgent("mcp-flood")"#;
+    let flooded = tokio::time::timeout(
+        Duration::from_secs(120),
+        call(
+            &client,
+            "agent_invoke",
+            json!({"agent_id": flood, "function_name": "flood"}),
+        ),
+    )
+    .await
+    .expect("the call ends at the output limit");
+    assert_eq!(error_code(&flooded), "output-too-large", "{flooded:?}");
+    assert_eq!(
+        error(&flooded)["payload"]["limit_bytes"],
+        4 * 1024 * 1024,
+        "{flooded:?}"
+    );
+    let after = tokio::time::timeout(
+        Duration::from_secs(120),
+        call(
+            &client,
+            "agent_invoke",
+            json!({"agent_id": flood, "function_name": "value"}),
+        ),
+    )
+    .await
+    .expect("the agent still runs the flooding invocation");
+    assert_eq!(structured(&after)["items"][0]["result"], "1", "{after:?}");
 
     // A cancelled call cancels the streams of its invocation on the server, also while it writes
     // their output, so the agent stops producing and takes the next invocation.

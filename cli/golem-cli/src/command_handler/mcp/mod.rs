@@ -40,8 +40,8 @@ use crate::error::{
     OutsideEnvironment, PipedExitCode, ProfileMissing, PromptAnswer,
 };
 use crate::log::{
-    LogColorize, Output, OutputCapture, discard_held_log, error_message_for_output, log_action,
-    log_error, log_warn, message_for_output, set_log_output,
+    LogColorize, OUTPUT_CAPTURE_LIMIT, Output, OutputCapture, discard_held_log,
+    error_message_for_output, log_action, log_error, log_warn, message_for_output, set_log_output,
 };
 use crate::model::cli_output::{
     command_output_schema_value, command_output_types, focused_command_output_schema,
@@ -261,8 +261,10 @@ fn tool_note(path: &str) -> Option<&'static str> {
         "agent invoke" => Some(
             "Cancelling the call of a method without streams only stops the wait: the agent keeps \
              running the invocation, and the call returns no result. Cancelling the call of a \
-             method with streams also cancels its streams. To run an invocation at most once \
-             across retries, pass the same `idempotency_key` on each try.",
+             method with streams also cancels its streams. The result holds every document that \
+             the invocation emits; a result larger than 4 MiB, such as of a long stream, ends the \
+             call with `output-too-large` and cancels the streams. To run an invocation at most \
+             once across retries, pass the same `idempotency_key` on each try.",
         ),
         _ => None,
     }
@@ -674,6 +676,21 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(CANCELLED_CALL_GRACE.as_sec
 /// closes stdin but does not read stdout blocks that close forever.
 const SERVICE_END_GRACE: Duration = Duration::from_secs(10);
 
+/// The error of a call that printed more than [`OUTPUT_CAPTURE_LIMIT`]. The server stopped the
+/// command as if the client had cancelled the call.
+fn output_too_large() -> CallToolResult {
+    error_envelope(
+        "output-too-large",
+        format!(
+            "The command printed more than {} MiB of JSON, the limit of a tool result, and was \
+             stopped; the streams of an invocation are cancelled. Narrow the call, such as with a \
+             filter, or run the command in a terminal with the `golem` CLI.",
+            OUTPUT_CAPTURE_LIMIT / (1024 * 1024)
+        ),
+        Map::from_iter([("limit_bytes".to_string(), json!(OUTPUT_CAPTURE_LIMIT))]),
+    )
+}
+
 /// Runs `run` until it ends or `cancellation` is cancelled. A cancelled run is dropped at once,
 /// so a command starts no more work, such as the request that its reads prepared. Only a run that
 /// holds a cleanup goes on, for at most [`CANCELLED_CALL_GRACE`], to end its remote work.
@@ -829,6 +846,9 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
         service.waiting(),
         SERVICE_END_GRACE,
         |call, cancellation| async move {
+            // Drops what was printed between calls, such as a late log line or a late document of
+            // a cancelled call.
+            capture.start_call(cancellation.token().clone());
             let run = run_call(
                 hooks.clone(),
                 global_flags,
@@ -839,7 +859,13 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
                 call.argv,
                 cancellation.clone(),
             );
-            match run_until_cancelled(run, &cancellation).await {
+            let result = run_until_cancelled(run, &cancellation).await;
+            if capture.overflowed() {
+                discard_held_log();
+                let _ = call.reply.send(output_too_large());
+                return;
+            }
+            match result {
                 Some(result) => {
                     let _ = call.reply.send(result);
                 }
@@ -895,7 +921,8 @@ async fn execute_calls<Q, Run: Future<Output = ()>>(
             if call.cancellation.is_cancelled() || call.reply.is_closed() {
                 continue;
             }
-            // The call's own token: the client cancels it with the request.
+            // The call's own token: the client cancels it with the request, and the capture
+            // cancels it when the call prints too much.
             let cancellation = Cancellation::new(call.cancellation.child_token());
             let run = execute(call, cancellation.clone());
             tokio::pin!(run);
@@ -971,9 +998,6 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     };
     let confirmed = command.global_flags.yes;
 
-    // Drops what was printed between calls, such as a late log line or a late document of a
-    // cancelled call.
-    capture.start_call();
     let ctx = match server_ctx.for_tool_call(confirmed, environment.clone(), cancellation) {
         Ok(ctx) => Arc::new(ctx),
         Err(error) => {
