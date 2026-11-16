@@ -576,8 +576,14 @@ fn native_source_is_lazy_cancel_safe_and_keeps_errors() {
                 .is_pending()
         );
     }
-    let error = ready(stream.next()).unwrap_err();
-    assert!(error.contains("Gone"));
+    let crate::schema::StreamError::Failed(error) = ready(stream.next()).unwrap().unwrap_err()
+    else {
+        panic!("expected the external stream failure");
+    };
+    let crate::schema::SchemaValue::String(message) = error.value() else {
+        panic!("expected the external stream error message");
+    };
+    assert!(message.contains("Gone"));
     READS.with_borrow(|r| {
         assert_eq!(r.len(), 2);
         assert_eq!(r[1].checkpoint.offset, "-1");

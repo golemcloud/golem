@@ -156,10 +156,12 @@ type ReconstructionPolicy uint8
 
 const (
 	// ReconnectAutomatically opens a replacement connection on the first live
-	// access. It is the host default.
+	// access. Choose it only when the peer accepts a new session in place of the
+	// lost one.
 	ReconnectAutomatically ReconstructionPolicy = ReconstructionPolicy(client.ReconstructionPolicyReconnectAutomatically)
 	// ReportConnectionLoss makes the first live access return a [SessionLost]
-	// error, and the connection stays lost.
+	// error, and the connection stays lost. It is the host default, used when
+	// [Connect] gets no [WithReconstructionPolicy] option.
 	ReportConnectionLoss ReconstructionPolicy = ReconstructionPolicy(client.ReconstructionPolicyReportConnectionLoss)
 )
 

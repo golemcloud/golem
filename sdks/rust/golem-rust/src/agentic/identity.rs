@@ -107,6 +107,21 @@ pub(crate) fn connect_with_config(
     connect(type_name, constructor, phantom_id, config)
 }
 
+#[doc(hidden)]
+pub fn __bind_self(
+    type_name: &str,
+) -> Result<(String, Option<Uuid>, agentic_host::WasmRpc), GolemReflectError> {
+    let (id, rpc) = agentic_host::WasmRpc::bind_self().map_err(agentic_rpc_error_to_reflect)?;
+    let (bound_type_name, _, phantom_id) =
+        parse_agent_id(&id).map_err(agentic_agent_error_to_reflect)?;
+    if bound_type_name != type_name {
+        return Err(GolemReflectError::InvalidType(format!(
+            "full client expects `{type_name}`, identity is `{bound_type_name}`"
+        )));
+    }
+    Ok((id, phantom_id.map(Into::into), rpc))
+}
+
 // Every consuming host call gets a fresh envelope. Schema value trees can own
 // affine quota-token handles, so even an equal constructor must be encoded again.
 #[doc(hidden)]

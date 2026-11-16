@@ -304,6 +304,11 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
+        GolemRpcBindSelf {
+            remote_agent_id: AgentId,
+            target_environment_id: EnvironmentId,
+            fingerprint: AgentFingerprint
+        },
         GolemRpcAsyncInvokeRejection {
             remote_agent_id: AgentId,
             idempotency_key: IdempotencyKey,
@@ -396,11 +401,6 @@ oplog_payload! {
         },
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>
-        },
-        GolemRpcActivate {
-            remote_agent_id: AgentId,
-            method_name: String,
-            decision: Result<(), SerializableRpcError>,
         },
         GolemToolResponseSecretHoldAdmission {
             value: TypedSchemaValue,
@@ -681,7 +681,7 @@ oplog_payload! {
             result: Result<(Vec<u8>, Option<u64>), String>
         },
         GolemRpcCreate {
-            target_fingerprint: AgentFingerprint,
+            result: Result<AgentFingerprint, SerializableRpcError>,
             target_environment_id: EnvironmentId
         },
         P3KeyvalueIncomingValueStream {
@@ -782,9 +782,6 @@ oplog_payload! {
         },
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>
-        },
-        GolemRpcActivate {
-            result: Result<AgentFingerprint, SerializableRpcError>
         },
         GolemToolResponseSecretHoldAdmission {
             admitted: bool,
@@ -1003,6 +1000,7 @@ pub mod host_functions {
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcBindSelf => "golem::rpc::wasm-rpc", "bind-self", GolemRpcBindSelf, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
         (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
         (GolemContextSpanFinish => "golem::api::context::span", "finish", GolemContextSpanResource, GolemApiUnit),
@@ -1073,7 +1071,6 @@ pub mod host_functions {
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents, denied = denied::golem_api::agents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
-        (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemRpcWasmRpcPrepareInvocation => "golem::rpc::wasm-rpc", "prepare-invocation", GolemRpcPrepareInvocation, GolemRpcPrepareInvocation),
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
         (GolemToolAwaitInvokeResults => "golem::tool::internal", "await-invoke-results", GolemToolAwaitInvokeResults, GolemToolAwaitInvokeResults),

@@ -653,12 +653,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.invoke(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -670,12 +671,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.async_invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .future
             .get()
@@ -690,12 +692,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -707,12 +710,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.schedule_invocation(
             Datetime {
                 seconds: 0,
@@ -732,12 +736,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.schedule_cancelable_invocation(
             Datetime {
                 seconds: 0,

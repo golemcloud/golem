@@ -1,0 +1,305 @@
+---
+import { text as t, paragraphs, lines } from "../../data/home-preview/golem-2";
+const calls = [1, 2, 3];
+---
+
+<div class="primitive-comparison">
+  {
+    ["Actors", "Functions"].map((kind) => (
+      <article>
+        <div class="primitive-title">
+          <h3>{kind}</h3>
+          <span>{paragraphs(t(2, kind))[0]}</span>
+        </div>
+        <p>{paragraphs(t(2, kind))[1]}</p>
+        {kind === "Actors" ? (
+          <figure
+            class="primitive-diagram"
+            role="img"
+            aria-label="Three calls to the same actor ID reach one actor inside its durable, permissioned VM. The actor retains private state across calls."
+          >
+            <div class="actor-flow" aria-hidden="true">
+              <div class="actor-calls">
+                {calls.map((n) => (
+                  <span>Call {n}</span>
+                ))}
+              </div>
+              <div class="actor-arrows">
+                {calls.map(() => (
+                  <span class="primitive-arrow" />
+                ))}
+              </div>
+              <div class="primitive-enclosure actor-enclosure">
+                <span class="primitive-vm-label">Durable, permissioned VM</span>
+                <div class="actor-instance">
+                  <span class="primitive-symbol">α</span>
+                  <strong>Actor</strong>
+                  <span class="actor-id">ID: 42</span>
+                </div>
+              </div>
+            </div>
+          </figure>
+        ) : (
+          <figure
+            class="primitive-diagram"
+            role="img"
+            aria-label="Three independent calls run the same function f. Each call has its own input, output and fresh durable, permissioned VM. No private instance state carries into the next call."
+          >
+            <div class="function-flow" aria-hidden="true">
+              {calls.map((n) => (
+                <div class="function-call">
+                  <span class="call-label">Call {n}</span>
+                  <span class="primitive-arrow" />
+                  <div class="primitive-enclosure function-enclosure">
+                    <span class="primitive-vm-label">Durable, permissioned VM</span>
+                    <span class="primitive-symbol">ƒ</span>
+                  </div>
+                  <span class="primitive-arrow" />
+                  <span class="call-label">Output {n}</span>
+                </div>
+              ))}
+            </div>
+          </figure>
+        )}
+        <div class="primitive-examples">
+          <p>Examples</p>
+          <ul>
+            {lines(t(2, kind === "Actors" ? "Actor examples" : "Function examples")).map(
+              (example) => (
+                <li>{example}</li>
+              )
+            )}
+          </ul>
+        </div>
+      </article>
+    ))
+  }
+</div>
+
+<style>
+  .primitive-comparison {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 48px;
+  }
+  .primitive-comparison > article {
+    min-width: 0;
+  }
+  .primitive-title {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .primitive-title h3 {
+    margin: 0;
+    font-size: 28px;
+  }
+  .primitive-title > span {
+    color: #59664f;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .primitive-comparison > article > p {
+    max-inline-size: var(--parallel-copy-width, 100%);
+    margin: 0 0 28px;
+    font-size: 15px;
+    line-height: 1.75;
+  }
+  .primitive-diagram {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #43563c;
+  }
+  .actor-flow {
+    display: grid;
+    grid-template-columns: 72px 28px minmax(0, 1fr);
+    height: 300px;
+  }
+  .actor-calls,
+  .actor-arrows {
+    display: grid;
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    align-items: center;
+    gap: 12px;
+  }
+  .actor-calls > span {
+    white-space: nowrap;
+  }
+  .primitive-arrow {
+    display: block;
+    position: relative;
+    width: 100%;
+    height: 1px;
+    background: #718765;
+  }
+  .primitive-arrow::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: -3px;
+    width: 7px;
+    height: 7px;
+    border-top: 1px solid #718765;
+    border-right: 1px solid #718765;
+    transform: rotate(45deg);
+  }
+  .primitive-enclosure {
+    border: 1px solid #718765;
+    border-radius: 5px;
+    background: #eaf0e1;
+  }
+  .actor-enclosure {
+    position: relative;
+    display: grid;
+    place-items: center;
+  }
+  .primitive-vm-label {
+    color: #53654a;
+    font-size: 10px;
+    line-height: 1.4;
+  }
+  .actor-enclosure > .primitive-vm-label {
+    position: absolute;
+    top: 15px;
+    left: 16px;
+    right: 16px;
+    text-align: center;
+  }
+  .actor-instance {
+    display: flex;
+    align-items: center;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .primitive-symbol {
+    font-family: Georgia, serif;
+    color: #4f714a;
+    font-size: 56px;
+    line-height: 1;
+  }
+  .actor-instance strong {
+    color: #263c2b;
+    font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+    font-size: 18px;
+    font-weight: 500;
+  }
+  .actor-id {
+    color: #53654a;
+    font-size: 12px;
+  }
+  .function-flow {
+    display: grid;
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    height: 300px;
+  }
+  .function-call {
+    display: grid;
+    grid-template-columns: 46px 28px minmax(0, 1fr) 28px 64px;
+    align-items: center;
+    gap: 0;
+  }
+  .call-label {
+    white-space: nowrap;
+  }
+  .call-label:last-child {
+    padding-left: 6px;
+  }
+  .function-enclosure {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px;
+    text-align: center;
+  }
+  .function-enclosure .primitive-symbol {
+    font-size: 34px;
+  }
+  .primitive-examples {
+    margin-top: 24px;
+  }
+  .primitive-examples > p {
+    margin: 0 0 9px;
+    font-size: 11px;
+    color: #59664f;
+  }
+  .primitive-examples ul {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .primitive-examples li {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 11px 8px;
+    border: 1px solid #d0dac7;
+    border-radius: 3px;
+    color: #344b31;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+  @media (max-width: 1100px) {
+    .primitive-comparison {
+      gap: 32px;
+    }
+    .primitive-title {
+      gap: 12px;
+    }
+    .primitive-title h3 {
+      font-size: 25px;
+    }
+    .primitive-examples li {
+      padding-inline: 4px;
+    }
+    .function-call {
+      grid-template-columns: 40px 20px minmax(0, 1fr) 20px 60px;
+    }
+    .primitive-diagram {
+      font-size: 11px;
+    }
+  }
+  @media (max-width: 800px) {
+    .primitive-comparison {
+      grid-template-columns: 1fr;
+      gap: 44px;
+    }
+    .primitive-comparison > article > p {
+      font-size: 14px;
+    }
+  }
+  @media (max-width: 600px) {
+    .primitive-examples ul {
+      gap: 4px;
+    }
+    .primitive-examples li {
+      padding: 10px 2px;
+      font-size: 12px;
+      letter-spacing: -0.01em;
+    }
+    .actor-flow {
+      grid-template-columns: 58px 22px minmax(0, 1fr);
+    }
+  }
+  @media (forced-colors: active) {
+    .primitive-enclosure,
+    .primitive-examples li {
+      border-color: CanvasText;
+    }
+    .primitive-arrow {
+      background: CanvasText;
+    }
+    .primitive-arrow::after {
+      border-color: CanvasText;
+    }
+  }
+</style>

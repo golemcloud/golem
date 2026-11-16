@@ -323,6 +323,24 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 
 #[async_trait]
 impl Rpc for ActivatingRpc {
+    async fn create_and_initialize(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
+        _self_created_by: AccountId,
+        _self_agent_id: &AgentId,
+        _self_env: &[(String, String)],
+        _self_stack: InvocationContextStack,
+        _config: Vec<AgentConfigEntryDto>,
+        _auth_ctx: &AuthCtx,
+        _idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        self.create_called.store(true, Ordering::SeqCst);
+        Ok(Box::new(FixedDemand {
+            fingerprint: self.live_fingerprint,
+        }))
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
@@ -414,6 +432,23 @@ impl Rpc for ActivatingRpc {
 
 #[async_trait]
 impl Rpc for RecordingScopeCardRpc {
+    async fn create_and_initialize(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
+        _self_created_by: AccountId,
+        _self_agent_id: &AgentId,
+        _self_env: &[(String, String)],
+        _self_stack: InvocationContextStack,
+        _config: Vec<AgentConfigEntryDto>,
+        _auth_ctx: &AuthCtx,
+        _idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        Ok(Box::new(FixedDemand {
+            fingerprint: self.fingerprint,
+        }))
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
@@ -941,31 +976,6 @@ fn known_fresh_requires_live_execution_and_an_ephemeral_target() {
 #[test]
 fn deferred_ephemeral_target_never_requests_replay_activation() {
     let target = WasmRpcTargetActivation::DeferredEphemeral {
-        env: vec![("KEY".to_string(), "value".to_string())],
-        config: vec![],
-    };
-
-    assert!(target.deferred_activation().is_none());
-    assert_eq!(
-        target.target_creation_data().0,
-        vec![("KEY".to_string(), "value".to_string())]
-    );
-}
-
-#[test]
-fn pinned_ephemeral_identity_skips_durable_activation() {
-    let target = initial_target_activation(vec![], vec![], true);
-
-    assert!(matches!(
-        target,
-        WasmRpcTargetActivation::DeferredEphemeral { .. }
-    ));
-    assert!(target.deferred_activation().is_none());
-}
-
-#[test]
-fn deferred_durable_target_has_no_spawned_activation() {
-    let target = WasmRpcTargetActivation::DeferredDurable {
         env: vec![("KEY".to_string(), "value".to_string())],
         config: vec![],
     };

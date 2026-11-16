@@ -298,6 +298,7 @@ impl ProducerStreamIndex {
             record,
             StreamSessionRecord::ConsumerItemValue(_)
                 | StreamSessionRecord::ConsumerTerminal(_)
+                | StreamSessionRecord::ConsumerOutcome(_)
                 | StreamSessionRecord::SourceUnavailable(_)
         ) && !record.has_supported_format()
         {
@@ -308,6 +309,37 @@ impl ProducerStreamIndex {
         if record.reobserves().is_some() {
             // The oplog fold validates the original record before applying this boundary.
             // Its logical ordinal, source high-water and nested readers already exist.
+            return Ok(());
+        }
+        if let StreamSessionRecord::ConsumerOutcome(record) = record {
+            let key = (
+                record
+                    .session_key
+                    .qualify(owner_environment_id, owner, owner_fingerprint),
+                record.reader_id,
+            );
+            let journal = self
+                .consumer_journals
+                .get_mut(&key)
+                .ok_or(StreamStoreError::ConsumerJournalAdvanced)?;
+            let matches_position = if journal.terminal {
+                record.consumer_read_ordinal.checked_add(1) == Some(journal.next_read_ordinal)
+                    && journal.last_source_offset == Some(record.source_offset)
+            } else {
+                record.consumer_read_ordinal == journal.next_read_ordinal
+                    && journal.source_unavailable == Some(record.source_offset)
+            };
+            let matches_terminal = matches_position
+                && journal
+                    .terminal_outcome
+                    .as_ref()
+                    .is_some_and(|(author, terminal)| {
+                        *author == record.authored_by && *terminal == record.terminal
+                    });
+            if journal.outcome_observed || !matches_terminal {
+                return Err(StreamStoreError::ConsumerJournalAdvanced);
+            }
+            journal.outcome_observed = true;
             return Ok(());
         }
         let relative_session_key = match record {
@@ -344,7 +376,10 @@ impl ProducerStreamIndex {
                     && let Some(existing_offset) = journal.source_unavailable
                 {
                     return if existing_offset == record.source_offset
-                        && record.consumer_read_ordinal == journal.next_read_ordinal
+                        && record
+                            .consumer_read_ordinal
+                            .checked_add(u64::from(journal.terminal))
+                            == Some(journal.next_read_ordinal)
                     {
                         Ok(())
                     } else {
@@ -362,6 +397,12 @@ impl ProducerStreamIndex {
                     .entry((session_key.clone(), record.reader_id))
                     .or_default();
                 journal.source_unavailable = Some(record.source_offset);
+                journal.terminal_outcome = Some((
+                    StreamTerminalAuthor::Protocol,
+                    StreamTerminal::Failed(StreamError::Interrupted(
+                        "durable stream source unavailable".into(),
+                    )),
+                ));
                 self.session_consumer_streams
                     .entry(session_key)
                     .or_default()
@@ -372,8 +413,17 @@ impl ProducerStreamIndex {
         };
         let key = (session_key.clone(), reader_id);
         let journal = self.consumer_journals.get(&key);
-        if journal.is_some_and(|journal| journal.terminal || journal.source_unavailable.is_some())
-            || ordinal != journal.map_or(0, |journal| journal.next_read_ordinal)
+        let observes_overlay = journal.is_some_and(|journal| {
+            matches!(record, StreamSessionRecord::ConsumerTerminal(record)
+                if journal.source_unavailable == Some(record.source_offset)
+                    && journal.terminal_outcome.as_ref().is_some_and(|(author, terminal)|
+                        *author == record.authored_by && *terminal == record.terminal))
+        });
+        if journal.is_some_and(|journal| {
+            journal.terminal
+                || journal.outcome_observed
+                || (journal.source_unavailable.is_some() && !observes_overlay)
+        }) || ordinal != journal.map_or(0, |journal| journal.next_read_ordinal)
         {
             return Err(StreamStoreError::ConsumerJournalAdvanced);
         }
@@ -397,6 +447,9 @@ impl ProducerStreamIndex {
         journal.next_read_ordinal = next_read_ordinal;
         journal.last_source_offset = Some(last_source_offset);
         journal.terminal = terminal;
+        if let StreamSessionRecord::ConsumerTerminal(record) = record {
+            journal.terminal_outcome = Some((record.authored_by, record.terminal.clone()));
+        }
         self.session_consumer_streams
             .entry(session_key.clone())
             .or_default()

@@ -1,0 +1,12 @@
+data: {"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":", "},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"世界!"},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: [DONE]
+
