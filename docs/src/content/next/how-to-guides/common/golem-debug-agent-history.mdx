@@ -36,11 +36,17 @@ If neither `--from` nor `--query` is provided, the entire oplog is streamed.
 
 ### Obfuscated export
 
-`--obfuscate` turns the output into a report that is safe to attach to a bug report. Without it, the output is the raw oplog and is not safe to share. Rules:
+`--obfuscate` turns the output into a report for a bug report: customer values become tokens, and Golem metadata stays in clear. Without it, the output is the raw oplog and is not safe to share. The report is not anonymous, so tell the user its limits before they share it. See [Sharing an oplog](https://learn.golem.cloud/next/debug/oplog-export) for the details:
+
+- A token is a pseudonym: equal values give equal tokens, so a reader who knows one value learns every place where it occurs.
+- Some data is always kept: env and config entry names, names from customer code such as agent type, method, type and field names, and entry timestamps and sizes.
+- The `--keep-*` flags keep more data, and `--keep-error-text` can leak any customer value that an error message quotes.
+
+Rules:
 
 - The structured output is a sequence of documents: one `agent.oplog-export-header`, one `agent.oplog-export-entry` per entry and one `agent.oplog-export-coverage`, not the `agent.oplog` documents. Branch on `$type`.
 - A sequence without a coverage document is from a failed export, and the exit code is not zero.
-- Check `incomplete`, `hydrationFailures` and `startUnknown` in the coverage document before you use the report. `incomplete` is `true` when one of the two lists is not empty.
+- Check `incomplete`, `hydrationFailures` and `startUnknown` in the coverage document before you use the report. `incomplete` is `true` when one of the two lists is not empty. `hostTypeMismatches` lists host payloads whose type differs from the type that the CLI expects, for example after a server upgrade; they are tokens in full, so use a CLI of the server's version.
 - An omitted `Create` entry above `--max-entry-bytes` fails the export. Export again with a larger limit.
 - Agent references are `agent:<token>`, and the report holds only the named agent.
 - Tokens are equal only inside one export or one `--serve` session. Do not compare two reports by their tokens.
