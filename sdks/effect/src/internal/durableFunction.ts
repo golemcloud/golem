@@ -163,7 +163,8 @@ const tryHostPromise = <A>(f: () => Promise<A>) =>
 
 /**
  * Runs a live body in its own child fiber, in the operation's scope, and finishes the
- * operation once the body and every child operation registered under its scope ended.
+ * operation once the body, the response encoding and every child operation registered under its
+ * scope ended.
  * The live invocation is always dropped under its own scope, then the scope is closed.
  * Runs uninterruptibly; `restore` makes only the wait for the body interruptible.
  */
@@ -187,13 +188,18 @@ const runLive = <A, E, R, RF>(
       client.drop(live)
       throw cause
     }
-    const cleanup = Effect.sync(() => {
-      try {
-        scopes.run(token, () => client.drop(live))
-      } finally {
-        closeScope(scopes, token, parent)
-      }
-    })
+    // Every exit waits for the children registered under the scope, including children that the
+    // response encoder started, before the live invocation is dropped and the scope closed.
+    const cleanup = Effect.andThen(
+      awaitChildren(token),
+      Effect.sync(() => {
+        try {
+          scopes.run(token, () => client.drop(live))
+        } finally {
+          closeScope(scopes, token, parent)
+        }
+      }),
+    )
     return yield* Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(Effect.scoped(body)).pipe(
         Effect.provideService(CurrentCustomScope, token),
@@ -201,7 +207,6 @@ const runLive = <A, E, R, RF>(
       const awaited = yield* Effect.exit(restore(Fiber.await(fiber)))
       if (Exit.isFailure(awaited)) {
         yield* Fiber.interrupt(fiber)
-        yield* awaitChildren(token)
         return yield* Effect.failCause(awaited.cause)
       }
       const exit = awaited.value
@@ -209,6 +214,7 @@ const runLive = <A, E, R, RF>(
       // Replay of a completed operation skips the response encoding, so it runs in the scope.
       yield* Effect.gen(function* () {
         const response = yield* finishWith(exit)
+        yield* awaitChildren(token)
         if (response !== undefined)
           yield* tryHostPromise(() => client.finishAsync(live, response, forcedCommit))
       }).pipe(Effect.provideService(CurrentCustomScope, token))

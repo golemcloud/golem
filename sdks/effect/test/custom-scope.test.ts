@@ -352,4 +352,62 @@ describe("custom durability scopes", () => {
         expect(Runtime.__open()).toBe(0)
       }).pipe(provide),
   )
+
+  // The parent must not finish or drop while an operation that its response encoder started is open.
+  it.effect.each(["succeeds", "dies"] as const)(
+    "waits for an operation started by a response encoder that %s",
+    (outcome) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const finished = yield* Deferred.make<void>()
+        const success = Schema.String.pipe(
+          Schema.decodeTo(Schema.String, {
+            decode: SchemaGetter.passthrough(),
+            encode: SchemaGetter.transformEffect((value: string) =>
+              Effect.gen(function* () {
+                yield* Effect.forkDetach(
+                  op(
+                    "encoder-child",
+                    Deferred.succeed(started, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                    ),
+                  ).pipe(Effect.ensuring(Deferred.succeed(finished, undefined))),
+                )
+                yield* Deferred.await(started)
+                return outcome === "succeeds" ? value : yield* Effect.die("encoder failed")
+              }),
+            ),
+          }),
+        )
+        const parent = yield* Effect.forkChild(
+          Durability.wrapInfallible(
+            {
+              iface: "",
+              function: "encoding-parent",
+              functionType: Durability.FunctionType.writeRemote,
+              requestSchema: Schema.Struct({}),
+              success,
+            },
+            {},
+            Effect.succeed("value"),
+          ),
+        )
+        yield* Deferred.await(started)
+        for (let i = 0; i < 10; i++) yield* Effect.yieldNow
+        const premature = parent.pollUnsafe()
+        yield* Deferred.succeed(release, undefined)
+        yield* Deferred.await(finished)
+        const exit = yield* Fiber.await(parent)
+        expect(premature).toBeUndefined()
+        if (outcome === "succeeds") expect(Exit.isSuccess(exit)).toBe(true)
+        else if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe("encoder failed")
+        else expect.fail("the parent succeeded")
+        const events = Host.__getEvents()
+        expect(events.indexOf("close:encoder-child")).toBeLessThan(
+          events.indexOf("close:encoding-parent"),
+        )
+        expect(Runtime.__open()).toBe(0)
+      }).pipe(provide),
+  )
 })
