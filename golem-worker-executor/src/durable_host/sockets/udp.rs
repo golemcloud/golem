@@ -44,9 +44,9 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         HostUdpSocket::start_bind(&mut view.sockets(), self_, network, local_address).await
     }
 
-    fn finish_bind(&mut self, self_: Resource<UdpSocket>) -> Result<(), SocketError> {
+    async fn finish_bind(&mut self, self_: Resource<UdpSocket>) -> Result<(), SocketError> {
         self.observe_function_call("sockets::udp", "finish_bind");
-        HostUdpSocket::finish_bind(&mut self.as_wasi_view().sockets(), self_)
+        HostUdpSocket::finish_bind(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     async fn stream(
@@ -89,9 +89,9 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         HostUdpSocket::address_family(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn unicast_hop_limit(&mut self, self_: Resource<UdpSocket>) -> Result<u8, SocketError> {
+    async fn unicast_hop_limit(&mut self, self_: Resource<UdpSocket>) -> Result<u8, SocketError> {
         self.observe_function_call("sockets::udp", "unicast_hop_limit");
-        HostUdpSocket::unicast_hop_limit(&mut self.as_wasi_view().sockets(), self_)
+        HostUdpSocket::unicast_hop_limit(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_unicast_hop_limit(
@@ -103,9 +103,12 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         HostUdpSocket::set_unicast_hop_limit(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn receive_buffer_size(&mut self, self_: Resource<UdpSocket>) -> Result<u64, SocketError> {
+    async fn receive_buffer_size(
+        &mut self,
+        self_: Resource<UdpSocket>,
+    ) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::udp", "receive_buffer_size");
-        HostUdpSocket::receive_buffer_size(&mut self.as_wasi_view().sockets(), self_)
+        HostUdpSocket::receive_buffer_size(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_receive_buffer_size(
@@ -117,9 +120,9 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         HostUdpSocket::set_receive_buffer_size(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn send_buffer_size(&mut self, self_: Resource<UdpSocket>) -> Result<u64, SocketError> {
+    async fn send_buffer_size(&mut self, self_: Resource<UdpSocket>) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::udp", "send_buffer_size");
-        HostUdpSocket::send_buffer_size(&mut self.as_wasi_view().sockets(), self_)
+        HostUdpSocket::send_buffer_size(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn set_send_buffer_size(
@@ -143,13 +146,14 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HostIncomingDatagramStream for DurableWorkerCtx<Ctx> {
-    fn receive(
+    async fn receive(
         &mut self,
         self_: Resource<IncomingDatagramStream>,
         max_results: u64,
     ) -> Result<Vec<IncomingDatagram>, SocketError> {
         self.observe_function_call("sockets::udp", "receive");
         HostIncomingDatagramStream::receive(&mut self.as_wasi_view().sockets(), self_, max_results)
+            .await
     }
 
     fn subscribe(
@@ -167,9 +171,12 @@ impl<Ctx: WorkerCtx> HostIncomingDatagramStream for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
-    fn check_send(&mut self, self_: Resource<OutgoingDatagramStream>) -> Result<u64, SocketError> {
+    async fn check_send(
+        &mut self,
+        self_: Resource<OutgoingDatagramStream>,
+    ) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::udp", "check_send");
-        HostOutgoingDatagramStream::check_send(&mut self.as_wasi_view().sockets(), self_)
+        HostOutgoingDatagramStream::check_send(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     async fn send(
