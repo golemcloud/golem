@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::IdempotencyKey;
 use crate::base_model::agent::{
     AgentMode, AgentTypeName, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic,
 };
+use crate::base_model::{AgentId, RESERVED_TYPE_TAG};
 use crate::model::agent::{
     AgentTypeSchemaResolver, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey,
-    ResolvedOwnerContext, ephemeral_invocation_phantom_id, typed_constructor_parameters,
+    ResolvedOwnerContext, typed_constructor_parameters,
 };
 use golem_schema::Empty;
 
@@ -43,11 +43,9 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
         vec![],
         Default::default(),
     );
-    let worker_name = "4f8d62ad-9a36-4ddb-a8f2-6ae73fc302d1";
-    let external_name = OwnerKind::external_tool_instance_name(&IdempotencyKey::new(
-        "external-invocation".to_string(),
-    ));
-    let processor_name = OwnerKind::oplog_processor_instance_name(Uuid::nil());
+    let typed_id = AgentId::from_parts(7, 1);
+    let reserved_id = AgentId::random_reserved();
+    let key = || ParsedAgentKey::parse("agent-2(1)", &agent).unwrap();
 
     for agent_types in [vec![], test_agent_types().into_values().collect()] {
         let processor = ComponentMetadata::from_parts(
@@ -61,7 +59,8 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
         );
         let resolved = ResolvedOwnerContext::from_authoritative_kind(
             OwnerKind::OplogProcessor,
-            &processor_name,
+            &reserved_id,
+            None,
             &processor,
         )
         .unwrap();
@@ -83,7 +82,8 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
         assert!(
             ResolvedOwnerContext::from_authoritative_kind(
                 OwnerKind::ComponentAgent,
-                &processor_name,
+                &reserved_id,
+                Some(key()),
                 &processor,
             )
             .is_err()
@@ -93,14 +93,16 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
     assert!(
         ResolvedOwnerContext::from_authoritative_kind(
             OwnerKind::ComponentAgent,
-            worker_name,
+            &typed_id,
+            Some(key()),
             &non_agent,
         )
         .is_err(),
     );
     let typed = ResolvedOwnerContext::from_authoritative_kind(
         OwnerKind::ComponentAgent,
-        "agent-2(1)",
+        &typed_id,
+        Some(key()),
         &agent,
     )
     .unwrap();
@@ -108,7 +110,8 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
     assert!(
         ResolvedOwnerContext::from_authoritative_kind(
             OwnerKind::ComponentAgent,
-            worker_name,
+            &typed_id,
+            None,
             &agent,
         )
         .is_err()
@@ -118,7 +121,8 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
         assert!(
             ResolvedOwnerContext::from_authoritative_kind(
                 OwnerKind::OplogProcessor,
-                &processor_name,
+                &reserved_id,
+                None,
                 metadata,
             )
             .is_err()
@@ -126,7 +130,8 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
         assert_eq!(
             ResolvedOwnerContext::from_authoritative_kind(
                 OwnerKind::EphemeralExternalTool,
-                &external_name,
+                &reserved_id,
+                None,
                 metadata,
             )
             .unwrap(),
@@ -135,7 +140,8 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
         assert!(
             ResolvedOwnerContext::from_authoritative_kind(
                 OwnerKind::ComponentAgent,
-                &external_name,
+                &reserved_id,
+                Some(key()),
                 metadata,
             )
             .is_err()
@@ -143,7 +149,8 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
         assert!(
             ResolvedOwnerContext::from_authoritative_kind(
                 OwnerKind::EphemeralExternalTool,
-                worker_name,
+                &typed_id,
+                None,
                 metadata,
             )
             .is_err()
@@ -152,48 +159,31 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
 }
 
 #[test]
-fn external_tool_owner_identity_is_stable_and_reserved() {
-    let key = crate::model::IdempotencyKey::new("same-request".to_string());
-    let name1 = crate::model::agent::OwnerKind::external_tool_instance_name(&key);
-    let name2 = crate::model::agent::OwnerKind::external_tool_instance_name(&key);
-    assert_eq!(name1, name2);
-    assert!(crate::model::agent::OwnerKind::is_reserved_instance_name(
-        &name1
-    ));
+fn only_component_agents_have_a_type_tag() {
+    let typed = AgentId::from_parts(7, 1);
+    let reserved = AgentId::from_parts(RESERVED_TYPE_TAG, 1);
+    assert!(OwnerKind::ComponentAgent.validate_agent_id(&typed).is_ok());
     assert!(
-        crate::model::agent::OwnerKind::ComponentAgent
-            .validate_instance_name(&name1)
+        OwnerKind::ComponentAgent
+            .validate_agent_id(&reserved)
             .is_err()
     );
-    assert!(
-        crate::model::agent::OwnerKind::EphemeralExternalTool
-            .validate_instance_name(&name1)
-            .is_ok()
-    );
-    assert!(
-        crate::model::agent::OwnerKind::EphemeralExternalTool
-            .validate_instance_name("caller-controlled")
-            .is_err()
-    );
-    let processor_name = OwnerKind::oplog_processor_instance_name(Uuid::nil());
-    assert_eq!(
-        processor_name,
-        "~golem-oplog-processor-00000000-0000-0000-0000-000000000000"
-    );
-    assert!(OwnerKind::is_reserved_instance_name(&processor_name));
-    for (kind, own_name, other_name) in [
-        (OwnerKind::OplogProcessor, &processor_name, &name1),
-        (OwnerKind::EphemeralExternalTool, &name1, &processor_name),
-    ] {
-        assert!(kind.validate_instance_name(own_name).is_ok());
-        assert!(kind.validate_instance_name(other_name).is_err());
-        assert!(kind.validate_instance_name("caller-controlled").is_err());
-        assert!(
-            OwnerKind::ComponentAgent
-                .validate_instance_name(own_name)
-                .is_err()
-        );
+    for kind in [OwnerKind::EphemeralExternalTool, OwnerKind::OplogProcessor] {
+        assert!(kind.validate_agent_id(&reserved).is_ok());
+        assert!(kind.validate_agent_id(&typed).is_err());
     }
+    let version_4: AgentId = "00000007-0000-4000-8000-000000000001".parse().unwrap();
+    let version_4_reserved: AgentId = "00000000-0000-4000-8000-000000000001".parse().unwrap();
+    assert!(
+        OwnerKind::ComponentAgent
+            .validate_agent_id(&version_4)
+            .is_err()
+    );
+    assert!(
+        OwnerKind::OplogProcessor
+            .validate_agent_id(&version_4_reserved)
+            .is_err()
+    );
     for (kind, discriminant, json) in [
         (OwnerKind::ComponentAgent, 0, "\"component-agent\""),
         (
@@ -217,13 +207,12 @@ use crate::schema::{
     MetadataEnvelope, NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue,
     TextRestrictions, TypedSchemaValue,
 };
-use crate::{agent_id, data_value, phantom_agent_id};
+use crate::{agent_key, data_value};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
 use proptest::{prop_assert_eq, proptest};
 use std::collections::HashMap;
 use test_r::test;
-use uuid::Uuid;
 #[test]
 fn agent_id_structural_normalization() {
     {
@@ -278,10 +267,32 @@ fn agent_id_excludes_auto_injected_constructor_fields() {
 }
 
 #[test]
-fn invalid_phantom_id() {
+fn a_key_longer_than_512_bytes_is_rejected() {
+    // `t("…")` is the string plus five bytes; `é` is two bytes, so the limit counts bytes.
+    let at_limit = format!("{}é", "a".repeat(505));
+    let key = ParsedAgentKey::try_new(AgentTypeName("t".to_string()), data_value!(at_limit))
+        .expect("a 512-byte key is accepted");
+    assert_eq!(key.to_string().len(), 512);
+
+    let over_limit = format!("{}é", "a".repeat(506));
+    let err = ParsedAgentKey::try_new(AgentTypeName("t".to_string()), data_value!(over_limit))
+        .expect_err("a 513-byte key is rejected");
+    assert_eq!(err, "Agent key is too long: 513 bytes, max length: 512");
+
+    // `agent-7([…])` around 300 one-digit elements is 610 bytes.
+    let err = ParsedAgentKey::parse(
+        format!("agent-7([{}])", vec!["1"; 300].join(",")),
+        TestAgentTypes::new(),
+    )
+    .expect_err("parsed key text is limited too");
+    assert_eq!(err, "Agent key is too long: 610 bytes, max length: 512");
+}
+
+#[test]
+fn a_phantom_suffix_is_not_part_of_a_key() {
     failure_test_with_string(
-        "agent-1()[not-a-uuid]",
-        "Invalid UUID in phantom ID: invalid character: found `n` at 0",
+        "agent-1()[550e8400-e29b-41d4-a716-446655440000]",
+        "Unexpected agent key format - must be 'agent-type(...)', got: agent-1()[550e8400-e29b-41d4-a716-446655440000]",
     )
 }
 
@@ -325,7 +336,7 @@ fn snapshotting_enabled_every_n_invocation_serde_poem_roundtrip() {
     )));
 }
 
-// Tests for AgentId::normalize_text
+// Tests for ParsedAgentKey::normalize_text
 
 #[test]
 fn normalize_strips_whitespace_in_wave_values() {
@@ -363,28 +374,15 @@ fn normalize_preserves_strings() {
 }
 
 #[test]
-fn normalize_handles_phantom_id() {
-    let result =
-        ParsedAgentKey::normalize_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]").unwrap();
-    assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
-}
-
-#[test]
-fn normalize_handles_phantom_id_with_whitespace() {
-    let result =
-        ParsedAgentKey::normalize_text("agent-1()[ 550e8400-e29b-41d4-a716-446655440000 ]")
-            .unwrap();
-    assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
+fn normalize_rejects_a_phantom_suffix() {
+    assert!(
+        ParsedAgentKey::normalize_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]").is_err()
+    );
 }
 
 #[test]
 fn normalize_rejects_invalid_format() {
     assert!(ParsedAgentKey::normalize_text("not-an-agent-id").is_err());
-}
-
-#[test]
-fn normalize_rejects_invalid_phantom_id() {
-    assert!(ParsedAgentKey::normalize_text("agent-1()[not-a-uuid]").is_err());
 }
 
 #[test]
@@ -483,14 +481,6 @@ fn normalize_trims_outer_whitespace() {
 }
 
 #[test]
-fn normalize_phantom_id_with_casing_and_whitespace() {
-    let result =
-        ParsedAgentKey::normalize_text("agent-1(  )[ 550E8400-E29B-41D4-A716-446655440000 ]")
-            .unwrap();
-    assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
-}
-
-#[test]
 fn normalize_empty_params_stays_empty() {
     assert_eq!(
         ParsedAgentKey::normalize_text("agent-1(   )").unwrap(),
@@ -527,7 +517,6 @@ proptest! {
         let agent_id = ParsedAgentKey::try_new(
             AgentTypeName("agent-2".to_string()),
             data_value!(x),
-            None,
         ).unwrap();
         let canonical = agent_id.to_string();
         let normalized = ParsedAgentKey::normalize_text(&canonical).unwrap();
@@ -554,7 +543,7 @@ proptest! {
                     }],
                 },
             ),
-            None,
+
         ).unwrap();
         let canonical = agent_id.to_string();
         let normalized = ParsedAgentKey::normalize_text(&canonical).unwrap();
@@ -767,19 +756,18 @@ fn data_value_macro_trailing_comma() {
 }
 
 #[test]
-fn agent_id_macro_no_parameters() {
-    let id = agent_id!("agent-1");
+fn agent_key_macro_no_parameters() {
+    let id = agent_key!("agent-1");
     assert_eq!(id.agent_type, AgentTypeName("agent-1".to_string()));
     assert_eq!(
         id.parameters.value(),
         &SchemaValue::Record { fields: vec![] }
     );
-    assert_eq!(id.phantom_id, None);
 }
 
 #[test]
-fn agent_id_macro_single_parameter() {
-    let id = agent_id!("agent-2", 42u32);
+fn agent_key_macro_single_parameter() {
+    let id = agent_key!("agent-2", 42u32);
     assert_eq!(id.agent_type, AgentTypeName("agent-2".to_string()));
     assert_eq!(
         id.parameters.value(),
@@ -787,12 +775,11 @@ fn agent_id_macro_single_parameter() {
             fields: vec![SchemaValue::U32(42)]
         }
     );
-    assert_eq!(id.phantom_id, None);
 }
 
 #[test]
-fn agent_id_macro_multiple_parameters() {
-    let id = agent_id!("agent-3", 42u32, 100u64, 3u8);
+fn agent_key_macro_multiple_parameters() {
+    let id = agent_key!("agent-3", 42u32, 100u64, 3u8);
     assert_eq!(id.agent_type, AgentTypeName("agent-3".to_string()));
     assert_eq!(
         id.parameters.value(),
@@ -804,246 +791,17 @@ fn agent_id_macro_multiple_parameters() {
             ]
         }
     );
-    assert_eq!(id.phantom_id, None);
 }
 
 #[test]
-fn agent_id_macro_with_trailing_comma() {
-    let id = agent_id!("agent-4", 42u32, 100u64,);
+fn agent_key_macro_with_trailing_comma() {
+    let id = agent_key!("agent-4", 42u32, 100u64,);
     assert_eq!(id.agent_type, AgentTypeName("agent-4".to_string()));
     assert_eq!(
         id.parameters.value(),
         &SchemaValue::Record {
             fields: vec![SchemaValue::U32(42), SchemaValue::U64(100)]
         }
-    );
-    assert_eq!(id.phantom_id, None);
-}
-
-#[test]
-fn phantom_agent_id_macro_no_parameters() {
-    let phantom_uuid = Uuid::now_v7();
-    let id = phantom_agent_id!("phantom-1", phantom_uuid);
-    assert_eq!(id.agent_type, AgentTypeName("phantom-1".to_string()));
-    assert_eq!(
-        id.parameters.value(),
-        &SchemaValue::Record { fields: vec![] }
-    );
-    assert_eq!(id.phantom_id, Some(phantom_uuid));
-}
-
-#[test]
-fn phantom_agent_id_macro_single_parameter() {
-    let phantom_uuid = Uuid::now_v7();
-    let id = phantom_agent_id!("phantom-2", phantom_uuid, 42u32);
-    assert_eq!(id.agent_type, AgentTypeName("phantom-2".to_string()));
-    assert_eq!(
-        id.parameters.value(),
-        &SchemaValue::Record {
-            fields: vec![SchemaValue::U32(42)]
-        }
-    );
-    assert_eq!(id.phantom_id, Some(phantom_uuid));
-}
-
-#[test]
-fn phantom_agent_id_macro_multiple_parameters() {
-    let phantom_uuid = Uuid::now_v7();
-    let id = phantom_agent_id!("phantom-3", phantom_uuid, 42u32, 100u64);
-    assert_eq!(id.agent_type, AgentTypeName("phantom-3".to_string()));
-    assert_eq!(
-        id.parameters.value(),
-        &SchemaValue::Record {
-            fields: vec![SchemaValue::U32(42), SchemaValue::U64(100)]
-        }
-    );
-    assert_eq!(id.phantom_id, Some(phantom_uuid));
-}
-
-#[test]
-fn phantom_agent_id_macro_with_trailing_comma() {
-    let phantom_uuid = Uuid::now_v7();
-    let id = phantom_agent_id!("phantom-4", phantom_uuid, 42u32, 100u64,);
-    assert_eq!(id.agent_type, AgentTypeName("phantom-4".to_string()));
-    assert_eq!(
-        id.parameters.value(),
-        &SchemaValue::Record {
-            fields: vec![SchemaValue::U32(42), SchemaValue::U64(100)]
-        }
-    );
-    assert_eq!(id.phantom_id, Some(phantom_uuid));
-}
-
-#[test]
-fn agent_id_vs_phantom_agent_id() {
-    let uuid = Uuid::now_v7();
-    let regular_id = agent_id!("test", 42u32);
-    let phantom_id = phantom_agent_id!("test", uuid, 42u32);
-
-    // Both should have the same type name and parameters
-    assert_eq!(regular_id.agent_type, phantom_id.agent_type);
-    assert_eq!(regular_id.parameters, phantom_id.parameters);
-
-    // But different phantom_id values
-    assert_eq!(regular_id.phantom_id, None);
-    assert_eq!(phantom_id.phantom_id, Some(uuid));
-}
-
-#[test]
-fn agent_id_too_long_rejected() {
-    use crate::base_model::AgentId;
-    use crate::base_model::component::ComponentId;
-
-    let component_id = ComponentId(Uuid::nil());
-    let parameters = data_value!("a".repeat(600));
-
-    let err = ParsedAgentKey::try_new(AgentTypeName("t".to_string()), parameters.clone(), None)
-        .expect_err("ParsedAgentKey::new should reject too-long ids");
-    assert!(
-        err.contains("too long"),
-        "Error should mention 'too long', got: {err}"
-    );
-
-    let parsed = ParsedAgentKey::new(AgentTypeName("t".to_string()), parameters, None);
-    let result = AgentId::from_agent_id(component_id, &parsed);
-    assert!(result.is_err(), "Expected error for too-long agent ID");
-    let err = result.unwrap_err();
-    assert!(
-        err.contains("too long"),
-        "Error should mention 'too long', got: {err}"
-    );
-}
-
-#[test]
-fn auto_phantom_lenient_allows_too_long_id_but_agent_id_still_rejects() {
-    use crate::base_model::AgentId;
-    use crate::base_model::component::ComponentId;
-
-    let component_id = ComponentId(Uuid::nil());
-    let agent_type = AgentTypeName("t".to_string());
-    let params = data_value!("a".repeat(600));
-
-    let err = ParsedAgentKey::new_auto_phantom(
-        agent_type.clone(),
-        params.clone(),
-        None,
-        AgentMode::Durable,
-    )
-    .expect_err("ParsedAgentKey::new_auto_phantom should reject too-long ids");
-    assert!(
-        err.contains("too long"),
-        "Error should mention 'too long', got: {err}"
-    );
-
-    let parsed = ParsedAgentKey::new(agent_type, params, None);
-
-    let result = AgentId::from_agent_id(component_id, &parsed);
-    assert!(result.is_err(), "Expected error for too-long agent ID");
-    let err = result.unwrap_err();
-    assert!(
-        err.contains("too long"),
-        "Error should mention 'too long', got: {err}"
-    );
-}
-
-#[test]
-fn agent_id_at_max_length_accepted() {
-    use crate::base_model::AgentId;
-    use crate::base_model::component::ComponentId;
-
-    let component_id = ComponentId(Uuid::nil());
-    // Format is: t("aaa...aaa") → 1 + 1 + 1 + N + 1 + 1 = N + 5, so N = 507 for total 512
-    let parsed = ParsedAgentKey::try_new(
-        AgentTypeName("t".to_string()),
-        data_value!("a".repeat(507)),
-        None,
-    )
-    .expect("ParsedAgentKey::new should succeed");
-    assert_eq!(
-        parsed.to_string().len(),
-        512,
-        "ParsedAgentKey string should be exactly 512 chars"
-    );
-    let result = AgentId::from_agent_id(component_id, &parsed);
-    assert!(
-        result.is_ok(),
-        "Expected success for exactly 512-char agent ID, got: {:?}",
-        result
-    );
-}
-
-#[test]
-fn new_auto_phantom_durable_none() {
-    let agent_type = AgentTypeName("test-agent".to_string());
-    let id = ParsedAgentKey::new_auto_phantom(agent_type, data_value!(), None, AgentMode::Durable)
-        .unwrap();
-    assert_eq!(
-        id.phantom_id, None,
-        "Durable agent with no phantom_id should remain None"
-    );
-}
-
-#[test]
-fn new_auto_phantom_durable_some() {
-    let supplied = Uuid::new_v4();
-    let agent_type = AgentTypeName("test-agent".to_string());
-    let id = ParsedAgentKey::new_auto_phantom(
-        agent_type,
-        data_value!(),
-        Some(supplied),
-        AgentMode::Durable,
-    )
-    .unwrap();
-    assert_eq!(
-        id.phantom_id,
-        Some(supplied),
-        "Durable agent should preserve supplied phantom_id"
-    );
-}
-
-#[test]
-fn new_auto_phantom_ephemeral_none() {
-    let agent_type = AgentTypeName("test-agent".to_string());
-    let id =
-        ParsedAgentKey::new_auto_phantom(agent_type, data_value!(), None, AgentMode::Ephemeral)
-            .unwrap();
-    assert!(
-        id.phantom_id.is_some(),
-        "Ephemeral agent with no phantom_id should auto-generate one"
-    );
-    // Verify it appears in the string representation
-    let s = id.to_string();
-    assert!(
-        s.contains('['),
-        "Ephemeral auto-phantom ID should appear in string: {s}"
-    );
-}
-
-#[test]
-fn new_auto_phantom_ephemeral_some() {
-    let supplied = Uuid::new_v4();
-    let agent_type = AgentTypeName("test-agent".to_string());
-    let id = ParsedAgentKey::new_auto_phantom(
-        agent_type,
-        data_value!(),
-        Some(supplied),
-        AgentMode::Ephemeral,
-    )
-    .unwrap();
-    assert_eq!(
-        id.phantom_id,
-        Some(supplied),
-        "Ephemeral agent should preserve supplied phantom_id"
-    );
-}
-
-#[test]
-fn ephemeral_invocation_phantom_id_has_stable_known_value() {
-    let key = IdempotencyKey::new("ephemeral-test-key".to_string());
-
-    assert_eq!(
-        ephemeral_invocation_phantom_id(&key),
-        Uuid::parse_str("24c6f96b-c066-5786-8903-e930c04ee32c").unwrap()
     );
 }
 
@@ -1052,78 +810,6 @@ fn invocation_freshness_defaults_to_may_exist() {
     assert_eq!(
         InvocationFreshnessDisposition::default(),
         InvocationFreshnessDisposition::MayExist
-    );
-}
-
-#[test]
-fn ephemeral_invocation_identity_is_deterministic_and_preserves_logical_target() {
-    let logical = ParsedAgentKey::try_new(
-        AgentTypeName("test-agent".to_string()),
-        data_value!("constructor-parameter"),
-        None,
-    )
-    .unwrap();
-    let key = IdempotencyKey::new("same".to_string());
-
-    let first = logical.with_ephemeral_invocation_phantom(&key).unwrap();
-    let second = logical.with_ephemeral_invocation_phantom(&key).unwrap();
-
-    assert_eq!(first, second);
-    assert_eq!(first.agent_type, logical.agent_type);
-    assert_eq!(first.parameters, logical.parameters);
-    assert_eq!(
-        first.phantom_id,
-        Some(Uuid::parse_str("5c610db3-26c7-5b64-8d71-2797bb32b481").unwrap())
-    );
-}
-
-#[test]
-fn different_idempotency_keys_produce_different_ephemeral_invocation_identities() {
-    let logical =
-        ParsedAgentKey::try_new(AgentTypeName("test-agent".to_string()), data_value!(), None)
-            .unwrap();
-
-    let first = logical
-        .with_ephemeral_invocation_phantom(&IdempotencyKey::new("same".to_string()))
-        .unwrap();
-    let second = logical
-        .with_ephemeral_invocation_phantom(&IdempotencyKey::new("different".to_string()))
-        .unwrap();
-
-    assert_ne!(first.phantom_id, second.phantom_id);
-}
-
-#[test]
-fn ephemeral_invocation_identity_rejects_an_existing_phantom() {
-    let logical = ParsedAgentKey::try_new(
-        AgentTypeName("test-agent".to_string()),
-        data_value!(),
-        Some(Uuid::new_v4()),
-    )
-    .unwrap();
-
-    assert_eq!(
-        logical
-            .with_ephemeral_invocation_phantom(&IdempotencyKey::new("same".to_string()))
-            .unwrap_err(),
-        "Cannot derive an ephemeral invocation identity from an agent ID that already has a phantom ID"
-    );
-}
-
-#[test]
-fn ephemeral_invocation_identity_preserves_agent_id_length_validation() {
-    let logical = ParsedAgentKey::try_new(
-        AgentTypeName("t".to_string()),
-        data_value!("a".repeat(507)),
-        None,
-    )
-    .unwrap();
-
-    assert!(
-        logical
-            .with_ephemeral_invocation_phantom(&IdempotencyKey::new("same".to_string()))
-            .unwrap_err()
-            .starts_with("Agent id is too long:")
     );
 }
 
@@ -1268,4 +954,71 @@ mod agent_error_tests {
             "secret ref must not leak into Display, got: {rendered:?}"
         );
     }
+}
+
+#[test]
+fn recorded_constructor_parameters_with_delimiters_round_trip() {
+    use crate::model::account::{AccountEmail, AccountId};
+    use crate::model::agent::{AgentMetadata, AgentStatusRecord, Principal};
+    use crate::model::component::ComponentId;
+    use crate::model::component_metadata::{ComponentMetadata, KnownExports};
+    use crate::model::environment::EnvironmentId;
+    use crate::model::invocation_context::InvocationContextStack;
+    use crate::model::oplog::{CreateRequest, CreateRequestKind};
+    use crate::model::{AgentFingerprint, Timestamp};
+    use uuid::Uuid;
+
+    let component_metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        test_agent_types().into_values().collect(),
+        Default::default(),
+    );
+    let key =
+        ParsedAgentKey::parse(r#"agent-4(@t"a(b), c)", @t")(,")"#, &component_metadata).unwrap();
+    let parameters = key.canonical_parameters().unwrap();
+    assert_eq!(parameters, r#"@t"a(b), c)",@t")(,""#);
+
+    let metadata = AgentMetadata {
+        component_id: ComponentId(Uuid::from_u128(1)),
+        agent_type_name: Some(key.agent_type.clone()),
+        canonical_key: Some(key.to_string()),
+        constructor_parameters: Some(parameters.clone()),
+        agent_id: AgentId::from_parts(7, 1),
+        owner_kind: OwnerKind::ComponentAgent,
+        env: vec![],
+        environment_id: EnvironmentId(Uuid::from_u128(2)),
+        created_by: AccountId(Uuid::from_u128(3)),
+        created_by_email: AccountEmail::new("test@golem"),
+        config: vec![],
+        created_at: Timestamp::now_utc(),
+        parent: None,
+        last_known_status: AgentStatusRecord::default(),
+        fingerprint: AgentFingerprint(Uuid::from_u128(4)),
+        agent_mode: AgentMode::Durable,
+        create_request: CreateRequest::new(
+            CreateRequestKind::GetOrCreate,
+            None,
+            Principal::anonymous(),
+            &InvocationContextStack::fresh_rounded(),
+        ),
+    };
+    let parsed = metadata.parse_agent_id(&component_metadata).unwrap();
+    assert_eq!(parsed, key);
+    assert_eq!(parsed.to_string(), format!("agent-4({parameters})"));
+
+    let without_parameters = AgentMetadata {
+        constructor_parameters: None,
+        ..metadata.clone()
+    };
+    assert!(
+        without_parameters
+            .parse_agent_id(&component_metadata)
+            .is_err()
+    );
+    let without_type = AgentMetadata {
+        agent_type_name: None,
+        ..metadata
+    };
+    assert!(without_type.parse_agent_id(&component_metadata).is_err());
 }

@@ -21,7 +21,6 @@ mod normalisation;
 mod protobuf;
 mod status;
 
-pub use agent_uuid::AgentUuid;
 pub use key::AgentKey;
 
 pub use invocation::{
@@ -58,12 +57,11 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::base_model::InvocationId;
 pub use crate::base_model::agent::*;
 pub use crate::base_model::worker::*;
-use crate::base_model::{IdempotencyKey, InvocationId};
 use crate::model::account::AccountId;
-use crate::model::component::ComponentId;
-use crate::model::component_metadata::{self, ComponentMetadata};
+use crate::model::component_metadata::ComponentMetadata;
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::{AgentFingerprint, AgentId, PromiseId, Timestamp};
@@ -75,10 +73,13 @@ use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
 /// An invocation or creation address before it resolves to a concrete owner.
-/// `Current` retains today's structural addressing and creation semantics.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum AgentTarget {
-    Current(AgentId),
+    /// The keyed agent that the key selects: its ID derives from the key.
+    Key(AgentKey),
+    /// The agent that has this ID.
+    Id(AgentId),
 }
 
 /// Resolved execution-owner context. Consumers must branch on this value
@@ -92,19 +93,20 @@ pub enum ResolvedOwnerContext {
 }
 
 impl ResolvedOwnerContext {
+    /// `agent` is the type and constructor parameters of a component agent, from its
+    /// creation request or its Create entry. Other owner kinds have none.
     pub fn from_authoritative_kind(
         kind: OwnerKind,
-        raw_agent_id: &str,
+        agent_id: &AgentId,
+        agent: Option<ParsedAgentKey>,
         metadata: &ComponentMetadata,
     ) -> Result<Self, String> {
-        kind.validate_instance_name(raw_agent_id)?;
+        kind.validate_agent_id(agent_id)?;
         match kind {
-            OwnerKind::ComponentAgent if metadata.is_agent() => {
-                ParsedAgentKey::parse(raw_agent_id, metadata)
-                    .map(Box::new)
-                    .map(Self::Agent)
-                    .map_err(|error| error.to_string())
-            }
+            OwnerKind::ComponentAgent if metadata.is_agent() => agent
+                .map(Box::new)
+                .map(Self::Agent)
+                .ok_or_else(|| "A component agent has no agent type".to_string()),
             OwnerKind::ComponentAgent => Err("Component declares no agent types".to_string()),
             OwnerKind::EphemeralExternalTool => Ok(Self::ComponentBaseline),
             OwnerKind::OplogProcessor if metadata.has_oplog_processor() => Ok(Self::OplogProcessor),
@@ -122,21 +124,11 @@ impl ResolvedOwnerContext {
     }
 }
 
-const EPHEMERAL_INVOCATION_PHANTOM_NAMESPACE_V1: Uuid =
-    uuid::uuid!("b6414d8d-acfb-4f13-9c5d-64a79af394e5");
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum InvocationFreshnessDisposition {
     #[default]
     MayExist,
     KnownFresh,
-}
-
-pub fn ephemeral_invocation_phantom_id(idempotency_key: &IdempotencyKey) -> Uuid {
-    Uuid::new_v5(
-        &EPHEMERAL_INVOCATION_PHANTOM_NAMESPACE_V1,
-        idempotency_key.value.as_bytes(),
-    )
 }
 
 impl TryFrom<i32> for AgentMode {
@@ -212,26 +204,24 @@ impl Display for BinarySource {
     }
 }
 
-static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
-});
+static AGENT_KEY_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([^(]+)\((.*)\)$").expect("Invalid agent key regex"));
 
-/// Parses the outer structure of an agent ID string into its components:
-/// (agent_type_name, param_list, optional_phantom_uuid_str)
-pub(crate) fn parse_agent_id_parts(s: &str) -> Result<(&str, &str, Option<&str>), String> {
-    let captures = AGENT_ID_REGEX.captures(s.trim()).ok_or_else(|| {
-        format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
+/// Parses the outer structure of agent key text, `Type(params)`, into the agent type
+/// name and the parameter list.
+pub(crate) fn parse_agent_key_parts(s: &str) -> Result<(&str, &str), String> {
+    let captures = AGENT_KEY_REGEX.captures(s.trim()).ok_or_else(|| {
+        format!("Unexpected agent key format - must be 'agent-type(...)', got: {s}")
     })?;
 
     let agent_type_name = captures.get(1).unwrap().as_str().trim();
     let param_list = captures.get(2).unwrap().as_str();
-    let phantom_id_str = captures.get(3).map(|m| m.as_str().trim());
 
     if agent_type_name.is_empty() {
         return Err("Agent type name cannot be empty".to_string());
     }
 
-    Ok((agent_type_name, param_list, phantom_id_str))
+    Ok((agent_type_name, param_list))
 }
 
 impl Display for Url {
@@ -271,33 +261,13 @@ impl AgentTypeSchemaResolver for &AgentTypeSchema {
 }
 
 impl ParsedAgentKey {
+    /// Fails when the parameters have no canonical text.
     pub fn try_new(
         agent_type: AgentTypeName,
         parameters: TypedSchemaValue,
-        phantom_id: Option<Uuid>,
     ) -> Result<Self, String> {
         let key = AgentKey::new(agent_type, parameters).map_err(|err| err.to_string())?;
-        let text = match phantom_id {
-            Some(phantom_id) => format!("{key}[{phantom_id}]"),
-            None => key.to_string(),
-        };
-        AgentId::validate_length(&text)?;
-        let (agent_type, parameters) = key.into_parts();
-        Ok(Self::new(agent_type, parameters, phantom_id))
-    }
-
-    pub fn new_auto_phantom(
-        agent_type: AgentTypeName,
-        parameters: TypedSchemaValue,
-        phantom_id: Option<Uuid>,
-        mode: AgentMode,
-    ) -> Result<Self, String> {
-        let phantom_id = match (mode, phantom_id) {
-            (_, Some(id)) => Some(id),
-            (AgentMode::Ephemeral, None) => Some(Uuid::new_v4()),
-            (AgentMode::Durable, None) => None,
-        };
-        Self::try_new(agent_type, parameters, phantom_id)
+        Ok(key.into())
     }
 
     pub fn parse(
@@ -311,40 +281,41 @@ impl ParsedAgentKey {
         s: impl AsRef<str>,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<(Self, AgentTypeSchema), String> {
-        let s = s.as_ref();
-        let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
-        let phantom_id = phantom_id_str
-            .map(Uuid::parse_str)
-            .transpose()
-            .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
-        let (key, agent_type) = AgentKey::parse_parts(agent_type_name, param_list, resolver)?;
-        let (agent_type_name, parameters) = key.into_parts();
-        let agent_id = Self::try_new(agent_type_name, parameters, phantom_id)?;
-        Ok((agent_id, agent_type))
+        let (key, agent_type) = AgentKey::parse(s.as_ref(), resolver)?;
+        Ok((key.into(), agent_type))
+    }
+
+    /// Parses the constructor parameter text of an agent of the named type, as the
+    /// Create entry records it.
+    pub fn parse_parameters(
+        agent_type_name: &AgentTypeName,
+        parameters: &str,
+        resolver: impl AgentTypeSchemaResolver,
+    ) -> Result<Self, String> {
+        let (key, _) = AgentKey::parse_parts(&agent_type_name.0, parameters, resolver)?;
+        Ok(key.into())
     }
 
     pub fn parse_agent_type_name(s: &str) -> Result<AgentTypeName, String> {
-        let (agent_type_name, _, _) = parse_agent_id_parts(s)?;
+        let (agent_type_name, _) = parse_agent_key_parts(s)?;
         Ok(AgentTypeName(agent_type_name.to_string()))
     }
 
     pub fn normalize_text(s: &str) -> Result<String, String> {
-        normalisation::normalize_agent_id_text(s)
+        normalisation::normalize_agent_key_text(s)
     }
 
-    pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Result<Self, String> {
-        Self::try_new(self.agent_type.clone(), self.parameters.clone(), phantom_id)
+    /// The canonical constructor parameter text, without the agent type name.
+    pub fn canonical_parameters(&self) -> Result<String, String> {
+        crate::model::agent::structural_format::format_structural_typed(&self.parameters)
+            .map_err(|err| err.to_string())
     }
+}
 
-    pub fn with_ephemeral_invocation_phantom(
-        &self,
-        idempotency_key: &IdempotencyKey,
-    ) -> Result<Self, String> {
-        if self.phantom_id.is_some() {
-            return Err("Cannot derive an ephemeral invocation identity from an agent ID that already has a phantom ID".to_string());
-        }
-
-        self.with_phantom_id(Some(ephemeral_invocation_phantom_id(idempotency_key)))
+impl From<AgentKey> for ParsedAgentKey {
+    fn from(key: AgentKey) -> Self {
+        let (agent_type, parameters) = key.into_parts();
+        Self::new(agent_type, parameters)
     }
 }
 
@@ -352,11 +323,7 @@ impl Display for ParsedAgentKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use crate::model::agent::structural_format::format_structural_typed;
         let rendered = format_structural_typed(&self.parameters).map_err(|_| std::fmt::Error)?;
-        write!(f, "{}({rendered})", self.agent_type)?;
-        if let Some(phantom_id) = self.phantom_id {
-            write!(f, "[{phantom_id}]")?;
-        }
-        Ok(())
+        write!(f, "{}({rendered})", self.agent_type)
     }
 }
 
@@ -410,119 +377,7 @@ pub enum InvocationStatus {
     Complete,
 }
 
-impl AgentId {
-    const AGENT_ID_MAX_LENGTH: usize = 512;
-
-    pub fn validate_length(id: &str) -> Result<(), String> {
-        if id.len() > Self::AGENT_ID_MAX_LENGTH {
-            Err(format!(
-                "Agent id is too long: {}, max length: {}, agent id: {}",
-                id.len(),
-                Self::AGENT_ID_MAX_LENGTH,
-                id,
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    pub fn from_agent_id(
-        component_id: ComponentId,
-        agent_id: &ParsedAgentKey,
-    ) -> Result<AgentId, String> {
-        let agent_id = agent_id.to_string();
-        Self::validate_length(&agent_id)?;
-        Ok(Self {
-            component_id,
-            agent_id,
-        })
-    }
-
-    pub fn from_agent_id_literal<S: AsRef<str>>(
-        component_id: ComponentId,
-        agent_id: S,
-        resolver: impl AgentTypeSchemaResolver,
-    ) -> Result<AgentId, String> {
-        Self::from_agent_id(component_id, &ParsedAgentKey::parse(agent_id, resolver)?)
-    }
-
-    pub fn from_component_metadata_and_agent_id<S: AsRef<str>>(
-        component_id: ComponentId,
-        component_metadata: &component_metadata::ComponentMetadata,
-        id: S,
-    ) -> Result<AgentId, String> {
-        if component_metadata.is_agent() {
-            Self::from_agent_id_literal(component_id, id, component_metadata)
-        } else {
-            let id = id.as_ref();
-            if id.len() > Self::AGENT_ID_MAX_LENGTH {
-                return Err(format!(
-                    "Legacy worker id is too long: {}, max length: {}, worker id: {}",
-                    id.len(),
-                    Self::AGENT_ID_MAX_LENGTH,
-                    id,
-                ));
-            }
-            if id.contains('/') {
-                return Err(format!(
-                    "Legacy worker id cannot contain '/', worker id: {}",
-                    id,
-                ));
-            }
-
-            Ok(AgentId {
-                component_id,
-                agent_id: id.to_string(),
-            })
-        }
-    }
-
-    pub fn from_agent_name_string<S: AsRef<str>>(
-        component_id: ComponentId,
-        id: S,
-    ) -> Result<AgentId, String> {
-        let id = id.as_ref();
-
-        match ParsedAgentKey::normalize_text(id) {
-            Ok(normalized) => {
-                if normalized.len() > Self::AGENT_ID_MAX_LENGTH {
-                    return Err(format!(
-                        "Agent id is too long: {}, max length: {}, agent id: {}",
-                        normalized.len(),
-                        Self::AGENT_ID_MAX_LENGTH,
-                        normalized,
-                    ));
-                }
-                Ok(AgentId {
-                    component_id,
-                    agent_id: normalized,
-                })
-            }
-            Err(_) => {
-                if id.len() > Self::AGENT_ID_MAX_LENGTH {
-                    return Err(format!(
-                        "Legacy worker id is too long: {}, max length: {}, worker id: {}",
-                        id.len(),
-                        Self::AGENT_ID_MAX_LENGTH,
-                        id,
-                    ));
-                }
-                if id.contains('/') {
-                    return Err(format!(
-                        "Legacy worker id cannot contain '/', worker id: {}",
-                        id,
-                    ));
-                }
-                Ok(AgentId {
-                    component_id,
-                    agent_id: id.to_string(),
-                })
-            }
-        }
-    }
-}
-
-/// Associates an agent-id with its owner project
+/// An agent ID with the environment that owns it
 #[derive(
     Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, BinaryCodec,
 )]
@@ -537,24 +392,21 @@ impl OwnedAgentId {
     pub fn new(environment_id: EnvironmentId, agent_id: &AgentId) -> Self {
         Self {
             environment_id,
-            agent_id: agent_id.clone(),
+            agent_id: *agent_id,
         }
     }
 
     pub fn agent_id(&self) -> AgentId {
-        self.agent_id.clone()
+        self.agent_id
     }
 
     pub fn environment_id(&self) -> EnvironmentId {
         self.environment_id
     }
 
-    pub fn component_id(&self) -> ComponentId {
-        self.agent_id.component_id
-    }
-
-    pub fn agent_name(&self) -> String {
-        self.agent_id.agent_id.clone()
+    /// The text key of the agent in every storage layer: `{env-uuid}/{agent-uuid}`.
+    pub fn storage_key(&self) -> String {
+        format!("{}/{}", self.environment_id, self.agent_id)
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {
@@ -564,7 +416,7 @@ impl OwnedAgentId {
 
 impl Display for OwnedAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.environment_id(), self.agent_id)
+        f.write_str(&self.storage_key())
     }
 }
 

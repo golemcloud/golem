@@ -34,8 +34,8 @@ use uuid::Uuid;
 
 /// Authoritative kind of an execution owner.
 ///
-/// This is persisted at creation time. In particular, an instance name that
-/// happens to use a reserved owner namespace never grants that authority.
+/// This is persisted at creation time. Owners other than component agents have the
+/// reserved type tag, which tells no kind apart, so only this value grants their authority.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
@@ -50,48 +50,19 @@ pub enum OwnerKind {
 }
 
 impl OwnerKind {
-    pub const EXTERNAL_TOOL_INSTANCE_PREFIX: &'static str = "~golem-external-tool-owner-";
-    pub const OPLOG_PROCESSOR_INSTANCE_PREFIX: &'static str = "~golem-oplog-processor-";
-
-    pub fn is_reserved_instance_name(name: &str) -> bool {
-        name.starts_with(Self::EXTERNAL_TOOL_INSTANCE_PREFIX)
-            || name.starts_with(Self::OPLOG_PROCESSOR_INSTANCE_PREFIX)
-    }
-
-    /// Derives the stable virtual owner name solely from ordinary request
-    /// idempotency. Input, deployment revision, credentials and incarnation
-    /// fingerprint deliberately do not participate.
-    pub fn external_tool_instance_name(
-        idempotency_key: &crate::base_model::IdempotencyKey,
-    ) -> String {
-        const NAMESPACE: Uuid = uuid::uuid!("29e775df-87cf-48aa-a53d-a1bc52e8f950");
-        let id = Uuid::new_v5(&NAMESPACE, idempotency_key.value.as_bytes());
-        format!("{}{id}", Self::EXTERNAL_TOOL_INSTANCE_PREFIX)
-    }
-
-    pub fn oplog_processor_instance_name(id: Uuid) -> String {
-        format!("{}{id}", Self::OPLOG_PROCESSOR_INSTANCE_PREFIX)
-    }
-
-    pub fn validate_instance_name(self, name: &str) -> Result<(), String> {
+    /// Component agents have their type's tag; the other owners have the reserved tag.
+    pub fn validate_agent_id(self, agent_id: &AgentId) -> Result<(), String> {
+        if !agent_id.is_issued() {
+            return Err(format!("{agent_id} is not a version 8 agent ID"));
+        }
+        let reserved = agent_id.type_tag() == crate::base_model::RESERVED_TYPE_TAG;
         match self {
-            Self::ComponentAgent if Self::is_reserved_instance_name(name) => {
-                Err("agent instance names in reserved owner namespaces are not allowed".to_string())
+            Self::ComponentAgent if reserved => {
+                Err("an agent ID with the reserved type tag belongs to no agent".to_string())
             }
-            Self::EphemeralExternalTool
-                if !name.starts_with(Self::EXTERNAL_TOOL_INSTANCE_PREFIX) =>
-            {
-                Err(
-                    "external-tool owner metadata does not agree with its reserved instance name"
-                        .to_string(),
-                )
-            }
-            Self::OplogProcessor if !name.starts_with(Self::OPLOG_PROCESSOR_INSTANCE_PREFIX) => {
-                Err(
-                    "oplog processor owner metadata does not agree with its reserved instance name"
-                        .to_string(),
-                )
-            }
+            Self::EphemeralExternalTool | Self::OplogProcessor if !reserved => Err(format!(
+                "a {self:?} owner must have the reserved type tag, got {agent_id}"
+            )),
             _ => Ok(()),
         }
     }
@@ -805,6 +776,7 @@ pub struct AgentHttpAuthDetails {
 )]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum Principal {
     Oidc(OidcPrincipal),
     Agent(AgentPrincipal),

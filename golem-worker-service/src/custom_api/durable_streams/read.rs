@@ -206,7 +206,7 @@ impl DurableStreamsHandler {
                 );
             }
             let read_request = ReadStreamSlotRequest {
-                agent_id: Some(agent_id.clone().into()),
+                agent_id: Some((*agent_id).into()),
                 environment_id: Some(route.route.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 route_scope: super::route_scope(route),
@@ -223,7 +223,7 @@ impl DurableStreamsHandler {
             result.body = ResponseBody::PoemBody {
                 body: sse_body(
                     self.worker_service.clone(),
-                    agent_id.clone(),
+                    *agent_id,
                     read_request,
                     read,
                     permit,
@@ -293,7 +293,7 @@ fn sse_body(
         (Some(first), read_request, (permit, active), false, cursor),
         move |(next, mut request, held, done, mut cursor)| {
             let service = service.clone();
-            let agent_id = agent_id.clone();
+            let agent_id = agent_id;
             async move {
                 if done {
                     return Ok(None);

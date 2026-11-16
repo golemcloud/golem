@@ -489,7 +489,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     {
                         let slot = (
                             record.attachment.producer_environment_id,
-                            record.attachment.producer.clone(),
+                            record.attachment.producer,
                             record.attachment.attachment_id,
                             record.attachment.stream_id,
                         );
@@ -510,7 +510,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     {
                         let slot = (
                             record.attachment.producer_environment_id,
-                            record.attachment.producer.clone(),
+                            record.attachment.producer,
                             record.attachment.attachment_id,
                             record.attachment.stream_id,
                         );
@@ -533,7 +533,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     StreamSessionRecord::ConsumerDeleting(StreamConsumerDeletingRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         consumer_environment_id: self.owned_agent_id.environment_id,
-                        consumer: self.owned_agent_id.agent_id.clone(),
+                        consumer: self.owned_agent_id.agent_id,
                         consumer_fingerprint: self.initial_worker_metadata.fingerprint,
                         deleting_at_millis: Timestamp::now_utc().to_millis(),
                     }),

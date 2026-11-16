@@ -64,7 +64,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ///
     /// The outer loop should either break or use the returned retry decision after the inner loop quits.
     pub async fn run(&mut self) -> InnerInvocationLoopResult {
-        let agent_id = self.owned_agent_id.agent_id.clone();
+        let agent_id = self.owned_agent_id.agent_id;
         debug!(%agent_id, "Invocation queue loop started");
 
         let mut final_decision = None;

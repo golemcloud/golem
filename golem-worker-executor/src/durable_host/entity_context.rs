@@ -139,10 +139,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .then(|| self.state.get_current_idempotency_key())
             .flatten()
             .map(|key| {
-                golem_common::model::OwnedInvocationId::new(
-                    self.state.owned_agent_id.agent_id.clone(),
-                    key,
-                )
+                golem_common::model::OwnedInvocationId::new(self.state.owned_agent_id.agent_id, key)
             });
     }
 
@@ -156,11 +153,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) fn invocation_principal(&self) -> Principal {
-        self.invocation_principal.clone().unwrap_or_else(|| {
-            Principal::Agent(AgentPrincipal {
-                agent_id: self.owned_agent_id.agent_id.clone(),
-            })
-        })
+        self.invocation_principal
+            .clone()
+            .unwrap_or(Principal::Agent(AgentPrincipal {
+                agent_id: self.owned_agent_id.agent_id,
+            }))
     }
 
     pub(crate) fn set_entity_cancellation(

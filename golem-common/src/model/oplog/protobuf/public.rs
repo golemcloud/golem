@@ -121,7 +121,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .map(|pr| pr.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
-                original_phantom_id: create.original_phantom_id.map(|id| id.into()),
+                agent_type_name: create
+                    .agent_type_name
+                    .map(crate::model::agent::AgentTypeName),
                 instance_id: create
                     .instance_id
                     .map(|id| id.into())
@@ -820,7 +822,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             .into_iter()
                             .map(Into::into)
                             .collect(),
-                        original_phantom_id: create.original_phantom_id.map(|id| id.into()),
+                        agent_type_name: create.agent_type_name.map(|name| name.0),
                         instance_id: Some(create.instance_id.into()),
                     },
                 )),
@@ -1895,6 +1897,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 timestamp: create.timestamp,
                 parameters: Box::new(CreateProjectionParameters {
                     agent_id: create.agent_id,
+                    agent_type_name: create.agent_type_name,
                     owner_kind: create.owner_kind,
                     agent_mode: create.agent_mode,
                     component_revision: create.component_revision,
@@ -1914,7 +1917,6 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                         .into_iter()
                         .map(|p| p.environment_plugin_grant_id)
                         .collect(),
-                    original_phantom_id: create.original_phantom_id,
                     instance_id: create.instance_id,
                 }),
             }),

@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::base_model::ShardId;
+use crate::base_model::agent_id::H_BITS;
 use crate::model::agent::AgentTypeName;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::MetadataEnvelope;
@@ -22,7 +23,7 @@ use crate::schema::schema_value::SchemaValue;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeSet;
 use test_r::test;
-use uuid::uuid;
+use uuid::{Uuid, Variant, Version, uuid};
 
 const ENV: EnvironmentId = EnvironmentId(uuid!("6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"));
 const OTHER_ENV: EnvironmentId = EnvironmentId(uuid!("0e0d0c0b-0a09-4807-8605-040302010000"));
@@ -59,19 +60,23 @@ fn idempotency_key(value: &str) -> IdempotencyKey {
     IdempotencyKey::new(value.to_string())
 }
 
+const CALLER_FINGERPRINT: AgentFingerprint =
+    AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000005"));
+const COMPONENT: ComponentId = ComponentId(uuid!("11111111-2222-4333-8444-555555555555"));
+
 const PHANTOM_NAME: &str = r#"Counter("x")[0b6f2c4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f]"#;
 
-fn all_derivations() -> Vec<(&'static str, AgentUuid)> {
-    let root = AgentUuid::keyed(ENV, type_id(7), &key("alice", 42));
+fn all_derivations() -> Vec<(&'static str, AgentId)> {
+    let root = AgentId::keyed(ENV, type_id(7), &key("alice", 42));
     vec![
         ("keyed", root),
         (
             "idempotent_create",
-            AgentUuid::idempotent_create(ENV, type_id(7), "user:acct-1", &idempotency_key("key-1")),
+            AgentId::idempotent_create(ENV, type_id(7), "user:acct-1", &idempotency_key("key-1")),
         ),
         (
             "ephemeral_invocation",
-            AgentUuid::ephemeral_invocation(
+            AgentId::ephemeral_invocation(
                 ENV,
                 type_id(7),
                 "user:acct-1",
@@ -80,15 +85,23 @@ fn all_derivations() -> Vec<(&'static str, AgentUuid)> {
         ),
         (
             "durable_stream_fork",
-            AgentUuid::durable_stream_fork(ENV, root, "fork-a"),
+            AgentId::durable_stream_fork(ENV, root, "fork-a"),
         ),
         (
             "durable_stream_session",
-            AgentUuid::durable_stream_session(ENV, type_id(7), "route:api/stream", "session-1"),
+            AgentId::durable_stream_session(ENV, type_id(7), "route:api/stream", "session-1"),
         ),
         (
             "imported_phantom",
-            AgentUuid::imported_phantom(ENV, type_id(7), PHANTOM_NAME),
+            AgentId::imported_phantom(ENV, type_id(7), PHANTOM_NAME),
+        ),
+        (
+            "allocated",
+            AgentId::allocated(ENV, 7, root, CALLER_FINGERPRINT, &idempotency_key("call-1")),
+        ),
+        (
+            "external_tool_owner",
+            AgentId::external_tool_owner(ENV, COMPONENT, "user:acct-1", &idempotency_key("key-1")),
         ),
     ]
 }
@@ -125,13 +138,21 @@ fn golden_vectors() {
                 "imported_phantom",
                 "00000007-863e-802f-8498-562366a23c83".to_string()
             ),
+            (
+                "allocated",
+                "00000007-5161-8feb-b559-215f1122f82b".to_string()
+            ),
+            (
+                "external_tool_owner",
+                "00000000-90c3-8c0e-af62-fab4e5dfdaaf".to_string()
+            ),
         ]
     );
 }
 
 #[test]
 fn the_same_inputs_to_different_derivations_give_different_ids() {
-    let ids: BTreeSet<AgentUuid> = all_derivations().into_iter().map(|(_, id)| id).collect();
+    let ids: BTreeSet<AgentId> = all_derivations().into_iter().map(|(_, id)| id).collect();
     assert_eq!(ids.len(), all_derivations().len());
 }
 
@@ -144,16 +165,16 @@ fn derivations_are_deterministic() {
 fn variable_length_inputs_are_length_prefixed() {
     let key = |value: &str| idempotency_key(value);
     assert_ne!(
-        AgentUuid::idempotent_create(ENV, type_id(7), "ab", &key("c")),
-        AgentUuid::idempotent_create(ENV, type_id(7), "a", &key("bc")),
+        AgentId::idempotent_create(ENV, type_id(7), "ab", &key("c")),
+        AgentId::idempotent_create(ENV, type_id(7), "a", &key("bc")),
     );
     assert_ne!(
-        AgentUuid::ephemeral_invocation(ENV, type_id(7), "ab", &key("c")),
-        AgentUuid::ephemeral_invocation(ENV, type_id(7), "a", &key("bc")),
+        AgentId::ephemeral_invocation(ENV, type_id(7), "ab", &key("c")),
+        AgentId::ephemeral_invocation(ENV, type_id(7), "a", &key("bc")),
     );
     assert_ne!(
-        AgentUuid::durable_stream_session(ENV, type_id(7), "ab", "c"),
-        AgentUuid::durable_stream_session(ENV, type_id(7), "a", "bc"),
+        AgentId::durable_stream_session(ENV, type_id(7), "ab", "c"),
+        AgentId::durable_stream_session(ENV, type_id(7), "a", "bc"),
     );
 }
 
@@ -161,41 +182,37 @@ fn variable_length_inputs_are_length_prefixed() {
 fn environment_and_type_are_part_of_every_typed_derivation() {
     let alice = key("alice", 42);
     assert_ne!(
-        AgentUuid::keyed(ENV, type_id(7), &alice),
-        AgentUuid::keyed(OTHER_ENV, type_id(7), &alice)
+        AgentId::keyed(ENV, type_id(7), &alice),
+        AgentId::keyed(OTHER_ENV, type_id(7), &alice)
     );
     assert_ne!(
-        AgentUuid::keyed(ENV, type_id(7), &alice)
-            .as_uuid()
-            .as_bytes()[4..],
-        AgentUuid::keyed(ENV, type_id(8), &alice)
-            .as_uuid()
-            .as_bytes()[4..],
+        AgentId::keyed(ENV, type_id(7), &alice).as_uuid().as_bytes()[4..],
+        AgentId::keyed(ENV, type_id(8), &alice).as_uuid().as_bytes()[4..],
         "the type ID must be hashed, not only used as the tag"
     );
     assert_ne!(
-        AgentUuid::idempotent_create(ENV, type_id(7), "s", &idempotency_key("k")),
-        AgentUuid::idempotent_create(OTHER_ENV, type_id(7), "s", &idempotency_key("k"))
+        AgentId::idempotent_create(ENV, type_id(7), "s", &idempotency_key("k")),
+        AgentId::idempotent_create(OTHER_ENV, type_id(7), "s", &idempotency_key("k"))
     );
     assert_ne!(
-        AgentUuid::durable_stream_session(ENV, type_id(7), "r", "s"),
-        AgentUuid::durable_stream_session(OTHER_ENV, type_id(7), "r", "s")
+        AgentId::durable_stream_session(ENV, type_id(7), "r", "s"),
+        AgentId::durable_stream_session(OTHER_ENV, type_id(7), "r", "s")
     );
     assert_ne!(
-        AgentUuid::durable_stream_session(ENV, type_id(7), "r", "s"),
-        AgentUuid::durable_stream_session(ENV, type_id(8), "r", "s")
+        AgentId::durable_stream_session(ENV, type_id(7), "r", "s"),
+        AgentId::durable_stream_session(ENV, type_id(8), "r", "s")
     );
     assert_ne!(
-        AgentUuid::imported_phantom(ENV, type_id(7), PHANTOM_NAME),
-        AgentUuid::imported_phantom(OTHER_ENV, type_id(7), PHANTOM_NAME)
+        AgentId::imported_phantom(ENV, type_id(7), PHANTOM_NAME),
+        AgentId::imported_phantom(OTHER_ENV, type_id(7), PHANTOM_NAME)
     );
 }
 
 #[test]
 fn keyed_ids_depend_on_the_key() {
-    let ids: BTreeSet<AgentUuid> = [key("alice", 42), key("alice", 43), key("bob", 42)]
+    let ids: BTreeSet<AgentId> = [key("alice", 42), key("alice", 43), key("bob", 42)]
         .iter()
-        .map(|k| AgentUuid::keyed(ENV, type_id(7), k))
+        .map(|k| AgentId::keyed(ENV, type_id(7), k))
         .collect();
     assert_eq!(ids.len(), 3);
 }
@@ -204,28 +221,94 @@ fn keyed_ids_depend_on_the_key() {
 fn ids_are_version_8_and_carry_their_tag() {
     for tag in [0, 1, u32::MAX] {
         for h in [0, H_MASK, 0x2AA_AAAA_AAAA_AAAA_AAAA_AAAA] {
-            let id = AgentUuid::from_parts(tag, h);
+            let id = AgentId::from_parts(tag, h);
             assert_eq!(id.as_uuid().get_version(), Some(Version::Custom));
             assert_eq!(id.as_uuid().get_variant(), Variant::RFC4122);
             assert_eq!(id.type_tag(), tag);
             assert_eq!(id.h(), h);
-            assert_eq!(AgentUuid::try_from(id.as_uuid()), Ok(id));
+            assert_eq!(id.to_string().parse::<AgentId>(), Ok(id));
         }
     }
     assert_eq!(
-        AgentUuid::from_parts(u32::MAX, 0).to_string(),
+        AgentId::from_parts(u32::MAX, 0).to_string(),
         "ffffffff-0000-8000-8000-000000000000"
     );
     assert_eq!(
-        AgentUuid::from_parts(1, H_MASK).to_string(),
+        AgentId::from_parts(1, H_MASK).to_string(),
         "00000001-ffff-8fff-bfff-ffffffffffff"
     );
 }
 
 #[test]
-fn other_uuid_versions_are_rejected() {
-    assert!(AgentUuid::try_from(Uuid::new_v4()).is_err());
-    assert!(AgentUuid::try_from(Uuid::nil()).is_err());
+fn every_bit_of_h_has_its_own_uuid_bit() {
+    let zero = AgentId::from_parts(0, 0).as_uuid().as_u128();
+    let mut seen = 0u128;
+    for bit in 0..H_BITS {
+        let id = AgentId::from_parts(0, 1 << bit);
+        assert_eq!(id.h(), 1 << bit);
+        let changed = id.as_uuid().as_u128() ^ zero;
+        assert_eq!(changed.count_ones(), 1, "bit {bit}");
+        assert_eq!(changed & seen, 0, "bit {bit}");
+        seen |= changed;
+    }
+    assert_eq!(seen.count_ones(), H_BITS);
+    assert_eq!(seen >> 96, 0, "H never reaches the tag");
+}
+
+#[test]
+fn the_reserved_tag_has_no_type_id() {
+    assert_eq!(AgentId::from_parts(RESERVED_TYPE_TAG, 5).type_id(), None);
+    assert_eq!(AgentId::random_reserved().type_tag(), RESERVED_TYPE_TAG);
+    assert_eq!(AgentId::from_parts(7, 5).type_id(), Some(type_id(7)));
+    assert_eq!(
+        AgentId::external_tool_owner(ENV, COMPONENT, "s", &idempotency_key("k")).type_id(),
+        None
+    );
+}
+
+#[test]
+fn allocated_ids_depend_on_every_input() {
+    let root = AgentId::keyed(ENV, type_id(7), &key("alice", 42));
+    let other = AgentId::keyed(ENV, type_id(7), &key("bob", 42));
+    let call = idempotency_key("call-1");
+    let id = AgentId::allocated(ENV, 9, root, CALLER_FINGERPRINT, &call);
+    assert_eq!(id.type_tag(), 9);
+    assert_eq!(
+        id,
+        AgentId::allocated(ENV, 9, root, CALLER_FINGERPRINT, &call)
+    );
+    let others = [
+        AgentId::allocated(OTHER_ENV, 9, root, CALLER_FINGERPRINT, &call),
+        AgentId::allocated(ENV, 8, root, CALLER_FINGERPRINT, &call),
+        AgentId::allocated(ENV, 9, other, CALLER_FINGERPRINT, &call),
+        AgentId::allocated(ENV, 9, root, AgentFingerprint(Uuid::from_u128(6)), &call),
+        AgentId::allocated(ENV, 9, root, CALLER_FINGERPRINT, &idempotency_key("call-2")),
+    ];
+    for other in others {
+        assert_ne!(
+            other.as_uuid().as_bytes()[4..],
+            id.as_uuid().as_bytes()[4..]
+        );
+    }
+}
+
+#[test]
+fn external_tool_owners_depend_on_every_input() {
+    let key = idempotency_key("key-1");
+    let id = AgentId::external_tool_owner(ENV, COMPONENT, "user:a", &key);
+    let others = [
+        AgentId::external_tool_owner(OTHER_ENV, COMPONENT, "user:a", &key),
+        AgentId::external_tool_owner(ENV, ComponentId(Uuid::from_u128(1)), "user:a", &key),
+        AgentId::external_tool_owner(ENV, COMPONENT, "user:b", &key),
+        AgentId::external_tool_owner(ENV, COMPONENT, "user:a", &idempotency_key("key-2")),
+    ];
+    for other in others {
+        assert_ne!(other, id);
+    }
+    assert_ne!(
+        AgentId::external_tool_owner(ENV, COMPONENT, "ab", &idempotency_key("c")),
+        AgentId::external_tool_owner(ENV, COMPONENT, "a", &idempotency_key("bc")),
+    );
 }
 
 #[test]
@@ -234,7 +317,7 @@ fn shards_come_from_the_hash_bits() {
     const KEYS: usize = 10_000;
     let mut counts = [0usize; SHARDS];
     for i in 0..KEYS {
-        let id = AgentUuid::keyed(ENV, type_id(7), &key(&format!("key-{i}"), 0));
+        let id = AgentId::keyed(ENV, type_id(7), &key(&format!("key-{i}"), 0));
         counts[ShardId::from_routing_hash(id.routing_hash(), SHARDS).value() as usize] += 1;
     }
     let mean = KEYS / SHARDS;
@@ -249,16 +332,25 @@ fn shards_come_from_the_hash_bits() {
 #[test]
 fn routing_hash_ignores_the_tag() {
     assert_eq!(
-        AgentUuid::from_parts(1, 0x1234_5678).routing_hash(),
-        AgentUuid::from_parts(2, 0x1234_5678).routing_hash()
+        AgentId::from_parts(1, 0x1234_5678).routing_hash(),
+        AgentId::from_parts(2, 0x1234_5678).routing_hash()
     );
-    assert!(AgentUuid::from_parts(0, H_MASK).routing_hash() >= 0);
+    assert_eq!(AgentId::from_parts(0, H_MASK).routing_hash(), i64::MAX);
+    assert_eq!(
+        AgentId::from_parts(0, 1 << (H_BITS - 1)).routing_hash(),
+        1 << 62
+    );
+    assert_eq!(AgentId::from_parts(0, 1 << (H_BITS - 63)).routing_hash(), 1);
+    assert_eq!(
+        AgentId::from_parts(u32::MAX, (1 << (H_BITS - 63)) - 1).routing_hash(),
+        0
+    );
 }
 
 #[test]
 fn random_ids_carry_the_tag_and_differ() {
-    let a = AgentUuid::random(type_id(9));
-    let b = AgentUuid::random(type_id(9));
+    let a = AgentId::random(type_id(9));
+    let b = AgentId::random(type_id(9));
     assert_eq!(a.type_tag(), 9);
     assert_eq!(b.type_tag(), 9);
     assert_ne!(a, b);
@@ -266,47 +358,47 @@ fn random_ids_carry_the_tag_and_differ() {
 
 #[test]
 fn durable_stream_forks() {
-    let root = AgentUuid::keyed(ENV, type_id(7), &key("alice", 42));
-    let other_root = AgentUuid::keyed(ENV, type_id(7), &key("bob", 42));
-    let fork = AgentUuid::durable_stream_fork(ENV, root, "fork-a");
+    let root = AgentId::keyed(ENV, type_id(7), &key("alice", 42));
+    let other_root = AgentId::keyed(ENV, type_id(7), &key("bob", 42));
+    let fork = AgentId::durable_stream_fork(ENV, root, "fork-a");
     assert_eq!(fork.type_tag(), root.type_tag());
-    assert_eq!(fork, AgentUuid::durable_stream_fork(ENV, root, "fork-a"));
-    assert_ne!(fork, AgentUuid::durable_stream_fork(ENV, root, "fork-b"));
+    assert_eq!(fork, AgentId::durable_stream_fork(ENV, root, "fork-a"));
+    assert_ne!(fork, AgentId::durable_stream_fork(ENV, root, "fork-b"));
     assert_ne!(
         fork,
-        AgentUuid::durable_stream_fork(ENV, other_root, "fork-a")
+        AgentId::durable_stream_fork(ENV, other_root, "fork-a")
     );
     assert_ne!(
         fork,
-        AgentUuid::durable_stream_fork(OTHER_ENV, root, "fork-a")
+        AgentId::durable_stream_fork(OTHER_ENV, root, "fork-a")
     );
     assert_ne!(fork, root);
-    let tagged_root = AgentUuid::from_parts(u32::MAX, 5);
+    let tagged_root = AgentId::from_parts(u32::MAX, 5);
     assert_eq!(
-        AgentUuid::durable_stream_fork(ENV, tagged_root, "fork-a").type_tag(),
+        AgentId::durable_stream_fork(ENV, tagged_root, "fork-a").type_tag(),
         u32::MAX
     );
 }
 
 #[test]
 fn durable_stream_sessions() {
-    let session = AgentUuid::durable_stream_session(ENV, type_id(7), "route-a", "s-1");
+    let session = AgentId::durable_stream_session(ENV, type_id(7), "route-a", "s-1");
     assert_eq!(session.type_tag(), 7);
     assert_eq!(
         session,
-        AgentUuid::durable_stream_session(ENV, type_id(7), "route-a", "s-1")
+        AgentId::durable_stream_session(ENV, type_id(7), "route-a", "s-1")
     );
     assert_ne!(
         session,
-        AgentUuid::durable_stream_session(ENV, type_id(7), "route-a", "s-2")
+        AgentId::durable_stream_session(ENV, type_id(7), "route-a", "s-2")
     );
     assert_ne!(
         session,
-        AgentUuid::durable_stream_session(ENV, type_id(7), "route-b", "s-1")
+        AgentId::durable_stream_session(ENV, type_id(7), "route-b", "s-1")
     );
     assert_ne!(
         session,
-        AgentUuid::ephemeral_invocation(ENV, type_id(7), "route-a", &idempotency_key("s-1"))
+        AgentId::ephemeral_invocation(ENV, type_id(7), "route-a", &idempotency_key("s-1"))
     );
 }
 
@@ -320,13 +412,13 @@ fn imported_phantoms_hash_the_whole_stored_name() {
         r#"Counter(m[("a",1),("b",2)])[0b6f2c4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f]"#,
         r#"Counter(m[("b",2),("a",1)])[0b6f2c4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f]"#,
     ];
-    let ids: BTreeSet<AgentUuid> = names
+    let ids: BTreeSet<AgentId> = names
         .iter()
-        .map(|name| AgentUuid::imported_phantom(ENV, type_id(7), name))
+        .map(|name| AgentId::imported_phantom(ENV, type_id(7), name))
         .collect();
     assert_eq!(ids.len(), names.len());
     assert_eq!(
-        AgentUuid::imported_phantom(ENV, type_id(7), PHANTOM_NAME),
-        AgentUuid::imported_phantom(ENV, type_id(7), PHANTOM_NAME)
+        AgentId::imported_phantom(ENV, type_id(7), PHANTOM_NAME),
+        AgentId::imported_phantom(ENV, type_id(7), PHANTOM_NAME)
     );
 }

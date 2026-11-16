@@ -29,7 +29,6 @@ use golem_schema::Empty;
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
-use uuid::Uuid;
 
 // --- Builders / convenience ---
 
@@ -165,28 +164,12 @@ fn sample_parameters() -> TypedSchemaValue {
 
 proptest! {
     #[test]
-    fn parsed_agent_id_phantom_id_round_trips(
-        phantom_present in any::<bool>(),
-    ) {
-        let phantom_id = phantom_present.then(Uuid::new_v4);
-        let id = ParsedAgentKey::new(
-            AgentTypeName("weather-agent".into()),
-            sample_parameters(),
-            phantom_id,
-        );
-        let json = serde_json::to_string(&id).unwrap();
-        let back: ParsedAgentKey = serde_json::from_str(&json).unwrap();
-        prop_assert_eq!(back, id);
-    }
-
-    #[test]
     fn parsed_agent_id_agent_type_round_trips(
         type_name in "[a-z][a-z0-9-]{0,32}",
     ) {
         let id = ParsedAgentKey::new(
             AgentTypeName(type_name),
             sample_parameters(),
-            None,
         );
         let json = serde_json::to_string(&id).unwrap();
         let back: ParsedAgentKey = serde_json::from_str(&json).unwrap();
@@ -199,29 +182,10 @@ proptest! {
 #[test]
 fn parsed_agent_id_rejects_missing_parameters() {
     let raw = json!({
-        "agent_type": "weather-agent",
-        "phantom_id": null
+        "agent_type": "weather-agent"
     });
     let res: Result<ParsedAgentKey, _> = serde_json::from_value(raw);
     assert!(res.is_err());
-}
-
-#[test]
-fn parsed_agent_id_accepts_absent_phantom_id() {
-    let parameters = TypedSchemaValue::new(
-        crate::schema::graph::SchemaGraph::anonymous(SchemaType::string()),
-        SchemaValue::String("alice".into()),
-    );
-    let json = serde_json::to_value(ParsedAgentKey::new(
-        AgentTypeName("weather-agent".into()),
-        parameters.clone(),
-        None,
-    ))
-    .unwrap();
-    let mut obj = json.as_object().unwrap().clone();
-    obj.remove("phantom_id");
-    let back: ParsedAgentKey = serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
-    assert!(back.phantom_id.is_none());
 }
 
 // --- SchemaGraph::empty() and agent-layer carrier ---

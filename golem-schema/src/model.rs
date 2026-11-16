@@ -277,16 +277,24 @@ impl From<CardId> for Uuid {
     )
 )]
 pub struct AgentId {
-    pub component_id: ComponentId,
-    pub agent_id: String,
+    pub uuid: Uuid,
 }
 
 impl AgentId {
-    pub fn new(component_id: ComponentId, agent_id: String) -> Self {
-        Self {
-            component_id,
-            agent_id,
-        }
+    pub fn new(uuid: Uuid) -> Self {
+        Self { uuid }
+    }
+}
+
+impl From<Uuid> for AgentId {
+    fn from(uuid: Uuid) -> Self {
+        Self::new(uuid)
+    }
+}
+
+impl From<AgentId> for Uuid {
+    fn from(value: AgentId) -> Self {
+        value.uuid
     }
 }
 

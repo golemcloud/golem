@@ -975,6 +975,6 @@ pub(in crate::durable_host) fn prepare_failure(
         error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
         | WorkerExecutorError::PreviousInvocationExited
         | WorkerExecutorError::Interrupted { .. }) => error,
-        error => WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), error),
+        error => WorkerExecutorError::failed_to_resume_worker(*agent_id, error),
     }
 }

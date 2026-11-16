@@ -104,18 +104,14 @@ impl From<golem_schema::schema::wit::wire::AccountId> for AccountId {
 impl From<AgentId> for golem_schema::schema::wit::wire::AgentId {
     fn from(value: AgentId) -> Self {
         Self {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
+            uuid: uuid_to_core2(value.0),
         }
     }
 }
 
 impl From<golem_schema::schema::wit::wire::AgentId> for AgentId {
     fn from(value: golem_schema::schema::wit::wire::AgentId) -> Self {
-        AgentId {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
-        }
+        AgentId(uuid_from_core2(value.uuid))
     }
 }
 

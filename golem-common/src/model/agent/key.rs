@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use super::structural_format::{
     StructuralFormatError, format_structural_typed, normalize_structural, parse_structural_typed,
 };
-use super::{AgentTypeName, AgentTypeSchemaResolver, parse_agent_id_parts};
+use super::{AgentTypeName, AgentTypeSchemaResolver, parse_agent_key_parts};
 use crate::schema::AgentTypeSchema;
 use crate::schema::graph::TypedSchemaValue;
 
@@ -36,13 +36,24 @@ pub struct AgentKey {
 }
 
 impl AgentKey {
+    /// The maximum length in bytes of the canonical `Type(params)` text.
+    pub const MAX_LENGTH: usize = 512;
+
     /// Fails when the parameters have no canonical text, for example a map with
-    /// duplicate keys or a value whose payload does not match its case.
+    /// duplicate keys or a value whose payload does not match its case, and when the
+    /// canonical text is longer than [`Self::MAX_LENGTH`] bytes.
     pub fn new(
         agent_type: AgentTypeName,
         parameters: TypedSchemaValue,
     ) -> Result<Self, StructuralFormatError> {
         let canonical_params = format_structural_typed(&parameters)?;
+        let length = agent_type.0.len() + canonical_params.len() + 2;
+        if length > Self::MAX_LENGTH {
+            return Err(StructuralFormatError::KeyTooLong {
+                length,
+                max_length: Self::MAX_LENGTH,
+            });
+        }
         Ok(Self {
             agent_type,
             parameters,
@@ -57,10 +68,7 @@ impl AgentKey {
         s: &str,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<(Self, AgentTypeSchema), String> {
-        let (agent_type_name, param_list, phantom_id) = parse_agent_id_parts(s)?;
-        if phantom_id.is_some() {
-            return Err(format!("An agent key has no phantom ID suffix, got: {s}"));
-        }
+        let (agent_type_name, param_list) = parse_agent_key_parts(s)?;
         Self::parse_parts(agent_type_name, param_list, resolver)
     }
 

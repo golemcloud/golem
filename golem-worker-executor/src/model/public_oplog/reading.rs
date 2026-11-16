@@ -540,7 +540,7 @@ pub fn check_oplog_cursor_query(
     match cursor {
         Some(cursor) if cursor.query_hash != OplogCursor::query_hash(query) => {
             Err(WorkerExecutorError::StaleCursor {
-                agent_id: owned_agent_id.agent_id.clone(),
+                agent_id: owned_agent_id.agent_id,
                 next_oplog_index: OplogIndex::from_u64(cursor.next_oplog_index),
                 reason: StaleCursorReason::QueryMismatch,
             })
@@ -572,7 +572,7 @@ pub async fn oplog_page_start(
                 .await?;
             if cursor.next_oplog_index > last_index.as_u64() {
                 return Err(WorkerExecutorError::StaleCursor {
-                    agent_id: owned_agent_id.agent_id.clone(),
+                    agent_id: owned_agent_id.agent_id,
                     next_oplog_index: OplogIndex::from_u64(cursor.next_oplog_index),
                     reason: StaleCursorReason::PastEnd {
                         last_oplog_index: last_index,

@@ -26,7 +26,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(self
             .current_invocation_id()
             .map(|invocation_id| CurrentInvocationId {
-                owner: wire::InvocationOwner::Agent(invocation_id.agent_id().clone().into()),
+                owner: wire::InvocationOwner::Agent((*invocation_id.agent_id()).into()),
                 id: invocation_id.uuid().into(),
             }))
     }

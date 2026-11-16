@@ -12,36 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Agent IDs: RFC 9562 version 8 UUIDs that carry the agent's type tag.
-//!
-//! Layout of the 122 free bits, in UUID byte order:
-//!
-//! - the 32-bit type tag, big-endian, in the leading bits of `custom_a` (the first
-//!   8 hex characters of the UUID text);
-//! - H, 90 bits, in the remaining 16 bits of `custom_a`, the 12 bits of `custom_b`
-//!   and the 62 bits of `custom_c`, most significant bit first.
+//! Derivations of agent IDs. The bit layout is documented on [`AgentId`].
 //!
 //! A derived H is the first 90 bits of a SHA-256 digest. Each derivation hashes its
 //! own domain tag first, and every variable-length input, the domain tag included,
-//! is a `u64` big-endian byte length followed by its bytes. Environment IDs and agent
-//! IDs are 16 raw bytes and type IDs are 4 big-endian bytes.
+//! is a `u64` big-endian byte length followed by its bytes. Environment IDs, agent
+//! IDs, component IDs and fingerprints are 16 raw bytes and type IDs are 4
+//! big-endian bytes.
 //!
-//! The derivations, their domain tags and this layout are part of every derived
+//! The derivations, their domain tags and the layout are part of every derived
 //! agent ID: changing any of them moves every such agent to another address. The
 //! golden tests of this module guard them.
 
-use std::fmt::{Display, Formatter};
-
 use sha2::{Digest, Sha256};
-use uuid::{Builder, Uuid, Variant, Version};
 
 use super::AgentKey;
-use crate::base_model::IdempotencyKey;
+use crate::base_model::agent_id::H_MASK;
+use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::type_id::TypeId;
-
-const H_BITS: u32 = 90;
-const H_MASK: u128 = (1 << H_BITS) - 1;
+use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, RESERVED_TYPE_TAG};
 
 const KEYED_DOMAIN: &str = "golem:agent-id:keyed:v1";
 const IDEMPOTENT_CREATE_DOMAIN: &str = "golem:agent-id:idempotent-create:v1";
@@ -49,11 +39,10 @@ const EPHEMERAL_INVOCATION_DOMAIN: &str = "golem:agent-id:ephemeral-invocation:v
 const DURABLE_STREAM_FORK_DOMAIN: &str = "golem:agent-id:durable-stream-fork:v1";
 const DURABLE_STREAM_SESSION_DOMAIN: &str = "golem:agent-id:durable-stream-session:v1";
 const IMPORTED_PHANTOM_DOMAIN: &str = "golem:agent-id:imported-phantom:v1";
+const ALLOCATED_DOMAIN: &str = "golem:agent-id:allocated:v1";
+const EXTERNAL_TOOL_OWNER_DOMAIN: &str = "golem:agent-id:external-tool-owner:v1";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AgentUuid(Uuid);
-
-impl AgentUuid {
+impl AgentId {
     /// The ID of the keyed agent that `key` selects. `type_id` must be the type ID
     /// of `key.agent_type()`; the type name is not part of the hash.
     pub fn keyed(environment_id: EnvironmentId, type_id: TypeId, key: &AgentKey) -> Self {
@@ -107,14 +96,14 @@ impl AgentUuid {
     /// The ID of a Durable Streams fork. It carries the root's type tag.
     pub fn durable_stream_fork(
         environment_id: EnvironmentId,
-        root: AgentUuid,
+        root: AgentId,
         fork_name: &str,
     ) -> Self {
         Self::from_parts(
             root.type_tag(),
             HashInput::new(DURABLE_STREAM_FORK_DOMAIN)
                 .environment(environment_id)
-                .fixed(root.0.as_bytes())
+                .fixed(root.as_uuid().as_bytes())
                 .variable(fork_name.as_bytes())
                 .h(),
         )
@@ -160,68 +149,60 @@ impl AgentUuid {
         Self::from_parts(type_id.get(), rand::random::<u128>() & H_MASK)
     }
 
-    /// The leading 32 bits. Tag 0 is reserved and belongs to no type.
-    pub fn type_tag(&self) -> u32 {
-        let b = self.0.as_bytes();
-        u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+    /// The ID that the host allocates inside an agent for a fork or a create without a
+    /// key. `call_key` is the idempotency key of the durable host call, derived from its
+    /// position in the caller's oplog, so a replay of the call allocates the same ID and
+    /// a repeated call reaches the agent the first attempt made. No key is part of the
+    /// hash, so no upsert reaches the agent. `type_tag` is the source's tag for a fork
+    /// and the target type's tag for a create; the hash includes it.
+    pub fn allocated(
+        environment_id: EnvironmentId,
+        type_tag: u32,
+        caller: AgentId,
+        caller_fingerprint: AgentFingerprint,
+        call_key: &IdempotencyKey,
+    ) -> Self {
+        Self::from_parts(
+            type_tag,
+            HashInput::new(ALLOCATED_DOMAIN)
+                .environment(environment_id)
+                .fixed(&type_tag.to_be_bytes())
+                .fixed(caller.as_uuid().as_bytes())
+                .fixed(caller_fingerprint.0.as_bytes())
+                .variable(call_key.value.as_bytes())
+                .h(),
+        )
     }
 
-    /// A non-negative shard routing hash: the top 63 bits of H, never the type tag,
-    /// so the agents of one type spread over every shard.
-    pub fn routing_hash(&self) -> i64 {
-        (self.h() >> (H_BITS - 63)) as i64
+    /// The ID of the owner of a native tool called on a component instead of on an
+    /// agent. It has the reserved tag. A caller without a caller scope never reaches
+    /// this derivation: its idempotency key is ignored, and it gets
+    /// [`Self::random_reserved`]. The first-class tools work replaces these owners.
+    pub fn external_tool_owner(
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        caller_scope: &str,
+        idempotency_key: &IdempotencyKey,
+    ) -> Self {
+        Self::from_parts(
+            RESERVED_TYPE_TAG,
+            HashInput::new(EXTERNAL_TOOL_OWNER_DOMAIN)
+                .environment(environment_id)
+                .fixed(component_id.0.as_bytes())
+                .variable(caller_scope.as_bytes())
+                .variable(idempotency_key.value.as_bytes())
+                .h(),
+        )
     }
 
-    pub fn as_uuid(&self) -> Uuid {
-        self.0
+    /// A fresh ID with the reserved tag, for an external-tool owner of a caller without
+    /// a caller scope and for an oplog processor.
+    pub fn random_reserved() -> Self {
+        Self::from_parts(RESERVED_TYPE_TAG, rand::random::<u128>() & H_MASK)
     }
 
     fn typed(type_id: TypeId, input: HashInput) -> Self {
         Self::from_parts(type_id.get(), input.h())
-    }
-
-    fn from_parts(type_tag: u32, h: u128) -> Self {
-        debug_assert_eq!(h & !H_MASK, 0);
-        let mut bytes = [0u8; 16];
-        bytes[0..4].copy_from_slice(&type_tag.to_be_bytes());
-        bytes[4..6].copy_from_slice(&((h >> 74) as u16).to_be_bytes());
-        let custom_b = ((h >> 62) & 0xFFF) as u16;
-        bytes[6] = (custom_b >> 8) as u8;
-        bytes[7] = custom_b as u8;
-        let custom_c = (h & ((1 << 62) - 1)) as u64;
-        bytes[8..16].copy_from_slice(&custom_c.to_be_bytes());
-        Self(Builder::from_custom_bytes(bytes).into_uuid())
-    }
-
-    fn h(&self) -> u128 {
-        let b = self.0.as_bytes();
-        let custom_a = u128::from(u16::from_be_bytes([b[4], b[5]]));
-        let custom_b = (u128::from(b[6] & 0x0F) << 8) | u128::from(b[7]);
-        let mut c = [0u8; 8];
-        c.copy_from_slice(&b[8..16]);
-        c[0] &= 0x3F;
-        let custom_c = u128::from(u64::from_be_bytes(c));
-        (custom_a << 74) | (custom_b << 62) | custom_c
-    }
-}
-
-impl TryFrom<Uuid> for AgentUuid {
-    type Error = String;
-
-    fn try_from(value: Uuid) -> Result<Self, Self::Error> {
-        if value.get_version() == Some(Version::Custom) && value.get_variant() == Variant::RFC4122 {
-            Ok(Self(value))
-        } else {
-            Err(format!(
-                "Agent ID {value} is not an RFC 9562 version 8 UUID"
-            ))
-        }
-    }
-}
-
-impl Display for AgentUuid {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
 
@@ -255,7 +236,7 @@ impl HashInput {
         let digest = self.0.finalize();
         let mut first = [0u8; 16];
         first.copy_from_slice(&digest[..16]);
-        u128::from_be_bytes(first) >> (128 - H_BITS)
+        u128::from_be_bytes(first) >> (128 - crate::base_model::agent_id::H_BITS)
     }
 }
 
