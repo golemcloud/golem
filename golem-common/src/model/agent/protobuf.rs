@@ -736,12 +736,16 @@ impl From<ToolPrincipal> for golem_api_grpc::proto::golem::component::ToolPrinci
     }
 }
 
-impl From<golem_api_grpc::proto::golem::component::TokenProvenance> for TokenProvenance {
-    fn from(value: golem_api_grpc::proto::golem::component::TokenProvenance) -> Self {
-        Self {
-            id: value.id.unwrap_or_default().into(),
+impl TryFrom<golem_api_grpc::proto::golem::component::TokenProvenance> for TokenProvenance {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::TokenProvenance,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id.ok_or_else(|| missing("token id"))?.into(),
             maker: value.maker.map(|pair| PrincipalRef::new(pair.into())),
-        }
+        })
     }
 }
 
@@ -772,8 +776,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Caller> for Caller {
             tokens: value
                 .tokens
                 .into_iter()
-                .map(TokenProvenance::from)
-                .collect(),
+                .map(TokenProvenance::try_from)
+                .collect::<Result<_, _>>()?,
         })
     }
 }

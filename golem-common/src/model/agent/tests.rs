@@ -1277,6 +1277,21 @@ mod caller_protobuf_tests {
     }
 
     #[test]
+    fn caller_protobuf_refuses_a_token_without_an_id() {
+        let mut wire: proto::Caller = Caller {
+            tokens: vec![TokenProvenance {
+                id: uuid::Uuid::from_u128(1),
+                maker: None,
+            }],
+            ..sample_caller()
+        }
+        .into();
+        wire.tokens[0].id = None;
+        let error = Caller::try_from(wire).unwrap_err();
+        assert!(error.contains("id"), "{error}");
+    }
+
+    #[test]
     fn caller_protobuf_refuses_malformed_callers() {
         let valid: proto::Caller = sample_caller().into();
 
