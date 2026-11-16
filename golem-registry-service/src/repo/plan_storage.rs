@@ -47,8 +47,8 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use golem_common::model::plan_dimension::{
-    DeclaredBounds, DimensionBoundsError, EffectiveBounds, InstallationAvailability, PlanDimension,
-    resolve_effective_bounds,
+    DeclaredBounds, DeclaredMax, DimensionBoundsError, EffectiveBounds, InstallationAvailability,
+    PlanDimension, resolve_effective_bounds,
 };
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -224,6 +224,38 @@ fn validate_policy(policy: &PlanPolicy) -> Result<(), PlanStorageRepoError> {
                 });
             }
         }
+        if let Some(operating) = declaration.operating {
+            validate_default(*dimension, declaration.bounds, operating.default)?;
+        }
+    }
+    Ok(())
+}
+
+/// Checks that a default is a value of the dimension and lies within the declaration's own
+/// bounds. The default joins the chain as a level that declares it as both its minimum and its
+/// maximum, so the shared resolution reports a value outside the domain, a disallowed
+/// unlimited value and a default outside the bounds.
+fn validate_default(
+    dimension: PlanDimension,
+    bounds: DeclaredBounds,
+    default: DeclaredMax,
+) -> Result<(), PlanStorageRepoError> {
+    let default_level = DeclaredBounds {
+        min: match default {
+            DeclaredMax::Finite(value) => Some(value),
+            DeclaredMax::Unlimited => None,
+        },
+        max: Some(default),
+    };
+    resolve_effective_bounds(
+        dimension,
+        InstallationAvailability::Available,
+        &[Some(bounds), Some(default_level)],
+    )
+    .map_err(|error| PlanStorageRepoError::InvalidDefault { dimension, error })?;
+    // An unlimited level never tightens a finite maximum, so the resolution accepts it.
+    if default == DeclaredMax::Unlimited && matches!(bounds.max, Some(DeclaredMax::Finite(_))) {
+        return Err(PlanStorageRepoError::UnlimitedDefaultAboveMaximum { dimension });
     }
     Ok(())
 }
