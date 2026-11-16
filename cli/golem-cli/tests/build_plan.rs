@@ -97,6 +97,95 @@ fn build_check_does_not_upgrade_manifests_even_with_yes() {
 }
 
 #[test]
+fn stale_common_markers_survive_checks_and_requirement_refusals() {
+    use golem_cli::app::build::task_result_marker::TaskResult;
+    use golem_cli::app::template::AppTemplateRepo;
+    use golem_cli::model::app::Application;
+    use golem_cli::model::language::GuestLanguage;
+    use golem_common::base_model::application::ApplicationName;
+
+    let template = AppTemplateRepo::get(false)
+        .unwrap()
+        .common_on_demand_template(GuestLanguage::Rust)
+        .unwrap()
+        .as_ref()
+        .unwrap();
+    let mut changed_projects = Vec::new();
+    for yes in [false, true] {
+        for (missing, step) in [(false, "check"), (true, "check"), (true, "build")] {
+            let project = tempfile::tempdir().unwrap();
+            let config = tempfile::tempdir().unwrap();
+            let command = if missing {
+                "gc03-program-that-does-not-exist"
+            } else {
+                "cargo build --target wasm32-wasip2"
+            };
+            std::fs::write(project.path().join("golem.yaml"), format!(
+                "manifestVersion: 2.0.0\napp: stale-common\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:main:\n    templates: rust\n    presets:\n      debug:\n        build:\n          - command: {command}\n"
+            )).unwrap();
+            std::fs::write(
+                project.path().join("Cargo.toml"),
+                "[package]\nname = \"stale-common\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+            )
+            .unwrap();
+            let target = project
+                .path()
+                .join(Application::on_demand_common_dir_for_language(
+                    GuestLanguage::Rust,
+                ));
+            template
+                .generate(
+                    &ApplicationName("stale-common".into()),
+                    project.path(),
+                    &target,
+                )
+                .unwrap();
+            let marker_path = std::fs::read_dir(target.join(".golem-task-results"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let mut marker: TaskResult =
+                serde_json::from_slice(&std::fs::read(&marker_path).unwrap()).unwrap();
+            marker.cli_version = format!("{}-stale", marker.cli_version);
+            std::fs::write(&marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
+            let before = snapshot(project.path());
+            for attempt in 0..2 {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_golem-cli"));
+                command
+                    .current_dir(project.path())
+                    .arg("--config-dir")
+                    .arg(config.path());
+                if yes {
+                    command.arg("--yes");
+                }
+                let output = command.args(["build", "--step", step]).output().unwrap();
+                let text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(output.status.success(), !missing, "{text}");
+                if missing {
+                    assert!(
+                        text.contains("Build requires program 'gc03-program-that-does-not-exist'"),
+                        "{text}"
+                    );
+                }
+                if snapshot(project.path()) != before {
+                    changed_projects.push((yes, missing, step, attempt));
+                }
+            }
+        }
+    }
+    assert!(
+        changed_projects.is_empty(),
+        "project changed (yes, missing, step, attempt): {changed_projects:?}"
+    );
+}
+
+#[test]
 fn missing_or_unclassifiable_programs_fail_before_any_project_write() {
     for version in ["1.6.0", "2.0.0"] {
         for command in ["gc03-program-that-does-not-exist", "\"unterminated"] {

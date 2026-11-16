@@ -453,6 +453,15 @@ pub struct TaskResultMarker {
 
 impl TaskResultMarker {
     pub fn new<T: TaskResultMarkerHashSource>(dir: &Path, task: T) -> anyhow::Result<Self> {
+        let marker = Self::inspect(dir, task)?;
+        if marker.marker_file_path.exists() && !marker.is_up_to_date() {
+            fs::remove(&marker.marker_file_path)?;
+        }
+        Ok(marker)
+    }
+
+    /// Reads freshness without invalidating an existing marker.
+    pub fn inspect<T: TaskResultMarkerHashSource>(dir: &Path, task: T) -> anyhow::Result<Self> {
         let (hash_input, hash_hex) = match task.source()? {
             HashFromString(hash_input) => {
                 let mut hasher = blake3::Hasher::new();
@@ -469,23 +478,17 @@ impl TaskResultMarker {
             }
         };
 
-        let (marker_file_path, marker_file_exists, previous_result) =
+        let (marker_file_path, _marker_file_exists, previous_result) =
             Self::load_previous_result(dir, &id_hash_hex)?;
 
-        let task_result_marker = Self {
+        Ok(Self {
             kind: T::kind(),
             id,
             hash_input,
             marker_file_path,
             hash_hex,
             previous_result,
-        };
-
-        if marker_file_exists && !task_result_marker.is_up_to_date() {
-            fs::remove(&task_result_marker.marker_file_path)?;
-        }
-
-        Ok(task_result_marker)
+        })
     }
 
     pub fn get_hash<T: TaskResultMarkerHashSource>(
@@ -664,6 +667,7 @@ mod tests {
 
         let invalidated = marker();
         assert!(!invalidated.is_up_to_date());
+        assert!(!path.exists());
         invalidated.success().unwrap();
         assert!(marker().is_up_to_date());
     }

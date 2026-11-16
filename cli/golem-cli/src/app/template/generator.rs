@@ -191,7 +191,7 @@ pub(super) fn on_demand_common_marker(
                 blake3::hash(format!("{content_hash}\0{}", application_name.0).as_bytes())
                     .to_hex()
                     .to_string();
-            TaskResultMarker::new(
+            TaskResultMarker::inspect(
                 &target_path.join(".golem-task-results"),
                 OnDemandCommonTemplateMarkerHash {
                     content_hash: &content_hash,
@@ -862,9 +862,13 @@ mod tests {
         let mut marker: TaskResult =
             serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
         marker.cli_version = format!("{}-other", crate::version());
-        std::fs::write(marker_path, serde_json::to_string(&marker).unwrap()).unwrap();
+        let stale_marker = serde_json::to_string(&marker).unwrap();
+        std::fs::write(&marker_path, &stale_marker).unwrap();
+        assert!(!template.is_up_to_date(&name, &target).unwrap());
+        assert_eq!(std::fs::read_to_string(&marker_path).unwrap(), stale_marker);
         generate("generated-app");
         assert_eq!(std::fs::read_to_string(&manifest).unwrap(), generated);
+        assert!(template.is_up_to_date(&name, &target).unwrap());
         generate("renamed-app");
         let renamed = std::fs::read_to_string(&manifest).unwrap();
         assert!(renamed.contains("/build/renamed-app/"));
