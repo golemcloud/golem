@@ -30,7 +30,7 @@ import java.util.UUID
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
 
