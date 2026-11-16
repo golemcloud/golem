@@ -595,7 +595,7 @@ impl Walker<'_, '_> {
                         .build(),
                 )
             }
-            PublicAgentInvocation::SaveSnapshot(golem_common::model::Empty {}) => None,
+            PublicAgentInvocation::SaveSnapshot(golem_schema::Empty {}) => None,
             PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters { snapshot }) => Some(
                 Fields::new()
                     .add("snapshot", removed_snapshot(snapshot))
@@ -657,7 +657,7 @@ impl Walker<'_, '_> {
                 };
                 Some(Fields::new().add("result", result).build())
             }
-            PublicAgentInvocationResult::ManualUpdate(golem_common::model::Empty {}) => None,
+            PublicAgentInvocationResult::ManualUpdate(golem_schema::Empty {}) => None,
             PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters { error }) => Some(
                 Fields::new()
                     .opt("error", error.as_deref().map(|e| self.err_text(e)))
@@ -683,7 +683,7 @@ impl Walker<'_, '_> {
 
     fn update_description(&self, description: &PublicUpdateDescription) -> ReportNode {
         let payload = match description {
-            PublicUpdateDescription::Automatic(golem_common::model::Empty {}) => None,
+            PublicUpdateDescription::Automatic(golem_schema::Empty {}) => None,
             PublicUpdateDescription::SnapshotAssistedAutomatic(
                 golem_common::model::oplog::SnapshotAssistedAutomaticUpdateParameters {},
             ) => None,
