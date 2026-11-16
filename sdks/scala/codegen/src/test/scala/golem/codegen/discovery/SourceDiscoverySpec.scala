@@ -487,6 +487,29 @@ class SourceDiscoverySpec extends munit.FunSuite {
     assertEquals(t.configFields(2), SourceDiscovery.ConfigField(List("db", "port"), "Int"))
   }
 
+  test("static and recursive config records remain whole override values") {
+    val code =
+      """package example
+        |case class Settings(label: String, count: Int)
+        |case class Node(displayName: String, next: Option[Node])
+        |case class Values(settings: Settings, recursive: Node, slots: (Option[Int], Option[Int], String))
+        |@agentDefinition()
+        |trait ConfigAgent extends AgentConfig[Values] {
+        |  class Id()
+        |  def read(): String
+        |}
+        |""".stripMargin
+    val result = SourceDiscovery.discover(Seq(src("Static.scala", code)))
+    assertEquals(
+      result.traits.head.configFields,
+      List(
+        SourceDiscovery.ConfigField(List("settings"), "Settings"),
+        SourceDiscovery.ConfigField(List("recursive"), "Node"),
+        SourceDiscovery.ConfigField(List("slots"), "(Option[Int], Option[Int], String)")
+      )
+    )
+  }
+
   test("agent without AgentConfig has no config fields") {
     val code =
       """|package example

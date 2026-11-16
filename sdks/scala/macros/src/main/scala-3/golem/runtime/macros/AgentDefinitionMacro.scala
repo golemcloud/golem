@@ -173,9 +173,15 @@ object AgentDefinitionMacro {
           readonly
         )
     }
-    def config(tpe: TypeRepr, path: List[String]): List[AgentConfigDeclaration] = tpe.dealias.asType match {
+    def config(
+      tpe: TypeRepr,
+      path: List[String],
+      root: Boolean = false,
+      default: Option[String] = None
+    ): List[AgentConfigDeclaration] = tpe.dealias.asType match {
       case '[Secret[a]] =>
-        val inner = graph(TypeRepr.of[a])
+        if (default.nonEmpty) report.errorAndAbort(s"Code default on managed config ${path.mkString(".")}")
+        val inner = ConfigSchema.canonicalGraph(graph(TypeRepr.of[a]))
         List(
           AgentConfigDeclaration(
             AgentConfigSource.Secret,
@@ -185,9 +191,27 @@ object AgentDefinitionMacro {
             )
           )
         )
-      case _ if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr.of[Tuple]) =>
-        tpe.typeSymbol.caseFields.flatMap(f => config(tpe.memberType(f), path :+ f.name))
-      case _ => List(AgentConfigDeclaration(AgentConfigSource.Local, path, graph(tpe)))
+      case _
+          if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr
+            .of[Tuple]) && (root || ConfigMacro.containsSecret(tpe)) =>
+        if (default.nonEmpty)
+          report.errorAndAbort(s"Code default on config group ${path.mkString(".")}; default its static fields")
+        val names = tpe.typeSymbol.caseFields.map(f => ConfigSchema.canonicalName(f.name))
+        if (names.distinct.size != names.size) report.errorAndAbort("Duplicate canonical config fields")
+        tpe.typeSymbol.caseFields.flatMap { f =>
+          if (f.name.startsWith("$") || f.name.contains(".")) report.errorAndAbort(s"Invalid config field ${f.name}")
+          config(tpe.memberType(f), path :+ ConfigSchema.canonicalName(f.name), default = ConfigMacro.default(tpe, f))
+        }
+      case _ =>
+        ConfigMacro.checkStaticFields(tpe, path)
+        val schema = ConfigSchema.canonicalGraph(graph(tpe))
+        val json   = default.map { value =>
+          try ConfigSchema.defaultJson(schema, value)
+          catch {
+            case error: IllegalArgumentException => report.errorAndAbort(s"${path.mkString(".")}: ${error.getMessage}")
+          }
+        }
+        List(AgentConfigDeclaration(AgentConfigSource.Local, path, schema, json))
     }
     val configTypes = traitType.baseClasses.filter(_.fullName == "golem.config.AgentConfig").flatMap { base =>
       traitType.baseType(base).typeArgs
@@ -207,7 +231,7 @@ object AgentDefinitionMacro {
       methods,
       constructor,
       mount,
-      configTypes.flatMap(tpe => config(tpe, Nil)),
+      configTypes.flatMap(tpe => config(tpe, Nil, root = true)),
       snapshotting
     )
     mount.foreach { m =>

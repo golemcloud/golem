@@ -28,3 +28,10 @@ object myApp extends GolemAutoRegister {
 ## Status
 
 - See `golem/docs/supported-versions.md` for the intended supported Mill versions.
+
+## Static config
+
+The plugin shares config discovery and creation-override generation with sbt.
+See [Static config](../docs/config.md) for declaration, access and default rules.
+After `sbt golemPublishLocal`, the `staticConfigFixture` module builds the real
+SDK consumer shared with the sbt fixture, rather than the lightweight API stubs.

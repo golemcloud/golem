@@ -834,13 +834,17 @@ object AgentImplementationMacro {
 
   private def wireConfigBuilder[A: Type](using Quotes): Expr[ConfigBuilder[A]] = {
     import quotes.reflect.*
-    val core                                                                                           = new ToolMacroCore
-    val compiled                                                                                       = new CompiledWireMetadata[core.type](core)
-    def load[T: Type](path: Expr[List[String]], loader: Expr[golem.config.ConfigFieldLoader]): Expr[T] = {
+    val core     = new ToolMacroCore
+    val compiled = new CompiledWireMetadata[core.type](core)
+    def load[T: Type](
+      path: Expr[List[String]],
+      loader: Expr[golem.config.ConfigFieldLoader],
+      root: Boolean = false
+    ): Expr[T] = {
       val tpe = TypeRepr.of[T].dealias
       Type.of[T] match {
         case '[golem.config.Secret[a]] =>
-          val graph  = compiled.graph(core.q.reflect.TypeRepr.of[a])
+          val graph  = golem.config.ConfigSchema.canonicalGraph(compiled.graph(core.q.reflect.TypeRepr.of[a]))
           val inner  = compiled.literal(golem.schema.wire.SchemaWire.schemaGraphToWit(graph))
           val handle = compiled.literal(
             golem.schema.wire.SchemaWire.schemaGraphToWit(
@@ -851,26 +855,35 @@ object AgentImplementationMacro {
             )
           )
           '{ $loader.loadSecretWire[a]($path, $inner, $handle, ConcreteCodec.derived[a]) }.asExprOf[T]
-        case _ if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr.of[Tuple]) =>
+        case _
+            if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr.of[Tuple]) && (root || ConfigMacro
+              .containsSecret(tpe)) =>
           val mirror = Expr
             .summon[scala.deriving.Mirror.ProductOf[T]]
             .getOrElse(report.errorAndAbort(s"Configuration ${tpe.show} must be a concrete product"))
           val fields = Expr.ofList(tpe.typeSymbol.caseFields.map { field =>
             tpe.memberType(field).asType match {
-              case '[f] => '{ ${ load[f]('{ $path :+ ${ Expr(field.name) } }, loader) }.asInstanceOf[Any] }
+              case '[f] =>
+                '{
+                  ${ load[f]('{ $path :+ ${ Expr(golem.config.ConfigSchema.canonicalName(field.name)) } }, loader) }
+                    .asInstanceOf[Any]
+                }
             }
           })
           '{ $mirror.fromProduct(Tuple.fromArray($fields.toArray)) }
         case _ =>
           val graph = compiled.literal(
-            golem.schema.wire.SchemaWire.schemaGraphToWit(compiled.graph(core.q.reflect.TypeRepr.of[T]))
+            golem.schema.wire.SchemaWire
+              .schemaGraphToWit(golem.config.ConfigSchema.canonicalGraph(compiled.graph(core.q.reflect.TypeRepr.of[T])))
           )
           '{ $loader.loadLocalWire[T]($path, $graph, ConcreteCodec.derived[T]) }
       }
     }
     '{
       new ConfigBuilder[A] {
-        def build(path: List[String], loader: golem.config.ConfigFieldLoader): A = ${ load[A]('path, 'loader) }
+        def build(path: List[String], loader: golem.config.ConfigFieldLoader): A = ${
+          load[A]('path, 'loader, root = true)
+        }
       }
     }
   }

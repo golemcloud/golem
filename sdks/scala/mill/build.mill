@@ -57,3 +57,16 @@ object emptyFixture extends golem.mill.GolemAutoRegister {
 
   override def golemBasePackage = Task(Some("emptyfixture"))
 }
+
+// Publish the SDK with `sbt golemPublishLocal` before building this real consumer.
+object staticConfigFixture extends golem.mill.GolemAutoRegister {
+  override def moduleDir = BuildCtx.workspaceRoot / os.up / "test-static-config"
+  override def sources = Task.Sources(moduleDir / "src" / "main" / "scala")
+  def scalaVersion = build.scalaVersion
+  def mvnDeps = Seq(mvn"cloud.golem::golem-scala-core::0.0.0-SNAPSHOT")
+  override def scalacOptions = Task(super.scalacOptions() :+ "-experimental")
+  override def scalaJSConfig = Task.Anon {
+    super.scalaJSConfig().withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
+  }
+  override def golemBasePackage = Task(Some("staticconfig"))
+}

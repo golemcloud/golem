@@ -22,7 +22,7 @@ import scala.util.control.NonFatal
 final case class SchemaIssue(message: String, path: List[String] = Nil)
 
 /**
- * A schema root in a schema graph. A schema whose root is a record may carry
+ * A host-independent schema root in a schema graph. A record root may carry
  * JSON defaults for root fields: its JSON surface (JSON packing, JSON
  * validation and JSON Schema rendering) uses a default when the JSON object
  * omits that field, while its value surface keeps the record unchanged.

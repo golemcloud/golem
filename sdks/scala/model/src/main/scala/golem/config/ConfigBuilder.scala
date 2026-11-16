@@ -30,7 +30,7 @@ object ConfigBuilder {
   implicit def fromSchema[A](implicit schema: Schema[A]): ConfigBuilder[A] =
     new ConfigBuilder[A] {
       override def build(path: List[String], loader: ConfigFieldLoader): A =
-        buildFromReflect(path, schema.reflect, loader)
+        buildFromReflect(path, schema.reflect, loader, root = true)
     }
 
   private val secretFullName: String =
@@ -48,7 +48,8 @@ object ConfigBuilder {
   private def buildFromReflect[A](
     path: List[String],
     reflect: Reflect.Bound[A],
-    loader: ConfigFieldLoader
+    loader: ConfigFieldLoader,
+    root: Boolean = false
   ): A =
     if (isSecret(reflect)) {
       val inner = reflect.asWrapperUnknown match {
@@ -58,7 +59,7 @@ object ConfigBuilder {
       buildSecret(path, inner, loader).asInstanceOf[A]
     } else {
       reflect.asRecord match {
-        case Some(record) if !isTupleRecord(record) =>
+        case Some(record) if !isTupleRecord(record) && (root || ConfigIntrospection.containsSecret(reflect)) =>
           buildRecord(path, record, loader)
         case _ =>
           reflect.asWrapperUnknown match {
@@ -81,7 +82,7 @@ object ConfigBuilder {
     while (idx < record.fields.length) {
       val field = record.fields(idx)
       val value = buildFromReflect(
-        path :+ field.name,
+        path :+ ConfigSchema.canonicalName(field.name),
         field.value.asInstanceOf[Reflect.Bound[Any]],
         loader
       )
