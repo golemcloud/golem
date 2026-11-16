@@ -12,6 +12,10 @@ import {
 } from "../src/Middleware.js"
 import { byteItems, startMiddleware, type ByteStreamItem } from "./tool-middleware-test-support.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import * as Durability from "../src/Durability.js"
+import { DurabilityLive } from "../src/host/DurabilityClient.js"
+import { CustomInvocationContextLive } from "../src/host/CustomInvocationContextClient.js"
+import * as Host from "./mocks/golem-durability.js"
 
 const wire = <A>(schema: Schema.Schema<A>, value: A) => {
   const codec = Effect.runSync(compile(schema))
@@ -510,6 +514,44 @@ describe("typed tool middleware", () => {
     await result.completion
     expect(output).toEqual([19, 43])
     expect(raw.close).toHaveBeenCalledOnce()
+  })
+
+  it("runs custom durability in middleware layer acquisition and release", async () => {
+    Host.__resetAll()
+    const durable = (name: string) =>
+      Durability.wrapInfallible(
+        {
+          iface: "",
+          function: name,
+          functionType: Durability.FunctionType.writeRemote,
+          requestSchema: Schema.Struct({}),
+          success: Schema.String,
+        },
+        {},
+        Effect.succeed(name),
+      )
+    universal({
+      name: "durable-layer",
+      parameters: Schema.Struct({}),
+      layer: Layer.effectDiscard(
+        Effect.acquireRelease(durable("acquire"), () => durable("release")),
+      ).pipe(Layer.provide(Layer.merge(DurabilityLive, CustomInvocationContextLive))),
+      handler: () => Effect.succeed({}),
+    })
+    const result = startMiddleware(
+      toolMiddlewareGuest.invokeToolMiddleware,
+      "durable-layer",
+      "target",
+      metadata,
+      wire(Schema.Struct({}), {}),
+      [],
+      wire(Schema.Void, undefined),
+      undefined,
+      undefined,
+      { invoke: vi.fn() } as never,
+    )
+    await expect(result.completion).resolves.toBeDefined()
+    expect(Host.__getBeginCalls().map((call) => call.functionName)).toEqual(["acquire", "release"])
   })
 
   it("cancels before first pull without pulling and releases raw and layer resources once", async () => {

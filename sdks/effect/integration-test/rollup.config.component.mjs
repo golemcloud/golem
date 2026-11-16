@@ -30,6 +30,7 @@ const externalPackages = (id) =>
   id === "effect/http" ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:") ||
+  id.startsWith("wasm-rquickjs:") ||
   id === "agent-guest"
 
 export default await componentConfiguration(rollup, () => ({

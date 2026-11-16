@@ -23,7 +23,8 @@ const external = (id) =>
   id === "@golemcloud/effect-golem" ||
   id.startsWith("@golemcloud/effect-golem/") ||
   id.startsWith("golem:") ||
-  id.startsWith("wasi:")
+  id.startsWith("wasi:") ||
+  id.startsWith("wasm-rquickjs:")
 
 const httpFacades = [
   ["effect/http", "GolemHttp", "effect-http"],
