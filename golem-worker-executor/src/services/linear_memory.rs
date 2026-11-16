@@ -26,6 +26,15 @@ use std::time::Instant;
 pub(crate) const SHARED_LINEAR_MEMORY_ERROR: &str =
     "Shared linear memories require WebAssembly threads, which are not supported";
 
+/// Tracks one Store's accounted memory: allocated linear-memory bytes plus GC heap capacity.
+/// The retained linear-memory accounting terminology includes GC capacity; individual
+/// Wasmtime linear memories remain distinct. This is not reachable GC object size,
+/// general host memory or measured resident memory (RSS).
+///
+/// Growth callbacks and reconciliation maintain the total. Initial allocations can contribute
+/// provisional bytes before allocation succeeds, replaced by a growth notification, rolled
+/// back on failure or reconciled through enumeration. Saved baselines, admission reservations,
+/// protected totals and configured limits are separate quantities, not current allocation.
 #[derive(Clone, Debug)]
 pub struct LinearMemoryTracker {
     inner: Arc<Inner>,
