@@ -33,10 +33,11 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasOplog, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAgentTypesService, HasAll, HasComponentService, HasConfig, HasOplog,
+    HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
+    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
+use crate::worker::target::ResolvedTarget;
 use crate::worker::{
     ExportStreamControlResult as DomainExportResult, RetirementReason, Worker, WorkerUpdateMode,
     retired_by_assignment,
@@ -246,35 +247,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.shard_service().check_admission(agent_id.as_ref())
     }
 
-    async fn canonicalize_agent_target(
+    /// Resolves the target of a request to the agent it reaches and the owner it may create.
+    /// See [`crate::worker::target::resolve_target`].
+    async fn resolve_request_target<Req: invocation::CanStartWorker>(
         &self,
-        environment_id: EnvironmentId,
-        target: &AgentTarget,
-    ) -> Result<OwnedAgentId, WorkerExecutorError> {
-        match target {
-            AgentTarget::Current(agent_id) => {
-                self.canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, agent_id))
-                    .await
-            }
-        }
-    }
-
-    /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
-    /// target component's metadata rather than from the caller-supplied
-    /// request data. This ensures that shard routing, auth checks, and all
-    /// downstream code use the component-authoritative environment.
-    async fn canonicalize_owned_agent_id(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> Result<OwnedAgentId, WorkerExecutorError> {
-        let component = self
-            .component_service()
-            .get_metadata(owned_agent_id.component_id(), None)
-            .await?;
-        Ok(OwnedAgentId::new(
-            component.environment_id,
-            &owned_agent_id.agent_id,
-        ))
+        request: &Req,
+    ) -> Result<ResolvedTarget, WorkerExecutorError> {
+        crate::worker::target::resolve_target(
+            self.component_service().as_ref(),
+            self.agent_types().as_ref(),
+            request.environment_id()?,
+            request.agent_target()?,
+            request.constructor()?,
+            request.component_id()?,
+        )
+        .await
     }
 
     /// Validate that the request carries a well-formed `auth_ctx` field.
@@ -329,8 +316,6 @@ fn extract_owned_agent_id<T>(
     let agent_id = get_agent_id(request)
         .as_ref()
         .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
-
-    AgentId::validate_length(&agent_id.name).map_err(WorkerExecutorError::invalid_request)?;
 
     let agent_id = agent_id
         .clone()

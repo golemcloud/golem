@@ -2206,7 +2206,7 @@ pub fn lower_invocation(
             entries,
             ..
         } => {
-            let component_id: core_wire::ComponentId = metadata.agent_id.component_id.into();
+            let component_id: core_wire::ComponentId = metadata.component_id.into();
             let agent_id: core_wire::AgentId = metadata.agent_id.clone().into();
             let account_info = oplog_processor_exports::AccountInfo {
                 account_id: account_id.into(),

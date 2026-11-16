@@ -76,7 +76,7 @@ use crate::worker::instance::{
 };
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerInvocationTicket};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
-use crate::worker::{CreateIntent, RetirementReason, Worker, WorkerCreationMode};
+use crate::worker::{CreateIntent, NewOwner, RetirementReason, Worker, WorkerCreationMode};
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
@@ -348,7 +348,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             invocation_context_stack,
             principal,
             InvocationFreshnessDisposition::MayExist,
-            CreateIntent::UNKEYED_INVOCATION,
+            CreateIntent::Existing,
         )
         .await
     }
@@ -392,6 +392,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
@@ -409,7 +410,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 Principal::anonymous(),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::OplogProcessor,
-                CreateIntent::UNKEYED_INVOCATION,
+                CreateIntent::Create {
+                    owner: NewOwner::untyped(component_id),
+                    exclusive: false,
+                    idempotency_key: None,
+                },
             )
             .in_current_span()
             .await?;
@@ -468,10 +473,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         }
         let owned_agent_id = OwnedAgentId::new(
             environment_id,
-            &AgentId {
-                component_id,
-                agent_id: OwnerKind::external_tool_instance_name(idempotency_key),
-            },
+            &AgentId::external_tool_owner(environment_id, component_id, idempotency_key),
         );
         let active_agent = self.get_or_add_unresolved(deps, &owned_agent_id).await?;
         let worker = active_agent.primary.clone();
@@ -486,6 +488,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::EphemeralExternalTool,
                 CreateIntent::Create {
+                    owner: NewOwner::untyped(component_id),
                     exclusive: false,
                     idempotency_key: Some(idempotency_key.clone()),
                 },

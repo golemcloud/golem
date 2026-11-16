@@ -34,7 +34,12 @@ pub fn agent_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> AgentOwnerPat
         application: component.application_name.clone(),
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
-        agent: AgentOwnerLeafPattern::Agent(ctx.agent_id().agent_id.clone()),
+        agent: AgentOwnerLeafPattern::agent(
+            ctx.agent_id().clone(),
+            ctx.owner_context()
+                .agent()
+                .map(|agent| agent.agent_type.clone()),
+        ),
     }
 }
 

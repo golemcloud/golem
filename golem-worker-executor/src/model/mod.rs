@@ -145,9 +145,12 @@ impl AgentConfig {
         }
     }
 
+    /// Strips the variables that Golem sets, so neither a create override nor an environment
+    /// that a fork copies can set them. The removed names are stripped as well.
     pub(crate) fn remove_dynamic_vars(worker_env: &mut Vec<(String, String)>) {
         worker_env.retain(|(key, _)| {
             key != "GOLEM_AGENT_ID"
+                && key != "GOLEM_AGENT_KEY"
                 && key != "GOLEM_AGENT_TYPE"
                 && key != "GOLEM_WORKER_NAME"
                 && key != "GOLEM_COMPONENT_ID"
@@ -155,20 +158,24 @@ impl AgentConfig {
         });
     }
 
+    /// `agent_key` is the canonical key of a keyed agent. Other agents have no
+    /// `GOLEM_AGENT_KEY`.
     pub(crate) fn enrich_env(
         worker_env: &mut Vec<(String, String)>,
-        component_id: ComponentId,
-        agent_name: String,
+        agent_id: &AgentId,
+        agent_key: Option<&str>,
         agent_type: &Option<AgentTypeName>,
         target_component_revision: ComponentRevision,
     ) {
-        let component_revision = target_component_revision.to_string();
-
         Self::remove_dynamic_vars(worker_env);
-        worker_env.push((String::from("GOLEM_AGENT_ID"), agent_name.clone()));
-        worker_env.push((String::from("GOLEM_WORKER_NAME"), agent_name)); // kept for backward compatibility temporarily
-        worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
-        worker_env.push((String::from("GOLEM_COMPONENT_REVISION"), component_revision));
+        worker_env.push((String::from("GOLEM_AGENT_ID"), agent_id.to_string()));
+        if let Some(agent_key) = agent_key {
+            worker_env.push((String::from("GOLEM_AGENT_KEY"), agent_key.to_string()));
+        }
+        worker_env.push((
+            String::from("GOLEM_COMPONENT_REVISION"),
+            target_component_revision.to_string(),
+        ));
         if let Some(agent_type) = agent_type {
             worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.to_string()));
         }

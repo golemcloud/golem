@@ -142,6 +142,8 @@ fn retained_response_stream(
 }
 
 struct AcceptedInvocation {
+    /// The agent that accepted the invocation, which a key target resolves to.
+    agent_id: AgentId,
     idempotency_key: golem_common::model::InvocationId,
     component_revision: Option<ComponentRevision>,
     durable_streams: Option<StreamSession>,

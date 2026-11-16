@@ -19,7 +19,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentMode, Principal};
 use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
@@ -113,6 +113,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
     async fn enqueue_oplog_processor(
         &self,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
@@ -342,6 +343,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
     async fn enqueue_oplog_processor(
         &self,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
@@ -355,7 +357,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                 WorkerExecutorError::runtime("WorkerActivator is disabled, not invoking processor")
             })?;
         activator
-            .enqueue_oplog_processor(owned_agent_id, component_revision, invocation)
+            .enqueue_oplog_processor(owned_agent_id, component_id, component_revision, invocation)
             .await
     }
 }
@@ -635,10 +637,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
     async fn enqueue_oplog_processor(
         &self,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        Worker::enqueue_oplog_processor(&self.all, owned_agent_id, component_revision, invocation)
-            .await
+        Worker::enqueue_oplog_processor(
+            &self.all,
+            owned_agent_id,
+            component_id,
+            component_revision,
+            invocation,
+        )
+        .await
     }
 }

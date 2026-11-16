@@ -115,7 +115,6 @@ pub trait WorkerForkService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
         invocation_id: Option<DurableInvocationId>,
-        forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError>;
@@ -1075,7 +1074,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source: &OwnedAgentId,
         target_agent_id: &AgentId,
         cut: OplogIndex,
-        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
+        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
@@ -1128,7 +1127,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // Resume can fail after publication, so retries reconcile the immutable marker and
         // retry this operation without replacing the fork or appending a second synthetic result.
         self.worker_proxy
-            .resume(target_agent_id, true, auth_ctx)
+            .resume(&target, true, auth_ctx)
             .await
             .map_err(|error| {
                 WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), error.into())
@@ -1149,7 +1148,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         cut: OplogIndex,
         source_fingerprint: AgentFingerprint,
         hash: [u8; 32],
-        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
+        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
         fork_request: &CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         let reconcile =
@@ -1171,9 +1170,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     fork_request,
                 )
                 .await?;
-            if let Some((scope, invocation_id, phantom)) = guest_result {
-                publication::write_guest_result(oplog.as_ref(), scope, invocation_id, phantom)
-                    .await?;
+            if let Some((scope, invocation_id)) = guest_result {
+                publication::write_guest_result(
+                    oplog.as_ref(),
+                    scope,
+                    invocation_id,
+                    &target.agent_id,
+                )
+                .await?;
             }
             oplog.commit(CommitLevel::Always).await?;
             let last = oplog.current_oplog_index().await;
@@ -1360,7 +1364,6 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
         invocation_id: Option<DurableInvocationId>,
-        forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
@@ -1369,7 +1372,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             source_agent_id,
             target_agent_id,
             oplog_index_cut_off,
-            Some((copied_scope_start, invocation_id, forked_phantom_id)),
+            Some((copied_scope_start, invocation_id)),
             auth_ctx,
             fork_request,
         )

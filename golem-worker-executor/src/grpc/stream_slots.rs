@@ -321,16 +321,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(WorkerExecutorError::invalid_request)?;
         auth.authorize_system_only("create authorized Durable Streams session")
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-        let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        let resolved = self.resolve_request_target(&request).await?;
+        let id = resolved.owned_agent_id.clone();
         self.ensure_worker_belongs_to_this_executor(&id)?;
         let (worker, _response_lease) = match self
-            .get_or_create_pending_for_lookup(&request, None)
+            .get_or_create_pending_for_lookup(&request, &resolved, None)
             .await?
         {
             Some(worker) => worker,
             None => {
                 self.get_or_create_pending_with_freshness(
                     &request,
+                    &resolved,
                     InvocationFreshnessDisposition::MayExist,
                     None,
                 )
@@ -403,6 +405,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (committed, _receipt) = tokio::sync::oneshot::channel();
         let domain_request = build_durable_streaming_request(
             &request,
+            id.agent_id.clone(),
+            Some(&parsed.agent_type),
             &component.metadata,
             revision,
             worker.get_initial_worker_metadata().fingerprint,

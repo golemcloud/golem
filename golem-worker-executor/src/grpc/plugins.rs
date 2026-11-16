@@ -75,6 +75,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .authorize_system_only("process oplog entries")
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
 
+        let component_id: golem_common::model::component::ComponentId = request
+            .component_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "component_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+
         let component_revision: golem_common::model::component::ComponentRevision =
             request.component_revision.try_into().map_err(|e| {
                 WorkerExecutorError::invalid_request(format!("invalid component_revision: {e}"))
@@ -131,6 +139,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::enqueue_oplog_processor(
             self,
             &owned_agent_id,
+            component_id,
             component_revision,
             AgentInvocation::ProcessOplogEntries {
                 idempotency_key,

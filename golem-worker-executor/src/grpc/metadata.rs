@@ -19,6 +19,8 @@ use super::{
     UpdateMode, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     extract_owned_agent_id, golem, info_span, to_protobuf_resource_description,
 };
+use crate::services::{HasAgentTypesService, HasComponentService};
+use golem_common::model::agent::{AgentKey, ParsedAgentKey};
 use golem_common::model::type_id::TypeId;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -30,7 +32,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<golem::worker::AgentMetadata, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
@@ -48,6 +49,66 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await;
 
         Self::create_proto_metadata(metadata, last_error_and_retry_count)
+    }
+
+    /// Resolves a key to the current agent that owns it. It never creates an agent. An agent at
+    /// the ID that the key derives with another key is a collision, not an absent agent, so a
+    /// caller never mistakes it for a free key.
+    pub(super) async fn lookup_agent_internal(
+        &self,
+        request: golem::workerexecutor::v1::LookupAgentRequest,
+    ) -> Result<Option<golem::workerexecutor::v1::LookedUpAgent>, WorkerExecutorError> {
+        Self::validate_auth_ctx(&request.auth_ctx)?;
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "environment_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let component_id = request
+            .component_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "component_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let key: ParsedAgentKey = AgentKey::try_from(
+            request
+                .key
+                .ok_or(WorkerExecutorError::invalid_request("key not found"))?,
+        )
+        .map_err(WorkerExecutorError::invalid_request)?
+        .into();
+        let resolved = crate::worker::target::resolve_key(
+            self.component_service().as_ref(),
+            self.agent_types().as_ref(),
+            environment_id,
+            component_id,
+            key,
+        )
+        .await?;
+        let owned_agent_id = resolved.owned_agent_id;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let Some(metadata) = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
+        else {
+            return Ok(None);
+        };
+        let requested_key = resolved
+            .new_owner
+            .as_ref()
+            .and_then(|owner| owner.canonical_key(metadata.agent_mode));
+        if metadata.canonical_key != requested_key {
+            return Err(WorkerExecutorError::AgentKeyCollision {
+                agent_id: owned_agent_id.agent_id,
+                requested_key: requested_key.unwrap_or_default(),
+            });
+        }
+        Ok(Some(golem::workerexecutor::v1::LookedUpAgent {
+            agent_id: Some(owned_agent_id.agent_id.into()),
+            agent_fingerprint: Some(metadata.fingerprint.0.into()),
+        }))
     }
 
     pub(super) async fn get_running_workers_metadata_internal(

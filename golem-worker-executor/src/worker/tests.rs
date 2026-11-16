@@ -2169,12 +2169,14 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
             Some(CreateIdentity {
                 request: &request,
                 canonical_key: Some("Counter(17)"),
+                constructor_parameters: Some("17"),
                 env: &env,
                 config: &config,
             }),
             CreateIdentity {
                 request: incoming_request,
                 canonical_key: key,
+                constructor_parameters: Some("17"),
                 env: incoming_env,
                 config: incoming_config,
             },
@@ -2187,6 +2189,7 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
             CreateIdentity {
                 request: &request,
                 canonical_key: Some("Counter(17)"),
+                constructor_parameters: Some("17"),
                 env: &env,
                 config: &config,
             },
@@ -2204,6 +2207,29 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
         decide(&retry, Some("Counter(17)"), &env, &config, true),
         CreateDecision::IdempotentRetry
     );
+    // An agent without a key gets its ID from the request alone, so a retry with other
+    // constructor parameters reaches the same ID and must conflict.
+    let unkeyed = |parameters| {
+        decide_create(
+            Some(CreateIdentity {
+                request: &request,
+                canonical_key: None,
+                constructor_parameters: Some("17"),
+                env: &env,
+                config: &config,
+            }),
+            CreateIdentity {
+                request: &retry,
+                canonical_key: None,
+                constructor_parameters: Some(parameters),
+                env: &env,
+                config: &config,
+            },
+            true,
+        )
+    };
+    assert_eq!(unkeyed("17"), CreateDecision::IdempotentRetry);
+    assert_eq!(unkeyed("18"), CreateDecision::IdempotencyKeyConflict);
     let reversed_env: Vec<_> = env.iter().cloned().rev().collect();
     let reversed_config: Vec<_> = config.iter().cloned().rev().collect();
     assert_eq!(

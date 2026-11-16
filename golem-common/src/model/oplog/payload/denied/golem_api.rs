@@ -38,7 +38,7 @@ pub fn agent_metadata<R>(_request: &R, _denial: &str) -> HostResponseGolemApiAge
 
 pub fn fork<R>(_request: &R, denial: &str) -> HostResponseGolemApiFork {
     HostResponseGolemApiFork {
-        forked_phantom_id: uuid::Uuid::nil(),
+        forked_agent_id: None,
         result: Err(denial.to_string()),
     }
 }

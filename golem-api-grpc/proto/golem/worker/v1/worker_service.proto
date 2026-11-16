@@ -281,6 +281,8 @@ message ProcessOplogEntriesRequest {
   uint64 first_entry_index = 8;
   repeated golem.worker.RawOplogEntry entries = 9;
   golem.auth.AuthCtx auth_ctx = 10;
+  // The component of the oplog processor. It creates the processor when it is missing.
+  golem.component.ComponentId component_id = 11;
 }
 
 message ProcessOplogEntriesResponse {

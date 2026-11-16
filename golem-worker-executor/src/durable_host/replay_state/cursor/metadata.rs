@@ -166,7 +166,6 @@ impl ReplayState {
                 entity_route_members: HashMap::new(),
                 skip_hints_after_delivery: false,
                 replay_buffer: VecDeque::new(),
-                pending_fork_starts: HashSet::new(),
                 starts,
                 custom_subtrees: HashMap::new(),
             }),

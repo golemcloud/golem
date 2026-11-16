@@ -76,12 +76,7 @@ fn all_derivations() -> Vec<(&'static str, AgentId)> {
         ),
         (
             "ephemeral_invocation",
-            AgentId::ephemeral_invocation(
-                ENV,
-                type_id(7),
-                "user:acct-1",
-                &idempotency_key("key-1"),
-            ),
+            AgentId::ephemeral_invocation(ENV, type_id(7), &idempotency_key("owner-key-1")),
         ),
         (
             "durable_stream_fork",
@@ -101,7 +96,7 @@ fn all_derivations() -> Vec<(&'static str, AgentId)> {
         ),
         (
             "external_tool_owner",
-            AgentId::external_tool_owner(ENV, COMPONENT, "user:acct-1", &idempotency_key("key-1")),
+            AgentId::external_tool_owner(ENV, COMPONENT, &idempotency_key("owner-key-1")),
         ),
     ]
 }
@@ -124,7 +119,7 @@ fn golden_vectors() {
             ),
             (
                 "ephemeral_invocation",
-                "00000007-19e9-8091-b4ac-a0f81b664808".to_string()
+                "00000007-2814-87e4-be24-1eca3768b3a6".to_string()
             ),
             (
                 "durable_stream_fork",
@@ -144,7 +139,7 @@ fn golden_vectors() {
             ),
             (
                 "external_tool_owner",
-                "00000000-90c3-8c0e-af62-fab4e5dfdaaf".to_string()
+                "00000000-564d-8e3b-a1f0-d53af5172140".to_string()
             ),
         ]
     );
@@ -167,10 +162,6 @@ fn variable_length_inputs_are_length_prefixed() {
     assert_ne!(
         AgentId::idempotent_create(ENV, type_id(7), "ab", &key("c")),
         AgentId::idempotent_create(ENV, type_id(7), "a", &key("bc")),
-    );
-    assert_ne!(
-        AgentId::ephemeral_invocation(ENV, type_id(7), "ab", &key("c")),
-        AgentId::ephemeral_invocation(ENV, type_id(7), "a", &key("bc")),
     );
     assert_ne!(
         AgentId::durable_stream_session(ENV, type_id(7), "ab", "c"),
@@ -261,7 +252,7 @@ fn the_reserved_tag_has_no_type_id() {
     assert_eq!(AgentId::random_reserved().type_tag(), RESERVED_TYPE_TAG);
     assert_eq!(AgentId::from_parts(7, 5).type_id(), Some(type_id(7)));
     assert_eq!(
-        AgentId::external_tool_owner(ENV, COMPONENT, "s", &idempotency_key("k")).type_id(),
+        AgentId::external_tool_owner(ENV, COMPONENT, &idempotency_key("k")).type_id(),
         None
     );
 }
@@ -295,20 +286,15 @@ fn allocated_ids_depend_on_every_input() {
 #[test]
 fn external_tool_owners_depend_on_every_input() {
     let key = idempotency_key("key-1");
-    let id = AgentId::external_tool_owner(ENV, COMPONENT, "user:a", &key);
+    let id = AgentId::external_tool_owner(ENV, COMPONENT, &key);
     let others = [
-        AgentId::external_tool_owner(OTHER_ENV, COMPONENT, "user:a", &key),
-        AgentId::external_tool_owner(ENV, ComponentId(Uuid::from_u128(1)), "user:a", &key),
-        AgentId::external_tool_owner(ENV, COMPONENT, "user:b", &key),
-        AgentId::external_tool_owner(ENV, COMPONENT, "user:a", &idempotency_key("key-2")),
+        AgentId::external_tool_owner(OTHER_ENV, COMPONENT, &key),
+        AgentId::external_tool_owner(ENV, ComponentId(Uuid::from_u128(1)), &key),
+        AgentId::external_tool_owner(ENV, COMPONENT, &idempotency_key("key-2")),
     ];
     for other in others {
         assert_ne!(other, id);
     }
-    assert_ne!(
-        AgentId::external_tool_owner(ENV, COMPONENT, "ab", &idempotency_key("c")),
-        AgentId::external_tool_owner(ENV, COMPONENT, "a", &idempotency_key("bc")),
-    );
 }
 
 #[test]
@@ -398,7 +384,7 @@ fn durable_stream_sessions() {
     );
     assert_ne!(
         session,
-        AgentId::ephemeral_invocation(ENV, type_id(7), "route-a", &idempotency_key("s-1"))
+        AgentId::ephemeral_invocation(ENV, type_id(7), &idempotency_key("s-1"))
     );
 }
 

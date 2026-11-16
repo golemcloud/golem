@@ -51,9 +51,6 @@ pub enum ReplayEvent {
     UpdateReplayed {
         new_revision: ComponentRevision,
     },
-    ForkReplayed {
-        new_phantom_id: Uuid,
-    },
     InvocationWalletPinned {
         oplog_index: OplogIndex,
         wallet_pin: InvocationWalletPin,
@@ -859,12 +856,6 @@ struct CursorState {
     skip_hints_after_delivery: bool,
     /// Entries prefetched from the oplog, beginning at the next speculative cursor position.
     replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
-    /// `Start` entries for `GolemApiFork` whose matching `End` has not yet been replayed. When the
-    /// matching `End` is read, the response is decoded and a `ForkReplayed` event is emitted. The
-    /// sequential adapter only ever has at most one in flight at a time (it writes the matched
-    /// `End` immediately after the `Start`), but we use a set so that future concurrent recorders cannot
-    /// trip us up.
-    pending_fork_starts: HashSet<OplogIndex>,
     /// Retained Starts and claimed replay obligations, keyed by their Start index. All lifecycle
     /// mutations share the cursor lock: retention, ahead consumption, registration and terminal
     /// routing cannot race. Explicit unregistration outside a transaction re-acquires this lock.

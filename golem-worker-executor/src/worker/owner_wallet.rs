@@ -374,7 +374,8 @@ impl WalletSnapshot {
             generation: 0,
             metadata: Arc::new(metadata.clone()),
             wallet_id_hash: CardHolder::Agent(AgentCardHolder {
-                agent_id: owner_id.agent_id.clone(),
+                environment_id: owner_id.environment_id,
+                agent_id: owner_id.agent_id,
             })
             .wallet_id_hash(),
         })
@@ -461,7 +462,8 @@ impl WalletSnapshot {
                 if !recorded {
                     *affected_wallets = if changed {
                         vec![CardHolder::Agent(AgentCardHolder {
-                            agent_id: owner_id.agent_id.clone(),
+                            environment_id: owner_id.environment_id,
+                            agent_id: owner_id.agent_id,
                         })]
                     } else {
                         Vec::new()
@@ -573,7 +575,8 @@ impl WalletBaseline {
                         generation: wallet_generation,
                         metadata: Arc::new(metadata.clone()),
                         wallet_id_hash: CardHolder::Agent(AgentCardHolder {
-                            agent_id: owner_id.agent_id.clone(),
+                            environment_id: owner_id.environment_id,
+                            agent_id: owner_id.agent_id,
                         })
                         .wallet_id_hash(),
                     },
@@ -1095,7 +1098,7 @@ impl OwnerWallet {
                         let confirmation = owner.lock_boundary().await?;
                         if !retry.is_confirmed(
                             worker.get_repaired_status().await?.as_ref(),
-                            &worker.owned_agent_id.agent_id,
+                            &worker.owned_agent_id,
                         )? {
                             owner
                                 .commit(
@@ -1107,7 +1110,8 @@ impl OwnerWallet {
                                         retry.source_card_id,
                                         retry.installed_card.card_id(),
                                         CardHolder::Agent(AgentCardHolder {
-                                            agent_id: retry.target_agent_id.clone(),
+                                            environment_id: worker.owned_agent_id.environment_id,
+                                            agent_id: retry.target_agent_id,
                                         }),
                                     ),
                                 )
@@ -1153,7 +1157,7 @@ impl OwnerWallet {
             let Some(mut retry) =
                 crate::durable_host::permissions::prepare_pending_source_card_transfer_retry(
                     &status,
-                    &worker.owned_agent_id.agent_id,
+                    &worker.owned_agent_id,
                     pending,
                     transfer,
                 )?
@@ -1169,10 +1173,12 @@ impl OwnerWallet {
                         retry.transfer_id,
                         retry.source_card_id,
                         CardHolder::Agent(AgentCardHolder {
-                            agent_id: worker.owned_agent_id.agent_id.clone(),
+                            environment_id: worker.owned_agent_id.environment_id,
+                            agent_id: worker.owned_agent_id.agent_id,
                         }),
                         CardHolder::Agent(AgentCardHolder {
-                            agent_id: retry.target_agent_id.clone(),
+                            environment_id: worker.owned_agent_id.environment_id,
+                            agent_id: retry.target_agent_id,
                         }),
                         0,
                     ),
@@ -1269,7 +1275,8 @@ impl OwnerWallet {
                                     event.source_card_id,
                                     card_id,
                                     CardHolder::Agent(AgentCardHolder {
-                                        agent_id: self.baseline.owner_id.agent_id.clone(),
+                                        environment_id: self.baseline.owner_id.environment_id,
+                                        agent_id: self.baseline.owner_id.agent_id,
                                     }),
                                     Box::new(card),
                                     0,

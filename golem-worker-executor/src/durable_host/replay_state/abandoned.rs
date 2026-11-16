@@ -37,12 +37,9 @@ impl AbandonedStarts {
     /// Whether a never-claimed `Start` for `function_name` may be drained as live-only abandoned
     /// progress at the invocation boundary.
     ///
-    /// `GolemApiFork` is excluded: it is a dedicated-positional-consumer pair whose committed
-    /// consume is not inert — [`CursorTx::apply_commit_effects`] records the `Start` as a pending
-    /// fork and decodes its matching `End` into a [`ReplayEvent::ForkReplayed`]. Draining such a
-    /// pair here would apply a fork the replayed guest never requested, so it stays fatal. Every
-    /// other `Start`/`End` commit is side-effect-free (the `End` arm of `apply_commit_effects`
-    /// only fires for pending fork starts), so draining them is genuinely inert. Any new
+    /// `GolemApiFork` is excluded: a recorded fork created a target agent, so a replayed guest
+    /// that never requests it has diverged from its history, and that stays fatal. Every other
+    /// `Start`/`End` commit is side-effect-free, so draining them is inert. Any new
     /// function-specific commit effect added to `apply_commit_effects` must be excluded here too.
     pub(super) fn can_drain(function_name: &HostFunctionName) -> bool {
         !matches!(function_name, HostFunctionName::GolemApiFork)

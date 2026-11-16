@@ -20,9 +20,10 @@ use super::{
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, WorkerUpdateMode, common_model,
     extract_owned_agent_id, extract_principal, from_proto_invocation_context, golem,
 };
+use crate::services::{HasAgentTypesService, HasComponentService};
 use crate::worker::CreateIntent;
 use golem_common::model::agent::{
-    AgentTarget, InvocationFreshnessDisposition, Principal, ScheduleId,
+    AgentKey, InvocationFreshnessDisposition, ParsedAgentKey, Principal, ScheduleId,
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
@@ -30,19 +31,62 @@ use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
 {
+    /// Creates the keyed agent of `constructor`, or, with `unkeyed_id`, an agent without a key at
+    /// that pre-allocated ID. Returns the fingerprint and the ID of the agent.
     pub(super) async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
         wait_until_initialized: bool,
-    ) -> Result<AgentFingerprint, WorkerExecutorError> {
-        let owned_agent_id =
-            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-        let owned_agent_id = self
-            .canonicalize_agent_target(
-                owned_agent_id.environment_id,
-                &AgentTarget::Current(owned_agent_id.agent_id),
-            )
-            .await?;
+    ) -> Result<(AgentFingerprint, AgentId), WorkerExecutorError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "environment_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let component_id = request
+            .component_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "component_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let constructor: ParsedAgentKey = AgentKey::try_from(request.constructor.clone().ok_or(
+            WorkerExecutorError::invalid_request("constructor not found"),
+        )?)
+        .map_err(WorkerExecutorError::invalid_request)?
+        .into();
+        let target = match request.unkeyed_id {
+            Some(agent_id) => {
+                let agent_id: AgentId = agent_id
+                    .try_into()
+                    .map_err(WorkerExecutorError::invalid_request)?;
+                crate::worker::target::resolve_unkeyed(
+                    self.component_service().as_ref(),
+                    self.agent_types().as_ref(),
+                    environment_id,
+                    component_id,
+                    agent_id,
+                    constructor,
+                )
+                .await?
+            }
+            None => {
+                crate::worker::target::resolve_key(
+                    self.component_service().as_ref(),
+                    self.agent_types().as_ref(),
+                    environment_id,
+                    component_id,
+                    constructor,
+                )
+                .await?
+            }
+        };
+        let owned_agent_id = target.owned_agent_id;
+        let owner = target
+            .new_owner
+            .expect("a resolved constructor creates an owner");
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
@@ -61,6 +105,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_agent_id,
                 &key.into(),
                 freshness_disposition,
+                Some(&owner),
             )
             .await?;
         } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
@@ -103,6 +148,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             principal,
             freshness_disposition,
             CreateIntent::Create {
+                owner,
                 exclusive: !request.ignore_already_existing,
                 idempotency_key: request.idempotency_key.clone().map(Into::into),
             },
@@ -110,13 +156,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await?;
 
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        let agent_id = owned_agent_id.agent_id;
 
         if !wait_until_initialized {
-            return Ok(fingerprint);
+            return Ok((fingerprint, agent_id));
         }
 
         worker.await_initialization().await?;
-        Ok(fingerprint)
+        Ok((fingerprint, agent_id))
     }
 
     pub(super) async fn complete_promise_internal(
@@ -131,7 +178,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .ok_or(WorkerExecutorError::invalid_request("promise_id not found"))?;
 
         let owned_agent_id = extract_owned_agent_id(
-            &(&request, promise_id.clone()),
+            &(&request, *promise_id),
             |(_, r)| &r.agent_id,
             |(r, _)| &r.environment_id,
         )?;
@@ -140,8 +187,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let data = request.data;
 
-        let promise_id: common_model::PromiseId = promise_id
-            .clone()
+        let promise_id: common_model::PromiseId = (*promise_id)
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
@@ -196,7 +242,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let target_agent_id_proto = request
             .target_agent_id
-            .clone()
             .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
 
         let target_agent_id: AgentId = target_agent_id_proto
@@ -207,7 +252,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let source_agent_id_proto = request
             .source_agent_id
-            .clone()
             .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
 
         let source_agent_id: AgentId = source_agent_id_proto

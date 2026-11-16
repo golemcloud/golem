@@ -518,7 +518,8 @@ oplog_payload! {
             result: Result<Option<ComponentId>, String>
         },
         GolemApiFork {
-            forked_phantom_id: Uuid,
+            /// The fork target. Absent when the fork was denied.
+            forked_agent_id: Option<AgentId>,
             result: Result<ForkResult, String>,
         },
         GolemApiIdempotencyKey {

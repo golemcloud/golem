@@ -37,7 +37,7 @@ type FilteredEnvironment = (Vec<(String, String)>, Vec<(PermissionTarget, bool)>
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Builds the deterministic enriched worker environment: the worker metadata env merged with
     /// the agent type's default env, plus the Golem-provided variables (`GOLEM_AGENT_ID`,
-    /// `GOLEM_WORKER_NAME`, `GOLEM_COMPONENT_ID`, ...). Shared by the P2 and P3
+    /// `GOLEM_AGENT_KEY`, `GOLEM_AGENT_TYPE`, ...). Shared by the P2 and P3
     /// `cli::environment` host implementations. This only reconstructs the existing worker
     /// environment; the filtered guest-visible result is recorded separately by the host call.
     fn build_unfiltered_environment(&self) -> wasmtime::Result<Vec<(String, String)>> {
@@ -59,19 +59,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut env =
             merge_agent_env_with_default_env(Some(worker_metadata.env), default_agent_env);
 
-        let current_agent_name = if let Some(agent_id) = self.parsed_agent_id() {
-            let updated_agent_id = agent_id
-                .with_phantom_id(self.state.current_phantom_id)
-                .map_err(wasmtime::Error::msg)?;
-            updated_agent_id.to_string()
-        } else {
-            self.owned_agent_id.agent_name()
-        };
-
         AgentConfig::enrich_env(
             &mut env,
-            worker_metadata.component_id,
-            current_agent_name,
+            &self.owned_agent_id.agent_id,
+            worker_metadata.canonical_key.as_deref(),
             &worker_metadata.agent_type_name,
             self.owner_component_metadata().revision,
         );

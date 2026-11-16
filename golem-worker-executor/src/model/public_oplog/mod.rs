@@ -23,10 +23,7 @@ mod snapshots;
 use attribution::PublicOplogAttributionResolver;
 #[cfg(test)]
 use conversion::host_response_to_public_value;
-use invocation::{
-    agent_invocation_result_to_public, agent_invocation_to_public, enrich_golem_rpc_invoke,
-    enrich_golem_rpc_scheduled_invocation,
-};
+use invocation::{agent_invocation_result_to_public, agent_invocation_to_public};
 pub use reading::{
     check_oplog_cursor_query, find_component_revision_at, get_public_oplog_chunk,
     get_public_oplog_entry, get_public_oplog_page, oplog_page_cursor, oplog_page_start,

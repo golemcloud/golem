@@ -48,6 +48,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let golem_common::model::oplog::CreateProjectionParameters {
                     agent_id,
+                    agent_type_name: created_agent_type_name,
                     owner_kind,
                     agent_mode,
                     component_revision,
@@ -59,7 +60,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     local_agent_config,
-                    original_phantom_id,
                     instance_id,
                 } = *parameters;
                 let metadata = components
@@ -92,6 +92,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 return Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     agent_id,
+                    agent_type_name: created_agent_type_name,
                     owner_kind,
                     agent_mode,
                     component_revision,
@@ -103,7 +104,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
                     local_agent_config,
-                    original_phantom_id,
                     instance_id,
                 }));
             }
@@ -132,18 +132,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     let request_value = match host_request {
                         HostRequest::EntityInvocation(request) => request.input,
                         HostRequest::McpToolCall(request) => request.input,
-                        HostRequest::GolemRpcInvoke(inner) => HostRequest::GolemRpcInvoke(
-                            enrich_golem_rpc_invoke(components, inner).await,
-                        )
-                        .into_typed_schema_value()
-                        .map_err(|error| error.to_string())?,
-                        HostRequest::GolemRpcScheduledInvocation(inner) => {
-                            HostRequest::GolemRpcScheduledInvocation(
-                                enrich_golem_rpc_scheduled_invocation(components, inner).await,
-                            )
-                            .into_typed_schema_value()
-                            .map_err(|error| error.to_string())?
-                        }
                         other => other
                             .into_typed_schema_value()
                             .map_err(|error| error.to_string())?,

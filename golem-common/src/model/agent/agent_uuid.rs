@@ -74,22 +74,22 @@ impl AgentId {
         )
     }
 
-    /// The ID of the instance that runs an ephemeral invocation, so a retry reaches
-    /// the same instance. A caller without a caller scope never reaches this
-    /// derivation: its idempotency key is ignored, and it gets [`Self::random`].
+    /// The ID of the instance that runs an ephemeral invocation, so a retry reaches the
+    /// same instance. `owner_key` is the invocation's owner key
+    /// ([`crate::model::InvocationRequestKey::owner_key`]), which binds the caller scope,
+    /// the operation and the idempotency key, so the executor can check the ID from the
+    /// owner key alone.
     pub fn ephemeral_invocation(
         environment_id: EnvironmentId,
         type_id: TypeId,
-        caller_scope: &str,
-        idempotency_key: &IdempotencyKey,
+        owner_key: &IdempotencyKey,
     ) -> Self {
         Self::typed(
             type_id,
             HashInput::new(EPHEMERAL_INVOCATION_DOMAIN)
                 .environment(environment_id)
                 .type_id(type_id)
-                .variable(caller_scope.as_bytes())
-                .variable(idempotency_key.value.as_bytes()),
+                .variable(owner_key.value.as_bytes()),
         )
     }
 
@@ -175,28 +175,26 @@ impl AgentId {
     }
 
     /// The ID of the owner of a native tool called on a component instead of on an
-    /// agent. It has the reserved tag. A caller without a caller scope never reaches
-    /// this derivation: its idempotency key is ignored, and it gets
-    /// [`Self::random_reserved`]. The first-class tools work replaces these owners.
+    /// agent. It has the reserved tag. `owner_key` is the invocation's owner key
+    /// ([`crate::model::InvocationRequestKey::owner_key`]), which binds the caller scope,
+    /// the operation and the idempotency key; a request without a caller scope has an owner
+    /// key of its own. The first-class tools work replaces these owners.
     pub fn external_tool_owner(
         environment_id: EnvironmentId,
         component_id: ComponentId,
-        caller_scope: &str,
-        idempotency_key: &IdempotencyKey,
+        owner_key: &IdempotencyKey,
     ) -> Self {
         Self::from_parts(
             RESERVED_TYPE_TAG,
             HashInput::new(EXTERNAL_TOOL_OWNER_DOMAIN)
                 .environment(environment_id)
                 .fixed(component_id.0.as_bytes())
-                .variable(caller_scope.as_bytes())
-                .variable(idempotency_key.value.as_bytes())
+                .variable(owner_key.value.as_bytes())
                 .h(),
         )
     }
 
-    /// A fresh ID with the reserved tag, for an external-tool owner of a caller without
-    /// a caller scope and for an oplog processor.
+    /// A fresh ID with the reserved tag, for an oplog processor.
     pub fn random_reserved() -> Self {
         Self::from_parts(RESERVED_TYPE_TAG, rand::random::<u128>() & H_MASK)
     }

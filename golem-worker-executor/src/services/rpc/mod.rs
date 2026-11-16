@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::agent_webhooks::AgentWebhooksService;
-use super::direct_invocation_auth::DirectInvocationAuthService;
+use super::direct_invocation_auth::{DirectInvocationAuthService, EnvironmentOwnerAccountId};
 use super::environment_state::EnvironmentStateService;
 use super::external_durable_stream::ExternalDurableStreamService;
 use super::file_loader::FileLoader;
@@ -43,6 +43,7 @@ use crate::services::{
     worker_enumeration, worker_fork,
 };
 use crate::worker::invocation::validate_agent_method_invocation;
+use crate::worker::target::ResolvedTarget;
 use crate::worker::{CreateIntent, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -141,8 +142,7 @@ pub trait Rpc: Send + Sync {
     /// Explicit creation observes the constructor outcome; preparation never starts execution.
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -154,8 +154,7 @@ pub trait Rpc: Send + Sync {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -173,8 +172,7 @@ pub trait Rpc: Send + Sync {
     /// activation; ephemeral targets pass none.
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -191,8 +189,7 @@ pub trait Rpc: Send + Sync {
 
     async fn invoke_and_await_streaming(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _idempotency_key: IdempotencyKey,
         _method_name: String,
         _method_parameters: ProtoSchemaValue,
@@ -243,8 +240,7 @@ pub trait Rpc: Send + Sync {
     /// `expected_callee_fingerprint` has the same meaning as for [`Rpc::invoke_and_await`].
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,

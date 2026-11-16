@@ -67,7 +67,15 @@ impl Rpc for RemoteInvocationRpc {
             _ => None,
         };
         let start = InvocationStart {
-            agent_id: Some(owned_agent_id.agent_id().into()),
+            target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+                target: Some(
+                    golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
+                        owned_agent_id.agent_id().into(),
+                    ),
+                ),
+            }),
+            constructor: None,
+            component_id: None,
             method_name: Some(method_name),
             input: Some(input.try_into().map_err(|error| RpcError::ProtocolError {
                 details: format!(
@@ -127,7 +135,7 @@ impl Rpc for RemoteInvocationRpc {
                 .map_err(|details| RpcError::ProtocolError { details })?;
             match response.response {
                 Some(invocation_response::Response::Accepted(accepted)) => {
-                    if accepted.agent_id != start.agent_id
+                    if accepted.agent_id != Some(owned_agent_id.agent_id().into())
                         || accepted.idempotency_key != Some(idempotency_key.into())
                         || accepted.method_name != start.method_name
                         || accepted.component_revision.is_none()
@@ -163,8 +171,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -173,12 +180,11 @@ impl Rpc for RemoteInvocationRpc {
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
     ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
-        let AgentTarget::Current(agent_id) = target;
-        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let owned_agent_id = &target.owned_agent_id;
         let fingerprint = self
             .worker_proxy
             .create(
-                &owned_agent_id,
+                &target,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
@@ -202,8 +208,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method_name: &str,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -214,8 +219,7 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
-        let AgentTarget::Current(agent_id) = target;
-        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
+        let owned_agent_id = &target.owned_agent_id;
         debug!("Ensuring remote target worker exists");
 
         let principal = caller_agent_principal(self_agent_id);
@@ -223,7 +227,7 @@ impl Rpc for RemoteInvocationRpc {
         let fingerprint = self
             .worker_proxy
             .prepare(
-                owned_agent_id,
+                &target,
                 method_name,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
@@ -231,7 +235,7 @@ impl Rpc for RemoteInvocationRpc {
                 config,
                 principal,
                 auth_ctx,
-                // The receiving executor checks a fresh ephemeral phantom against the same owner
+                // The receiving executor checks a fresh ephemeral instance against the same owner
                 // key the caller derived it from.
                 idempotency_key
                     .map(|key| InvocationRequestKey::Internal(key).owner_key(method_name)),
@@ -247,8 +251,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -262,13 +265,12 @@ impl Rpc for RemoteInvocationRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
-        let AgentTarget::Current(agent_id) = target;
-        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
+        let owned_agent_id = &target.owned_agent_id;
         let principal = caller_agent_principal(self_agent_id);
         let output = self
             .worker_proxy
             .invoke_agent(
-                &owned_agent_id.agent_id(),
+                &target,
                 method_name,
                 method_parameters,
                 AgentInvocationMode::Await,
@@ -299,8 +301,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke_and_await_streaming(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: IdempotencyKey,
         method_name: String,
         method_parameters: ProtoSchemaValue,
@@ -317,11 +318,13 @@ impl Rpc for RemoteInvocationRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<DurableRpcInvocationResult, RpcError> {
-        let AgentTarget::Current(agent_id) = target;
-        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
+        let owned_agent_id = &target.owned_agent_id;
+        let proto_target = target.to_proto()?;
         let start = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(owned_agent_id.agent_id().into()),
+                target: Some(proto_target.target),
+                constructor: proto_target.constructor,
+                component_id: proto_target.component_id,
                 method_name: Some(method_name),
                 input: Some(method_parameters),
                 request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
@@ -561,8 +564,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -575,12 +577,11 @@ impl Rpc for RemoteInvocationRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
-        let AgentTarget::Current(agent_id) = target;
-        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
+        let owned_agent_id = &target.owned_agent_id;
         let principal = caller_agent_principal(self_agent_id);
         self.worker_proxy
             .invoke_agent(
-                &owned_agent_id.agent_id(),
+                &target,
                 method_name,
                 method_parameters,
                 AgentInvocationMode::Schedule,

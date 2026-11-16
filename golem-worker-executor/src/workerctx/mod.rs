@@ -297,7 +297,6 @@ pub trait WorkerCtx:
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<HydratedUpdate>,
-        original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,

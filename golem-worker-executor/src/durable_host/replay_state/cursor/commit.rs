@@ -265,11 +265,6 @@ impl CursorTx<'_> {
                 },
             );
         }
-        // The sequential adapter persists GolemApiFork as a matched
-        // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
-        // pair. On Start we remember the `Start`'s `OplogIndex`, on the matching
-        // End (via `start_index`) we decode the response and emit `ForkReplayed`
-        // if necessary.
         match oplog_entry {
             OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
                 self.record_wallet_replay_event(
@@ -414,44 +409,6 @@ impl CursorTx<'_> {
                         wallet_generation: *wallet_generation,
                     },
                 );
-            }
-            OplogEntry::Start { function_name, .. }
-                if function_name == &HostFunctionName::GolemApiFork =>
-            {
-                self.st.pending_fork_starts.insert(read_idx);
-            }
-            OplogEntry::End {
-                start_index,
-                response: Some(response_payload),
-                ..
-            } => {
-                let is_pending = self.st.pending_fork_starts.remove(start_index);
-                if is_pending {
-                    let response = self
-                        .cursor
-                        .oplog
-                        .download_payload(response_payload.clone())
-                        .await
-                        .map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "failed to download GolemApiFork oplog payload at index {read_idx}: {err}"
-                            ))
-                        })?;
-                    let result: HostResponseGolemApiFork =
-                        if let HostResponse::GolemApiFork(result) = response {
-                            result
-                        } else {
-                            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                "HostResponse::GolemApiFork",
-                                format!("{response:?}"),
-                            ));
-                        };
-                    if result.result == Ok(ForkResult::Forked) {
-                        self.record_replay_event(ReplayEvent::ForkReplayed {
-                            new_phantom_id: result.forked_phantom_id,
-                        });
-                    }
-                }
             }
             _ => {}
         }
