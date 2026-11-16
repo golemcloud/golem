@@ -9,6 +9,70 @@ import {
 } from '@golemcloud/golem-ts-sdk';
 import type { PromiseId } from 'golem:api/host@1.5.0';
 
+export const StaticDefaultsAgent = defineAgent({
+  name: 'StaticDefaultsAgent',
+  id: { name: z.string() },
+  config: {
+    settings: s.default(z.object({ label: z.string(), count: s.u32() }), {
+      label: 'code-default',
+      count: 31,
+    }),
+    choice: s.default(
+      s.union([
+        {
+          tag: 'Text',
+          schema: z.string(),
+          discriminator: { tag: 'prefix', val: 'selected:' },
+        },
+        {
+          tag: 'Other',
+          schema: z.string(),
+          discriminator: { tag: 'prefix', val: 'other:' },
+        },
+      ]),
+      'selected:value',
+    ),
+    slots: s.default(s.tuple([s.option(s.s32()), s.option(s.s32()), z.string()]), [
+      null,
+      7,
+      'retained',
+    ]),
+    omitted: z.string().optional(),
+  },
+  methods: {
+    read: method({ input: {}, returns: z.string() }),
+    constructorRead: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const StaticDefaultsAgentImpl = StaticDefaultsAgent.implement({
+  init: ({ config }) => {
+    const choice = config.choice;
+    return {
+      initial: {
+        settings: config.settings,
+        choice: { [choice.startsWith('selected:') ? 'Text' : 'Other']: choice },
+        slots: config.slots,
+        omitted: config.omitted ?? null,
+      },
+    };
+  },
+  methods: {
+    constructorRead() {
+      return JSON.stringify(this.initial);
+    },
+    read() {
+      const choice = this.config.choice;
+      return JSON.stringify({
+        settings: this.config.settings,
+        choice: { [choice.startsWith('selected:') ? 'Text' : 'Other']: choice },
+        slots: this.config.slots,
+        omitted: this.config.omitted ?? null,
+      });
+    },
+  },
+});
+
 // A `PromiseId` is a nested host record carrying bigints and a UUID; declare
 // it as an explicit Standard Schema so it can be returned / accepted by a
 // method.
@@ -270,7 +334,10 @@ export const NestedRequiredGroupConfigAgentImpl = NestedRequiredGroupConfigAgent
       const config = this.config;
       return JSON.stringify({
         outer: config.outer
-          ? { required: config.outer.required, inner: { a: config.outer.inner.a } }
+          ? {
+              required: config.outer.required,
+              inner: { a: config.outer.inner.a },
+            }
           : undefined,
       });
     },

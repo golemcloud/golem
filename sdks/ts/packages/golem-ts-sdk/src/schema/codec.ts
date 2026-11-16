@@ -90,6 +90,8 @@ export interface SchemaCodec {
   readonly invocationDirect?: DirectSchemaCodec;
   /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
   readonly sourceSchema?: StandardSchemaV1;
+  /** Portable canonical JSON default, exported as metadata, never applied by the codec. */
+  readonly configDefault?: import('./ref').JsonValue;
   /**
    * True for the unit/void type: the method's `returns` maps to WIT
    * `output-schema.unit`, so `graph` is a placeholder and is never encoded.
@@ -770,6 +772,7 @@ function freezeCodec(
 export type SchemaWalker = (
   schema: unknown,
   recurse: (child: unknown) => SchemaCodec,
+  options?: { readonly config?: boolean },
 ) => SchemaCodec;
 
 /**
@@ -838,7 +841,7 @@ function peekCapabilityHandle(value: unknown): unknown {
   return undefined;
 }
 
-function graphMayContainCapability(graph: SchemaGraph): boolean {
+export function graphMayContainCapability(graph: SchemaGraph): boolean {
   const cached = capabilityGraphCache.get(graph);
   if (cached !== undefined) return cached;
 

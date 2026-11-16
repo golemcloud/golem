@@ -156,3 +156,50 @@ void noCfgDef.implement({
     },
   },
 });
+
+const staticDef = defineAgent({
+  name: 'TypedStaticConfig',
+  id: {},
+  config: {
+    settings: s.default(z.object({ label: z.string(), count: s.u32() }), {
+      label: 'default',
+      count: 31,
+    }),
+    slots: s.default(s.tuple([s.option(s.s32()), s.option(s.s32()), z.string()]), [
+      null,
+      7,
+      'retained',
+    ]),
+    choice: s.union([
+      {
+        tag: 'mail',
+        schema: z.object({ kind: z.literal('mail'), address: z.string() }),
+        discriminator: { tag: 'field-equals', val: { fieldName: 'kind', literal: 'mail' } },
+      },
+      {
+        tag: 'queue',
+        schema: z.object({ kind: z.literal('queue'), queue: z.string() }),
+        discriminator: { tag: 'field-equals', val: { fieldName: 'kind', literal: 'queue' } },
+      },
+    ]),
+  },
+  methods: { read: method({ input: {}, returns: z.string() }) },
+});
+void staticDef.implement({
+  init: () => ({}),
+  methods: {
+    read() {
+      const count: number = this.config.settings.count;
+      const retained: string = this.config.slots[2];
+      const optional: number | undefined = this.config.slots[0];
+      void retained;
+      void optional;
+      // @ts-expect-error defaults do not erase the declared output type
+      const invalid: boolean = this.config.settings.label;
+      void invalid;
+      return this.config.choice.kind === 'mail'
+        ? this.config.choice.address
+        : this.config.choice.queue + count;
+    },
+  },
+});

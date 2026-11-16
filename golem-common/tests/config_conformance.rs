@@ -186,14 +186,18 @@ fn common_config_corpus() {
 
 #[test]
 async fn static_config_reference_exports_corpus_metadata() -> anyhow::Result<()> {
+    check_reference_metadata("../test-components/golem_it_agent_sdk_rust_release.wasm").await
+}
+
+#[test]
+async fn ts_static_config_exports_corpus_metadata() -> anyhow::Result<()> {
+    check_reference_metadata("../test-components/golem_it_agent_sdk_ts.wasm").await
+}
+
+async fn check_reference_metadata(component: &str) -> anyhow::Result<()> {
     let corpus: Corpus =
         serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
-    let agents = extract_agent_type_schemas(
-        Path::new("../test-components/golem_it_agent_sdk_rust_release.wasm"),
-        true,
-        false,
-    )
-    .await?;
+    let agents = extract_agent_type_schemas(Path::new(component), true, false).await?;
     let agent = agents
         .iter()
         .find(|agent| agent.type_name.0 == corpus.reference.agent_type)

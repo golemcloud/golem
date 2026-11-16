@@ -938,7 +938,10 @@ function decodeDuration(value: JsonValue, path: Path): bigint {
   );
 }
 
-function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonValue): boolean {
+export function discriminatorMatches(
+  rule: { tag: string; val?: unknown },
+  value: JsonValue,
+): boolean {
   if (rule.tag === 'prefix')
     return typeof value === 'string' && value.startsWith(rule.val as string);
   if (rule.tag === 'suffix') return typeof value === 'string' && value.endsWith(rule.val as string);

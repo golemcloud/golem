@@ -28,7 +28,7 @@ import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './ru
 import { ConfigSpec } from './config';
 import { HttpMountSpec } from './http';
 import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
-import type { MarkerKindOf, SecretInnerOf } from './schema/markers';
+import type { DefaultInnerOf, MarkerKindOf, SecretInnerOf } from './schema/markers';
 import type { Secret } from './secret';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { buildAgentClientSurface } from './client';
@@ -71,14 +71,15 @@ type ConfigObjectShapeOf<S> = S extends { readonly shape: infer Sh }
  * - anything else (primitive / union / array / map / scalar marker) → its
  *   decoded `InferOutput` value, read whole.
  */
-type ConfigFieldView<S> =
-  MarkerKindOf<S> extends 'secret'
+type ConfigFieldView<S> = [DefaultInnerOf<S>] extends [never]
+  ? MarkerKindOf<S> extends 'secret'
     ? Secret<SecretInnerOf<S>>
     : [ConfigObjectShapeOf<S>] extends [never]
       ? OutputOf<S>
       : {
           readonly [K in keyof ConfigObjectShapeOf<S>]: ConfigFieldView<ConfigObjectShapeOf<S>[K]>;
-        };
+        }
+  : ConfigFieldView<DefaultInnerOf<S>>;
 
 /** `InferOutput` guarded for the unconstrained recursion parameter. */
 type OutputOf<S> = S extends StandardSchemaV1 ? StandardSchemaV1.InferOutput<S> : unknown;

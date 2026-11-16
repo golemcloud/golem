@@ -23,6 +23,7 @@ use crate::Tracing;
 
 pub mod attempt_server;
 pub mod checkout_v2_regressions;
+pub mod config;
 pub mod manifest_status;
 pub mod permissions;
 pub mod sdk_policy;

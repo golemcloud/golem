@@ -35,6 +35,8 @@ import { SchemaCodec, SchemaWalker } from './codec';
 import { StandardSchemaV1 } from './standardSchema';
 import { buildUnionVariantCodec, matchesStandard } from './union';
 import { registerSchemaWalker } from './adapter';
+import { nativeConfigDefault } from './configDefault';
+import { buildConfigUnionCodec } from './union';
 
 interface NormalizedDef {
   kind: string;
@@ -120,7 +122,16 @@ function leaf(
   return { graph: { defs: new Map(), root }, toValue, fromValue };
 }
 
-const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
+const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
+  if (
+    context?.config &&
+    ('fallback' in (schema as object) ||
+      (schema as any).pipe?.some((action: any) => action.kind === 'transformation'))
+  ) {
+    throw new TypeError(
+      'Cannot extract a Valibot fallback or transformation as static config; use s.default(schema, JSON data)',
+    );
+  }
   const {
     kind,
     inner,
@@ -158,6 +169,9 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
               innerCodec.graph.root.body.tag !== 'option');
     const optionCodec: SchemaCodec = {
       graph: { defs: innerCodec.graph.defs, root },
+      configDefault: context?.config
+        ? nativeConfigDefault(unwrapPipe(schema), 'default')
+        : undefined,
       optionKind: kind as 'optional' | 'nullable' | 'nullish',
       optionInner: innerCodec,
       toValue: (value) =>
@@ -253,6 +267,7 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       const defs = mergeGraphDefs(itemCodecs.map((c) => c.graph));
       return {
         graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
+        tupleItems: itemCodecs,
         toValue: (value) => v.tuple((value as unknown[]).map((e, i) => itemCodecs[i].toValue(e))),
         fromValue: (sv) =>
           (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) =>
@@ -380,6 +395,7 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
         const lit = litSchema ? normalize(litSchema).literalValues?.[0] : undefined;
         if (lit !== undefined) discToIndex.set(lit, i);
       });
+      if (context?.config) return buildConfigUnionCodec(optCodecs, disc, [...discToIndex.keys()]);
       return {
         graph: { defs, root: t.variant(cases) },
         toValue: (value) => {
