@@ -125,6 +125,8 @@ describe("Polar billing", () => {
       net_amount: subtotal,
       tax_amount: 0,
       total_amount: subtotal,
+      applied_balance_amount: 0,
+      due_amount: subtotal,
       items,
       ...overrides
     }
@@ -1388,7 +1390,8 @@ describe("Polar billing", () => {
       // Polar adds the tax on top, or takes it out of the subtotal.
       net_amount: taxOnTop ? 2345 : 2094,
       tax_amount: taxOnTop ? 281 : 251,
-      total_amount: taxOnTop ? 2626 : 2345
+      total_amount: taxOnTop ? 2626 : 2345,
+      due_amount: taxOnTop ? 2626 : 2345
     })
 
     it("charges the paid overage with the tax that the invoice added on top, and records a payment that includes the tax", async () => {
@@ -1437,11 +1440,27 @@ describe("Polar billing", () => {
           discount_amount: 500,
           net_amount: 500,
           tax_amount: 60,
-          total_amount: 560
+          total_amount: 560,
+          due_amount: 560
         })
       )
 
       expect(await page(jar)).toContain("Settle $5.60")
+    })
+
+    it("takes the credit that a pending order used off the settlement, and charges the total of a void order", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      // $10.00 of credit from the wallet of the customer, for example after a downgrade, pays part
+      // of the order. It stays used while the order is pending.
+      const withCredit = { ...taxedLastOrder(true), applied_balance_amount: -1000, due_amount: 1626 }
+      await deliver("order.created", order(accountId, withCredit))
+      expect(await page(jar)).toContain("Settle $2.39")
+
+      // A void gives the credit back to the wallet, so the person owes the whole order again.
+      await deliver("order.updated", order(accountId, { ...withCredit, status: "void", modified_at: new Date().toISOString() }))
+      expect(await page(jar)).toContain("Settle $3.86")
     })
 
     it("keeps the debt when Polar voids the unpaid order of a revoked subscription", async () => {

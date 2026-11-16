@@ -1,23 +1,24 @@
 /**
- * What the invoice of an order charges for each item, after the discount and with the tax, in
- * cents. Polar gives the amount of each item before the discount and the tax, and computes the
- * discount and the tax only for the whole order: the discount applies to the items that are not a
- * proration, and the tax to the subtotal after the discount. So the discount of the order is shared
- * over those items by their amounts, and the total of the order over all items by their amounts
- * after the discount. The total holds the tax when Polar adds it on top, and the subtotal holds it
- * when the tax is inclusive, so the result does not depend on the tax behavior.
+ * What an order asks for each item, in cents: `amount`, the part of the order that the person
+ * pays, shared over the items. Polar gives the amount of each item before the discount and the tax,
+ * and computes the discount, the tax and the credit only for the whole order: the discount applies
+ * to the items that are not a proration, and the tax to the subtotal after the discount. So the
+ * discount of the order is shared over those items by their amounts, and `amount` over all items by
+ * their amounts after the discount. The total of an order holds the tax when Polar adds it on top,
+ * and the subtotal holds it when the tax is inclusive, so the result does not depend on the tax
+ * behavior.
  */
 export const itemTotals = (order: {
   readonly items: ReadonlyArray<{ readonly amount: number; readonly proration: boolean }>
   readonly discountAmount: number
-  readonly totalAmount: number
+  readonly amount: number
 }): ReadonlyArray<number> => {
   const discounts = share(
     order.discountAmount,
     order.items.map((item) => (item.proration ? 0 : item.amount))
   )
   return share(
-    order.totalAmount,
+    order.amount,
     order.items.map((item, index) => item.amount - (discounts[index] ?? 0))
   )
 }

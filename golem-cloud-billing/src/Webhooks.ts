@@ -58,12 +58,22 @@ const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): S
   pastDueAt: data.past_due_at ? new Date(data.past_due_at) : undefined
 })
 
+/**
+ * The part of an order that the person pays. Credit from the wallet of the customer, for example
+ * after a downgrade, pays part of a new order, so its due amount is the total less that credit, and
+ * the credit stays used while the order is pending. A void gives that credit back to the wallet, so
+ * the person owes the total of a void order. Polar also takes credit that the customer gained after
+ * the order against a void, and the order does not show it.
+ */
+const owedAmount = (data: OrderPayload["data"]): number =>
+  data.status === "void" ? data.total_amount : data.due_amount
+
 const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["data"]): Order => {
   const items = data.items ?? []
   const totals = itemTotals({
     items: items.map((item) => ({ amount: item.amount, proration: item.proration === true })),
     discountAmount: data.discount_amount,
-    totalAmount: data.total_amount
+    amount: owedAmount(data)
   })
   return {
     orderId: data.id,

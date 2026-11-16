@@ -267,7 +267,12 @@ and the tax only for a whole order, so the webhook shares them over the items
 (`src/OrderTotals.ts`): the discount over the items that are not a proration, by their amounts,
 and the total of the order over all items, by their amounts after the discount. The total holds
 the tax when Polar adds it on top, and the subtotal holds it when the tax is inclusive, so no tax
-setting of the organization or of a price changes the amount. One settlement pays the oldest orders
+setting of the organization or of a price changes the amount. Credit from the wallet of the
+customer, for example after a downgrade, pays part of an order. A pending order keeps that credit,
+so it shares its due amount. A void gives the credit back to the wallet, so a void order shares its
+total. Polar also takes credit that the customer gained after the order against a void, and the
+order does not show it; such a person pays that part twice, and an operator refunds it. One
+settlement pays the oldest orders
 that fit: at most 13, the most IDs that fit in a metadata value, and at most $999,999.99, the
 largest price of Polar.
 

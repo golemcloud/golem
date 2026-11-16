@@ -45,8 +45,9 @@ export interface Order {
   readonly createdAt: Date
   readonly modifiedAt: Date
   /**
-   * `amount` is before the discount and the tax. `total` is what the invoice charges for the item,
-   * after the discount and with the tax (`OrderTotals.itemTotals`).
+   * `amount` is before the discount and the tax. `total` is what the order asks for the item: after
+   * the discount, with the tax, and less the credit that a pending order uses
+   * (`OrderTotals.itemTotals`).
    */
   readonly items: ReadonlyArray<{
     readonly productPriceId: string | null
