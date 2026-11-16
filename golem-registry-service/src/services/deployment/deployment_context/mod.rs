@@ -59,10 +59,11 @@ use golem_common::model::tool_middleware_release::{
 };
 use golem_common::model::tool_release::ToolReleaseId;
 use golem_common::schema::agent::agent_secret_value_schema;
+use golem_common::schema::config::{ConfigOrigin, ConfigSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::tool::validation::validate_tool;
-use golem_common::schema::validation::is_equivalent_cross_graph;
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_service_base::custom_api::{
     SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
@@ -102,6 +103,91 @@ pub struct DeploymentContext {
 }
 
 impl DeploymentContext {
+    pub fn validate_static_config(&self, errors: &mut Vec<DeployValidationError>) {
+        for component in self.components.values() {
+            let metadata = &component.metadata;
+            let component_schema = metadata.config_schema();
+            let owners = std::iter::once((
+                None,
+                &component_schema.schema,
+                component_schema.declarations.as_slice(),
+                metadata.component_provision_config().config.as_slice(),
+            ))
+            .chain(metadata.agent_types().iter().map(|agent| {
+                (
+                    Some(&agent.type_name),
+                    &agent.schema,
+                    agent.config.as_slice(),
+                    metadata.agent_type_config(&agent.type_name).unwrap_or(&[]),
+                )
+            }));
+            for (agent_type, graph, declarations, captures) in owners {
+                let origin = ConfigOrigin {
+                    file: component.component_name.to_string().into(),
+                    path: vec!["config".into()],
+                    layer: "code".into(),
+                };
+                let declarations = declarations
+                    .iter()
+                    .filter(|field| field.source == AgentConfigSource::Local)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let result = ConfigSchema::from_declarations(graph, &declarations, &origin)
+                    .map_err(|error| error.to_string())
+                    .and_then(|schema| {
+                        for field in &schema.fields {
+                            for length in 1..field.path.len() {
+                                let group = &field.path[..length];
+                                if !captures.iter().any(|entry| entry.path.starts_with(group)) {
+                                    return Err(format!(
+                                        "missing required config group '{}'",
+                                        group.join(".")
+                                    ));
+                                }
+                            }
+                            if let Some(capture) =
+                                captures.iter().find(|entry| entry.path == field.path)
+                            {
+                                if !is_equivalent_cross_graph(
+                                    graph,
+                                    &field.value_type,
+                                    capture.value.graph(),
+                                    capture.value.root_type(),
+                                ) {
+                                    return Err(format!(
+                                        "incompatible capture at '{}'",
+                                        field.path.join(".")
+                                    ));
+                                }
+                                validate_value(graph, &field.value_type, capture.value.value())
+                                    .map_err(|_| {
+                                        format!("invalid capture at '{}'", field.path.join("."))
+                                    })?;
+                            } else if field.default.is_none()
+                                && !matches!(
+                                    graph.resolve_ref(&field.value_type),
+                                    Ok(SchemaType::Option { .. })
+                                )
+                            {
+                                return Err(format!(
+                                    "missing required static config '{}'",
+                                    field.path.join(".")
+                                ));
+                            }
+                        }
+                        Ok(())
+                    });
+                if let Err(message) = result {
+                    errors.push(DeployValidationError::InvalidStaticConfig {
+                        component_name: component.component_name.clone(),
+                        agent_type_name: agent_type.cloned(),
+                        message,
+                    });
+                }
+            }
+        }
+    }
+
     pub fn collect_tool_middleware_registrations(
         &self,
         deployment_revision: golem_common::model::deployment::DeploymentRevision,

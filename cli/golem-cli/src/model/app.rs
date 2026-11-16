@@ -1372,6 +1372,10 @@ impl Application {
             .map(PathBuf::as_path)
     }
 
+    pub fn config_catalog(&self) -> Option<&ConfigCatalogSources> {
+        self.config_catalogs.get(self.environment_name())
+    }
+
     /// Resolve owner inputs only after its declaration schema is available.
     /// This does not provision resources or materialize runtime handles.
     pub fn resolve_config(
@@ -2675,6 +2679,26 @@ impl Layer for ComponentLayer {
                 selection,
                 properties.config_schema.value().clone(),
             );
+            if properties.config_schema.value().is_some() {
+                let mut path = vec![
+                    if id.is_template() {
+                        "componentTemplates"
+                    } else {
+                        "components"
+                    }
+                    .into(),
+                    id.name().to_owned(),
+                ];
+                if let Some(preset) = &preset {
+                    path.extend(["presets".into(), preset.clone()]);
+                }
+                path.push("configSchema".into());
+                value.config_schema_origin = Some(ConfigOrigin {
+                    file: self.source.clone(),
+                    path,
+                    layer: id.to_string(),
+                });
+            }
 
             value.node_http_routers.apply_layer(
                 id,
@@ -3012,6 +3036,8 @@ pub struct ComponentLayerProperties {
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
+    #[serde(skip)]
+    pub config_schema_origin: Option<ConfigOrigin>,
     pub node_http_routers:
         OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
     #[serde(skip)]
@@ -3057,6 +3083,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
             config_schema: value.config_schema.into(),
+            config_schema_origin: None,
             node_http_routers: value.node_http_routers.into(),
             node_http_routers_origin: None,
             config: value.agent_properties.config.into(),

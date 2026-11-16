@@ -233,6 +233,8 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     ),
     registry_entry!("BuildResult", "build", arb_build_result),
     registry_entry!("CleanResult", "clean", arb_clean_result),
+    registry_entry!("ConfigListView", "config.list", arb_config_list_result),
+    registry_entry!("ConfigGetView", "config.get", arb_config_get_result),
     registry_entry!("DeployPlanView", "deploy.plan", arb_deploy_plan_result),
     registry_entry!("DeployResultView", "deploy", arb_deploy_result),
     registry_entry!(
@@ -1008,6 +1010,7 @@ fn deploy_diff_and_plan_structured_outputs_mask_secret_payloads() {
         deployment_diff: &diff,
         tool_publications: &Default::default(),
         environment_setup: None,
+        static_config: &[],
     });
 
     for value in [diff_value, plan_value] {
@@ -5890,9 +5893,62 @@ fn arb_polymorphic_card() -> BoxedStrategy<golem_common::model::card::Polymorphi
         .boxed()
 }
 
+fn arb_static_config_field() -> BoxedStrategy<crate::model::config::StaticConfigFieldView> {
+    (
+        any::<bool>(),
+        proptest::option::of("[a-z]{0,12}"),
+        any::<bool>(),
+    )
+        .prop_map(|(agent, fill, selected)| {
+            use crate::model::config::{StaticConfigFieldView, StaticConfigSource};
+            use golem_common::schema::config::ConfigOrigin;
+            let origin = ConfigOrigin {
+                file: "golem.yaml".into(),
+                path: vec!["config".into(), "local".into(), "label".into()],
+                layer: "environment".into(),
+            };
+            StaticConfigFieldView {
+                component: golem_common::model::component::ComponentName("app:main".into()),
+                agent_type: agent.then(|| golem_common::model::agent::AgentTypeName("Main".into())),
+                path: vec!["settings".into(), "label".into()],
+                schema: golem_common::schema::SchemaGraph::anonymous(
+                    golem_common::schema::SchemaType::option(
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                ),
+                fill: serde_json::to_value(fill).unwrap().into(),
+                sources: vec![StaticConfigSource {
+                    path: vec![],
+                    origin: origin.clone(),
+                }],
+                catalog_origin: selected.then_some(origin),
+            }
+        })
+        .boxed()
+}
+
+fn arb_config_list_result() -> OutputDocumentStrategy {
+    proptest::collection::vec(arb_static_config_field(), 0..4)
+        .prop_map(|fields| {
+            to_structured_output_value(crate::model::config::ConfigListView { fields }).unwrap()
+        })
+        .boxed()
+}
+
+fn arb_config_get_result() -> OutputDocumentStrategy {
+    arb_static_config_field()
+        .prop_map(|field| {
+            to_structured_output_value(crate::model::config::ConfigGetView { field }).unwrap()
+        })
+        .boxed()
+}
+
 fn arb_deploy_plan_result() -> OutputDocumentStrategy {
-    any::<bool>()
-        .prop_map(|include_environment_setup| {
+    (
+        any::<bool>(),
+        proptest::collection::vec(arb_static_config_field(), 0..3),
+    )
+        .prop_map(|(include_environment_setup, fields)| {
             let deployment_diff = empty_deployment_diff();
             let environment_setup =
                 include_environment_setup.then(crate::model::deploy::EnvironmentSetupPlan::default);
@@ -5901,6 +5957,7 @@ fn arb_deploy_plan_result() -> OutputDocumentStrategy {
                     deployment_diff: &deployment_diff,
                     tool_publications: &Default::default(),
                     environment_setup: environment_setup.as_ref(),
+                    static_config: &fields,
                 },
                 MaskingConfig::hide_secrets(),
             )

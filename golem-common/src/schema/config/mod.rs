@@ -456,6 +456,18 @@ impl ConfigSchema {
         layers: &[ConfigLayer],
         code_origin: &ConfigOrigin,
     ) -> Result<Vec<ConfigFieldPlan>, ConfigError> {
+        self.resolve_with(catalogs, layers, code_origin, &|value, _| Ok(value.clone()))
+    }
+
+    /// Evaluate supplied static leaves before validation. Code defaults are already
+    /// canonical values and never pass through the manifest evaluator.
+    pub fn resolve_with(
+        &self,
+        catalogs: &ConfigCatalogSources,
+        layers: &[ConfigLayer],
+        code_origin: &ConfigOrigin,
+        evaluate: &impl Fn(&Value, &ConfigOrigin) -> Result<Value, ConfigError>,
+    ) -> Result<Vec<ConfigFieldPlan>, ConfigError> {
         self.validate(code_origin)?;
         catalogs.validate()?;
         for layer in layers {
@@ -583,6 +595,7 @@ impl ConfigSchema {
                             selected_origin.as_ref().unwrap_or(&origin),
                             &mut origins,
                             catalogs,
+                            evaluate,
                         )?);
                     } else {
                         origins.clear();
@@ -1030,6 +1043,7 @@ fn merge_config(
     origin: &ConfigOrigin,
     origins: &mut BTreeMap<Vec<String>, ConfigOrigin>,
     catalogs: &ConfigCatalogSources,
+    evaluate: &impl Fn(&Value, &ConfigOrigin) -> Result<Value, ConfigError>,
 ) -> Result<Value, ConfigError> {
     let graph = &schema.graph;
     if let Some(selected) = selector(&layer, "$config", origin)? {
@@ -1050,6 +1064,7 @@ fn merge_config(
             &source,
             origins,
             catalogs,
+            evaluate,
         );
     }
     if matches!(deref_type(graph, ty), SchemaType::Secret { .. }) {
@@ -1066,6 +1081,7 @@ fn merge_config(
     if schema.descriptor_kind(ty).is_some() {
         origins.retain(|key, _| !key.starts_with(path));
         record_origins(&layer, path, origin, origins);
+        let layer = evaluate(&layer, origin)?;
         return schema.descriptor_json(ty, layer, true, origin, Some(catalogs));
     }
     let ty = deref_type(graph, ty);
@@ -1081,16 +1097,38 @@ fn merge_config(
             origin,
             origins,
             catalogs,
+            evaluate,
         );
     }
-    if matches!(ty, SchemaType::Union { .. }) {
+    if let SchemaType::Union { spec, .. } = ty {
+        let mut evaluated = layer.clone();
+        if let Some(object) = evaluated.as_object_mut() {
+            for branch in &spec.branches {
+                if let crate::schema::DiscriminatorRule::FieldEquals(rule) = &branch.discriminator
+                    && let Some(value) = layer.get(&rule.field_name)
+                {
+                    let origin = origin.child(&rule.field_name);
+                    let (value, source) = match selector(value, "$config", &origin)? {
+                        Some(selected) => {
+                            let (value, source) = catalogs.select(selected, &origin)?;
+                            (value, source)
+                        }
+                        None => (value, origin),
+                    };
+                    object.insert(rule.field_name.clone(), evaluate(value, &source)?);
+                }
+            }
+        } else {
+            evaluated = evaluate(&layer, origin)?;
+        }
         // A partial record overlay inherits the discriminator, not the old case's fields.
         let mut discriminated = current.clone().unwrap_or(Value::Null);
-        if let (Some(previous), Some(overlay)) = (discriminated.as_object_mut(), layer.as_object())
+        if let (Some(previous), Some(overlay)) =
+            (discriminated.as_object_mut(), evaluated.as_object())
         {
             previous.extend(overlay.clone());
         } else {
-            discriminated = layer.clone();
+            discriminated = evaluated;
         }
         if let Some(branch) = union_branch(ty, &discriminated) {
             let same_case = current
@@ -1109,6 +1147,7 @@ fn merge_config(
                 origin,
                 origins,
                 catalogs,
+                evaluate,
             );
         }
     } else if let SchemaType::Record { fields, .. } = ty
@@ -1133,6 +1172,7 @@ fn merge_config(
                 &origin.child(name),
                 origins,
                 catalogs,
+                evaluate,
             )?;
             merged.insert(name.clone(), value);
         }
@@ -1160,6 +1200,7 @@ fn merge_config(
                     &origin.child(&index),
                     origins,
                     catalogs,
+                    evaluate,
                 )
             })
             .collect::<Result<Vec<_>, _>>()
@@ -1167,6 +1208,7 @@ fn merge_config(
     }
     origins.retain(|key, _| !key.starts_with(path));
     record_origins(&layer, path, origin, origins);
+    let layer = evaluate(&layer, origin)?;
     let value = schema.descriptor_json(ty, layer, true, origin, Some(catalogs))?;
     if !contains_secret(graph, ty, &mut HashSet::new()) {
         let decoded = from_json_value(graph, ty, &value)

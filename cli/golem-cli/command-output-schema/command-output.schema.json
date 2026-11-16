@@ -172,6 +172,12 @@
       "$ref": "#/definitions/clean"
     },
     {
+      "$ref": "#/definitions/config.list"
+    },
+    {
+      "$ref": "#/definitions/config.get"
+    },
+    {
       "$ref": "#/definitions/deploy.plan"
     },
     {
@@ -3298,6 +3304,63 @@
       },
       "additionalProperties": false
     },
+    "ConfigOrigin": {
+      "type": "object",
+      "required": ["file", "path", "layer"],
+      "properties": {
+        "file": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "layer": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "StaticConfigSource": {
+      "type": "object",
+      "required": ["path", "origin"],
+      "properties": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "origin": { "$ref": "#/definitions/ConfigOrigin" }
+      },
+      "additionalProperties": false
+    },
+    "StaticConfigFieldView": {
+      "type": "object",
+      "required": ["component", "agentType", "path", "schema", "fill", "sources", "catalogOrigin"],
+      "properties": {
+        "component": { "type": "string" },
+        "agentType": { "type": ["string", "null"] },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "fill": {},
+        "sources": { "type": "array", "items": { "$ref": "#/definitions/StaticConfigSource" } },
+        "catalogOrigin": { "oneOf": [{ "$ref": "#/definitions/ConfigOrigin" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "config.list": {
+      "type": "object",
+      "description": "Static declarations, effective fills and source layers from the local manifest and built component metadata. This is not deployed-state inspection.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "config list",
+      "required": ["$type", "fields"],
+      "properties": {
+        "$type": { "const": "config.list" },
+        "fields": { "type": "array", "items": { "$ref": "#/definitions/StaticConfigFieldView" } }
+      },
+      "additionalProperties": false
+    },
+    "config.get": {
+      "type": "object",
+      "description": "One exact static declaration with its effective local fill and source layers. Secret values are excluded.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "config get",
+      "required": ["$type", "field"],
+      "properties": {
+        "$type": { "const": "config.get" },
+        "field": { "$ref": "#/definitions/StaticConfigFieldView" }
+      },
+      "additionalProperties": false
+    },
     "deploy.plan": {
       "type": "object",
       "description": "May be emitted by `golem deploy` when planning includes deployment or environment setup changes. Other deploy output documents may also appear in the same command run.",
@@ -3307,6 +3370,7 @@
         "$type",
         "deploymentDiff",
         "environmentSetup",
+        "staticConfig",
         "toolPublications"
       ],
       "properties": {
@@ -3318,6 +3382,10 @@
         },
         "toolPublications": {
           "$ref": "#/definitions/ToolPublicationPlan"
+        },
+        "staticConfig": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/StaticConfigFieldView" }
         },
         "environmentSetup": {
           "oneOf": [
@@ -9918,6 +9986,14 @@
     {
       "type": "clean",
       "rustType": "CleanResult"
+    },
+    {
+      "type": "config.list",
+      "rustType": "ConfigListView"
+    },
+    {
+      "type": "config.get",
+      "rustType": "ConfigGetView"
     },
     {
       "type": "deploy.plan",

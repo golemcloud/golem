@@ -1532,10 +1532,18 @@ impl AppCommandHandler {
                     || deploy_diff.environment_setup.is_some()
                 {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    let static_config = deploy_diff
+                        .deployable_manifest
+                        .components
+                        .iter()
+                        .filter(|(name, _)| deploy_diff.diff.components.contains_key(name.as_str()))
+                        .flat_map(|(_, component)| component.static_config.iter().cloned())
+                        .collect::<Vec<_>>();
                     self.ctx.log_handler().log_output(DeployPlanView {
                         deployment_diff: &deploy_diff.diff,
                         tool_publications: &deploy_diff.tool_publication_plan,
                         environment_setup: deploy_diff.environment_setup.as_ref(),
+                        static_config: &static_config,
                     })?;
                 }
                 if deploy_diff.has_deployment_request_changes() && !deployment_version.0.is_empty()

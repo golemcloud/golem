@@ -38,6 +38,7 @@ use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::bridge::BridgeCommandHandler;
 use crate::command_handler::card::CardCommandHandler;
 use crate::command_handler::component::ComponentCommandHandler;
+use crate::command_handler::config::ConfigCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
@@ -78,6 +79,7 @@ mod app;
 mod bridge;
 mod card;
 mod component;
+mod config;
 mod environment;
 pub(crate) mod interactive;
 mod log;
@@ -546,6 +548,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
+                GolemCliSubcommand::Config { subcommand } => {
+                    ctx.get_or_init()
+                        .await?
+                        .config_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
                 GolemCliSubcommand::Resource { subcommand } => {
                     ctx.get_or_init()
                         .await?
@@ -678,6 +687,7 @@ pub trait Handlers {
     fn account_permission_share_handler(&self) -> AccountPermissionShareCommandHandler;
     fn account_usage_handler(&self) -> AccountUsageCommandHandler;
     fn secret_handler(&self) -> SecretCommandHandler;
+    fn config_handler(&self) -> ConfigCommandHandler;
     fn retry_policy_handler(&self) -> RetryPolicyCommandHandler;
     fn resource_definition_handler(&self) -> ResourceDefinitionCommandHandler;
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
@@ -721,6 +731,10 @@ impl Handlers for Arc<Context> {
 
     fn secret_handler(&self) -> SecretCommandHandler {
         SecretCommandHandler::new(self.clone())
+    }
+
+    fn config_handler(&self) -> ConfigCommandHandler {
+        ConfigCommandHandler::new(self.clone())
     }
 
     fn retry_policy_handler(&self) -> RetryPolicyCommandHandler {

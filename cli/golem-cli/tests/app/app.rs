@@ -66,6 +66,310 @@ fn write_extracted_agent_types(
 }
 
 #[test]
+async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracing: &Tracing) {
+    use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
+    use golem_common::schema::{AgentTypeSchema, NamedFieldType};
+
+    let mut ctx = TestContext::new();
+    ctx.cd(ctx.cwd_path().canonicalize().unwrap());
+    ctx.add_env_var("STATIC_CONFIG_TEST_LABEL", "from-environment");
+    let wasm = ctx.cwd_path_join("main.wasm");
+    copy_placeholder_wasm(placeholder_component_wasm(&ctx), &wasm);
+    let mut agents: Vec<AgentTypeSchema> = serde_json::from_str(
+        &fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    agents.retain(|agent| agent.type_name.0 == "BarAgent");
+    agents[0].config = vec![AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: vec!["settings".into()],
+        value_type: SchemaType::record(vec![
+            NamedFieldType {
+                name: "label".into(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "count".into(),
+                body: SchemaType::u32(),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "literal".into(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ]),
+        default_value: Some(
+            r#"{"label":"code","count":31,"literal":"{{ not_a_template }}"}"#.into(),
+        ),
+    }];
+    let mut incomplete = agents[0].clone();
+    incomplete.type_name = AgentTypeName("Incomplete".into());
+    incomplete.config[0].default_value = None;
+    agents.push(incomplete);
+    seed_extracted_metadata(
+        &ctx,
+        "app:main",
+        &wasm,
+        &serde_json::to_string(&agents).unwrap(),
+    );
+    seed_extraction_marker(&ctx, "app:main");
+    fs::write_str(
+        ctx.cwd_path_join("schema.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        componentTemplates:
+          with-config:
+            configSchema:
+              declarations:
+                - source: Local
+                  path: [global]
+                  value_type: {{ kind: bool, value: {{}} }}
+                  default_value: "true"
+        "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        app: static-inspection
+        includes: [schema.yaml]
+        environments:
+          local:
+            server: local
+        config:
+          local:
+            label: "{{{{ STATIC_CONFIG_TEST_LABEL }}}}"
+        components:
+          app:main:
+            templates: with-config
+            componentWasm: main.wasm
+        agents:
+          BarAgent:
+            config:
+              settings:
+                label: {{ $config: label }}
+                count: 0
+    "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    let result = ctx
+        .cli(["config", "get", "BarAgent.settings", "--format", "json"])
+        .await;
+    assert!(result.success_or_dump());
+    let documents: Vec<JsonValue> = result.stdout_json();
+    let field = &documents[0]["field"];
+    assert_eq!(documents[0]["$type"], "config.get");
+    assert_eq!(
+        field["fill"],
+        serde_json::json!({"label":"from-environment","count":0,"literal":"{{ not_a_template }}"})
+    );
+    assert!(
+        field["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["origin"]["path"]
+                == serde_json::json!(["config", "local", "label"]))
+    );
+
+    let list = ctx
+        .cli([
+            "config",
+            "list",
+            "--agent-type",
+            "BarAgent",
+            "--format",
+            "json",
+        ])
+        .await;
+    assert!(list.success_or_dump());
+    let documents: Vec<JsonValue> = list.stdout_json();
+    assert_eq!(documents[0]["fields"], serde_json::json!([field]));
+    let component = ctx
+        .cli([
+            "config",
+            "get",
+            "global",
+            "--component",
+            "app:main",
+            "--format",
+            "json",
+        ])
+        .await;
+    assert!(component.success_or_dump());
+    let documents: Vec<JsonValue> = component.stdout_json();
+    assert_eq!(documents[0]["field"]["fill"], true);
+    assert!(documents[0]["field"]["agentType"].is_null());
+    assert!(
+        documents[0]["field"]["sources"][0]["origin"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("schema.yaml")
+    );
+    assert_eq!(
+        documents[0]["field"]["sources"][0]["origin"]["path"],
+        serde_json::json!([
+            "componentTemplates",
+            "with-config",
+            "configSchema",
+            "global"
+        ])
+    );
+    let all = ctx.cli(["config", "list"]).await;
+    assert!(!all.success());
+    assert!(all.stderr_contains("Incomplete"));
+    let wrong_case = ctx.cli(["config", "get", "BarAgent.Settings"]).await;
+    assert!(!wrong_case.success());
+    assert!(wrong_case.stderr_contains("No static config declaration"));
+}
+
+#[test]
+#[test_r::tag(deploy)]
+#[test_r::tag(deploy_runtime)]
+#[timeout("10 minutes")]
+async fn static_config_catalog_changes_capture_on_deploy_and_agent_update(_tracing: &Tracing) {
+    use golem_cli::model::invoke_result_view::InvokeResultView;
+    use golem_common::schema::FromSchema;
+
+    async fn read(ctx: &TestContext, id: &str) -> String {
+        let output = ctx
+            .cli([
+                "agent",
+                "invoke",
+                id,
+                "read",
+                "--no-stream",
+                "--format",
+                "json",
+            ])
+            .await;
+        assert!(output.success_or_dump());
+        let documents: Vec<InvokeResultView> = output.stdout_json();
+        String::from_value(documents[0].result_json.as_ref().unwrap().value()).unwrap()
+    }
+
+    let mut ctx = TestContext::new();
+    ctx.add_env_var("CARGO_BUILD_JOBS", "2");
+    assert!(
+        ctx.cli(["new", "static-capture", "--template", "rust", "--yes"])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd("static-capture");
+    let lib = walkdir::WalkDir::new(ctx.cwd_path())
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .find(|path| path.ends_with("src/lib.rs"))
+        .unwrap();
+    let original = fs::read_to_string(&lib).unwrap();
+    fs::write_str(&lib, format!("{original}\n{}", indoc! {r#"
+        use golem_rust::agentic::Config;
+        use golem_rust::{agent_definition, agent_implementation, ConfigSchema};
+
+        #[derive(ConfigSchema)]
+        pub struct StaticConfig {
+            pub label: String,
+            pub count: u32,
+            pub optional: Option<String>,
+        }
+
+        #[agent_definition]
+        pub trait StaticConfigAgent {
+            fn new(name: String, #[agent_config] config: Config<StaticConfig>) -> Self;
+            fn read(&self) -> String;
+        }
+        struct StaticConfigAgentImpl { config: Config<StaticConfig> }
+        #[agent_implementation]
+        impl StaticConfigAgent for StaticConfigAgentImpl {
+            fn new(_name: String, #[agent_config] config: Config<StaticConfig>) -> Self { Self { config } }
+            fn read(&self) -> String {
+                let config = self.config.get().unwrap();
+                format!("{}:{}:{:?}", config.label, config.count, config.optional)
+            }
+        }
+    "#})).unwrap();
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    let original = fs::read_to_string(&manifest).unwrap();
+    let manifest_with_catalog = format!(
+        "{original}\n{}",
+        indoc! {r#"
+        config:
+          local:
+            label: first
+        agents:
+          StaticConfigAgent:
+            config:
+              label: { $config: label }
+              count: 0
+    "#}
+    );
+    fs::write_str(&manifest, &manifest_with_catalog).unwrap();
+    ctx.start_server().await;
+    assert!(ctx.cli(["deploy", "--yes"]).await.success_or_dump());
+    let old = r#"StaticConfigAgent("old")"#;
+    let overridden = r#"StaticConfigAgent("override")"#;
+    assert_eq!(read(&ctx, old).await, "first:0:None");
+    assert!(
+        ctx.cli([
+            "agent",
+            "new",
+            overridden,
+            "--config",
+            r#"label="creation""#
+        ])
+        .await
+        .success_or_dump()
+    );
+    assert_eq!(read(&ctx, overridden).await, "creation:0:None");
+
+    fs::write_str(
+        &manifest,
+        manifest_with_catalog.replace("label: first", "label: second"),
+    )
+    .unwrap();
+    let plan = ctx.cli(["deploy", "--plan", "--format", "json"]).await;
+    assert!(plan.success_or_dump());
+    let documents: Vec<JsonValue> = plan.stdout_json();
+    let captures = documents
+        .iter()
+        .find(|document| document["$type"] == "deploy.plan")
+        .unwrap()["staticConfig"]
+        .as_array()
+        .unwrap();
+    assert!(
+        captures
+            .iter()
+            .any(|field| field["agentType"] == "StaticConfigAgent"
+                && field["path"] == serde_json::json!(["label"])
+                && field["fill"] == "second")
+    );
+    assert!(ctx.cli(["deploy", "--yes"]).await.success_or_dump());
+    assert_eq!(
+        read(&ctx, r#"StaticConfigAgent("new")"#).await,
+        "second:0:None"
+    );
+    assert_eq!(read(&ctx, old).await, "first:0:None");
+    for id in [old, overridden] {
+        assert!(
+            ctx.cli(["agent", "update", id, "--await", "--yes"])
+                .await
+                .success_or_dump()
+        );
+    }
+    assert_eq!(read(&ctx, old).await, "second:0:None");
+    assert_eq!(read(&ctx, overridden).await, "creation:0:None");
+}
+
+#[test]
 async fn app_help_in_empty_folder(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli(cmd::NO_ARGS).await;

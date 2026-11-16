@@ -16,8 +16,103 @@ pub mod profile;
 pub mod server;
 
 use crate::config::{AuthenticationConfig, ClientConfig, NamedProfile, ProfileConfig, ProfileName};
+use crate::model::cli_output::StructuredOutput;
+use crate::model::text_format::{TextOutput, logln};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::{AgentConfigEntryDto, ComponentName};
+use golem_common::model::json::NormalizedJsonValue;
+use golem_common::schema::SchemaGraph;
+use golem_common::schema::config::ConfigOrigin;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaticConfigSource {
+    pub path: Vec<String>,
+    pub origin: ConfigOrigin,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaticConfigFieldView {
+    pub component: ComponentName,
+    pub agent_type: Option<AgentTypeName>,
+    pub path: Vec<String>,
+    pub schema: SchemaGraph,
+    pub fill: NormalizedJsonValue,
+    pub sources: Vec<StaticConfigSource>,
+    pub catalog_origin: Option<ConfigOrigin>,
+}
+
+impl StaticConfigFieldView {
+    pub fn config_entry(&self) -> AgentConfigEntryDto {
+        AgentConfigEntryDto {
+            path: self.path.clone(),
+            value: self.fill.clone(),
+        }
+    }
+}
+
+impl TextOutput for StaticConfigFieldView {
+    fn log(&self) {
+        let owner = self
+            .agent_type
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("component {}", self.component));
+        logln(format!("{owner}.{} = {}", self.path.join("."), self.fill.0));
+        logln(format!(
+            "  Type: {}",
+            golem_common::schema::render::cli_text::type_to_cli_text(
+                &self.schema,
+                &self.schema.root
+            )
+        ));
+        for source in &self.sources {
+            logln(format!(
+                "  {}: {} ({}:{})",
+                source.path.join("."),
+                source.origin.layer,
+                source.origin.file.display(),
+                source.origin.path.join(".")
+            ));
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigListView {
+    pub fields: Vec<StaticConfigFieldView>,
+}
+
+impl TextOutput for ConfigListView {
+    fn log(&self) {
+        for field in &self.fields {
+            field.log();
+        }
+    }
+}
+
+impl StructuredOutput for ConfigListView {
+    const KIND: &'static str = "config.list";
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConfigGetView {
+    pub field: StaticConfigFieldView,
+}
+
+impl TextOutput for ConfigGetView {
+    fn log(&self) {
+        self.field.log();
+    }
+}
+
+impl StructuredOutput for ConfigGetView {
+    const KIND: &'static str = "config.get";
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]

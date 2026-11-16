@@ -375,6 +375,35 @@ fn catalog_union_overlays_replace_cases_and_preserve_positions() {
             expected
         );
     }
+    for overlay in [
+        json!({"setting":{"choice":{"$config":"selected"}}}),
+        json!({"setting":{"choice":{"kind":{"$config":"kind"},"b":41}}}),
+    ] {
+        let plan = schema
+            .resolve_with(
+                &catalog(json!({
+                    "selected": {"kind":"{{ selected }}","b":41},
+                    "kind": "{{ selected }}"
+                })),
+                &layers(vec![base.clone(), overlay]),
+                &origin("code"),
+                &|value, _| {
+                    Ok(if value == "{{ selected }}" {
+                        json!("b")
+                    } else {
+                        value.clone()
+                    })
+                },
+            )
+            .unwrap();
+        let ConfigSourcePlan::Static(value) = &plan[0].source else {
+            panic!("static capture expected")
+        };
+        assert_eq!(
+            to_json_value(&schema.graph, &schema.fields[0].value_type, value).unwrap(),
+            json!({"choice":{"kind":"b","b":41},"items":[1,2]})
+        );
+    }
 }
 
 #[test]

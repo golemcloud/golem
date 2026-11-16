@@ -420,6 +420,7 @@ pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
     pub config_schema: ComponentConfigSchema,
     pub component_config: Vec<AgentConfigEntryDto>,
+    pub static_config: Vec<crate::model::config::StaticConfigFieldView>,
     pub component_initial_card: Option<ParsedInitialPermissionCard>,
     pub component_env: BTreeMap<String, String>,
     pub component_files: Vec<InitialComponentFile>,

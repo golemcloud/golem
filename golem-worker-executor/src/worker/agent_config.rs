@@ -277,12 +277,12 @@ pub fn effective_agent_config(
         })
         .collect();
 
-    for entry in default_agent_config {
-        result.insert(entry.path, entry.value);
-    }
-
-    for entry in config {
-        result.insert(entry.path, entry.value);
+    for entry in default_agent_config.into_iter().chain(config) {
+        if declarations.iter().any(|declaration| {
+            declaration.source == AgentConfigSource::Local && declaration.path == entry.path
+        }) {
+            result.insert(entry.path, entry.value);
+        }
     }
 
     Ok(result)
@@ -305,6 +305,17 @@ pub fn validate_agent_config(
 
         match config.get(&entry.path) {
             Some(config_value) => {
+                if !is_equivalent_cross_graph(
+                    declared_graph,
+                    declared_type,
+                    config_value.graph(),
+                    config_value.root_type(),
+                ) {
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "Incompatible captured schema for config {}",
+                        entry.path.join(".")
+                    )));
+                }
                 validate_value(declared_graph, declared_type, config_value.value()).map_err(
                     |errors| {
                         WorkerExecutorError::invalid_request(format!(
@@ -414,8 +425,46 @@ mod tests {
             &SchemaValue::Option { inner: None },
         );
         assert!(!captured.contains_key(&vec!["settings".into(), "omitted".into()]));
-        let rebuilt = effective_agent_config(creation, provisioned, &graph, &declarations).unwrap();
+        let rebuilt =
+            effective_agent_config(creation.clone(), provisioned.clone(), &graph, &declarations)
+                .unwrap();
         assert_eq!(rebuilt, captured);
+
+        let mut updated = declarations.clone();
+        updated.retain(|declaration| declaration.path.last().unwrap() != "creation");
+        let rebuilt = effective_agent_config(creation, provisioned, &graph, &updated).unwrap();
+        assert!(!rebuilt.contains_key(&vec!["settings".into(), "creation".into()]));
+
+        let mut agent = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
+            type_name: AgentTypeName("Static".into()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: graph.clone(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: declarations,
+        };
+        validate_agent_config(&captured, &agent).unwrap();
+        agent
+            .config
+            .iter_mut()
+            .find(|declaration| declaration.path.last().unwrap() == "cleared")
+            .unwrap()
+            .value_type = SchemaType::option(SchemaType::u32());
+        assert!(
+            validate_agent_config(&captured, &agent).is_err(),
+            "an absent optional payload must not hide an incompatible retype"
+        );
     }
 
     #[test]
