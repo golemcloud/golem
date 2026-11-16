@@ -21,8 +21,8 @@ use futures::FutureExt;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{
-    AgentMode, AgentTypeName, CorsOptions, CustomHttpMethod, FileMapping, HttpEndpointDetails,
-    HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, Snapshotting,
+    AgentMode, AgentTypeName, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails,
+    PathSegment, Snapshotting,
 };
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
@@ -172,6 +172,7 @@ use golem_registry_service::services::{
     plan::PlanService,
     tool_release::{ToolReleaseError, ToolReleaseService},
 };
+use golem_schema::http::{CustomHttpMethod, FileMapping, LiteralSegment};
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::db::{postgres::PostgresPool, sqlite::SqlitePool};
@@ -9766,9 +9767,11 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         FileMapping::compile_list(pairs.iter().copied()).expect("valid persistence mappings")
     };
     let mount = |static_bindings, filesystem_bindings, openapi_provider_method| HttpMountDetails {
-        path_prefix: vec![PathSegment::Literal(LiteralSegment {
-            value: "assets".to_string(),
-        })],
+        path_prefix: vec![PathSegment::Segment(
+            golem_schema::http::PathSegment::Literal(LiteralSegment {
+                value: "assets".to_string(),
+            }),
+        )],
         auth_details: None,
         phantom_agent: false,
         phantom_id_binding: None,
@@ -9847,9 +9850,11 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         prompt_hint: None,
         input_schema: InputSchema::parameters([]),
         output_schema: OutputSchema::Unit,
-        http_endpoint: vec![endpoint(HttpMethod::Custom(CustomHttpMethod {
-            value: "ANY".to_string(),
-        }))],
+        http_endpoint: vec![endpoint(HttpMethod::Method(
+            golem_schema::http::HttpMethod::Custom(CustomHttpMethod {
+                value: "ANY".to_string(),
+            }),
+        ))],
         read_only: None,
     });
     regular.http_mount = Some(mount(
@@ -14858,11 +14863,8 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                     static_bindings: if protected {
                         vec![]
                     } else {
-                        golem_common::base_model::agent::FileMapping::compile_list([(
-                            "/assets/*",
-                            "/public/$1",
-                        )])
-                        .unwrap()
+                        golem_schema::http::FileMapping::compile_list([("/assets/*", "/public/$1")])
+                            .unwrap()
                     },
                     file_index: if protected {
                         vec![]
@@ -14973,7 +14975,7 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     assert_eq!(
         router.static_bindings,
         vec![FileMapping::Subtree(
-            golem_common::model::agent::SubtreeFileMapping {
+            golem_schema::http::SubtreeFileMapping {
                 public_prefix: vec!["assets".into()],
                 filesystem_root: "/public".into()
             }
@@ -14996,7 +14998,7 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     assert_eq!(
         router.static_bindings,
         vec![FileMapping::Subtree(
-            golem_common::model::agent::SubtreeFileMapping {
+            golem_schema::http::SubtreeFileMapping {
                 public_prefix: vec!["assets".into()],
                 filesystem_root: "/public".into()
             }

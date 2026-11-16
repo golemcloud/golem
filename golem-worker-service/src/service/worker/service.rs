@@ -5470,7 +5470,9 @@ mod tests {
                 input_schema: InputSchema::Parameters(vec![]),
                 output_schema: OutputSchema::Unit,
                 http_endpoint: vec![HttpEndpointDetails {
-                    http_method: golem_common::model::agent::HttpMethod::Get(Empty {}),
+                    http_method: golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(Default::default()),
+                    ),
                     path_suffix: vec![],
                     header_vars: vec![],
                     query_vars: vec![],
@@ -7013,8 +7015,8 @@ mod tests {
         };
         use crate::service::component::RemoteComponentService;
         use crate::service::component::tests::TestRegistry;
-        use golem_common::model::agent::http_files::HttpRequestTarget;
         use golem_common::model::domain_registration::Domain;
+        use golem_schema::http::HttpRequestTarget;
         use golem_service_base::custom_api::{
             AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
             MethodParameter, PathSegmentType, PhantomSelection, QueryOrHeaderType,
@@ -7115,7 +7117,10 @@ mod tests {
                     environment_id: a.environment_id,
                     deployment_revision: DeploymentRevision::new(1).unwrap(),
                     route_id: 1,
-                    route_match: golem_common::model::agent::HttpMethod::Get(Empty {}).into(),
+                    route_match: golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(Default::default()),
+                    )
+                    .into(),
                     path: vec![],
                     behavior: RichRouteBehaviour::CallAgent(behaviour.clone()),
                     security: RichRouteSecurity::None,

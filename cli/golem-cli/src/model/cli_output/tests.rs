@@ -3282,12 +3282,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                     filesystem_bindings,
                     file_response_headers: file_response_headers
                         .into_iter()
-                        .map(
-                            |(name, value)| golem_common::model::agent::FileResponseHeader {
-                                name,
-                                value,
-                            },
-                        )
+                        .map(|(name, value)| golem_schema::http::FileResponseHeader { name, value })
                         .collect(),
                     openapi_provider_method,
                 }
@@ -3296,31 +3291,27 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
         .boxed()
 }
 
-fn arb_file_mapping() -> BoxedStrategy<golem_common::model::agent::FileMapping> {
+fn arb_file_mapping() -> BoxedStrategy<golem_schema::http::FileMapping> {
     prop_oneof![
         (
             proptest::collection::vec(arb_small_string(), 1..3),
             arb_small_string(),
         )
             .prop_map(|(public_path, file_path)| {
-                golem_common::model::agent::FileMapping::Exact(
-                    golem_common::model::agent::ExactFileMapping {
-                        public_path,
-                        file_path,
-                    },
-                )
+                golem_schema::http::FileMapping::Exact(golem_schema::http::ExactFileMapping {
+                    public_path,
+                    file_path,
+                })
             }),
         (
             proptest::collection::vec(arb_small_string(), 1..3),
             arb_small_string(),
         )
             .prop_map(|(public_prefix, filesystem_root)| {
-                golem_common::model::agent::FileMapping::Subtree(
-                    golem_common::model::agent::SubtreeFileMapping {
-                        public_prefix,
-                        filesystem_root,
-                    },
-                )
+                golem_schema::http::FileMapping::Subtree(golem_schema::http::SubtreeFileMapping {
+                    public_prefix,
+                    filesystem_root,
+                })
             }),
     ]
     .boxed()
@@ -3334,7 +3325,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
         proptest::collection::vec(arb_path_segment(), 0..2),
         proptest::collection::vec(
             (arb_small_string(), arb_small_string()).prop_map(|(header_name, variable_name)| {
-                golem_common::model::agent::HeaderVariable {
+                golem_schema::http::HeaderVariable {
                     header_name,
                     variable_name,
                 }
@@ -3343,7 +3334,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
         ),
         proptest::collection::vec(
             (arb_small_string(), arb_small_string()).prop_map(
-                |(query_param_name, variable_name)| golem_common::model::agent::QueryVariable {
+                |(query_param_name, variable_name)| golem_schema::http::QueryVariable {
                     query_param_name,
                     variable_name,
                 },
@@ -3433,38 +3424,40 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
 }
 
 fn arb_http_method() -> BoxedStrategy<golem_common::model::agent::HttpMethod> {
+    use golem_common::model::agent::HttpMethod;
+    use golem_schema::http::HttpMethod as SharedHttpMethod;
     prop_oneof![
-        Just(golem_common::model::agent::HttpMethod::Get(
-            golem_common::model::Empty {}
+        Just(HttpMethod::Method(
+            SharedHttpMethod::Get(Default::default())
         )),
-        Just(golem_common::model::agent::HttpMethod::Head(
-            golem_common::model::Empty {}
+        Just(HttpMethod::Method(SharedHttpMethod::Head(
+            Default::default()
+        ))),
+        Just(HttpMethod::Method(SharedHttpMethod::Post(
+            Default::default()
+        ))),
+        Just(HttpMethod::Method(
+            SharedHttpMethod::Put(Default::default())
         )),
-        Just(golem_common::model::agent::HttpMethod::Post(
-            golem_common::model::Empty {}
-        )),
-        Just(golem_common::model::agent::HttpMethod::Put(
-            golem_common::model::Empty {}
-        )),
-        Just(golem_common::model::agent::HttpMethod::Delete(
-            golem_common::model::Empty {}
-        )),
-        Just(golem_common::model::agent::HttpMethod::Connect(
-            golem_common::model::Empty {}
-        )),
-        Just(golem_common::model::agent::HttpMethod::Options(
-            golem_common::model::Empty {}
-        )),
-        Just(golem_common::model::agent::HttpMethod::Trace(
-            golem_common::model::Empty {}
-        )),
-        Just(golem_common::model::agent::HttpMethod::Patch(
-            golem_common::model::Empty {}
-        )),
+        Just(HttpMethod::Method(SharedHttpMethod::Delete(
+            Default::default()
+        ))),
+        Just(HttpMethod::Method(SharedHttpMethod::Connect(
+            Default::default()
+        ))),
+        Just(HttpMethod::Method(SharedHttpMethod::Options(
+            Default::default()
+        ))),
+        Just(HttpMethod::Method(SharedHttpMethod::Trace(
+            Default::default()
+        ))),
+        Just(HttpMethod::Method(SharedHttpMethod::Patch(
+            Default::default()
+        ))),
         arb_small_string().prop_map(|value| {
-            golem_common::model::agent::HttpMethod::Custom(
-                golem_common::model::agent::CustomHttpMethod { value },
-            )
+            HttpMethod::Method(SharedHttpMethod::Custom(
+                golem_schema::http::CustomHttpMethod { value },
+            ))
         }),
         Just(golem_common::model::agent::HttpMethod::Any(
             golem_common::model::Empty {}
@@ -3474,21 +3467,23 @@ fn arb_http_method() -> BoxedStrategy<golem_common::model::agent::HttpMethod> {
 }
 
 fn arb_path_segment() -> BoxedStrategy<golem_common::model::agent::PathSegment> {
+    use golem_common::model::agent::PathSegment;
+    use golem_schema::http::PathSegment as SharedPathSegment;
     prop_oneof![
         arb_small_string().prop_map(|value| {
-            golem_common::model::agent::PathSegment::Literal(
-                golem_common::model::agent::LiteralSegment { value },
-            )
+            PathSegment::Segment(SharedPathSegment::Literal(
+                golem_schema::http::LiteralSegment { value },
+            ))
         }),
         arb_small_string().prop_map(|variable_name| {
-            golem_common::model::agent::PathSegment::PathVariable(
-                golem_common::model::agent::PathVariable { variable_name },
-            )
+            PathSegment::Segment(SharedPathSegment::PathVariable(
+                golem_schema::http::PathVariable { variable_name },
+            ))
         }),
         arb_small_string().prop_map(|variable_name| {
-            golem_common::model::agent::PathSegment::RemainingPathVariable(
-                golem_common::model::agent::PathVariable { variable_name },
-            )
+            PathSegment::Segment(SharedPathSegment::RemainingPathVariable(
+                golem_schema::http::PathVariable { variable_name },
+            ))
         }),
         prop_oneof![
             Just(golem_common::model::agent::SystemVariable::AgentType),
@@ -6893,6 +6888,24 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
         arb_small_u64(),
         proptest::collection::vec(
             prop_oneof![
+                (
+                    arb_uuid(),
+                    arb_small_string(),
+                    arb_small_string(),
+                    arb_http_method(),
+                    arb_small_string(),
+                )
+                    .prop_map(|(component_id, agent_type, method_name, http_method, path)| {
+                        golem_common::model::deployment::DeployValidationWarning::HttpApiReadOnlyMethodBoundToNonGetVerb(
+                            golem_common::model::deployment::HttpApiReadOnlyMethodBoundToNonGetVerb {
+                                component_id: golem_common::model::component::ComponentId(component_id),
+                                agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                                method_name,
+                                http_method,
+                                path,
+                            },
+                        )
+                    }),
                 (
                     proptest::option::of(any::<u32>()),
                     proptest::option::of(arb_small_string()),

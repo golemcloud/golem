@@ -4348,6 +4348,7 @@ dependencies = [
  "criterion",
  "desert_rust",
  "golem-schema-derive",
+ "http 1.5.0",
  "mac_address",
  "miette",
  "nonempty-collections",

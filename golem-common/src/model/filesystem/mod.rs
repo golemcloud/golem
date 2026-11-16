@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::agent::http_files::valid_decoded_segment;
 use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker as proto;
+use golem_schema::http::valid_decoded_segment;
 
 #[cfg(test)]
 mod selection_tests;

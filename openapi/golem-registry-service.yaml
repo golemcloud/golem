@@ -12597,6 +12597,31 @@ components:
       properties:
         required:
           type: boolean
+    AgentHttpMethod:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - Method
+          value:
+            $ref: '#/components/schemas/HttpMethod'
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - Any
+          value:
+            $ref: '#/components/schemas/Empty'
     AgentId:
       type: object
       title: AgentId
@@ -12653,6 +12678,31 @@ components:
       enum:
       - Durable
       - Ephemeral
+    AgentPathSegment:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - Segment
+          value:
+            $ref: '#/components/schemas/PathSegment'
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - SystemVariable
+          value:
+            $ref: '#/components/schemas/SystemVariableSegment'
     AgentSecretCreation:
       type: object
       title: AgentSecretCreation
@@ -16878,7 +16928,7 @@ components:
         methodName:
           type: string
         httpMethod:
-          $ref: '#/components/schemas/HttpMethod'
+          $ref: '#/components/schemas/AgentHttpMethod'
         path:
           type: string
     HttpApiReadOnlyTtlBelowOneSecond:
@@ -16911,11 +16961,11 @@ components:
       - corsOptions
       properties:
         httpMethod:
-          $ref: '#/components/schemas/HttpMethod'
+          $ref: '#/components/schemas/AgentHttpMethod'
         pathSuffix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         headerVars:
           type: array
           items:
@@ -16935,31 +16985,29 @@ components:
     HttpMethod:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
       discriminator:
         propertyName: type
         mapping:
-          Get: '#/components/schemas/HttpMethod_Empty'
-          Head: '#/components/schemas/HttpMethod_Empty'
-          Post: '#/components/schemas/HttpMethod_Empty'
-          Put: '#/components/schemas/HttpMethod_Empty'
-          Delete: '#/components/schemas/HttpMethod_Empty'
-          Connect: '#/components/schemas/HttpMethod_Empty'
-          Options: '#/components/schemas/HttpMethod_Empty'
-          Trace: '#/components/schemas/HttpMethod_Empty'
-          Patch: '#/components/schemas/HttpMethod_Empty'
+          Get: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Head: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Post: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Put: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Delete: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Connect: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Options: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Trace: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Patch: '#/components/schemas/HttpMethod_SchemaEmpty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
-          Any: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -16972,7 +17020,7 @@ components:
             - Custom
             example: Custom
       - $ref: '#/components/schemas/CustomHttpMethod'
-    HttpMethod_Empty:
+    HttpMethod_SchemaEmpty:
       allOf:
       - type: object
         required:
@@ -16981,9 +17029,9 @@ components:
           type:
             type: string
             enum:
-            - Any
-            example: Any
-      - $ref: '#/components/schemas/Empty'
+            - Patch
+            example: Patch
+      - $ref: '#/components/schemas/SchemaEmpty'
     HttpMountDetails:
       type: object
       title: HttpMountDetails
@@ -16999,7 +17047,7 @@ components:
         pathPrefix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         authDetails:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
@@ -17011,7 +17059,7 @@ components:
         webhookSuffix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         staticBindings:
           type: array
           items:
@@ -18385,14 +18433,12 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PathSegment_LiteralSegment'
-      - $ref: '#/components/schemas/PathSegment_SystemVariableSegment'
       - $ref: '#/components/schemas/PathSegment_PathVariable'
       - $ref: '#/components/schemas/PathSegment_PathVariable'
       discriminator:
         propertyName: type
         mapping:
           Literal: '#/components/schemas/PathSegment_LiteralSegment'
-          SystemVariable: '#/components/schemas/PathSegment_SystemVariableSegment'
           PathVariable: '#/components/schemas/PathSegment_PathVariable'
           RemainingPathVariable: '#/components/schemas/PathSegment_PathVariable'
     PathSegment_LiteralSegment:
@@ -18419,18 +18465,6 @@ components:
             - RemainingPathVariable
             example: RemainingPathVariable
       - $ref: '#/components/schemas/PathVariable'
-    PathSegment_SystemVariableSegment:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - SystemVariable
-            example: SystemVariable
-      - $ref: '#/components/schemas/SystemVariableSegment'
     PathSpec:
       type: object
       required:
@@ -19687,6 +19721,9 @@ components:
             - other
           value:
             type: string
+    SchemaEmpty:
+      type: object
+      title: SchemaEmpty
     SchemaGraph:
       type: object
       required:

@@ -1878,9 +1878,7 @@ pub(crate) fn validate_final_http_api_router_for_origin(
                 ));
                 continue;
             }
-            match golem_common::model::agent::http_files::HttpRequestTarget::parse(
-                scheme.redirect_url.url().path(),
-            ) {
+            match golem_schema::http::HttpRequestTarget::parse(scheme.redirect_url.url().path()) {
                 Ok(target) => {
                     let path = target
                         .segments()
@@ -1891,8 +1889,8 @@ pub(crate) fn validate_final_http_api_router_for_origin(
                         .collect::<Vec<_>>();
                     if add_reserved(
                         RouteMatch::Method {
-                            method: golem_common::model::agent::HttpMethod::Get(
-                                golem_common::model::Empty {},
+                            method: golem_common::model::agent::HttpMethod::Method(
+                                golem_schema::http::HttpMethod::Get(Default::default()),
                             ),
                             trailing_slash: target.trailing_slash(),
                         },
@@ -1912,17 +1910,20 @@ pub(crate) fn validate_final_http_api_router_for_origin(
             ) {
                 for (method, path) in [
                     (
-                        golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {}),
+                        golem_common::model::agent::HttpMethod::Method(
+                            golem_schema::http::HttpMethod::Get(Default::default()),
+                        ),
                         pkce_authorization_path(&scheme.id),
                     ),
                     (
-                        golem_common::model::agent::HttpMethod::Post(golem_common::model::Empty {}),
+                        golem_common::model::agent::HttpMethod::Method(
+                            golem_schema::http::HttpMethod::Post(Default::default()),
+                        ),
                         pkce_token_path(&scheme.id),
                     ),
                 ] {
-                    let target =
-                        golem_common::model::agent::http_files::HttpRequestTarget::parse(&path)
-                            .expect("generated PKCE endpoint path must be valid");
+                    let target = golem_schema::http::HttpRequestTarget::parse(&path)
+                        .expect("generated PKCE endpoint path must be valid");
                     let path = target
                         .segments()
                         .iter()

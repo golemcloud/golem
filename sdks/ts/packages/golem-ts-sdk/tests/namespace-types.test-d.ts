@@ -24,6 +24,9 @@ export const text: bridge.TextRestrictions = { languages: ['en'] };
 export const binary: bridge.BinaryRestrictions = { mimeTypes: ['image/png'] };
 export const metadata: bridge.MetadataEnvelope | undefined = undefined;
 export const tree: bridge.SchemaValueTree | undefined = undefined;
-export const segment: http.PathSegment = { tag: 'literal', val: 'counters' };
+export const segment: http.PathSegment = {
+  tag: 'segment',
+  val: { tag: 'literal', val: 'counters' },
+};
 export const entry: oplog.OplogEntry | undefined = undefined;
 export const level: oplog.LogLevel = 'info';

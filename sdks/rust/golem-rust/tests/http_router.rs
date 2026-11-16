@@ -14,6 +14,7 @@ mod tests {
         AgentMode, AgentTypeKind, FileMapping, HttpMethod, InputSchema, PathSegment, Snapshotting,
         SystemVariable,
     };
+    use golem_rust::golem_schema::http::wit::wire::PathSegment as SharedPathSegment;
     use golem_rust::schema::SchemaValueStream;
     use golem_rust::schema::stream::SchemaValueStreamSource;
     use golem_rust::{
@@ -217,7 +218,7 @@ mod tests {
             PathSegment::SystemVariable(SystemVariable::AgentVersion)
         ));
         assert!(
-            matches!(&mount.path_prefix[3], PathSegment::PathVariable(variable) if variable.variable_name == "owner")
+            matches!(&mount.path_prefix[3], PathSegment::Segment(SharedPathSegment::PathVariable(variable)) if variable.variable_name == "owner")
         );
         assert_eq!(mount.file_response_headers.len(), 2);
         assert_eq!(

@@ -125,7 +125,9 @@ fn sample_agent_type_schema() -> AgentTypeSchema {
                 },
             ))),
             http_endpoint: vec![HttpEndpointDetails {
-                http_method: HttpMethod::Post(Empty {}),
+                http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(
+                    Default::default(),
+                )),
                 path_suffix: vec![],
                 header_vars: vec![],
                 query_vars: vec![],

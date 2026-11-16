@@ -1,6 +1,5 @@
 use super::*;
 use crate::repo::model::deployment::{CompiledMcpData, DeploymentCompiledMcpRecord};
-use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, Snapshotting};
 use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath, AgentSecretRevision};
@@ -35,6 +34,7 @@ use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
 };
+use golem_schema::Empty;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::repo::Blob;
 use serde_json::json;
@@ -64,7 +64,7 @@ fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
         id: golem_common::model::security_scheme::SecuritySchemeId::new(),
         revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
         name,
-        provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
+        provider_type: golem_common::model::security_scheme::Provider::Google(Default::default()),
         client_id: openidconnect::ClientId::new("test-client".into()),
         client_secret: openidconnect::ClientSecret::new("test-secret".into()),
         redirect_url: openidconnect::RedirectUrl::new(
@@ -72,7 +72,7 @@ fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
         )
         .unwrap(),
         scopes: vec![],
-        login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
+        login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Default::default()),
     }
 }
 
@@ -129,7 +129,8 @@ fn http_context(agents: Vec<AgentTypeSchema>) -> DeploymentContext {
 }
 
 fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
-    use golem_common::model::agent::{CorsOptions, HttpMountDetails, LiteralSegment, PathSegment};
+    use golem_common::model::agent::{CorsOptions, HttpMountDetails, PathSegment};
+    use golem_schema::http::LiteralSegment;
     let mut agent = agent_type_with_secret_config(
         AgentTypeName(name.into()),
         vec!["key".into()],
@@ -142,9 +143,9 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
             .split('/')
             .filter(|part| !part.is_empty())
             .map(|value| {
-                PathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(golem_schema::http::PathSegment::Literal(LiteralSegment {
                     value: value.into(),
-                })
+                }))
             })
             .collect(),
         auth_details: None,
@@ -163,22 +164,29 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
 }
 
 fn selector_test_path(path: &str) -> Vec<golem_common::model::agent::PathSegment> {
-    use golem_common::model::agent::{LiteralSegment, PathSegment, PathVariable};
+    use golem_common::model::agent::PathSegment;
+    use golem_schema::http::{LiteralSegment, PathVariable};
     path.split('/')
         .filter(|s| !s.is_empty())
         .map(|s| {
             if let Some(name) = s.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
                 if let Some(name) = name.strip_prefix('*') {
-                    PathSegment::RemainingPathVariable(PathVariable {
-                        variable_name: name.into(),
-                    })
+                    PathSegment::Segment(golem_schema::http::PathSegment::RemainingPathVariable(
+                        PathVariable {
+                            variable_name: name.into(),
+                        },
+                    ))
                 } else {
-                    PathSegment::PathVariable(PathVariable {
-                        variable_name: name.into(),
-                    })
+                    PathSegment::Segment(golem_schema::http::PathSegment::PathVariable(
+                        PathVariable {
+                            variable_name: name.into(),
+                        },
+                    ))
                 }
             } else {
-                PathSegment::Literal(LiteralSegment { value: s.into() })
+                PathSegment::Segment(golem_schema::http::PathSegment::Literal(LiteralSegment {
+                    value: s.into(),
+                }))
             }
         })
         .collect()
@@ -200,7 +208,7 @@ fn selector_test_agent(path: &str, optional: bool) -> AgentTypeSchema {
     }));
     let mut method = provider_method("compare");
     method.http_endpoint = vec![HttpEndpointDetails {
-        http_method: HttpMethod::Get(Empty {}),
+        http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
         path_suffix: vec![],
         header_vars: vec![],
         query_vars: vec![],
@@ -320,8 +328,9 @@ fn required_phantom_mount_emits_only_the_selector_path() {
 
 #[test]
 fn phantom_mount_validation_preserves_application_binding_ownership() {
-    use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails, QueryVariable};
+    use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
     use golem_common::schema::NamedField;
+    use golem_schema::http::QueryVariable;
     let valid = selector_test_agent("/decisions/{instance}", true);
     let mut invalid = vec![];
     for path in ["/decisions", "/{instance}/{instance}", "/{*instance}"] {
@@ -483,7 +492,8 @@ fn optional_phantom_mount_rejects_new_overlap_without_changing_existing_preceden
         literal.type_name = AgentTypeName("literal".into());
         literal.http_mount.as_mut().unwrap().phantom_id_binding = None;
         if !same_method {
-            literal.methods[0].http_endpoint[0].http_method = HttpMethod::Post(Empty {});
+            literal.methods[0].http_endpoint[0].http_method =
+                HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {}));
         }
         let mut errors = vec![];
         http_context(vec![selected, literal]).compile_http_api_routes(
@@ -578,8 +588,8 @@ fn provider_method(name: &str) -> golem_common::schema::AgentMethodSchema {
 
 #[test]
 fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
-    use golem_common::model::agent::FileMapping;
     use golem_common::schema::schema_type::SecretSpec;
+    use golem_schema::http::FileMapping;
 
     let corpus: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
@@ -642,7 +652,7 @@ fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
 
 #[test]
 fn http_mount_compilation_loads_metadata_corpus() {
-    use golem_common::model::agent::FileMapping;
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::RouteBehaviour;
     let corpus: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
@@ -918,17 +928,18 @@ fn http_mount_compilation_provider_limit_and_order() {
 
 #[test]
 fn http_mount_compilation_rejects_equal_not_nested_or_literal_parameter_overlap() {
-    use golem_common::model::agent::{FileMapping, PathSegment, PathVariable};
+    use golem_common::model::agent::PathSegment;
+    use golem_schema::http::{FileMapping, PathVariable};
     let live = |name: &str| {
         let mut agent = router_agent(name, "/site");
         agent.kind = golem_common::schema::AgentTypeKind::Regular;
         agent.mode = AgentMode::Durable;
         let mount = agent.http_mount.as_mut().unwrap();
-        mount
-            .path_prefix
-            .push(PathSegment::PathVariable(PathVariable {
+        mount.path_prefix.push(PathSegment::Segment(
+            golem_schema::http::PathSegment::PathVariable(PathVariable {
                 variable_name: "id".into(),
-            }));
+            }),
+        ));
         mount.filesystem_bindings = vec![FileMapping::compile("/*", "/public/$1").unwrap()];
         agent.constructor.input_schema =
             InputSchema::Parameters(vec![golem_common::schema::NamedField::user_supplied(
@@ -963,7 +974,8 @@ fn http_mount_compilation_rejects_equal_not_nested_or_literal_parameter_overlap(
 
 #[test]
 fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
-    use golem_common::model::agent::{CorsOptions, FileMapping, HttpEndpointDetails, HttpMethod};
+    use golem_common::model::agent::{CorsOptions, HttpEndpointDetails, HttpMethod};
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::{PathSegment, RouteBehaviour};
     let mut agent = router_agent("site", "/site");
     agent.kind = golem_common::schema::AgentTypeKind::Regular;
@@ -972,7 +984,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         vec![FileMapping::compile("/*", "/public/$1").unwrap()];
     let mut method = provider_method("typed");
     method.http_endpoint = vec![HttpEndpointDetails {
-        http_method: HttpMethod::Get(Empty {}),
+        http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
         path_suffix: vec![],
         header_vars: vec![],
         query_vars: vec![],
@@ -1024,21 +1036,21 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             vec![PathSegment::Literal {
                 value: "openapi.json".into(),
             }],
-            HttpMethod::Get(Empty {}),
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             false,
         ),
         (
             vec![PathSegment::Literal {
                 value: "openapi.json".into(),
             }],
-            HttpMethod::Post(Empty {}),
+            HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})),
             true,
         ),
         (
             vec![PathSegment::Variable {
                 display_name: "other".into(),
             }],
-            HttpMethod::Get(Empty {}),
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             true,
         ),
     ] {
@@ -1083,11 +1095,12 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             },
             last,
         ];
-        typed.route_match = HttpMethod::Post(Empty {}).into();
+        typed.route_match =
+            HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})).into();
         routes.push(UnboundCompiledRoute {
             domain: Domain("example.com".into()),
             route_id: 99,
-            route_match: HttpMethod::Post(Empty {}).into(),
+            route_match: HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})).into(),
             path: vec![
                 PathSegment::Literal {
                     value: "hooks".into(),
@@ -1125,13 +1138,17 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             id: golem_common::model::security_scheme::SecuritySchemeId::new(),
             revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
             name: name.clone(),
-            provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
+            provider_type: golem_common::model::security_scheme::Provider::Google(
+                Default::default(),
+            ),
             client_id: openidconnect::ClientId::new("test-client".into()),
             client_secret: openidconnect::ClientSecret::new("test-secret".into()),
             redirect_url: openidconnect::RedirectUrl::new(format!("https://example.com{callback}"))
                 .unwrap(),
             scopes: vec![],
-            login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
+            login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                Default::default(),
+            ),
         };
         let mut routes: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
         let typed = routes
@@ -1147,9 +1164,9 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             },
         ];
         typed.route_match = if post {
-            HttpMethod::Post(Empty {})
+            HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {}))
         } else {
-            HttpMethod::Get(Empty {})
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {}))
         }
         .into();
         typed.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
@@ -1280,7 +1297,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
                     origins: vec!["https://frontend.example".into()],
                 },
             );
-        let endpoint = golem_common::model::agent::http_files::HttpRequestTarget::parse(
+        let endpoint = golem_schema::http::HttpRequestTarget::parse(
             &golem_service_base::custom_api::pkce_authorization_path(&scheme.id),
         )
         .unwrap();
@@ -1296,7 +1313,8 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
                 value: value.clone(),
             })
             .collect();
-        typed.route_match = HttpMethod::Get(Empty {}).into();
+        typed.route_match =
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})).into();
         typed.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
             crate::model::api_definition::UnboundSecuritySchemeRouteSecurity {
                 security_scheme: name.clone(),
@@ -1320,11 +1338,12 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
 
 #[test]
 fn http_mounts_compile_only_when_selected_for_deployment() {
-    use golem_common::model::agent::{CorsOptions, FileMapping, HttpMountDetails};
+    use golem_common::model::agent::{CorsOptions, HttpMountDetails};
     use golem_common::model::http_api_deployment::{
         HttpApiDeploymentId, HttpApiDeploymentRevision,
     };
     use golem_common::schema::AgentTypeKind;
+    use golem_schema::http::FileMapping;
 
     for (kind, static_files, live_files) in [
         (AgentTypeKind::HttpRouter, false, false),
@@ -1456,7 +1475,7 @@ fn agent_type_with_secret_config(
         dependencies: Vec::new(),
         mode: AgentMode::Durable,
         http_mount: None,
-        snapshotting: Snapshotting::Disabled(Empty {}),
+        snapshotting: Snapshotting::Disabled(Default::default()),
         config: vec![AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
             path,

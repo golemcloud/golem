@@ -5430,7 +5430,7 @@
             "componentId": { "type": "string" },
             "agentType": { "type": "string" },
             "methodName": { "type": "string" },
-            "httpMethod": { "$ref": "#/definitions/DeployValidationHttpMethod" },
+            "httpMethod": { "$ref": "#/definitions/HttpMethod" },
             "path": { "type": "string" }
           },
           "additionalProperties": false
@@ -5470,45 +5470,6 @@
           "additionalProperties": false
         }
       ]
-    },
-    "DeployValidationHttpMethod": {
-      "type": "object",
-      "required": ["type"],
-      "properties": {
-        "type": {
-          "type": "string",
-          "enum": [
-            "Get",
-            "Head",
-            "Post",
-            "Put",
-            "Delete",
-            "Connect",
-            "Options",
-            "Trace",
-            "Patch",
-            "Custom"
-          ]
-        },
-        "value": {
-          "type": "string"
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": { "type": { "const": "Custom" } },
-            "required": ["type"]
-          },
-          "then": {
-            "required": ["value"]
-          },
-          "else": {
-            "not": { "required": ["value"] }
-          }
-        }
-      ],
-      "additionalProperties": false
     },
     "FileNode": {
       "type": "object",
@@ -7255,8 +7216,13 @@
     },
     "PathSegment": {
       "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Segment" }, "value": { "$ref": "#/definitions/SharedPathSegment" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "SystemVariable" }, "value": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/definitions/SystemVariable" } }, "additionalProperties": false } }, "additionalProperties": false }
+      ]
+    },
+    "SharedPathSegment": {
+      "oneOf": [
         { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Literal" }, "value": { "type": "string" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "SystemVariable" }, "value": { "$ref": "#/definitions/SystemVariable" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "variableName"], "properties": { "type": { "const": "PathVariable" }, "variableName": { "type": "string" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "variableName"], "properties": { "type": { "const": "RemainingPathVariable" }, "variableName": { "type": "string" } }, "additionalProperties": false }
       ]
@@ -7288,9 +7254,14 @@
     },
     "HttpMethod": {
       "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Method" }, "value": { "$ref": "#/definitions/SharedHttpMethod" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Any" }, "value": { "type": "object", "properties": {}, "additionalProperties": false } }, "additionalProperties": false }
+      ]
+    },
+    "SharedHttpMethod": {
+      "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["Get", "Head", "Post", "Put", "Delete", "Connect", "Options", "Trace", "Patch"] } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Any" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false }
       ]
     },
     "ApiPredicateValue": {

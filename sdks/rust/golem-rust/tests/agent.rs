@@ -3265,6 +3265,8 @@ mod tests {
     #[test]
     fn test_all_http_methods_supported() {
         use golem_rust::agentic::get_all_agent_types;
+        use golem_rust::golem_agentic::golem::agent::common::HttpMethod;
+        use golem_rust::golem_schema::http::wit::wire::HttpMethod as SharedHttpMethod;
 
         let agent_types = get_all_agent_types();
 
@@ -3276,11 +3278,11 @@ mod tests {
         assert!(matches!(agent.kind, AgentTypeKind::Regular));
 
         let expected_methods = vec![
-            ("get_method", "HttpMethod::Get"),
-            ("post_method", "HttpMethod::Post"),
-            ("put_method", "HttpMethod::Put"),
-            ("delete_method", "HttpMethod::Delete"),
-            ("patch_method", "HttpMethod::Patch"),
+            ("get_method", SharedHttpMethod::Get),
+            ("post_method", SharedHttpMethod::Post),
+            ("put_method", SharedHttpMethod::Put),
+            ("delete_method", SharedHttpMethod::Delete),
+            ("patch_method", SharedHttpMethod::Patch),
         ];
 
         for (method_name, expected_http_method) in expected_methods {
@@ -3298,10 +3300,12 @@ mod tests {
             );
 
             let endpoint = &method.http_endpoint[0];
-            // Convert HttpMethod enum to string representation for comparison
-            let method_str = format!("{:?}", endpoint.http_method);
+            let HttpMethod::Method(actual) = &endpoint.http_method else {
+                panic!("Expected a concrete HTTP method for {}", method_name);
+            };
             assert_eq!(
-                method_str, expected_http_method,
+                std::mem::discriminant(actual),
+                std::mem::discriminant(&expected_http_method),
                 "HTTP method mismatch for {}",
                 method_name
             );

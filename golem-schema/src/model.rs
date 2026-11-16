@@ -15,6 +15,31 @@
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(
+    feature = "full",
+    oai(rename = "SchemaEmpty", rename_all = "camelCase")
+)]
+#[serde(rename_all = "camelCase")]
+pub struct Empty {}
+
 /// The producer's failure, independent of a reader dropping its stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]

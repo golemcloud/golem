@@ -160,17 +160,20 @@ impl fmt::Display for DeployValidationWarning {
 }
 
 fn render_http_method(method: &HttpMethod) -> &'static str {
+    use golem_schema::http::HttpMethod as SharedHttpMethod;
     match method {
-        HttpMethod::Get(_) => "GET",
-        HttpMethod::Head(_) => "HEAD",
-        HttpMethod::Post(_) => "POST",
-        HttpMethod::Put(_) => "PUT",
-        HttpMethod::Delete(_) => "DELETE",
-        HttpMethod::Connect(_) => "CONNECT",
-        HttpMethod::Options(_) => "OPTIONS",
-        HttpMethod::Trace(_) => "TRACE",
-        HttpMethod::Patch(_) => "PATCH",
-        HttpMethod::Custom(_) => "<custom>",
+        HttpMethod::Method(method) => match method {
+            SharedHttpMethod::Get(_) => "GET",
+            SharedHttpMethod::Head(_) => "HEAD",
+            SharedHttpMethod::Post(_) => "POST",
+            SharedHttpMethod::Put(_) => "PUT",
+            SharedHttpMethod::Delete(_) => "DELETE",
+            SharedHttpMethod::Connect(_) => "CONNECT",
+            SharedHttpMethod::Options(_) => "OPTIONS",
+            SharedHttpMethod::Trace(_) => "TRACE",
+            SharedHttpMethod::Patch(_) => "PATCH",
+            SharedHttpMethod::Custom(_) => "<custom>",
+        },
         HttpMethod::Any(_) => "<any>",
     }
 }

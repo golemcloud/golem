@@ -479,8 +479,10 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         environment_id: Default::default(),
         deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 1,
-        route_match: golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {})
-            .into(),
+        route_match: golem_common::model::agent::HttpMethod::Method(
+            golem_schema::http::HttpMethod::Get(Default::default()),
+        )
+        .into(),
         path: vec![PathSegment::Literal {
             value: "redirect".to_string(),
         }],
@@ -501,10 +503,7 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         public_authority: "example.com".to_string(),
         route: Arc::new(compiled_route),
         captured_path_parameters: vec![],
-        request_target: golem_common::model::agent::http_files::HttpRequestTarget::parse(
-            "/redirect",
-        )
-        .unwrap(),
+        request_target: golem_schema::http::HttpRequestTarget::parse("/redirect").unwrap(),
         openapi_inputs: None,
     }
 }

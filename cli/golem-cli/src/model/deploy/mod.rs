@@ -1346,26 +1346,34 @@ fn render_path(segments: &[PathSegment]) -> String {
 }
 
 fn render_path_segment(segment: &PathSegment) -> String {
+    use golem_schema::http::PathSegment as SharedPathSegment;
     match segment {
-        PathSegment::Literal(segment) => segment.value.clone(),
+        PathSegment::Segment(SharedPathSegment::Literal(segment)) => segment.value.clone(),
         PathSegment::SystemVariable(segment) => format!("{{{}}}", segment.value),
-        PathSegment::PathVariable(segment) => format!("{{{}}}", segment.variable_name),
-        PathSegment::RemainingPathVariable(segment) => format!("{{*{}}}", segment.variable_name),
+        PathSegment::Segment(SharedPathSegment::PathVariable(segment)) => {
+            format!("{{{}}}", segment.variable_name)
+        }
+        PathSegment::Segment(SharedPathSegment::RemainingPathVariable(segment)) => {
+            format!("{{*{}}}", segment.variable_name)
+        }
     }
 }
 
 fn render_http_method(method: &HttpMethod) -> &str {
+    use golem_schema::http::HttpMethod as SharedHttpMethod;
     match method {
-        HttpMethod::Get(_) => "GET",
-        HttpMethod::Head(_) => "HEAD",
-        HttpMethod::Post(_) => "POST",
-        HttpMethod::Put(_) => "PUT",
-        HttpMethod::Delete(_) => "DELETE",
-        HttpMethod::Connect(_) => "CONNECT",
-        HttpMethod::Options(_) => "OPTIONS",
-        HttpMethod::Trace(_) => "TRACE",
-        HttpMethod::Patch(_) => "PATCH",
-        HttpMethod::Custom(method) => &method.value,
+        HttpMethod::Method(method) => match method {
+            SharedHttpMethod::Get(_) => "GET",
+            SharedHttpMethod::Head(_) => "HEAD",
+            SharedHttpMethod::Post(_) => "POST",
+            SharedHttpMethod::Put(_) => "PUT",
+            SharedHttpMethod::Delete(_) => "DELETE",
+            SharedHttpMethod::Connect(_) => "CONNECT",
+            SharedHttpMethod::Options(_) => "OPTIONS",
+            SharedHttpMethod::Trace(_) => "TRACE",
+            SharedHttpMethod::Patch(_) => "PATCH",
+            SharedHttpMethod::Custom(method) => &method.value,
+        },
         HttpMethod::Any(_) => "<any>",
     }
 }
