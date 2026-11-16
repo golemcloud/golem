@@ -27,6 +27,7 @@ message InvocationStart {
   golem.worker.InvocationContext context = 5;
   golem.auth.AuthCtx auth_ctx = 6;
   reserved 7;
+  reserved "principal";
   golem.component.Caller caller = 21;
   golem.common.EnvironmentId environment_id = 8;
   repeated golem.worker.AgentConfigEntryDto config = 9;
@@ -68,6 +69,7 @@ message ResumeAttach {
   repeated StreamCursor cursors = 9;
   golem.auth.AuthCtx auth_ctx = 10;
   reserved 11;
+  reserved "principal";
   golem.component.Caller caller = 12;
 }
 

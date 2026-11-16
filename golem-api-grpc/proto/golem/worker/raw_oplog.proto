@@ -193,6 +193,7 @@ message RawCreateRequest {
   RawCreateRequestKind kind = 1;
   optional IdempotencyKey idempotency_key = 2;
   reserved 3;
+  reserved "principal";
   golem.component.Caller caller = 7;
   string trace_id = 4;
   repeated string trace_states = 5;
