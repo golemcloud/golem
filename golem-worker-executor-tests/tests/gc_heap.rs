@@ -49,6 +49,10 @@ inherit_test_dep!(
     #[tagged_as("gc_heap")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("gc_initializer")]
+    PrecompiledComponent
+);
 
 const MIB: u64 = 1024 * 1024;
 
@@ -903,6 +907,176 @@ async fn reconstruction_reconciles_real_gc_capacity_in_both_directions(
         allocations[1].linear, allocations[2].linear,
         "{allocations:?}"
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn initializer_replay_cutover_counts_each_allocation_once(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("gc_initializer")] gc_initializer: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const READ_ONE: &str = "monotonic_clock::now";
+    const READ_TWO: &str = "wall_clock::now";
+    let context = TestContext::new(last_unique_id);
+    let executor = start_executor(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, gc_initializer)
+        .store()
+        .await?;
+    let agent = agent_id!("GcHeapAgent", "initializer-cutover");
+    let worker_id = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
+    let mut gate = executor.gate_next_call_end(&worker_id, true).await;
+    let starter = executor.clone();
+    let component_id = component.id;
+    let starting_agent = agent.clone();
+    let start =
+        tokio::spawn(async move { starter.start_agent(&component_id, starting_agent).await });
+    let (prefix, read_one_start) = loop {
+        tokio::time::timeout(Duration::from_secs(15), gate.entered()).await?;
+        let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let index = gate.start_index();
+        if entries.iter().any(|entry| entry.oplog_index == index
+            && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == READ_ONE))
+        {
+            break (entries, index);
+        }
+        let next = executor.gate_next_call_end(&worker_id, true).await;
+        drop(gate);
+        gate = next;
+    };
+    let prefix_tip = prefix.last().unwrap().oplog_index;
+    assert!(matches!(&prefix.last().unwrap().entry,
+        PublicOplogEntry::End(params) if params.start_index == read_one_start));
+    assert!(!prefix.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::Start(params) if params.function_name == READ_TWO)));
+    assert!(
+        !prefix.iter().any(|entry| matches!(
+            entry.entry,
+            PublicOplogEntry::GrowMemory(_) | PublicOplogEntry::AgentInvocationStarted(_)
+        )),
+        "{prefix:?}"
+    );
+    let (_, saved) = memory_history(&prefix);
+    gate.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(gate);
+    start.abort();
+    let _ = start.await;
+    drop(executor);
+
+    let executor = start_executor(deps, &context).await?;
+    let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+    executor.probe_next_instance_preparation(
+        &worker_id,
+        |_| Box::pin(async { Ok(()) }),
+        move |store| {
+            Box::pin(async move {
+                let observed = MemoryObservation::read(store);
+                let worker = store.data().get_public_state().worker();
+                let _ = observed_tx.send((observed, worker));
+                Ok(())
+            })
+        },
+    );
+    let read_key = IdempotencyKey::fresh();
+    let retained = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &read_key,
+            "retained_kib",
+            data_value!(),
+        )
+        .await?;
+    // The fixture traverses the actual GC arrays and checks their sentinel bytes.
+    assert_eq!(retained.into_typed::<u32>()?, 41 * 1024);
+    let (observed, worker) = observed_rx.await?;
+    assert!(observed.gc > 0, "{observed:?}");
+    assert_eq!(observed.tracked, observed.allocated(), "{observed:?}");
+    assert_eq!(observed.reserved, observed.allocated(), "{observed:?}");
+    worker
+        .commit_oplog_and_update_state(CommitLevel::Always)
+        .await?;
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let recovery_baselines = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::MemorySizeReconciled(params) if entry.oplog_index > prefix_tip => {
+                Some((entry.oplog_index, params.bytes))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(recovery_baselines.len(), 1, "{entries:?}");
+    let (baseline_index, baseline) = recovery_baselines[0];
+    assert!(baseline > saved, "baseline={baseline}, saved={saved}");
+    assert!(
+        observed.allocated() > baseline,
+        "{observed:?}, baseline={baseline}"
+    );
+    let read_two = entries
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry,
+        PublicOplogEntry::Start(params) if params.function_name == READ_TWO)
+        })
+        .unwrap();
+    assert!(baseline_index < read_two.oplog_index);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::Start(params) if params.function_name == READ_ONE))
+            .count(),
+        1
+    );
+    let deltas = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(params) if entry.oplog_index > baseline_index => {
+                Some(params.delta)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(deltas, vec![observed.allocated() - baseline]);
+    assert_eq!(memory_history(&entries).1, observed.allocated());
+    assert_eq!(
+        executor
+            .get_worker_metadata(&worker_id)
+            .await?
+            .total_linear_memory_size,
+        observed.allocated()
+    );
+    let mut expected = vec![
+        constructor_key(&entries),
+        executor
+            .external_invocation_key(&worker_id, &read_key, "retained_kib")
+            .await?,
+    ];
+    assert_settled_history(&entries, &expected);
+    let cap = observed.allocated();
+    assert!(cap < observed.allocated() + baseline - saved);
+    drop(worker);
+    drop(executor);
+
+    let executor = start_with_memory_limit(deps, &context, cap as usize).await?;
+    let key = IdempotencyKey::fresh();
+    let retained = executor
+        .invoke_and_await_agent_with_key(&component, &agent, &key, "retained_kib", data_value!())
+        .await?;
+    assert_eq!(retained.into_typed::<u32>()?, 41 * 1024);
+    expected.push(
+        executor
+            .external_invocation_key(&worker_id, &key, "retained_kib")
+            .await?,
+    );
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_settled_history(&entries, &expected);
+    assert_eq!(memory_history(&entries).1, cap);
     Ok(())
 }
 

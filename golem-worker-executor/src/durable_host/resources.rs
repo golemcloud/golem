@@ -625,6 +625,89 @@ mod tests {
     }
 
     #[test]
+    async fn gc_initializer_cutover_reconciles_only_unpublished_capacity() -> anyhow::Result<()> {
+        const CAPACITY: u64 = 128 * 1024 * 1024;
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+        for later_allocation in [0, 16 * 1024 * 1024] {
+            let module = Module::new(
+                &engine,
+                format!(
+                    r#"
+                (module
+                  (import "host" "publish" (func $publish))
+                  (memory (export "memory") 1)
+                  (type $bytes (array (mut i8)))
+                  (global $first (mut (ref null $bytes)) (ref.null $bytes))
+                  (global $second (mut (ref null $bytes)) (ref.null $bytes))
+                  (func $init
+                    (global.set $first (array.new_default $bytes (i32.const 1048576)))
+                    (call $publish)
+                    (global.set $second (array.new_default $bytes (i32.const {later_allocation}))))
+                  (start $init))
+            "#
+                ),
+            )?;
+            let controller = Arc::new(AdmissionController::new(
+                Box::new(FixedProbe::new(CAPACITY, 0)),
+                AdmissionPolicy { usable_ratio: 1.0 },
+            ));
+            let reservation = controller.admit(65536, &NoEvictionSource).await.unwrap();
+            let tracker = LinearMemoryTracker::new(
+                65536,
+                65536,
+                AgentMode::Durable,
+                true,
+                false,
+                Arc::new(AtomicResourceEntry::new(0, CAPACITY as usize, 0, 0, 0)),
+                Arc::new(Mutex::new(reservation)),
+                Instant::now(),
+            );
+            let mut store = Store::new(
+                &engine,
+                LimitedMemory {
+                    tracker: tracker.clone(),
+                    controller: controller.clone(),
+                    limit: CAPACITY,
+                    gc_growths: 0,
+                },
+            );
+            store.limiter_async(|state| state);
+            store.set_fuel(u64::MAX)?;
+            store.set_epoch_deadline(u64::MAX);
+            let baseline = Arc::new(Mutex::new(None));
+            let captured = baseline.clone();
+            let publish = wasmtime::Func::wrap(
+                &mut store,
+                move |caller: wasmtime::Caller<'_, LimitedMemory>| {
+                    let tracker = &caller.data().tracker;
+                    *captured.lock().unwrap() =
+                        tracker.start_memory_accounting(false, |bytes| bytes);
+                    tracker.switch_to_live();
+                },
+            );
+            let instance = Instance::new_async(&mut store, &module, &[publish.into()]).await?;
+            let allocated = instance
+                .get_memory(&mut store, "memory")
+                .unwrap()
+                .data_size(&store) as u64
+                + store.gc_heap_capacity() as u64;
+            let baseline = baseline.lock().unwrap().unwrap();
+            assert!(baseline > 65536);
+            if later_allocation > 0 {
+                assert!(allocated > baseline);
+            } else {
+                assert_eq!(allocated, baseline);
+            }
+            let delta = tracker.reconcile(allocated, Instant::now());
+            assert_eq!(baseline + delta, allocated);
+            assert_eq!(tracker.current_bytes(), allocated);
+            assert_eq!(tracker.reserved_bytes(), allocated);
+            assert_eq!(controller.headroom_bytes(), CAPACITY - allocated);
+        }
+        Ok(())
+    }
+
+    #[test]
     async fn gc_initializers_reuse_prepaid_capacity_across_multiple_growths() -> anyhow::Result<()>
     {
         const CAPACITY: u64 = 256 * 1024 * 1024;

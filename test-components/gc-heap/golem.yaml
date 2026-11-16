@@ -23,6 +23,11 @@ componentTemplates:
       - gc-probe/gc_probe.wat
       targets:
       - "{{ cargoTarget }}/gc-probe.wasm"
+    - command: wasm-tools parse gc-probe/gc_initializer.wat -o "{{ cargoTarget }}/gc-initializer.wasm"
+      sources:
+      - gc-probe/gc_initializer.wat
+      targets:
+      - "{{ cargoTarget }}/gc-initializer.wasm"
     presets:
       debug:
         build:
@@ -32,10 +37,17 @@ componentTemplates:
           - "{{ cargoTarget }}/gc-probe.wasm"
           targets:
           - "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm"
+        - command: wasm-tools compose "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm" -d "{{ cargoTarget }}/gc-initializer.wasm" -o "{{ cargoTarget }}/gc-initializer-agent-debug.wasm"
+          sources:
+          - "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
+          - "{{ cargoTarget }}/gc-initializer.wasm"
+          targets:
+          - "{{ cargoTarget }}/gc-initializer-agent-debug.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm"
         customCommands:
           copy:
           - command: cp "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_debug.wasm"
+          - command: cp "{{ cargoTarget }}/gc-initializer-agent-debug.wasm" "{{ appRootDir }}/../golem_it_gc_initializer_debug.wasm"
       release:
         build:
         - command: wasm-tools compose "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm" -d "{{ cargoTarget }}/gc-probe.wasm" -o "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
@@ -44,10 +56,17 @@ componentTemplates:
           - "{{ cargoTarget }}/gc-probe.wasm"
           targets:
           - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
+        - command: wasm-tools compose "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm" -d "{{ cargoTarget }}/gc-initializer.wasm" -o "{{ cargoTarget }}/gc-initializer-agent-release.wasm"
+          sources:
+          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+          - "{{ cargoTarget }}/gc-initializer.wasm"
+          targets:
+          - "{{ cargoTarget }}/gc-initializer-agent-release.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
         customCommands:
           copy:
           - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
+          - command: cp "{{ cargoTarget }}/gc-initializer-agent-release.wasm" "{{ appRootDir }}/../golem_it_gc_initializer_release.wasm"
 
 components:
   golem-it:gc-heap:

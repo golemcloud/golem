@@ -23,6 +23,12 @@ use golem_common::schema::SchemaValue;
 use test_r::test;
 
 fn accounting_tracker(saved: u64, current: u64) -> LinearMemoryTracker {
+    let tracker = instantiating_accounting_tracker(saved, current);
+    tracker.reconcile(current, Instant::now());
+    tracker
+}
+
+fn instantiating_accounting_tracker(saved: u64, current: u64) -> LinearMemoryTracker {
     let tracker = LinearMemoryTracker::new(
         saved,
         saved,
@@ -35,8 +41,73 @@ fn accounting_tracker(saved: u64, current: u64) -> LinearMemoryTracker {
         Arc::new(StdMutex::new(MemoryGrant::inert(saved))),
         Instant::now(),
     );
-    tracker.reconcile(current, Instant::now());
     tracker
+        .prepare_unshared_growth(0, current as usize)
+        .unwrap();
+    tracker.grow(current, Instant::now());
+    tracker
+}
+
+#[test]
+async fn accounting_initializer_baseline_survives_cancellation_and_reset() {
+    use tokio::sync::oneshot;
+
+    for reset in [false, true] {
+        let accounting = residency::MemoryAccounting::default();
+        let tracker = instantiating_accounting_tracker(20, 40);
+        let entries = Arc::new(StdMutex::new(Vec::new()));
+        let (sender, receipt) = oneshot::channel();
+        let captured = entries.clone();
+        let mut first = Box::pin(accounting.reconcile(&tracker, false, |bytes| {
+            captured.lock().unwrap().push(bytes);
+            receipt
+        }));
+        assert!(futures::poll!(&mut first).is_pending());
+        drop(first);
+        tracker.grow_and_record(7, Instant::now(), |_| panic!("premature growth hint"));
+        let mut retry = Box::pin(accounting.reconcile(&tracker, reset, |bytes| {
+            assert!(reset, "retry must join the original baseline");
+            entries.lock().unwrap().push(bytes);
+            let (sender, receipt) = oneshot::channel();
+            sender.send(Ok(())).unwrap();
+            receipt
+        }));
+        assert!(futures::poll!(&mut retry).is_pending());
+        assert_eq!(*entries.lock().unwrap(), vec![40]);
+        sender.send(Ok(())).unwrap();
+        retry.await.unwrap();
+        tracker.switch_to_live();
+        tracker.grow_and_record(11, Instant::now(), |_| panic!("premature growth hint"));
+        let delta = tracker.reconcile(58, Instant::now());
+        assert_eq!(delta, if reset { 11 } else { 18 });
+        assert_eq!(entries.lock().unwrap().last().unwrap() + delta, 58);
+    }
+    for dropped in [false, true] {
+        let accounting = residency::MemoryAccounting::default();
+        let tracker = instantiating_accounting_tracker(20, 40);
+        let (sender, receipt) = oneshot::channel();
+        let mut first = Box::pin(accounting.reconcile(&tracker, false, |_| receipt));
+        assert!(futures::poll!(&mut first).is_pending());
+        drop(first);
+        tracker.grow_and_record(7, Instant::now(), |_| panic!("premature growth hint"));
+        if dropped {
+            drop(sender);
+        } else {
+            sender
+                .send(Err(WorkerExecutorError::runtime(
+                    "refused initializer baseline",
+                )))
+                .unwrap();
+        }
+        for reset in [false, true] {
+            assert!(
+                accounting
+                    .reconcile(&tracker, reset, |_| panic!("failed receipt was lost"))
+                    .await
+                    .is_err()
+            );
+        }
+    }
 }
 
 #[test]

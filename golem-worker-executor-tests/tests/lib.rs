@@ -481,6 +481,12 @@ test_component!(
     "golem-it:gc-heap"
 );
 test_component!(
+    gc_initializer,
+    "gc_initializer",
+    "golem_it_gc_initializer_release",
+    "golem-it:gc-heap"
+);
+test_component!(
     large_initial_memory,
     "large_initial_memory",
     "scalability_large_initial_memory_release",

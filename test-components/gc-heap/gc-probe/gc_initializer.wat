@@ -1,0 +1,62 @@
+;; Retained GC arrays separated by direct durable clock reads in a core start function.
+(component
+  (import "wasi:clocks/monotonic-clock@0.2.12" (instance $clock
+    (export "now" (func (result u64)))))
+  (import "wasi:clocks/wall-clock@0.2.12" (instance $wall
+    (type $datetime-record (record (field "seconds" u64) (field "nanoseconds" u32)))
+    (export "datetime" (type $datetime (eq $datetime-record)))
+    (export "now" (func (result $datetime)))))
+  (core module $abi (memory (export "memory") 1))
+  (core instance $abi (instantiate $abi))
+  (core func $now (canon lower (func $clock "now")))
+  (core func $wall_now (canon lower (func $wall "now") (memory (core memory $abi "memory"))))
+  (core module $initializer
+    (import "host" "now" (func $now (result i64)))
+    (import "host" "wall-now" (func $wall_now (param i32)))
+    (type $bytes (array (mut i8)))
+    (global $a (mut (ref null $bytes)) (ref.null $bytes))
+    (global $b (mut (ref null $bytes)) (ref.null $bytes))
+    (global $c (mut (ref null $bytes)) (ref.null $bytes))
+    (func $init
+      (global.set $a (array.new $bytes (i32.const 90) (i32.const 1048576)))
+      (drop (call $now))
+      (global.set $b (array.new $bytes (i32.const 91) (i32.const 8388608)))
+      (call $wall_now (i32.const 0))
+      (global.set $c (array.new $bytes (i32.const 92) (i32.const 33554432))))
+    (func $check (param $data (ref null $bytes)) (param $value i32) (result i32)
+      (if (i32.ne (array.get_u $bytes (local.get $data) (i32.const 0)) (local.get $value))
+        (then unreachable))
+      (if (i32.ne
+            (array.get_u $bytes (local.get $data)
+              (i32.sub (array.len (local.get $data)) (i32.const 1)))
+            (local.get $value))
+        (then unreachable))
+      (array.len (local.get $data)))
+    (func (export "retained-kib") (result i32)
+      (i32.div_u
+        (i32.add (call $check (global.get $a) (i32.const 90))
+          (i32.add (call $check (global.get $b) (i32.const 91))
+            (call $check (global.get $c) (i32.const 92))))
+        (i32.const 1024)))
+    ;; This fixture exposes only the observation method; mutation/exception calls are invalid.
+    (func (export "retain") (param i32) (result i32) unreachable)
+    (func (export "release") unreachable)
+    (func (export "catch-thrown") (param i32) (result i32) unreachable)
+    (func (export "throw-uncaught") unreachable)
+    (start $init))
+  (core instance $host
+    (export "now" (func $now))
+    (export "wall-now" (func $wall_now)))
+  (core instance $heap (instantiate $initializer (with "host" (instance $host))))
+  (func $retained (result u32) (canon lift (core func $heap "retained-kib")))
+  (func $retain (param "kib" u32) (result u32) (canon lift (core func $heap "retain")))
+  (func $release (canon lift (core func $heap "release")))
+  (func $catch (param "value" u32) (result u32) (canon lift (core func $heap "catch-thrown")))
+  (func $throw (canon lift (core func $heap "throw-uncaught")))
+  (instance $exports
+    (export "retained-kib" (func $retained))
+    (export "retain" (func $retain))
+    (export "release" (func $release))
+    (export "catch-thrown" (func $catch))
+    (export "throw-uncaught" (func $throw)))
+  (export "golem-it:gc-probe/heap" (instance $exports)))

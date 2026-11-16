@@ -86,6 +86,7 @@ struct TrackerState {
     reconciling: bool,
     replaying: bool,
     accounting_started: bool,
+    instantiation_accounting_baseline: Option<u64>,
     historical_admission: bool,
     live_reservation_activated: bool,
     pending_initial_bytes: u64,
@@ -229,6 +230,7 @@ impl LinearMemoryTracker {
                 reconciling: true,
                 replaying,
                 accounting_started: false,
+                instantiation_accounting_baseline: None,
                 historical_admission,
                 live_reservation_activated: false,
                 pending_initial_bytes: 0,
@@ -280,7 +282,12 @@ impl LinearMemoryTracker {
         } else {
             None
         };
-        self.inner.state.lock().unwrap().accounting_started = true;
+        let mut state = self.inner.state.lock().unwrap();
+        if state.reconciling {
+            // Initializer growth is folded at enumeration, relative to this accounting sample.
+            state.instantiation_accounting_baseline = Some(bytes);
+        }
+        state.accounting_started = true;
         result
     }
 
@@ -475,7 +482,11 @@ impl LinearMemoryTracker {
         let live_growth = if state.replaying {
             0
         } else {
-            bytes.saturating_sub(self.inner.persisted_startup_bytes)
+            bytes.saturating_sub(
+                state
+                    .instantiation_accounting_baseline
+                    .unwrap_or(self.inner.persisted_startup_bytes),
+            )
         };
         let protected =
             state.reconciliation_grant_bytes(bytes, self.inner.initially_reserved_bytes);
@@ -730,6 +741,58 @@ mod tests {
 
     fn grant() -> Arc<Mutex<MemoryGrant>> {
         Arc::new(Mutex::new(MemoryGrant::inert(0)))
+    }
+
+    #[test]
+    fn initializer_cutover_counts_only_growth_after_its_baseline() {
+        const PAGE: u64 = 65536;
+        for saved_pages in [1, 2, 4] {
+            for later_pages in [0, 1] {
+                let now = Instant::now();
+                let saved = saved_pages * PAGE;
+                let tracker = LinearMemoryTracker::new(
+                    saved,
+                    saved,
+                    AgentMode::Durable,
+                    true,
+                    false,
+                    Arc::new(AtomicResourceEntry::new(0, 8 * PAGE as usize, 0, 0, 0)),
+                    Arc::new(Mutex::new(MemoryGrant::inert(saved))),
+                    now,
+                );
+                tracker.prepare_unshared_growth(0, PAGE as usize).unwrap();
+                let gc = tracker.prepare_unshared_growth(0, PAGE as usize).unwrap();
+                tracker.retain_growth_grant(MemoryGrant::inert(gc.admission_delta));
+                tracker.grow(PAGE, now);
+                let baseline = tracker
+                    .start_memory_accounting(false, |bytes| bytes)
+                    .unwrap_or(saved);
+                tracker.switch_to_live();
+                let later = later_pages * PAGE;
+                if later > 0 {
+                    tracker
+                        .prepare_unshared_growth(PAGE as usize, (PAGE + later) as usize)
+                        .unwrap();
+                    tracker.grow_and_record(later, now, |_| {
+                        panic!("initializer growth must remain unrecorded until reconciliation")
+                    });
+                }
+                assert_eq!(
+                    tracker.start_memory_accounting(false, |_| panic!("duplicate baseline")),
+                    None::<()>
+                );
+                let actual = 2 * PAGE + later;
+                let growth = tracker.reconcile(actual, now);
+                assert_eq!(growth, later, "saved={saved}, actual={actual}");
+                assert_eq!(baseline + growth, actual);
+                let recorded = std::cell::Cell::new(0);
+                tracker.grow_and_record(PAGE, now, |delta| {
+                    recorded.set(recorded.get() + delta);
+                });
+                assert_eq!(recorded.get(), PAGE);
+                assert_eq!(tracker.current_bytes(), actual + PAGE);
+            }
+        }
     }
 
     #[test]
