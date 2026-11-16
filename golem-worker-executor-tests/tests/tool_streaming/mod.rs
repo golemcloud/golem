@@ -22549,6 +22549,13 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             )
             .await?;
         let loads = executor.instance_load_count(&worker);
+        let write_start_gate = markerless_crash.then(|| {
+            executor.gate_next_replay_access_admission(
+                &worker,
+                "tool-output-writer::write",
+                ReplayAdmissionStage::BeforeLiveStart,
+            )
+        });
         let mut acceptance = (!acknowledged && !storage_failure).then(|| {
             executor.gate_next_replay_access_admission(
                 &worker,
@@ -22573,6 +22580,11 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         let synchronize = async {
             let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
+            if let Some(mut write_start_gate) = write_start_gate {
+                // The checkpoint commit must not incidentally persist the output write.
+                tokio::time::timeout(Duration::from_secs(30), write_start_gate.entered()).await?;
+                write_start_gate.release();
+            }
             if let Some((entered, _)) = failure_gate.as_mut() {
                 tokio::time::timeout(Duration::from_secs(30), entered).await??;
                 executor
@@ -22618,6 +22630,8 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 )
             };
             if markerless_crash {
+                // Acceptance appends the local write but does not commit it to storage.
+                executor.commit_oplog(&worker).await?;
                 let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                 let write = entries
                     .iter()
