@@ -15,7 +15,10 @@
 use super::canonical::{encode, encode_str};
 use super::value::{Region, Walker};
 use super::*;
-use crate::oplog_export::model::{CaseNode, ListNode, OmittedReason, ReportEntry, ReportNode};
+use crate::oplog_export::model::{
+    CaseNode, HostPayloadDirection, HostTypeMismatchRef, ListNode, OmittedReason, ReportEntry,
+    ReportNode,
+};
 use base64::Engine;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -32,9 +35,10 @@ use golem_common::model::oplog::{
     HostRequestGolemRpcInvoke, HostRequestRandomBytes, HostResponse, HostResponseEntityInvocation,
     HostResponseFileSystemStat, HostResponseGolemAgentGetConfigValue, HostResponseGolemRpcCreate,
     HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
-    HostResponseGolemRpcPrepareInvocation, HostResponseKVGet, HostResponseP3FileSystemStat,
-    HostResponseP3HttpClientSendResult, OmittedOplogEntry, PublicDurableFunctionType,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+    HostResponseGolemRpcPrepareInvocation, HostResponseKVGet, HostResponseMonotonicClockTimestamp,
+    HostResponseP3FileSystemStat, HostResponseP3HttpClientSendResult, OmittedOplogEntry,
+    PublicDurableFunctionType, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, Empty, IdempotencyKey, InvocationId, InvocationRequestKey,
@@ -3167,7 +3171,8 @@ fn scheduled_start_is_a_datetime_token() {
 }
 
 /// A reader can predict numbers that Golem writes, such as consumed fuel or a resource ID, so
-/// they must not share a token with an equal customer number.
+/// they must not share a token with an equal customer number. A host payload leaf that no rule
+/// names is customer data, so it shares the token of an equal customer number.
 #[test]
 fn golem_numbers_do_not_name_customer_tokens() {
     let scalar_token = |node: &ReportNode| match node {
@@ -3188,15 +3193,94 @@ fn golem_numbers_do_not_name_customer_tokens() {
     assert!(fuel.starts_with("golem:int:"), "{fuel}");
     assert_ne!(fuel[fuel.len() - 32..], customer[customer.len() - 32..]);
 
+    let clock = rendered(
+        keep,
+        &end(
+            8,
+            response(HostResponse::MonotonicClockTimestamp(
+                HostResponseMonotonicClockTimestamp { nanos: 0x5EC2E7 },
+            )),
+        ),
+        Some(fqfn::<host_functions::MonotonicClockNow>()),
+    );
+    let host_leaf = scalar_token(record_field(field(&clock.entry, "response"), "nanos"));
+    assert_eq!(host_leaf, customer);
+
+    // The `Create` entry shows the component revision in clear, so a revision in a host
+    // payload stays out of the customer domain.
+    let update = rendered(
+        keep,
+        &start(
+            7,
+            fqfn::<host_functions::GolemApiUpdateWorker>(),
+            request(HostRequest::GolemApiUpdateAgent(
+                golem_common::model::oplog::HostRequestGolemApiUpdateAgent {
+                    agent_id: agent_id("target"),
+                    target_revision: golem_common::model::component::ComponentRevision::new(
+                        0x5EC2E7,
+                    )
+                    .unwrap(),
+                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
+                },
+            )),
+        ),
+        None,
+    );
+    let revision = match record_field(field(&update.entry, "request"), "targetRevision") {
+        ReportNode::Tuple(tuple) if tuple.elements.len() == 1 => scalar_token(&tuple.elements[0]),
+        other => panic!("not a revision newtype: {other:?}"),
+    };
+    assert!(revision.starts_with("golem:int:"), "{revision}");
+    assert_ne!(
+        revision[revision.len() - 32..],
+        customer[customer.len() - 32..]
+    );
+
     let key = key();
     let ctx = ObfuscationContext::new(&key, keep);
     for value in [SchemaValue::U32(0), SchemaValue::Bool(false)] {
-        let trusted = scalar_token(&Walker::new(&ctx).schemaless(&value, Region::Trusted));
+        let golem = scalar_token(&Walker::new(&ctx).schemaless(&value, Region::Golem));
         let error = scalar_token(&Walker::new(&ctx).schemaless(&value, Region::Error));
+        let trusted = scalar_token(&Walker::new(&ctx).schemaless(&value, Region::Trusted));
         let customer = scalar_token(&render(keep, &value));
-        assert_eq!(trusted, error);
-        assert_ne!(trusted, customer);
+        assert_eq!(golem, error);
+        assert_ne!(golem, customer);
+        assert_eq!(trusted, customer);
     }
+}
+
+/// A payload of a known host function with another type graph, for example from a server of
+/// another Golem version, becomes tokens and is listed. A matching payload and a payload of an
+/// unknown function are not listed.
+#[test]
+fn host_type_mismatch_is_listed() {
+    let keep = KeepFlags::default();
+    let clock = || {
+        response(HostResponse::MonotonicClockTimestamp(
+            HostResponseMonotonicClockTimestamp { nanos: 7 },
+        ))
+    };
+    let other = || response(HostResponse::KVGet(HostResponseKVGet { result: Ok(None) }));
+    let known = fqfn::<host_functions::MonotonicClockNow>();
+
+    let mismatched = rendered(keep, &end(8, other()), Some(known));
+    assert_eq!(
+        mismatched.host_type_mismatches,
+        vec![HostTypeMismatchRef {
+            index: 8,
+            direction: HostPayloadDirection::Response,
+        }]
+    );
+    assert!(
+        rendered(keep, &end(8, clock()), Some(known))
+            .host_type_mismatches
+            .is_empty()
+    );
+    assert!(
+        rendered(keep, &end(8, other()), Some("custom:pkg/iface.{fn}"))
+            .host_type_mismatches
+            .is_empty()
+    );
 }
 
 /// IDs that must not appear in a report. Each ID field of `every_entry_kind` gets one.

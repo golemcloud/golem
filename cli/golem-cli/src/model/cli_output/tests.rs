@@ -3841,8 +3841,9 @@ fn arb_coverage_list<T: std::fmt::Debug + Clone + 'static>(
 
 fn arb_agent_oplog_export_coverage() -> OutputDocumentStrategy {
     use crate::oplog_export::model::{
-        KEEP_SCALARS_WITHOUT_SHAPE_NOTE, OmittedEntryRef, OmittedReason, OplogExportCoverage,
-        SchemaLessRpcValueRef, StartUnknownRef,
+        HostPayloadDirection, HostTypeMismatchRef, KEEP_SCALARS_WITHOUT_SHAPE_NOTE,
+        OmittedEntryRef, OmittedReason, OplogExportCoverage, SchemaLessRpcValueRef,
+        StartUnknownRef,
     };
     serialized_output(
         (
@@ -3872,21 +3873,34 @@ fn arb_agent_oplog_export_coverage() -> OutputDocumentStrategy {
                 (arb_small_u64(), "[a-zA-Z.]{1,24}")
                     .prop_map(|(index, path)| SchemaLessRpcValueRef { index, path }),
             ),
+            arb_coverage_list(
+                (arb_small_u64(), any::<bool>()).prop_map(|(index, request)| HostTypeMismatchRef {
+                    index,
+                    direction: if request {
+                        HostPayloadDirection::Request
+                    } else {
+                        HostPayloadDirection::Response
+                    },
+                }),
+            ),
             any::<bool>(),
         )
-            .prop_map(|(hydration_failures, start_unknown, schema_less, note)| {
-                let notes = if note {
-                    vec![KEEP_SCALARS_WITHOUT_SHAPE_NOTE.to_string()]
-                } else {
-                    vec![]
-                };
-                let mut coverage = OplogExportCoverage::new(notes);
-                coverage.hydration_failures = hydration_failures;
-                coverage.start_unknown = start_unknown;
-                coverage.schema_less_rpc_values = schema_less;
-                coverage.update_incomplete();
-                crate::model::agent::oplog_export_view::AgentOplogExportCoverageView(coverage)
-            }),
+            .prop_map(
+                |(hydration_failures, start_unknown, schema_less, mismatches, note)| {
+                    let notes = if note {
+                        vec![KEEP_SCALARS_WITHOUT_SHAPE_NOTE.to_string()]
+                    } else {
+                        vec![]
+                    };
+                    let mut coverage = OplogExportCoverage::new(notes);
+                    coverage.hydration_failures = hydration_failures;
+                    coverage.start_unknown = start_unknown;
+                    coverage.schema_less_rpc_values = schema_less;
+                    coverage.host_type_mismatches = mismatches;
+                    coverage.update_incomplete();
+                    crate::model::agent::oplog_export_view::AgentOplogExportCoverageView(coverage)
+                },
+            ),
     )
 }
 

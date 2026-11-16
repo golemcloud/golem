@@ -180,6 +180,7 @@ fn coverage_lines(coverage: &OplogExportCoverage) -> Vec<String> {
         hydration_failures,
         start_unknown,
         schema_less_rpc_values,
+        host_type_mismatches,
         notes,
     } = coverage;
     let mut lines = vec![format_message_highlight("COVERAGE")];
@@ -200,6 +201,12 @@ fn coverage_lines(coverage: &OplogExportCoverage) -> Vec<String> {
         "schema-less RPC values",
         schema_less_rpc_values,
         |item| format!("#{:0>5} {}", item.index, item.path),
+    );
+    push_list(
+        &mut lines,
+        "host payloads with another type",
+        host_type_mismatches,
+        |item| format!("#{:0>5} {}", item.index, serde_text(&item.direction)),
     );
     for note in notes {
         lines.push(format!("{PAD}note: {note}"));
@@ -460,10 +467,10 @@ fn type_text(description: &TypeDescription) -> String {
 mod tests {
     use super::*;
     use crate::oplog_export::model::{
-        BytesNode, CaseKind, FlagNode, MapEntryNode, NumberNode, OmittedEntryRef, OmittedReason,
-        RedactedNode, RedactionReason, ReportAgentRef, ReportField, ReportOmission, ReportToken,
-        ScalarKind, SchemaLessRpcValueRef, StartUnknownRef, TextNode, TimestampNode, TupleNode,
-        TypeDescriptionNode, TypeKind,
+        BytesNode, CaseKind, FlagNode, HostPayloadDirection, HostTypeMismatchRef, MapEntryNode,
+        NumberNode, OmittedEntryRef, OmittedReason, RedactedNode, RedactionReason, ReportAgentRef,
+        ReportField, ReportOmission, ReportToken, ScalarKind, SchemaLessRpcValueRef,
+        StartUnknownRef, TextNode, TimestampNode, TupleNode, TypeDescriptionNode, TypeKind,
     };
     use golem_common::model::Timestamp;
     use test_r::test;
@@ -711,6 +718,13 @@ mod tests {
             }],
             discovered: 7,
         };
+        coverage.host_type_mismatches = CoverageList {
+            shown: vec![HostTypeMismatchRef {
+                index: 14,
+                direction: HostPayloadDirection::Response,
+            }],
+            discovered: 7,
+        };
         coverage.update_incomplete();
         let lines = coverage_lines(&coverage).join("\n");
         for expected in [
@@ -720,6 +734,8 @@ mod tests {
             "#00012 (Start #00003)",
             "schema-less RPC values: 7 discovered",
             "#00013 request.input",
+            "host payloads with another type: 7 discovered",
+            "#00014 response",
             "… 6 more",
             "note: NOTE-TEXT",
             "not in the report in full",

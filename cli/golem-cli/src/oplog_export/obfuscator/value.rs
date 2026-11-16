@@ -20,9 +20,10 @@ use super::canonical::{encode, encode_str};
 use super::describe::{describe_agent_type, describe_schema, known_role};
 use super::{ObfuscationContext, agent_reference};
 use crate::oplog_export::model::{
-    BytesNode, CaseKind, CaseNode, KnownRole, ListNode, MapEntryNode, MapNode, NumberNode,
-    QuantityNode, RecordNode, RedactedNode, RedactionReason, ReportField, ReportNode, ReportToken,
-    ScalarKind, ScalarNode, StrNode, TextNode, TupleNode, TypeDescriptionNode,
+    BytesNode, CaseKind, CaseNode, HostPayloadDirection, KnownRole, ListNode, MapEntryNode,
+    MapNode, NumberNode, QuantityNode, RecordNode, RedactedNode, RedactionReason, ReportField,
+    ReportNode, ReportToken, ScalarKind, ScalarNode, StrNode, TextNode, TupleNode,
+    TypeDescriptionNode,
 };
 use golem_common::model::AgentId;
 use golem_common::model::oplog::types::{
@@ -35,8 +36,8 @@ use golem_common::model::oplog::types::{
     SerializableWebsocketError,
 };
 use golem_common::schema::{
-    FromSchema, IntoSchema, RegisteredAgentTypeSchema, ResultSpec, ResultValuePayload, SchemaGraph,
-    SchemaType, SchemaValue, TypeId, TypedSchemaValue,
+    FromSchema, IntoSchema, NamedFieldType, RegisteredAgentTypeSchema, ResultSpec,
+    ResultValuePayload, SchemaGraph, SchemaType, SchemaValue, TypeId, TypedSchemaValue,
 };
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -44,12 +45,20 @@ use std::sync::LazyLock;
 /// Where a value node is. Customer data gets only the default rendering. A trusted host payload
 /// gets the default rendering plus its kept nodes. An error subtree is a trusted region whose
 /// strings are error text and whose enum and variant cases are kept, because every type in it
-/// is a Golem error type; a customer value inside it is rendered in the customer region.
+/// is a Golem error type; a customer value inside it is rendered in the customer region. A
+/// Golem value is a number or bool that Golem writes into the entry structure, such as consumed
+/// fuel.
+///
+/// A leaf of a trusted host payload that no rule names is customer data, so its token is in the
+/// same `scalar` domain as a customer value. A reader can often predict the leaves of Golem
+/// values and error subtrees, so their tokens are in `golem` domains; then such a known value
+/// does not name an equal customer token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Region {
     Customer,
     Trusted,
     Error,
+    Golem,
 }
 
 /// The schema type IDs that the rules look for.
@@ -102,6 +111,7 @@ pub(super) static KNOWN_IDS: LazyLock<KnownIds> = LazyLock::new(|| KnownIds {
 pub(super) struct Walker<'r, 'a> {
     pub ctx: &'r ObfuscationContext<'a>,
     pub rpc_values: Vec<&'static str>,
+    pub host_type_mismatches: Vec<HostPayloadDirection>,
 }
 
 const STACK_RED_ZONE: usize = 64 * 1024;
@@ -113,6 +123,7 @@ impl<'r, 'a> Walker<'r, 'a> {
         Self {
             ctx,
             rpc_values: Vec::new(),
+            host_type_mismatches: Vec::new(),
         }
     }
 
@@ -237,7 +248,7 @@ impl<'r, 'a> Walker<'r, 'a> {
                     .zip(values)
                     .map(|(field, value)| ReportField {
                         name: Some(field.name.clone()),
-                        value: self.typed(graph, &field.body, value, region),
+                        value: self.typed(graph, &field.body, value, field_region(region, field)),
                     })
                     .collect();
                 ReportNode::Record(RecordNode {
@@ -668,12 +679,9 @@ impl<'r, 'a> Walker<'r, 'a> {
     /// A leaf value. `declared_unit` is true when a quantity's unit is declared by its type.
     fn leaf(&mut self, value: &SchemaValue, region: Region, declared_unit: bool) -> ReportNode {
         let scalars = self.ctx.keep().scalars;
-        // Golem writes the numbers of trusted and error regions, so a reader can often predict
-        // them. Their own domain keeps such a known value from naming an equal customer token.
-        let prefix = if region == Region::Customer {
-            "scalar"
-        } else {
-            "golem"
+        let prefix = match region {
+            Region::Customer | Region::Trusted => "scalar",
+            Region::Error | Region::Golem => "golem",
         };
         let scalar = |walker: &Self, kind: ScalarKind, name: &str, shown: serde_json::Value| {
             ReportNode::Scalar(ScalarNode {
@@ -1012,6 +1020,20 @@ fn float_json(value: f64) -> serde_json::Value {
     serde_json::Number::from_f64(value)
         .map(serde_json::Value::Number)
         .unwrap_or_else(|| serde_json::Value::String(value.to_string()))
+}
+
+/// The region of a record field. A component revision in a trusted payload is a Golem value:
+/// the `Create` entry shows the revision in clear, so a `scalar` token of it would name equal
+/// customer numbers.
+pub(super) fn field_region(region: Region, field: &NamedFieldType) -> Region {
+    match normalized(&field.name).as_str() {
+        "componentrevision" | "currentcomponentrevision" | "targetrevision"
+            if region == Region::Trusted =>
+        {
+            Region::Golem
+        }
+        _ => region,
+    }
 }
 
 /// Folds an ASCII case name for comparison: lower case, without `-` and `_`.

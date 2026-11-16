@@ -19,8 +19,10 @@
 //! not one whose public value can be bare customer data, and the value's graph equals the graph
 //! of the pair's Rust type. Every other payload is customer data as a whole.
 
-use super::value::{Region, Walker, normalized, number, record, resolve, text, unsigned};
-use crate::oplog_export::model::{ReportField, ReportNode, TupleNode};
+use super::value::{
+    Region, Walker, field_region, normalized, number, record, resolve, text, unsigned,
+};
+use crate::oplog_export::model::{HostPayloadDirection, ReportField, ReportNode, TupleNode};
 use golem_common::model::oplog::host_functions::{self, HostFunctionName};
 use golem_common::model::oplog::{
     HostPayloadPair, HostRequestGolemAgentGetConfigValue, HostRequestGolemApiForkAgent,
@@ -694,16 +696,26 @@ static RULE_IDS: LazyLock<RuleIds> = LazyLock::new(|| RuleIds {
 
 impl Walker<'_, '_> {
     /// Renders a host payload. `function` is the host function name of the `Start`, or `None`
-    /// when it is unknown. Returns the node and whether the payload was trusted.
+    /// when it is unknown. Returns the node and whether the payload was trusted. A payload of a
+    /// known host function with another type graph is recorded in `host_type_mismatches`.
     pub(super) fn host_payload(
         &mut self,
         function: Option<&str>,
         direction: Direction,
         value: &TypedSchemaValue,
     ) -> (ReportNode, bool) {
-        let trusted = function
-            .and_then(|function| trusted_graph(function, direction))
-            .is_some_and(|expected| &expected == value.graph());
+        let expected = function.and_then(|function| trusted_graph(function, direction));
+        let trusted = match expected {
+            Some(expected) if &expected == value.graph() => true,
+            Some(_) => {
+                self.host_type_mismatches.push(match direction {
+                    Direction::Request => HostPayloadDirection::Request,
+                    Direction::Response => HostPayloadDirection::Response,
+                });
+                false
+            }
+            None => false,
+        };
         if !trusted {
             return (self.customer(value), false);
         }
@@ -769,7 +781,7 @@ impl Walker<'_, '_> {
                         walker.typed(graph, ty, ok, Region::Trusted)
                     })
                 } else {
-                    self.typed(graph, body, value, Region::Trusted)
+                    self.typed(graph, body, value, field_region(Region::Trusted, field))
                 };
                 ReportField {
                     name: Some(field.name.clone()),

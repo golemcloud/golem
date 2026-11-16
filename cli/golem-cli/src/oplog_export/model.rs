@@ -397,6 +397,24 @@ pub struct SchemaLessRpcValueRef {
     pub path: String,
 }
 
+/// The direction of a host payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostPayloadDirection {
+    Request,
+    Response,
+}
+
+/// A payload of a known host function whose type graph is not the graph that this CLI
+/// expects, for example because the server runs another Golem version. The whole payload is
+/// customer data, so it becomes tokens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostTypeMismatchRef {
+    pub index: u64,
+    pub direction: HostPayloadDirection,
+}
+
 /// The first document of an export: the keep flags, the root reference and the provenance of
 /// the report. It never holds the query text, an agent ID or a component.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -473,6 +491,7 @@ pub struct OplogExportCoverage {
     pub hydration_failures: CoverageList<OmittedEntryRef>,
     pub start_unknown: CoverageList<StartUnknownRef>,
     pub schema_less_rpc_values: CoverageList<SchemaLessRpcValueRef>,
+    pub host_type_mismatches: CoverageList<HostTypeMismatchRef>,
     pub notes: Vec<String>,
 }
 
@@ -486,6 +505,7 @@ impl OplogExportCoverage {
             hydration_failures: CoverageList::default(),
             start_unknown: CoverageList::default(),
             schema_less_rpc_values: CoverageList::default(),
+            host_type_mismatches: CoverageList::default(),
             notes,
         }
     }
@@ -496,6 +516,7 @@ impl OplogExportCoverage {
         self.start_unknown.merge(other.start_unknown);
         self.schema_less_rpc_values
             .merge(other.schema_less_rpc_values);
+        self.host_type_mismatches.merge(other.host_type_mismatches);
         for note in other.notes {
             if !self.notes.contains(&note) {
                 self.notes.push(note);

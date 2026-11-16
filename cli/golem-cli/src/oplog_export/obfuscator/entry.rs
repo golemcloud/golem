@@ -19,8 +19,8 @@ use super::host::Direction;
 use super::value::{Region, Walker, flag, kept_case, number, record, text};
 use super::{ObfuscationContext, agent_reference};
 use crate::oplog_export::model::{
-    CaseKind, OmittedReason, ReportEntry, ReportField, ReportNode, ReportOmission,
-    SchemaLessRpcValueRef, TimestampNode, TupleNode,
+    CaseKind, HostTypeMismatchRef, OmittedReason, ReportEntry, ReportField, ReportNode,
+    ReportOmission, SchemaLessRpcValueRef, TimestampNode, TupleNode,
 };
 use golem_common::model::card::{
     AccountCardHolder, AgentCardHolder, ApplicationCardHolder, PublicCardHolder,
@@ -52,6 +52,7 @@ pub struct RenderedEntry {
     /// `true` for an `End` or `Cancelled` with a value whose `Start` function is unknown.
     pub provenance_unknown: bool,
     pub schema_less_rpc_values: Vec<SchemaLessRpcValueRef>,
+    pub host_type_mismatches: Vec<HostTypeMismatchRef>,
 }
 
 /// Renders one public oplog entry. `start_function` is the host function name of the `Start`
@@ -88,6 +89,11 @@ pub fn render_entry(
                 index,
                 path: path.to_string(),
             })
+            .collect(),
+        host_type_mismatches: walker
+            .host_type_mismatches
+            .into_iter()
+            .map(|direction| HostTypeMismatchRef { index, direction })
             .collect(),
     }
 }
@@ -336,11 +342,11 @@ impl Walker<'_, '_> {
     /// A number or bool that Golem writes, such as consumed fuel: a token in a `golem` domain
     /// that `--keep-scalars` shows.
     fn int(&mut self, value: i64) -> ReportNode {
-        self.schemaless(&SchemaValue::S64(value), Region::Trusted)
+        self.schemaless(&SchemaValue::S64(value), Region::Golem)
     }
 
     fn uint(&mut self, value: u64) -> ReportNode {
-        self.schemaless(&SchemaValue::U64(value), Region::Trusted)
+        self.schemaless(&SchemaValue::U64(value), Region::Golem)
     }
 
     /// A time chosen by the guest, such as when a scheduled invocation may start: a datetime
@@ -355,7 +361,7 @@ impl Walker<'_, '_> {
     }
 
     fn boolean(&mut self, value: bool) -> ReportNode {
-        self.schemaless(&SchemaValue::Bool(value), Region::Trusted)
+        self.schemaless(&SchemaValue::Bool(value), Region::Golem)
     }
 
     fn err_text(&self, value: &str) -> ReportNode {
@@ -1045,7 +1051,7 @@ impl Walker<'_, '_> {
             }) => Fields::new()
                 .add(
                     "id",
-                    self.schemaless(&SchemaValue::U64(id.0), Region::Trusted),
+                    self.schemaless(&SchemaValue::U64(id.0), Region::Golem),
                 )
                 .add("name", text(resource_name.clone()))
                 .add("owner", text(owner.clone()))
@@ -1152,7 +1158,7 @@ impl Walker<'_, '_> {
                             .add("name", self.str_leaf(policy_name, Region::Customer))
                             .add(
                                 "priority",
-                                self.schemaless(&SchemaValue::U32(*priority), Region::Trusted),
+                                self.schemaless(&SchemaValue::U32(*priority), Region::Golem),
                             )
                             .add("predicate", self.tok(predicate))
                             .add("policy", self.tok(policy))

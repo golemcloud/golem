@@ -279,6 +279,9 @@ impl<R: OplogReads> OplogExportSession<R> {
         for value in rendered.schema_less_rpc_values {
             coverage.schema_less_rpc_values.push(value);
         }
+        for mismatch in rendered.host_type_mismatches {
+            coverage.host_type_mismatches.push(mismatch);
+        }
         rendered.entry
     }
 

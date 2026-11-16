@@ -1184,7 +1184,7 @@ const pageEntries = page => EXPORT ? normalize({ entries: exportEntries(page.ent
 function mergeCoverage(a, b) {
   if (!a) return b || null; if (!b) return a;
   const list = (x, y) => ({ shown: x.shown.concat(y.shown).slice(0, 100), discovered: x.discovered + y.discovered });
-  const out = { hydrationFailures: list(a.hydrationFailures, b.hydrationFailures), startUnknown: list(a.startUnknown, b.startUnknown), schemaLessRpcValues: list(a.schemaLessRpcValues, b.schemaLessRpcValues), notes: [...new Set([...(a.notes || []), ...(b.notes || [])])] };
+  const out = { hydrationFailures: list(a.hydrationFailures, b.hydrationFailures), startUnknown: list(a.startUnknown, b.startUnknown), schemaLessRpcValues: list(a.schemaLessRpcValues, b.schemaLessRpcValues), hostTypeMismatches: list(a.hostTypeMismatches, b.hostTypeMismatches), notes: [...new Set([...(a.notes || []), ...(b.notes || [])])] };
   out.incomplete = out.hydrationFailures.discovered > 0 || out.startUnknown.discovered > 0;
   return out;
 }
@@ -1193,7 +1193,7 @@ function mergeCoverage(a, b) {
 function coverageBefore(c, lo) {
   if (!c) return c;
   const list = x => { const shown = x.shown.filter(i => i.index < lo); return { shown, discovered: shown.length + (shown.length === x.shown.length ? x.discovered - x.shown.length : 0) }; };
-  return { ...c, hydrationFailures: list(c.hydrationFailures), startUnknown: list(c.startUnknown), schemaLessRpcValues: list(c.schemaLessRpcValues) };
+  return { ...c, hydrationFailures: list(c.hydrationFailures), startUnknown: list(c.startUnknown), schemaLessRpcValues: list(c.schemaLessRpcValues), hostTypeMismatches: list(c.hostTypeMismatches) };
 }
 function renderExportBanner(header, coverage) {
   const b = $('#exportbanner'); b.replaceChildren();
@@ -1210,7 +1210,8 @@ function renderExportBanner(header, coverage) {
   };
   b.append(list(LIVE ? 'omitted entries (loaded pages)' : 'omitted entries', coverage.hydrationFailures, x => h('span', null, indexLink(x.index), ` ${x.kind} · ${fmtBytes(x.size)} · ${x.reason === 'tooLarge' ? 'too large' : 'read failed'}`)),
     list('results with an unknown Start', coverage.startUnknown, x => h('span', null, indexLink(x.index), ' ← ', indexLink(x.startIndex))),
-    list('RPC values without a schema', coverage.schemaLessRpcValues, x => h('span', null, indexLink(x.index), ' ' + x.path)));
+    list('RPC values without a schema', coverage.schemaLessRpcValues, x => h('span', null, indexLink(x.index), ' ' + x.path)),
+    list('host payloads with another type', coverage.hostTypeMismatches, x => h('span', null, indexLink(x.index), ' ' + x.direction)));
   for (const note of coverage.notes || []) b.append(h('div', { class: 'muted' }, 'note: ' + note));
   if (coverage.incomplete) b.append(h('div', { class: 'err' }, 'Some entries are not in the report in full.'));
 }

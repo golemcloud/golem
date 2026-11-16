@@ -2286,6 +2286,7 @@
         "hydrationFailures",
         "startUnknown",
         "schemaLessRpcValues",
+        "hostTypeMismatches",
         "notes"
       ],
       "properties": {
@@ -2303,6 +2304,9 @@
         },
         "schemaLessRpcValues": {
           "$ref": "#/definitions/OplogExportSchemaLessRpcValueRefList"
+        },
+        "hostTypeMismatches": {
+          "$ref": "#/definitions/OplogExportHostTypeMismatchRefList"
         },
         "notes": {
           "type": "array",
@@ -2928,6 +2932,28 @@
       },
       "additionalProperties": false
     },
+    "OplogExportHostTypeMismatchRef": {
+      "type": "object",
+      "description": "A payload of a known host function whose type differs from the type that the CLI expects. The whole payload is tokens.",
+      "required": [
+        "index",
+        "direction"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "request",
+            "response"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "OplogExportOmittedEntryRefList": {
       "type": "object",
       "description": "The first 100 items of a coverage list; `discovered` counts every item.",
@@ -2982,6 +3008,27 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/OplogExportSchemaLessRpcValueRef"
+          }
+        },
+        "discovered": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "OplogExportHostTypeMismatchRefList": {
+      "type": "object",
+      "description": "The first 100 items of a coverage list; `discovered` counts every item.",
+      "required": [
+        "shown",
+        "discovered"
+      ],
+      "properties": {
+        "shown": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OplogExportHostTypeMismatchRef"
           }
         },
         "discovered": {
