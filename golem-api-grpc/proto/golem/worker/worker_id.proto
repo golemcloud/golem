@@ -3,9 +3,27 @@ syntax = "proto3";
 package golem.worker;
 
 import "golem/common/uuid.proto";
+import "golem/schema/schema.proto";
 
 message AgentId {
   golem.common.UUID value = 1;
+}
+
+// The type and constructor parameters of an agent. As the target of a request, it
+// selects the keyed agent whose ID derives from it.
+message AgentKey {
+  string agent_type_name = 1;
+  golem.schema.TypedSchemaValue parameters = 2;
+}
+
+// The address of an agent before it resolves to an owner.
+message AgentTarget {
+  oneof target {
+    // The keyed agent that the key selects.
+    AgentKey key = 1;
+    // The agent that has this ID.
+    AgentId id = 2;
+  }
 }
 
 enum OwnerKind {

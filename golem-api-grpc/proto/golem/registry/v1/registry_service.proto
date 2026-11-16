@@ -48,6 +48,8 @@ service RegistryService {
   rpc ResolveMcpImport (ResolveMcpImportRequest) returns (ResolveMcpImportResponse);
   rpc ResolveAgentTypeByNames(ResolveAgentTypeByNamesRequest)
       returns (ResolveAgentTypeByNamesResponse);
+  // Resolves the type ID in an agent ID's tag. It also resolves types that are no longer deployed.
+  rpc ResolveTypeId (ResolveTypeIdRequest) returns (ResolveTypeIdResponse);
 
   // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
@@ -417,6 +419,37 @@ message ResolveAgentTypeByNamesSuccessResponse {
   uint64 deployment_revision = 3;
   // Present only when request.deployment_revision is not set.
   optional uint64 current_deployment_revision = 4;
+}
+
+message ResolveTypeIdRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  uint32 type_id = 2;
+}
+
+message ResolveTypeIdResponse {
+  oneof result {
+    ResolveTypeIdSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveTypeIdSuccessResponse {
+  // Absent when the environment never assigned the type ID.
+  optional ResolvedTypeId resolved = 1;
+}
+
+enum TypeIdKind {
+  TYPE_ID_KIND_UNSPECIFIED = 0;
+  TYPE_ID_KIND_AGENT_TYPE = 1;
+  TYPE_ID_KIND_TOOL = 2;
+}
+
+message ResolvedTypeId {
+  TypeIdKind kind = 1;
+  string name = 2;
+  // The component that implements the agent type in the current deployment. Absent when
+  // the type is not deployed, and always absent for a tool.
+  optional golem.registry.RegisteredAgentTypeImplementer implemented_by = 3;
 }
 
 message GetActiveRoutesForDomainRequest {

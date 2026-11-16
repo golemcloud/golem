@@ -1022,3 +1022,57 @@ fn recorded_constructor_parameters_with_delimiters_round_trip() {
     };
     assert!(without_type.parse_agent_id(&component_metadata).is_err());
 }
+
+#[test]
+fn agent_targets_round_trip_through_protobuf() {
+    use crate::model::agent::{AgentKey, AgentTarget};
+    use crate::model::component_metadata::{ComponentMetadata, KnownExports};
+    use golem_api_grpc::proto::golem::worker as proto;
+
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        test_agent_types().into_values().collect(),
+        Default::default(),
+    );
+    let key = AgentKey::parse("agent-3(7,(1,2,f(0,2)))", &metadata)
+        .unwrap()
+        .0;
+    for target in [
+        AgentTarget::Key(key.clone()),
+        AgentTarget::Id(AgentId::from_parts(7, 9)),
+    ] {
+        let wire = proto::AgentTarget::try_from(target.clone()).unwrap();
+        assert_eq!(AgentTarget::try_from(wire).unwrap(), target);
+    }
+
+    let wire = proto::AgentKey::try_from(key.clone()).unwrap();
+    assert_eq!(wire.agent_type_name, "agent-3");
+    let decoded = AgentKey::try_from(wire.clone()).unwrap();
+    assert_eq!(decoded.canonical_params(), key.canonical_params());
+    assert_eq!(decoded.parameters(), key.parameters());
+    assert!(
+        AgentKey::try_from(proto::AgentKey {
+            parameters: None,
+            ..wire
+        })
+        .is_err()
+    );
+    assert!(AgentTarget::try_from(proto::AgentTarget { target: None }).is_err());
+}
+
+#[test]
+fn type_id_kinds_round_trip_through_protobuf() {
+    use crate::model::type_id::TypeIdKind;
+    use golem_api_grpc::proto::golem::registry::v1::TypeIdKind as Proto;
+
+    for (kind, wire) in [
+        (TypeIdKind::AgentType, Proto::AgentType),
+        (TypeIdKind::Tool, Proto::Tool),
+    ] {
+        assert_eq!(Proto::from(kind), wire);
+        assert_eq!(TypeIdKind::try_from(wire), Ok(kind));
+    }
+    assert!(TypeIdKind::try_from(Proto::Unspecified).is_err());
+    assert_eq!(Proto::default(), Proto::Unspecified);
+}

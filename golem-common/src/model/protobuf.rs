@@ -989,6 +989,37 @@ pub fn from_protobuf_resource_description(
     Ok((key, value))
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::registry::v1::TypeIdKind>
+    for crate::model::type_id::TypeIdKind
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::registry::v1::TypeIdKind,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::registry::v1::TypeIdKind as Proto;
+
+        match value {
+            Proto::Unspecified => Err("Unspecified type ID kind".to_string()),
+            Proto::AgentType => Ok(Self::AgentType),
+            Proto::Tool => Ok(Self::Tool),
+        }
+    }
+}
+
+impl From<crate::model::type_id::TypeIdKind>
+    for golem_api_grpc::proto::golem::registry::v1::TypeIdKind
+{
+    fn from(value: crate::model::type_id::TypeIdKind) -> Self {
+        use crate::model::type_id::TypeIdKind;
+
+        match value {
+            TypeIdKind::AgentType => Self::AgentType,
+            TypeIdKind::Tool => Self::Tool,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

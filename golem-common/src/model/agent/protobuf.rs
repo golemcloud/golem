@@ -1167,3 +1167,64 @@ impl TryFrom<TypedAgentConfigEntry>
         })
     }
 }
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::AgentKey {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentKey,
+    ) -> Result<Self, Self::Error> {
+        let parameters = value
+            .parameters
+            .ok_or_else(|| "Missing field: AgentKey.parameters".to_string())?
+            .try_into()?;
+        Self::new(super::AgentTypeName(value.agent_type_name), parameters)
+            .map_err(|err| err.to_string())
+    }
+}
+
+impl TryFrom<super::AgentKey> for golem_api_grpc::proto::golem::worker::AgentKey {
+    type Error = String;
+
+    fn try_from(value: super::AgentKey) -> Result<Self, Self::Error> {
+        let (agent_type, parameters) = value.into_parts();
+        Ok(Self {
+            agent_type_name: agent_type.0,
+            parameters: Some(parameters.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentTarget> for super::AgentTarget {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentTarget,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+
+        match value
+            .target
+            .ok_or_else(|| "Missing field: AgentTarget.target".to_string())?
+        {
+            Target::Key(key) => Ok(Self::Key(key.try_into()?)),
+            Target::Id(id) => Ok(Self::Id(id.try_into()?)),
+        }
+    }
+}
+
+impl TryFrom<super::AgentTarget> for golem_api_grpc::proto::golem::worker::AgentTarget {
+    type Error = String;
+
+    fn try_from(value: super::AgentTarget) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+
+        let target = match value {
+            super::AgentTarget::Key(key) => Target::Key(key.try_into()?),
+            super::AgentTarget::Id(id) => Target::Id(id.into()),
+        };
+        Ok(Self {
+            target: Some(target),
+        })
+    }
+}

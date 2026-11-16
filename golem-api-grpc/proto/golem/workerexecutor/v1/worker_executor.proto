@@ -48,6 +48,8 @@ service WorkerExecutor {
   rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
   rpc GetAgentMetadata(GetAgentMetadataRequest) returns (GetAgentMetadataResponse);
+  // Resolves a key to the keyed agent it selects. It never creates an agent.
+  rpc LookupAgent(LookupAgentRequest) returns (LookupAgentResponse);
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
@@ -137,7 +139,13 @@ message InterruptWorkerResponse {
 }
 
 message CreateWorkerRequest {
-  golem.worker.AgentId agent_id = 1;
+  // The type and constructor parameters of the agent to create.
+  golem.worker.AgentKey constructor = 1;
+  // Unset: the keyed agent of `constructor`. Set: an agent without a key at this
+  // pre-allocated ID, so a repeated request reaches the agent the first one created.
+  optional golem.worker.AgentId unkeyed_id = 12;
+  // The component that implements the agent type.
+  golem.component.ComponentId component_id = 13;
   map<string, string> env = 2;
   repeated golem.worker.AgentConfigEntryDto config = 3;
   // Account the component belongs to
@@ -148,7 +156,7 @@ message CreateWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 7;
   optional golem.component.Principal principal = 8;
   optional golem.worker.InvocationContext invocation_context = 9;
-  // Owner key of the invocation that demands the agent; a KnownFresh ephemeral phantom is
+  // Owner key of the invocation that demands the agent; a KnownFresh ephemeral instance is
   // checked against it.
   optional golem.worker.IdempotencyKey idempotency_key = 10;
   golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
@@ -156,6 +164,7 @@ message CreateWorkerRequest {
 
 message CreateWorkerSuccessResponse {
   golem.common.UUID instance_id = 1;
+  golem.worker.AgentId agent_id = 2;
 }
 
 message CreateWorkerResponse {
@@ -238,6 +247,31 @@ message GetAgentMetadataResponse {
   }
 }
 
+message LookupAgentRequest {
+  golem.worker.AgentKey key = 1;
+  // The component that implements the agent type.
+  golem.component.ComponentId component_id = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message LookupAgentSuccessResponse {
+  // Absent when no current agent has the key.
+  optional LookedUpAgent agent = 1;
+}
+
+message LookedUpAgent {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.UUID agent_fingerprint = 2;
+}
+
+message LookupAgentResponse {
+  oneof result {
+    LookupAgentSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
 message ResumeWorkerRequest {
   golem.worker.AgentId agent_id = 1;
   optional bool force = 2;
@@ -254,9 +288,11 @@ message ResumeWorkerResponse {
 }
 
 message GetRunningWorkersMetadataRequest {
-  golem.component.ComponentId component_id = 1;
+  // The type ID of the agent type to list.
+  uint32 type_id = 1;
   golem.worker.AgentFilter filter = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  golem.common.EnvironmentId environment_id = 4;
 }
 
 
@@ -272,7 +308,8 @@ message GetRunningWorkersMetadataSuccessResponse {
 }
 
 message GetWorkersMetadataRequest {
-  golem.component.ComponentId component_id = 1;
+  // The type ID of the agent type to list.
+  uint32 type_id = 1;
   golem.worker.AgentFilter filter = 2;
   golem.worker.Cursor cursor = 3;
   uint64 count = 4;
