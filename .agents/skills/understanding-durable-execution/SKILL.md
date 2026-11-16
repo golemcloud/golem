@@ -1827,8 +1827,10 @@ then the body, `finish-async` and the drop under the child token, then `close`. 
 promise hook, timer and callback wrappers and import-bridge wrappers capture the scope at
 registration or initiation, install it around each job, poll, sleep and drop, restore the previous
 scope afterwards, and restore the root before control returns to the host. A parent finishes only
-after the operations that started inside it have settled. A closed token resolves to its nearest
-open ancestor, or to the root, and never installs its stale snapshot. `durable` is sync-only.
+after the operations that started inside it have settled; an operation that begins after that wait
+ended begins in the nearest enclosing scope that still waits, or at the root. A closed token
+resolves to its nearest open ancestor, or to the root, and never installs its stale snapshot.
+`durable` is sync-only.
 
 **Non-Rust SDK limitation:** Effect, Scala, MoonBit, and Go custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.

@@ -64,6 +64,7 @@ function catalogRevisionAsync(
 
 Limits:
 
+- A parent stops waiting for children when they have all settled. An operation that starts after that, for example from a getter that reads the result, begins in the nearest enclosing operation that still waits, or in the invocation.
 - Work that the body detaches and that runs after the operation finished does not belong to that operation. It runs in the nearest enclosing open operation, or in the invocation, and the runtime writes one report to stderr. Await or join the work that the body starts before the body returns.
 - `FinalizationRegistry` callbacks and dynamic `import()` jobs run outside every custom operation.
 - Each `await` inside an operation switches the scope in and out with two host calls, so a CPU-bound loop with many awaits runs slower inside an operation than outside it.
