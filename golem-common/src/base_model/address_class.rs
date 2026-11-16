@@ -80,7 +80,7 @@ impl AddressClass {
             Self::LinkLocal
         } else if within(&V4_PRIVATE) {
             Self::Private
-        } else if within(&V4_OTHER) {
+        } else if within(&V4_OTHER) && !within(&V4_GLOBAL_EXCEPTIONS) {
             Self::Other
         } else {
             Self::Public
@@ -102,7 +102,9 @@ impl AddressClass {
             Self::LinkLocal
         } else if within(&[(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7)]) {
             Self::Private
-        } else if !within(&[(Ipv6Addr::new(0x2000, 0, 0, 0, 0, 0, 0, 0), 3)]) || within(&V6_OTHER) {
+        } else if !within(&[(Ipv6Addr::new(0x2000, 0, 0, 0, 0, 0, 0, 0), 3)])
+            || (within(&V6_OTHER) && !within(&V6_GLOBAL_EXCEPTIONS))
+        {
             Self::Other
         } else {
             Self::Public
@@ -116,7 +118,8 @@ const V4_PRIVATE: [(Ipv4Addr, u32); 3] = [
     (Ipv4Addr::new(192, 168, 0, 0), 16),
 ];
 
-const V4_OTHER: [(Ipv4Addr, u32); 9] = [
+/// Ranges that are not globally reachable, following the IANA IPv4 special-purpose registry.
+const V4_OTHER: [(Ipv4Addr, u32); 10] = [
     // "This network", including the unspecified address
     (Ipv4Addr::new(0, 0, 0, 0), 8),
     // Shared address space (CGNAT)
@@ -127,6 +130,8 @@ const V4_OTHER: [(Ipv4Addr, u32); 9] = [
     (Ipv4Addr::new(192, 0, 2, 0), 24),
     (Ipv4Addr::new(198, 51, 100, 0), 24),
     (Ipv4Addr::new(203, 0, 113, 0), 24),
+    // 6a44 relay anycast
+    (Ipv4Addr::new(192, 88, 99, 2), 32),
     // Benchmarking
     (Ipv4Addr::new(198, 18, 0, 0), 15),
     // Multicast
@@ -135,7 +140,16 @@ const V4_OTHER: [(Ipv4Addr, u32); 9] = [
     (Ipv4Addr::new(240, 0, 0, 0), 4),
 ];
 
-/// Ranges inside global unicast (`2000::/3`) that are not globally reachable. Every address
+/// Globally reachable allocations inside the `V4_OTHER` ranges.
+const V4_GLOBAL_EXCEPTIONS: [(Ipv4Addr, u32); 2] = [
+    // Port Control Protocol anycast
+    (Ipv4Addr::new(192, 0, 0, 9), 32),
+    // TURN anycast
+    (Ipv4Addr::new(192, 0, 0, 10), 32),
+];
+
+/// Ranges inside global unicast (`2000::/3`) that are not globally reachable, following the
+/// IANA IPv6 special-purpose registry. Every address
 /// outside `2000::/3` that is not loopback, link-local or unique local is `Other` too.
 const V6_OTHER: [(Ipv6Addr, u32); 3] = [
     // IETF protocol assignments, including Teredo and benchmarking
@@ -143,6 +157,22 @@ const V6_OTHER: [(Ipv6Addr, u32); 3] = [
     // Documentation
     (Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 32),
     (Ipv6Addr::new(0x3fff, 0, 0, 0, 0, 0, 0, 0), 20),
+];
+
+/// Globally reachable allocations inside the `V6_OTHER` ranges.
+const V6_GLOBAL_EXCEPTIONS: [(Ipv6Addr, u32); 7] = [
+    // Port Control Protocol, TURN and DNS-SD Service Registration Protocol anycast
+    (Ipv6Addr::new(0x2001, 0x0001, 0, 0, 0, 0, 0, 1), 128),
+    (Ipv6Addr::new(0x2001, 0x0001, 0, 0, 0, 0, 0, 2), 128),
+    (Ipv6Addr::new(0x2001, 0x0001, 0, 0, 0, 0, 0, 3), 128),
+    // AMT
+    (Ipv6Addr::new(0x2001, 0x0003, 0, 0, 0, 0, 0, 0), 32),
+    // AS112-v6
+    (Ipv6Addr::new(0x2001, 0x0004, 0x0112, 0, 0, 0, 0, 0), 48),
+    // ORCHIDv2
+    (Ipv6Addr::new(0x2001, 0x0020, 0, 0, 0, 0, 0, 0), 28),
+    // Drone Remote ID Protocol Entity Tags
+    (Ipv6Addr::new(0x2001, 0x0030, 0, 0, 0, 0, 0, 0), 28),
 ];
 
 impl Display for AddressClass {
@@ -217,12 +247,19 @@ mod tests {
             ("172.32.0.0", Public),
             ("191.255.255.255", Public),
             ("192.0.0.0", Other),
+            ("192.0.0.8", Other),
+            ("192.0.0.9", Public),
+            ("192.0.0.10", Public),
+            ("192.0.0.11", Other),
             ("192.0.0.255", Other),
             ("192.0.1.0", Public),
             ("192.0.1.255", Public),
             ("192.0.2.0", Other),
             ("192.0.2.255", Other),
             ("192.0.3.0", Public),
+            ("192.88.99.1", Public),
+            ("192.88.99.2", Other),
+            ("192.88.99.3", Public),
             ("192.167.255.255", Public),
             ("192.168.0.0", Private),
             ("192.168.255.255", Private),
@@ -257,6 +294,25 @@ mod tests {
             ("1fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", Other),
             ("2000::", Public),
             ("2001::1", Other),
+            ("2001:1::", Other),
+            ("2001:1::1", Public),
+            ("2001:1::2", Public),
+            ("2001:1::3", Public),
+            ("2001:1::4", Other),
+            ("2001:2::1", Other),
+            ("2001:2:ffff:ffff:ffff:ffff:ffff:ffff", Other),
+            ("2001:3::", Public),
+            ("2001:3:ffff:ffff:ffff:ffff:ffff:ffff", Public),
+            ("2001:4::1", Other),
+            ("2001:4:111:ffff:ffff:ffff:ffff:ffff", Other),
+            ("2001:4:112::", Public),
+            ("2001:4:112:ffff:ffff:ffff:ffff:ffff", Public),
+            ("2001:4:113::", Other),
+            ("2001:10::1", Other),
+            ("2001:1f:ffff:ffff:ffff:ffff:ffff:ffff", Other),
+            ("2001:20::", Public),
+            ("2001:3f:ffff:ffff:ffff:ffff:ffff:ffff", Public),
+            ("2001:40::", Other),
             ("2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff", Other),
             ("2001:200::", Public),
             ("2001:db7:ffff:ffff:ffff:ffff:ffff:ffff", Public),
@@ -299,6 +355,8 @@ mod tests {
             ("::ffff:169.254.169.254", Metadata),
             ("::ffff:0.0.0.0", Other),
             ("::ffff:8.8.8.8", Public),
+            ("::ffff:192.0.0.9", Public),
+            ("::ffff:192.88.99.2", Other),
         ]);
     }
 
@@ -323,6 +381,7 @@ mod tests {
             ("64:ff9b::a9fe:101", LinkLocal),
             ("64:ff9b::169.254.169.254", Metadata),
             ("64:ff9b::8.8.8.8", Public),
+            ("64:ff9b::192.88.99.2", Other),
             // Outside 64:ff9b::/96: not decoded, and not public.
             ("64:ff9b::1:a00:1", Other),
             ("64:ff9b:1::a00:1", Other),
@@ -341,6 +400,8 @@ mod tests {
             ("2002:a9fe:a9fe::", Metadata),
             ("2002:c000:201::", Other),
             ("2002:808:808::", Public),
+            ("2002:c058:6302::1", Other),
+            ("2002:c000:a::", Public),
         ]);
     }
 
