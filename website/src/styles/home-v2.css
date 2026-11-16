@@ -443,9 +443,24 @@ html:has(.g2-page) {
   list-style: none;
   font-family: var(--font-mono);
 }
-.g2-page .primitive-access .g2-text-link {
-  width: 260px;
+.g2-page .primitive-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  min-height: 52px;
+  padding: 14px 20px;
+  border: 1px solid #263d2e;
+  border-radius: 4px;
+  background: #263d2e;
+  color: #f7f7f0;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
   margin-inline-start: auto;
+}
+.g2-page .primitive-cta:hover {
+  background: #354f3c;
 }
 @media (max-width: 800px) {
   .primitive-access {
@@ -453,7 +468,7 @@ html:has(.g2-page) {
     flex-direction: column;
     gap: 24px;
   }
-  .g2-page .primitive-access .g2-text-link {
+  .g2-page .primitive-cta {
     width: 100%;
   }
 }

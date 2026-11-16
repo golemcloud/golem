@@ -24,6 +24,7 @@ use golem_common::model::oplog::types::{
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
 };
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use wasmtime_wasi::p3::bindings::sockets::types::IpAddressFamily;
 
 /// Store-local socket state, reconstructed from recorded bind, connect and acquire results.
@@ -69,11 +70,12 @@ impl SocketEntry {
 
 #[derive(Debug, Default)]
 pub(crate) struct TcpSocketOptions {
-    pub keep_alive_enabled: Option<bool>,
-    pub keep_alive_idle_time: Option<u64>,
-    pub keep_alive_interval: Option<u64>,
-    pub keep_alive_count: Option<u32>,
-    pub hop_limit: Option<u8>,
-    pub receive_buffer_size: Option<u64>,
-    pub send_buffer_size: Option<u64>,
+    // A successful setter invalidates its cache; the next async getter reads the native effective value.
+    pub keep_alive_enabled: Option<OnceLock<bool>>,
+    pub keep_alive_idle_time: Option<OnceLock<u64>>,
+    pub keep_alive_interval: Option<OnceLock<u64>>,
+    pub keep_alive_count: Option<OnceLock<u32>>,
+    pub hop_limit: Option<OnceLock<u8>>,
+    pub receive_buffer_size: Option<OnceLock<u64>>,
+    pub send_buffer_size: Option<OnceLock<u64>>,
 }

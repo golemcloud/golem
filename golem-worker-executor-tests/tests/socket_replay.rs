@@ -530,6 +530,19 @@ async fn p3_tcp_bind_and_configured_options_replay_without_native_bind(
     let address: SocketAddr = address.parse()?;
     assert_ne!(address.port(), 0);
     assert_eq!(&options[..5], &[1, 3_000_000_000, 4_000_000_000, 7, 42]);
+    for expected in [51u8, 42] {
+        let changed: Result<u8, String> = session
+            .call(
+                "p3_tcp_hop_limit",
+                data_value!("a".to_string(), Some(expected)),
+            )
+            .await?;
+        assert_eq!(changed, Ok(expected));
+        let cached: Result<u8, String> = session
+            .call("p3_tcp_hop_limit", data_value!("a".to_string(), None::<u8>))
+            .await?;
+        assert_eq!(cached, Ok(expected));
+    }
     session.restart_executor().await?;
     // Occupy the recorded endpoint before reconstruction. Replaying bind must not touch it.
     let _occupied = tokio::time::timeout(WAIT, async {
@@ -548,6 +561,10 @@ async fn p3_tcp_bind_and_configured_options_replay_without_native_bind(
         .call("p3_tcp_bound_state", data_value!("a".to_string()))
         .await?;
     assert_eq!(after, before);
+    let changed: Result<u8, String> = session
+        .call("p3_tcp_hop_limit", data_value!("a".to_string(), Some(63u8)))
+        .await?;
+    assert_eq!(changed, Ok(63));
     assert_eq!(session.starts("sockets::types::tcp-socket::bind").await?, 1);
     let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let connect: Result<(), String> = session

@@ -420,7 +420,8 @@ mod tests {
 
     use crate::base_model::agent::AgentFileContentHash;
     use crate::model::component::{AgentFilePath, InitialAgentFile};
-    use crate::model::{AgentFilePermissions, AgentStatus, Empty, IdempotencyKey};
+    use crate::model::{AgentFilePermissions, AgentStatus, IdempotencyKey};
+    use golem_schema::Empty;
 
     #[test]
     fn phantom_binding_openapi_matches_serde() {

@@ -14,6 +14,7 @@
 
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
 use crate::durable_host::authorization::targets::tcp_target;
@@ -671,17 +672,30 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_keep_alive_enabled(&mut self, socket: Resource<TcpSocket>) -> SocketResult<bool> {
+    async fn get_keep_alive_enabled(&mut self, socket: Resource<TcpSocket>) -> SocketResult<bool> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-keep-alive-enabled",
         );
-        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), socket.rep())?.keep_alive_enabled
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .keep_alive_enabled
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
         {
             return Ok(value);
         }
-        types::HostTcpSocket::get_keep_alive_enabled(&mut WasiSocketsView::sockets(self.0), socket)
+        let value = types::HostTcpSocket::get_keep_alive_enabled(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.keep_alive_enabled {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_keep_alive_enabled(
@@ -701,18 +715,14 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             socket,
             value,
         )?;
-        let value = types::HostTcpSocket::get_keep_alive_enabled(
-            &mut WasiSocketsView::sockets(self.0),
-            Resource::new_borrow(rep),
-        )?;
         tcp_entry(self.0.durable_ctx_mut(), rep)
             .map_err(SocketError::trap)?
             .options
-            .keep_alive_enabled = Some(value);
+            .keep_alive_enabled = Some(OnceLock::new());
         Ok(())
     }
 
-    fn get_keep_alive_idle_time(
+    async fn get_keep_alive_idle_time(
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::Duration> {
@@ -721,15 +731,24 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "get-keep-alive-idle-time",
         );
-        if let Some(value) =
-            tcp_options(self.0.durable_ctx_mut(), socket.rep())?.keep_alive_idle_time
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .keep_alive_idle_time
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
         {
             return Ok(value);
         }
-        types::HostTcpSocket::get_keep_alive_idle_time(
+        let value = types::HostTcpSocket::get_keep_alive_idle_time(
             &mut WasiSocketsView::sockets(self.0),
             socket,
         )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.keep_alive_idle_time {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_keep_alive_idle_time(
@@ -749,18 +768,14 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             socket,
             value,
         )?;
-        let value = types::HostTcpSocket::get_keep_alive_idle_time(
-            &mut WasiSocketsView::sockets(self.0),
-            Resource::new_borrow(rep),
-        )?;
         tcp_entry(self.0.durable_ctx_mut(), rep)
             .map_err(SocketError::trap)?
             .options
-            .keep_alive_idle_time = Some(value);
+            .keep_alive_idle_time = Some(OnceLock::new());
         Ok(())
     }
 
-    fn get_keep_alive_interval(
+    async fn get_keep_alive_interval(
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::Duration> {
@@ -769,12 +784,24 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "get-keep-alive-interval",
         );
-        if let Some(value) =
-            tcp_options(self.0.durable_ctx_mut(), socket.rep())?.keep_alive_interval
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .keep_alive_interval
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
         {
             return Ok(value);
         }
-        types::HostTcpSocket::get_keep_alive_interval(&mut WasiSocketsView::sockets(self.0), socket)
+        let value = types::HostTcpSocket::get_keep_alive_interval(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.keep_alive_interval {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_keep_alive_interval(
@@ -794,27 +821,37 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             socket,
             value,
         )?;
-        let value = types::HostTcpSocket::get_keep_alive_interval(
-            &mut WasiSocketsView::sockets(self.0),
-            Resource::new_borrow(rep),
-        )?;
         tcp_entry(self.0.durable_ctx_mut(), rep)
             .map_err(SocketError::trap)?
             .options
-            .keep_alive_interval = Some(value);
+            .keep_alive_interval = Some(OnceLock::new());
         Ok(())
     }
 
-    fn get_keep_alive_count(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u32> {
+    async fn get_keep_alive_count(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u32> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-keep-alive-count",
         );
-        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), socket.rep())?.keep_alive_count {
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .keep_alive_count
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
             return Ok(value);
         }
-        types::HostTcpSocket::get_keep_alive_count(&mut WasiSocketsView::sockets(self.0), socket)
+        let value = types::HostTcpSocket::get_keep_alive_count(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.keep_alive_count {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_keep_alive_count(
@@ -834,23 +871,31 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             socket,
             value,
         )?;
-        let value = types::HostTcpSocket::get_keep_alive_count(
-            &mut WasiSocketsView::sockets(self.0),
-            Resource::new_borrow(rep),
-        )?;
         tcp_entry(self.0.durable_ctx_mut(), rep)
             .map_err(SocketError::trap)?
             .options
-            .keep_alive_count = Some(value);
+            .keep_alive_count = Some(OnceLock::new());
         Ok(())
     }
 
-    fn get_hop_limit(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u8> {
+    async fn get_hop_limit(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u8> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-hop-limit");
-        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), socket.rep())?.hop_limit {
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .hop_limit
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
             return Ok(value);
         }
-        types::HostTcpSocket::get_hop_limit(&mut WasiSocketsView::sockets(self.0), socket)
+        let value =
+            types::HostTcpSocket::get_hop_limit(&mut WasiSocketsView::sockets(self.0), socket)
+                .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.hop_limit {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_hop_limit(&mut self, socket: Resource<TcpSocket>, value: u8) -> SocketResult<()> {
@@ -858,29 +903,37 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         let rep = socket.rep();
         tcp_options(self.0.durable_ctx_mut(), rep)?;
         types::HostTcpSocket::set_hop_limit(&mut WasiSocketsView::sockets(self.0), socket, value)?;
-        let value = types::HostTcpSocket::get_hop_limit(
-            &mut WasiSocketsView::sockets(self.0),
-            Resource::new_borrow(rep),
-        )?;
         tcp_entry(self.0.durable_ctx_mut(), rep)
             .map_err(SocketError::trap)?
             .options
-            .hop_limit = Some(value);
+            .hop_limit = Some(OnceLock::new());
         Ok(())
     }
 
-    fn get_receive_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
+    async fn get_receive_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-receive-buffer-size",
         );
-        if let Some(value) =
-            tcp_options(self.0.durable_ctx_mut(), socket.rep())?.receive_buffer_size
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .receive_buffer_size
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
         {
             return Ok(value);
         }
-        types::HostTcpSocket::get_receive_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
+        let value = types::HostTcpSocket::get_receive_buffer_size(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.receive_buffer_size {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_receive_buffer_size(
@@ -900,27 +953,37 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             socket,
             value,
         )?;
-        let value = types::HostTcpSocket::get_receive_buffer_size(
-            &mut WasiSocketsView::sockets(self.0),
-            Resource::new_borrow(rep),
-        )?;
         tcp_entry(self.0.durable_ctx_mut(), rep)
             .map_err(SocketError::trap)?
             .options
-            .receive_buffer_size = Some(value);
+            .receive_buffer_size = Some(OnceLock::new());
         Ok(())
     }
 
-    fn get_send_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
+    async fn get_send_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-send-buffer-size",
         );
-        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), socket.rep())?.send_buffer_size {
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .send_buffer_size
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
             return Ok(value);
         }
-        types::HostTcpSocket::get_send_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
+        let value = types::HostTcpSocket::get_send_buffer_size(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.send_buffer_size {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_send_buffer_size(
@@ -940,14 +1003,10 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             socket,
             value,
         )?;
-        let value = types::HostTcpSocket::get_send_buffer_size(
-            &mut WasiSocketsView::sockets(self.0),
-            Resource::new_borrow(rep),
-        )?;
         tcp_entry(self.0.durable_ctx_mut(), rep)
             .map_err(SocketError::trap)?
             .options
-            .send_buffer_size = Some(value);
+            .send_buffer_size = Some(OnceLock::new());
         Ok(())
     }
 

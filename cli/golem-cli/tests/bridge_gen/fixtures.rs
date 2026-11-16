@@ -14,7 +14,6 @@
 
 use crate::workspace_path;
 use golem_cli::model::language::GuestLanguage;
-use golem_common::model::Empty;
 use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::{
@@ -22,6 +21,7 @@ use golem_common::schema::{
     NamedField, NamedFieldType, OutputSchema, Role, SchemaGraph, SchemaType, SchemaTypeDef, TypeId,
     VariantCaseType,
 };
+use golem_schema::Empty;
 use test_r::test;
 
 pub fn field(name: impl Into<String>, schema: SchemaType) -> NamedField {

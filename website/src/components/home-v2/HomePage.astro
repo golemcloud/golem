@@ -129,8 +129,10 @@ const capabilityIds = ["budget", "journal", "coordinate", "operate"];
               <ul aria-label="Available interfaces">
                 {lines(t(2, "Interfaces")).map((name) => <li>{name}</li>)}
               </ul>
-            </div><TextLink href={links.primitives} label={t(2, "Link")} />
-          </div><Details section={2} id="primitive-details" />
+            </div><a class="primitive-cta" href={links.primitives}>
+              <span>{t(2, "Link").replace(/\s*→$/, "")}</span>{" "}<span aria-hidden="true">→</span>
+            </a>
+          </div>
         </div>
       </section>
 

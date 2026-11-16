@@ -677,7 +677,6 @@ fn authorize_get_tool_permission(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{
         AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
     };
@@ -686,6 +685,7 @@ mod tests {
     use golem_common::model::card::{EffectiveSurface, EnvironmentResourcePattern, GrantSurface};
     use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};
     use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+    use golem_schema::Empty;
     use test_r::test;
 
     fn test_environment() -> Environment {

@@ -4,6 +4,199 @@
 use super::*;
 use crate::proto::golem::http as proto;
 
+impl TryFrom<proto::HttpMethod> for HttpMethod {
+    type Error = String;
+
+    fn try_from(value: proto::HttpMethod) -> Result<Self, Self::Error> {
+        use proto::{StandardHttpMethod, http_method::Value};
+        match value.value.ok_or("Missing HttpMethod.value")? {
+            Value::Standard(value) => {
+                match StandardHttpMethod::try_from(value).map_err(|_| "Unknown HTTP method")? {
+                    StandardHttpMethod::Get => Ok(Self::Get(Empty {})),
+                    StandardHttpMethod::Head => Ok(Self::Head(Empty {})),
+                    StandardHttpMethod::Post => Ok(Self::Post(Empty {})),
+                    StandardHttpMethod::Put => Ok(Self::Put(Empty {})),
+                    StandardHttpMethod::Delete => Ok(Self::Delete(Empty {})),
+                    StandardHttpMethod::Connect => Ok(Self::Connect(Empty {})),
+                    StandardHttpMethod::Options => Ok(Self::Options(Empty {})),
+                    StandardHttpMethod::Trace => Ok(Self::Trace(Empty {})),
+                    StandardHttpMethod::Patch => Ok(Self::Patch(Empty {})),
+                    StandardHttpMethod::Unspecified => Err("Unknown HTTP method".into()),
+                }
+            }
+            Value::Custom(value) => Ok(Self::Custom(CustomHttpMethod { value })),
+        }
+    }
+}
+
+impl From<HttpMethod> for proto::HttpMethod {
+    fn from(value: HttpMethod) -> Self {
+        use proto::{StandardHttpMethod, http_method::Value};
+        Self {
+            value: Some(match value {
+                HttpMethod::Get(_) => Value::Standard(StandardHttpMethod::Get.into()),
+                HttpMethod::Head(_) => Value::Standard(StandardHttpMethod::Head.into()),
+                HttpMethod::Post(_) => Value::Standard(StandardHttpMethod::Post.into()),
+                HttpMethod::Put(_) => Value::Standard(StandardHttpMethod::Put.into()),
+                HttpMethod::Delete(_) => Value::Standard(StandardHttpMethod::Delete.into()),
+                HttpMethod::Connect(_) => Value::Standard(StandardHttpMethod::Connect.into()),
+                HttpMethod::Options(_) => Value::Standard(StandardHttpMethod::Options.into()),
+                HttpMethod::Trace(_) => Value::Standard(StandardHttpMethod::Trace.into()),
+                HttpMethod::Patch(_) => Value::Standard(StandardHttpMethod::Patch.into()),
+                HttpMethod::Custom(value) => Value::Custom(value.value),
+            }),
+        }
+    }
+}
+
+impl TryFrom<proto::PathSegment> for PathSegment {
+    type Error = String;
+
+    fn try_from(value: proto::PathSegment) -> Result<Self, Self::Error> {
+        use proto::path_segment::Value;
+        match value.value.ok_or("Missing PathSegment.value")? {
+            Value::Literal(value) => Ok(Self::Literal(LiteralSegment { value: value.value })),
+            Value::PathVariable(value) => Ok(Self::PathVariable(value.into())),
+            Value::RemainingPathVariable(value) => Ok(Self::RemainingPathVariable(value.into())),
+        }
+    }
+}
+
+impl From<PathSegment> for proto::PathSegment {
+    fn from(value: PathSegment) -> Self {
+        use proto::path_segment::Value;
+        Self {
+            value: Some(match value {
+                PathSegment::Literal(value) => {
+                    Value::Literal(proto::LiteralSegment { value: value.value })
+                }
+                PathSegment::PathVariable(value) => Value::PathVariable(value.into()),
+                PathSegment::RemainingPathVariable(value) => {
+                    Value::RemainingPathVariable(value.into())
+                }
+            }),
+        }
+    }
+}
+
+impl From<proto::LiteralSegment> for LiteralSegment {
+    fn from(value: proto::LiteralSegment) -> Self {
+        Self { value: value.value }
+    }
+}
+
+impl From<LiteralSegment> for proto::LiteralSegment {
+    fn from(value: LiteralSegment) -> Self {
+        Self { value: value.value }
+    }
+}
+
+impl From<proto::PathVariable> for PathVariable {
+    fn from(value: proto::PathVariable) -> Self {
+        Self {
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<PathVariable> for proto::PathVariable {
+    fn from(value: PathVariable) -> Self {
+        Self {
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<proto::HeaderVariable> for HeaderVariable {
+    fn from(value: proto::HeaderVariable) -> Self {
+        Self {
+            header_name: value.header_name,
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<HeaderVariable> for proto::HeaderVariable {
+    fn from(value: HeaderVariable) -> Self {
+        Self {
+            header_name: value.header_name,
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<proto::QueryVariable> for QueryVariable {
+    fn from(value: proto::QueryVariable) -> Self {
+        Self {
+            query_param_name: value.query_param_name,
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<QueryVariable> for proto::QueryVariable {
+    fn from(value: QueryVariable) -> Self {
+        Self {
+            query_param_name: value.query_param_name,
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl TryFrom<proto::FileMapping> for FileMapping {
+    type Error = String;
+
+    fn try_from(value: proto::FileMapping) -> Result<Self, Self::Error> {
+        use proto::file_mapping::Value;
+        match value.value.ok_or("Missing FileMapping.value")? {
+            Value::Exact(value) => Ok(Self::Exact(ExactFileMapping {
+                public_path: value.public_path,
+                file_path: value.file_path,
+            })),
+            Value::Subtree(value) => Ok(Self::Subtree(SubtreeFileMapping {
+                public_prefix: value.public_prefix,
+                filesystem_root: value.filesystem_root,
+            })),
+        }
+    }
+}
+
+impl From<FileMapping> for proto::FileMapping {
+    fn from(value: FileMapping) -> Self {
+        use proto::file_mapping::Value;
+        Self {
+            value: Some(match value {
+                FileMapping::Exact(value) => Value::Exact(proto::ExactFileMapping {
+                    public_path: value.public_path,
+                    file_path: value.file_path,
+                }),
+                FileMapping::Subtree(value) => Value::Subtree(proto::SubtreeFileMapping {
+                    public_prefix: value.public_prefix,
+                    filesystem_root: value.filesystem_root,
+                }),
+            }),
+        }
+    }
+}
+
+impl From<proto::FileResponseHeader> for FileResponseHeader {
+    fn from(value: proto::FileResponseHeader) -> Self {
+        Self {
+            name: value.name,
+            value: value.value,
+        }
+    }
+}
+
+impl From<FileResponseHeader> for proto::FileResponseHeader {
+    fn from(value: FileResponseHeader) -> Self {
+        Self {
+            name: value.name,
+            value: value.value,
+        }
+    }
+}
+
 impl From<HttpRouteMode> for proto::HttpRouteMode {
     fn from(value: HttpRouteMode) -> Self {
         match value {
