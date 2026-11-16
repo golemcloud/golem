@@ -4,6 +4,7 @@ import BaseLayout from "../../layouts/BaseLayout.astro";
 import Details from "../../components/home-v2/Details.astro";
 import Visual from "../../components/home-v2/Visual.astro";
 import HeroVMs from "./HeroVMs.astro";
+import Primitives from "./Primitives.astro";
 import Icon from "../../components/home-v2/Icon.astro";
 import UseCase from "../../components/home-v2/UseCase.astro";
 import HeadingLines from "../../components/home-v2/HeadingLines.astro";
@@ -122,27 +123,13 @@ const capabilityIds = ["budget", "journal", "coordinate", "operate"];
             >
               {t(2, "Introduction")}
             </p>
-          </div><Visual kind="primitives" /><div class="primitive-copy two-cols">
-            {
-              ["Actors", "Functions"].map((key) => (
-                <div>
-                  <>
-                    <div class="primitive-heading">
-                      <>
-                        <h3>{key}</h3>
-                        <span>{paragraphs(t(2, key))[0]}</span>
-                      </>
-                    </div>
-                    <p>{paragraphs(t(2, key))[1]}</p>
-                  </>
-                </div>
-              ))
-            }
-          </div><div class="below-model">
-            <p>{paragraphs(t(2, "Below the panels"))[0]}</p><TextLink
-              href={links.primitives}
-              label={paragraphs(t(2, "Below the panels"))[1]}
-            />
+          </div><Primitives /><div class="primitive-access">
+            <div class="primitive-interfaces">
+              <span>Interfaces</span>
+              <ul aria-label="Available interfaces">
+                {lines(t(2, "Interfaces")).map((name) => <li>{name}</li>)}
+              </ul>
+            </div><TextLink href={links.primitives} label={t(2, "Link")} />
           </div><Details section={2} id="primitive-details" />
         </div>
       </section>
