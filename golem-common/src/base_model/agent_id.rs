@@ -38,8 +38,10 @@ pub const RESERVED_TYPE_TAG: u32 = 0;
 crate::newtype_uuid!(issued AgentId, golem_api_grpc::proto::golem::worker::AgentId);
 
 impl AgentId {
-    pub(crate) fn from_parts(type_tag: u32, h: u128) -> Self {
-        debug_assert_eq!(h & !H_MASK, 0);
+    /// The agent ID with this type tag and these 90 bits of H. Golem issues IDs through the
+    /// derivations in `model::agent::agent_uuid`, so this is only for tests.
+    pub fn from_parts(type_tag: u32, h: u128) -> Self {
+        assert_eq!(h & !H_MASK, 0, "H has more than {H_BITS} bits");
         let mut bytes = [0u8; 16];
         bytes[0..4].copy_from_slice(&type_tag.to_be_bytes());
         bytes[4..6].copy_from_slice(&((h >> 74) as u16).to_be_bytes());

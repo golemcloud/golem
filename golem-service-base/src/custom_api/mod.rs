@@ -821,55 +821,62 @@ impl OriginPattern {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
-/// PromiseId (-component-id) to be base64-url encoded and used as the final segment in a webhook callback.
-/// Includes a checksum that can be used to verify that the webhook was indeed created by the worker executor and
-/// for the correct component_id. The checksum covers the agent's fingerprint, so a webhook of a deleted agent
-/// does not complete a promise of the agent re-created with the same name.
+/// A PromiseId, base64-url encoded as the final segment of a webhook callback URL.
+/// Includes a checksum that verifies that the worker executor created the webhook for an agent
+/// of the route's environment. The checksum covers the agent's fingerprint, so a webhook of a
+/// deleted agent does not complete a promise of the agent re-created with the same ID.
 pub struct AgentWebhookId {
-    pub agent_name: String,
+    pub agent_id: AgentId,
     pub fingerprint: AgentFingerprint,
     pub oplog_idx: OplogIndex,
     pub checksum: [u8; 32],
 }
 
 impl AgentWebhookId {
-    pub fn from_promise_id(promise_id: &PromiseId, hmac_key: &[u8]) -> Self {
+    pub fn from_promise_id(
+        environment_id: EnvironmentId,
+        promise_id: &PromiseId,
+        hmac_key: &[u8],
+    ) -> Self {
         Self {
-            agent_name: promise_id.agent_id.agent_id.clone(),
+            agent_id: promise_id.agent_id,
             fingerprint: promise_id.fingerprint,
             oplog_idx: promise_id.oplog_idx,
-            checksum: Self::checksum(promise_id, hmac_key),
+            checksum: Self::checksum(environment_id, promise_id, hmac_key),
         }
     }
 
-    pub fn into_promise_id(self, component_id: ComponentId) -> PromiseId {
+    pub fn into_promise_id(self) -> PromiseId {
         PromiseId {
-            agent_id: AgentId {
-                component_id,
-                agent_id: self.agent_name,
-            },
+            agent_id: self.agent_id,
             fingerprint: self.fingerprint,
             oplog_idx: self.oplog_idx,
         }
     }
 
-    pub fn verify_checksum(&self, component_id: ComponentId, hmac_key: &[u8]) -> bool {
-        let promise_id = self.clone().into_promise_id(component_id);
-        Self::mac(&promise_id, hmac_key)
+    /// Whether the worker executor created this webhook for an agent of `environment_id`.
+    pub fn verify_checksum(&self, environment_id: EnvironmentId, hmac_key: &[u8]) -> bool {
+        let promise_id = self.clone().into_promise_id();
+        Self::mac(environment_id, &promise_id, hmac_key)
             .verify_slice(&self.checksum)
             .is_ok()
     }
 
-    fn checksum(promise_id: &PromiseId, hmac_key: &[u8]) -> [u8; 32] {
-        Self::mac(promise_id, hmac_key)
+    fn checksum(
+        environment_id: EnvironmentId,
+        promise_id: &PromiseId,
+        hmac_key: &[u8],
+    ) -> [u8; 32] {
+        Self::mac(environment_id, promise_id, hmac_key)
             .finalize()
             .into_bytes()
             .into()
     }
 
-    fn mac(promise_id: &PromiseId, hmac_key: &[u8]) -> Hmac<Sha256> {
+    fn mac(environment_id: EnvironmentId, promise_id: &PromiseId, hmac_key: &[u8]) -> Hmac<Sha256> {
         let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
-        mac.update(b"agent-webhook-id:v1");
+        mac.update(b"agent-webhook-id:v2");
+        mac.update(environment_id.0.as_bytes());
         let promise_id_bytes = desert_rust::serialize_to_byte_vec(promise_id)
             .expect("PromiseId serialization must not fail");
         mac.update(&promise_id_bytes);
@@ -909,24 +916,28 @@ mod tests {
     #[test]
     fn webhook_id_checksum_covers_the_fingerprint() {
         let hmac_key = b"webhook-test-key";
-        let component_id = ComponentId(uuid::Uuid::from_u128(1));
+        let environment_id = EnvironmentId(uuid::Uuid::from_u128(1));
         let promise_id = PromiseId {
-            agent_id: AgentId {
-                component_id,
-                agent_id: "approval(\"order-1\")".to_string(),
-            },
+            agent_id: "00000007-0000-8000-8000-000000000001".parse().unwrap(),
             fingerprint: AgentFingerprint(uuid::Uuid::from_u128(2)),
             oplog_idx: OplogIndex::from_u64(7),
         };
-        let webhook_id = AgentWebhookId::from_promise_id(&promise_id, hmac_key);
+        let webhook_id = AgentWebhookId::from_promise_id(environment_id, &promise_id, hmac_key);
 
         let decoded = AgentWebhookId::from_base64_url(&webhook_id.to_base64_url()).unwrap();
-        assert!(decoded.verify_checksum(component_id, hmac_key));
-        assert_eq!(decoded.into_promise_id(component_id), promise_id);
+        assert!(decoded.verify_checksum(environment_id, hmac_key));
+        assert_eq!(decoded.into_promise_id(), promise_id);
 
         let mut of_new_incarnation = webhook_id.clone();
         of_new_incarnation.fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
-        assert!(!of_new_incarnation.verify_checksum(component_id, hmac_key));
+        assert!(!of_new_incarnation.verify_checksum(environment_id, hmac_key));
+
+        let other_environment = EnvironmentId(uuid::Uuid::from_u128(4));
+        assert!(!webhook_id.verify_checksum(other_environment, hmac_key));
+
+        let mut of_other_agent = webhook_id.clone();
+        of_other_agent.agent_id = "00000007-0000-8000-8000-000000000002".parse().unwrap();
+        assert!(!of_other_agent.verify_checksum(environment_id, hmac_key));
     }
 
     #[test]

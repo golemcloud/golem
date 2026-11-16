@@ -3279,17 +3279,13 @@ async fn put_raw_if_absent_rejects_a_name_that_breaks_a_rule_without_a_request()
 
 #[test]
 async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its_incarnation() {
-    // The agent name holds a `..` segment, which the rules of a key refuse. So the key holds the
-    // bounded segment of the agent and not the agent name. The path style of the client puts the
-    // bucket first in the URI.
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::nil()),
-        agent_id: r#"counter("a/../b")"#.to_string(),
-    };
+    // The key holds the agent path segment, the text of the agent ID. The path style of the
+    // client puts the bucket first in the URI.
+    let agent_id = golem_common::model::AgentId::from_parts(7, 1);
     let fingerprint = Uuid::from_u128(7);
     let namespace = BlobStorageNamespace::FilesystemSnapshots {
         environment_id: EnvironmentId(Uuid::nil()),
-        agent_id: agent_id.clone(),
+        agent_id,
         fingerprint: AgentFingerprint(fingerprint),
     };
     let segment = agent_path_segment(&agent_id);
@@ -3331,16 +3327,12 @@ async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its
 
 #[test]
 async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
-    // The agent name holds a `..` segment, which the rules of a key refuse. So the key holds the
-    // path segment of the agent, and not the component id and the agent name. The path style of
-    // the client puts the bucket first in the URI.
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::nil()),
-        agent_id: r#"counter("a/../b")"#.to_string(),
-    };
+    // The key holds the agent path segment, the text of the agent ID. The path style of the
+    // client puts the bucket first in the URI.
+    let agent_id = golem_common::model::AgentId::from_parts(7, 1);
     let namespace = BlobStorageNamespace::OplogPayload {
         environment_id: EnvironmentId(Uuid::nil()),
-        agent_id: agent_id.clone(),
+        agent_id,
         agent_mode: AgentMode::Durable,
     };
     let segment = agent_path_segment(&agent_id);
@@ -3391,10 +3383,7 @@ fn layout_ids() -> (EnvironmentId, ComponentId, AgentId, AgentFingerprint) {
     (
         EnvironmentId(Uuid::from_u128(1)),
         component_id,
-        AgentId {
-            component_id,
-            agent_id: r#"counter("a/../b")"#.to_string(),
-        },
+        golem_common::model::AgentId::from_parts(7, 2),
         AgentFingerprint(Uuid::from_u128(3)),
     )
 }
@@ -3411,14 +3400,14 @@ fn layout_namespaces() -> Vec<BlobStorageNamespace> {
         BlobStorageNamespace::Components { environment_id },
         BlobStorageNamespace::FilesystemSnapshots {
             environment_id,
-            agent_id: agent_id.clone(),
+            agent_id,
             fingerprint,
         },
     ];
     for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         namespaces.push(BlobStorageNamespace::OplogPayload {
             environment_id,
-            agent_id: agent_id.clone(),
+            agent_id,
             agent_mode,
         });
         for level in [0, 1] {
