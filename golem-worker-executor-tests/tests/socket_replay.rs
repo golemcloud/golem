@@ -722,7 +722,7 @@ async fn an_open_p3_tcp_receive_stream_blocks_snapshots_and_manual_updates(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
     let session = Session::start(
         deps,
         &context,
@@ -738,6 +738,10 @@ async fn an_open_p3_tcp_receive_stream_blocks_snapshots_and_manual_updates(
     let _: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
         .await?;
+    let first: Result<Vec<u8>, String> = session
+        .call("p3_tcp_receive", data_value!("a".to_string(), 3u32))
+        .await?;
+    assert_eq!(first, Ok(b"abc".to_vec()));
     // The loop decides on the snapshot of an invocation before it starts the next one.
     let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
     let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
@@ -772,12 +776,18 @@ async fn an_open_p3_tcp_receive_stream_blocks_snapshots_and_manual_updates(
         .manual_update_worker(&session.worker_id, target.revision, false)
         .await?;
     assert_eq!(session.update_outcome(1).await?, Ok(()));
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert_eq!(
+        log,
+        vec![received("a", b"abc")],
+        "the update keeps the receive history through the save and load hooks"
+    );
     session.finish().await
 }
 
 /// An open P2 TCP socket holds no durable call, so a snapshot is taken while it is open. After
-/// recovery from that snapshot the socket is gone without any error: the load hook of the agent
-/// cannot restore it. SK-16 (GOL-2122) decides what an open socket means for a snapshot.
+/// recovery from that snapshot the receive history is back, but the socket is gone without any
+/// error: the load hook of the agent cannot restore it. SK-16 (GOL-2122) decides what an open socket means for a snapshot.
 #[test]
 #[timeout("3m")]
 async fn an_open_p2_tcp_socket_does_not_block_snapshots(
@@ -809,6 +819,12 @@ async fn an_open_p2_tcp_socket_does_not_block_snapshots(
     session.wait_for_snapshot_after(before).await?;
 
     session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert_eq!(
+        log,
+        vec![received("a", b"a")],
+        "recovery from the snapshot keeps the receive history"
+    );
     let after: Result<Vec<u8>, String> = session
         .call("p2_tcp_receive", data_value!("a".to_string(), 1u32))
         .await?;
