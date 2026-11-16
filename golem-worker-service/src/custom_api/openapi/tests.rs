@@ -2971,16 +2971,16 @@ fn raw_route(
 fn test_route_match(method: Method) -> golem_service_base::custom_api::RouteMatch {
     use golem_common::model::agent::HttpMethod;
     use golem_schema::Empty;
-    use golem_schema::http::HttpMethod as SharedHttpMethod;
+    use golem_schema::http as schema_http;
     HttpMethod::Method(match method {
-        Method::GET => SharedHttpMethod::Get(Empty {}),
-        Method::POST => SharedHttpMethod::Post(Empty {}),
-        Method::PUT => SharedHttpMethod::Put(Empty {}),
-        Method::DELETE => SharedHttpMethod::Delete(Empty {}),
-        Method::PATCH => SharedHttpMethod::Patch(Empty {}),
-        Method::HEAD => SharedHttpMethod::Head(Empty {}),
-        Method::OPTIONS => SharedHttpMethod::Options(Empty {}),
-        other => SharedHttpMethod::Custom(golem_schema::http::CustomHttpMethod {
+        Method::GET => schema_http::HttpMethod::Get(Empty {}),
+        Method::POST => schema_http::HttpMethod::Post(Empty {}),
+        Method::PUT => schema_http::HttpMethod::Put(Empty {}),
+        Method::DELETE => schema_http::HttpMethod::Delete(Empty {}),
+        Method::PATCH => schema_http::HttpMethod::Patch(Empty {}),
+        Method::HEAD => schema_http::HttpMethod::Head(Empty {}),
+        Method::OPTIONS => schema_http::HttpMethod::Options(Empty {}),
+        other => schema_http::HttpMethod::Custom(golem_schema::http::CustomHttpMethod {
             value: other.to_string(),
         }),
     })

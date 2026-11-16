@@ -31,7 +31,7 @@ use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_o
 use golem_common::schema::{
     FieldSource, InputSchema, NamedField, NamedFieldType, SchemaGraph, SchemaType,
 };
-use golem_schema::http::PathSegment as SharedPathSegment;
+use golem_schema::http as schema_http;
 use golem_schema::http::{HeaderVariable, QueryVariable};
 use golem_service_base::custom_api::{
     CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, QueryOrHeaderType,
@@ -295,7 +295,8 @@ fn collect_path_bindings_from_segments<E>(
         let is_variable = matches!(
             segment,
             PathSegment::Segment(
-                SharedPathSegment::PathVariable(_) | SharedPathSegment::RemainingPathVariable(_)
+                schema_http::PathSegment::PathVariable(_)
+                    | schema_http::PathSegment::RemainingPathVariable(_)
             )
         );
 
@@ -306,8 +307,8 @@ fn collect_path_bindings_from_segments<E>(
             if bindable_range.contains(&i) {
                 let var = match segment {
                     PathSegment::Segment(
-                        SharedPathSegment::PathVariable(v)
-                        | SharedPathSegment::RemainingPathVariable(v),
+                        schema_http::PathSegment::PathVariable(v)
+                        | schema_http::PathSegment::RemainingPathVariable(v),
                     ) => v,
                     _ => unreachable!(),
                 };
@@ -329,7 +330,7 @@ fn collect_path_bindings_from_segments<E>(
 
             if matches!(
                 segment,
-                PathSegment::Segment(SharedPathSegment::RemainingPathVariable(_))
+                PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(_))
             ) {
                 found_remaining_path_variable = true;
             }
@@ -421,7 +422,7 @@ fn validate_path_segment_type<E>(
     ty: &PathSegmentType,
     make_error: &impl Fn(String) -> E,
 ) -> Result<(), E> {
-    if let PathSegment::Segment(SharedPathSegment::RemainingPathVariable(_)) = segment
+    if let PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(_)) = segment
         && !matches!(ty, PathSegmentType::Str)
     {
         return Err(make_error(
@@ -440,8 +441,7 @@ mod test {
         BinaryRestrictions, InputSchema, NamedField, SchemaGraph, SchemaType, TextRestrictions,
     };
     use golem_schema::http::{
-        HeaderVariable, LiteralSegment, PathSegment as SharedPathSegment, PathVariable,
-        QueryVariable,
+        self as schema_http, HeaderVariable, LiteralSegment, PathVariable, QueryVariable,
     };
     use test_r::test;
 
@@ -475,10 +475,10 @@ mod test {
             file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
-                PathSegment::Segment(SharedPathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(schema_http::PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
                 })),
-                PathSegment::Segment(SharedPathSegment::PathVariable(PathVariable {
+                PathSegment::Segment(schema_http::PathSegment::PathVariable(PathVariable {
                     variable_name: "agent_id".into(),
                 })),
             ],
@@ -514,7 +514,7 @@ mod test {
             filesystem_bindings: vec![],
             file_response_headers: vec![],
             openapi_provider_method: None,
-            path_prefix: vec![PathSegment::Segment(SharedPathSegment::Literal(
+            path_prefix: vec![PathSegment::Segment(schema_http::PathSegment::Literal(
                 LiteralSegment {
                     value: "agents".into(),
                 },
@@ -545,7 +545,7 @@ mod test {
             file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![PathSegment::Segment(
-                SharedPathSegment::RemainingPathVariable(PathVariable {
+                schema_http::PathSegment::RemainingPathVariable(PathVariable {
                     variable_name: "rest".into(),
                 }),
             )],
@@ -574,11 +574,11 @@ mod test {
             filesystem_bindings: vec![],
             file_response_headers: vec![],
             openapi_provider_method: None,
-            path_prefix: vec![PathSegment::Segment(SharedPathSegment::PathVariable(
-                PathVariable {
+            path_prefix: vec![PathSegment::Segment(
+                schema_http::PathSegment::PathVariable(PathVariable {
                     variable_name: "agent_id".into(),
-                },
-            ))],
+                }),
+            )],
             auth_details: None,
             phantom_agent: false,
             phantom_id_binding: None,
@@ -594,11 +594,11 @@ mod test {
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
-            path_suffix: vec![PathSegment::Segment(SharedPathSegment::PathVariable(
-                PathVariable {
+            path_suffix: vec![PathSegment::Segment(
+                schema_http::PathSegment::PathVariable(PathVariable {
                     variable_name: "task_id".into(),
-                },
-            ))],
+                }),
+            )],
             query_vars: vec![],
             header_vars: vec![],
             mode: None,
@@ -738,10 +738,10 @@ mod test {
             file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
-                PathSegment::Segment(SharedPathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(schema_http::PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
                 })),
-                PathSegment::Segment(SharedPathSegment::PathVariable(PathVariable {
+                PathSegment::Segment(schema_http::PathSegment::PathVariable(PathVariable {
                     variable_name: "user_name".into(),
                 })),
             ],
@@ -778,10 +778,10 @@ mod test {
             file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
-                PathSegment::Segment(SharedPathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(schema_http::PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
                 })),
-                PathSegment::Segment(SharedPathSegment::PathVariable(PathVariable {
+                PathSegment::Segment(schema_http::PathSegment::PathVariable(PathVariable {
                     variable_name: "userName".into(),
                 })),
             ],

@@ -3425,37 +3425,37 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
 
 fn arb_http_method() -> BoxedStrategy<golem_common::model::agent::HttpMethod> {
     use golem_common::model::agent::HttpMethod;
-    use golem_schema::http::HttpMethod as SharedHttpMethod;
+    use golem_schema::http as schema_http;
     prop_oneof![
-        Just(HttpMethod::Method(
-            SharedHttpMethod::Get(Default::default())
-        )),
-        Just(HttpMethod::Method(SharedHttpMethod::Head(
+        Just(HttpMethod::Method(schema_http::HttpMethod::Get(
             Default::default()
         ))),
-        Just(HttpMethod::Method(SharedHttpMethod::Post(
+        Just(HttpMethod::Method(schema_http::HttpMethod::Head(
             Default::default()
         ))),
-        Just(HttpMethod::Method(
-            SharedHttpMethod::Put(Default::default())
-        )),
-        Just(HttpMethod::Method(SharedHttpMethod::Delete(
+        Just(HttpMethod::Method(schema_http::HttpMethod::Post(
             Default::default()
         ))),
-        Just(HttpMethod::Method(SharedHttpMethod::Connect(
+        Just(HttpMethod::Method(schema_http::HttpMethod::Put(
             Default::default()
         ))),
-        Just(HttpMethod::Method(SharedHttpMethod::Options(
+        Just(HttpMethod::Method(schema_http::HttpMethod::Delete(
             Default::default()
         ))),
-        Just(HttpMethod::Method(SharedHttpMethod::Trace(
+        Just(HttpMethod::Method(schema_http::HttpMethod::Connect(
             Default::default()
         ))),
-        Just(HttpMethod::Method(SharedHttpMethod::Patch(
+        Just(HttpMethod::Method(schema_http::HttpMethod::Options(
+            Default::default()
+        ))),
+        Just(HttpMethod::Method(schema_http::HttpMethod::Trace(
+            Default::default()
+        ))),
+        Just(HttpMethod::Method(schema_http::HttpMethod::Patch(
             Default::default()
         ))),
         arb_small_string().prop_map(|value| {
-            HttpMethod::Method(SharedHttpMethod::Custom(
+            HttpMethod::Method(schema_http::HttpMethod::Custom(
                 golem_schema::http::CustomHttpMethod { value },
             ))
         }),
@@ -3468,20 +3468,20 @@ fn arb_http_method() -> BoxedStrategy<golem_common::model::agent::HttpMethod> {
 
 fn arb_path_segment() -> BoxedStrategy<golem_common::model::agent::PathSegment> {
     use golem_common::model::agent::PathSegment;
-    use golem_schema::http::PathSegment as SharedPathSegment;
+    use golem_schema::http as schema_http;
     prop_oneof![
         arb_small_string().prop_map(|value| {
-            PathSegment::Segment(SharedPathSegment::Literal(
+            PathSegment::Segment(schema_http::PathSegment::Literal(
                 golem_schema::http::LiteralSegment { value },
             ))
         }),
         arb_small_string().prop_map(|variable_name| {
-            PathSegment::Segment(SharedPathSegment::PathVariable(
+            PathSegment::Segment(schema_http::PathSegment::PathVariable(
                 golem_schema::http::PathVariable { variable_name },
             ))
         }),
         arb_small_string().prop_map(|variable_name| {
-            PathSegment::Segment(SharedPathSegment::RemainingPathVariable(
+            PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(
                 golem_schema::http::PathVariable { variable_name },
             ))
         }),

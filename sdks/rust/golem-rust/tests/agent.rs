@@ -3266,7 +3266,7 @@ mod tests {
     fn test_all_http_methods_supported() {
         use golem_rust::agentic::get_all_agent_types;
         use golem_rust::golem_agentic::golem::agent::common::HttpMethod;
-        use golem_rust::golem_schema::http::wit::wire::HttpMethod as SharedHttpMethod;
+        use golem_rust::golem_schema::http::wit::wire as http;
 
         let agent_types = get_all_agent_types();
 
@@ -3278,11 +3278,11 @@ mod tests {
         assert!(matches!(agent.kind, AgentTypeKind::Regular));
 
         let expected_methods = vec![
-            ("get_method", SharedHttpMethod::Get),
-            ("post_method", SharedHttpMethod::Post),
-            ("put_method", SharedHttpMethod::Put),
-            ("delete_method", SharedHttpMethod::Delete),
-            ("patch_method", SharedHttpMethod::Patch),
+            ("get_method", http::HttpMethod::Get),
+            ("post_method", http::HttpMethod::Post),
+            ("put_method", http::HttpMethod::Put),
+            ("delete_method", http::HttpMethod::Delete),
+            ("patch_method", http::HttpMethod::Patch),
         ];
 
         for (method_name, expected_http_method) in expected_methods {

@@ -366,19 +366,19 @@ fn resolve_top_ref<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> &'a Schema
 }
 
 fn http_method_name(method: &HttpMethod) -> String {
-    use golem_schema::http::HttpMethod as SharedHttpMethod;
+    use golem_schema::http as schema_http;
     match method {
         HttpMethod::Method(method) => match method {
-            SharedHttpMethod::Get(_) => "GET".to_string(),
-            SharedHttpMethod::Head(_) => "HEAD".to_string(),
-            SharedHttpMethod::Post(_) => "POST".to_string(),
-            SharedHttpMethod::Put(_) => "PUT".to_string(),
-            SharedHttpMethod::Delete(_) => "DELETE".to_string(),
-            SharedHttpMethod::Connect(_) => "CONNECT".to_string(),
-            SharedHttpMethod::Options(_) => "OPTIONS".to_string(),
-            SharedHttpMethod::Trace(_) => "TRACE".to_string(),
-            SharedHttpMethod::Patch(_) => "PATCH".to_string(),
-            SharedHttpMethod::Custom(custom) => custom.value.to_uppercase(),
+            schema_http::HttpMethod::Get(_) => "GET".to_string(),
+            schema_http::HttpMethod::Head(_) => "HEAD".to_string(),
+            schema_http::HttpMethod::Post(_) => "POST".to_string(),
+            schema_http::HttpMethod::Put(_) => "PUT".to_string(),
+            schema_http::HttpMethod::Delete(_) => "DELETE".to_string(),
+            schema_http::HttpMethod::Connect(_) => "CONNECT".to_string(),
+            schema_http::HttpMethod::Options(_) => "OPTIONS".to_string(),
+            schema_http::HttpMethod::Trace(_) => "TRACE".to_string(),
+            schema_http::HttpMethod::Patch(_) => "PATCH".to_string(),
+            schema_http::HttpMethod::Custom(custom) => custom.value.to_uppercase(),
         },
         HttpMethod::Any(_) => "<any>".to_string(),
     }

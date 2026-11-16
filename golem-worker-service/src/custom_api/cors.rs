@@ -17,7 +17,7 @@ use super::error::RequestHandlerError;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::HttpMethod;
-use golem_schema::http::HttpMethod as SharedHttpMethod;
+use golem_schema::http as schema_http;
 use golem_service_base::custom_api::{CorsPreflightBehaviour, CorsPreflightMethodPolicy};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use std::collections::BTreeSet;
@@ -97,7 +97,7 @@ pub fn handle_selected_preflight(
         request,
         &CorsPreflightBehaviour {
             method_policies: vec![CorsPreflightMethodPolicy {
-                method: HttpMethod::Method(SharedHttpMethod::Custom(
+                method: HttpMethod::Method(schema_http::HttpMethod::Custom(
                     golem_schema::http::CustomHttpMethod {
                         value: requested_method.to_string(),
                     },
@@ -249,10 +249,10 @@ pub fn apply_cors_outgoing_middleware(
                 .is_some_and(|slot| slot.writable());
         let mut exposed = vec!["Allow", "Retry-After"];
         match resolved_route.route.route_match.method() {
-            Some(HttpMethod::Method(SharedHttpMethod::Put(_))) if is_base => {
+            Some(HttpMethod::Method(schema_http::HttpMethod::Put(_))) if is_base => {
                 exposed.push("Location")
             }
-            Some(HttpMethod::Method(SharedHttpMethod::Put(_))) if is_slot => {
+            Some(HttpMethod::Method(schema_http::HttpMethod::Put(_))) if is_slot => {
                 exposed.extend([
                     "Stream-Next-Offset",
                     "Stream-Closed",
@@ -266,29 +266,34 @@ pub fn apply_cors_outgoing_middleware(
                     exposed.push("Location");
                 }
             }
-            Some(HttpMethod::Method(SharedHttpMethod::Head(_))) if is_slot => exposed.extend([
-                "Stream-Next-Offset",
-                "Stream-Closed",
-                "Stream-Cancelled",
-                "Stream-Up-To-Date",
-                "Stream-TTL",
-                "Stream-Expires-At",
-                "ETag",
-            ]),
-            Some(HttpMethod::Method(SharedHttpMethod::Head(_))) => {
+            Some(HttpMethod::Method(schema_http::HttpMethod::Head(_))) if is_slot => exposed
+                .extend([
+                    "Stream-Next-Offset",
+                    "Stream-Closed",
+                    "Stream-Cancelled",
+                    "Stream-Up-To-Date",
+                    "Stream-TTL",
+                    "Stream-Expires-At",
+                    "ETag",
+                ]),
+            Some(HttpMethod::Method(schema_http::HttpMethod::Head(_))) => {
                 exposed.extend(["Stream-Closed", "Stream-TTL", "Stream-Expires-At"])
             }
-            Some(HttpMethod::Method(SharedHttpMethod::Get(_))) if is_slot => exposed.extend([
-                "Stream-Next-Offset",
-                "Stream-Closed",
-                "Stream-Cancelled",
-                "Stream-Up-To-Date",
-                "Stream-Cursor",
-                "Stream-SSE-Data-Encoding",
-                "ETag",
-            ]),
-            Some(HttpMethod::Method(SharedHttpMethod::Get(_))) => exposed.push("Stream-Closed"),
-            Some(HttpMethod::Method(SharedHttpMethod::Post(_)))
+            Some(HttpMethod::Method(schema_http::HttpMethod::Get(_))) if is_slot => {
+                exposed.extend([
+                    "Stream-Next-Offset",
+                    "Stream-Closed",
+                    "Stream-Cancelled",
+                    "Stream-Up-To-Date",
+                    "Stream-Cursor",
+                    "Stream-SSE-Data-Encoding",
+                    "ETag",
+                ])
+            }
+            Some(HttpMethod::Method(schema_http::HttpMethod::Get(_))) => {
+                exposed.push("Stream-Closed")
+            }
+            Some(HttpMethod::Method(schema_http::HttpMethod::Post(_)))
                 if behaviour
                     .durable_streams
                     .as_ref()
@@ -791,7 +796,7 @@ mod tests {
             &request,
             &CorsPreflightBehaviour {
                 method_policies: vec![CorsPreflightMethodPolicy {
-                    method: HttpMethod::Method(SharedHttpMethod::Post(Empty {})),
+                    method: HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})),
                     allowed_origins: BTreeSet::from([OriginPattern(
                         "https://frontend.example.com".to_string(),
                     )]),
@@ -846,7 +851,7 @@ mod tests {
             &request,
             &CorsPreflightBehaviour {
                 method_policies: vec![CorsPreflightMethodPolicy {
-                    method: HttpMethod::Method(SharedHttpMethod::Post(Empty {})),
+                    method: HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})),
                     allowed_origins: BTreeSet::from([OriginPattern(
                         "https://frontend.example.com".to_string(),
                     )]),
@@ -971,12 +976,12 @@ mod tests {
             &CorsPreflightBehaviour {
                 method_policies: vec![
                     CorsPreflightMethodPolicy {
-                        method: HttpMethod::Method(SharedHttpMethod::Get(Empty {})),
+                        method: HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})),
                         allowed_origins: BTreeSet::from([OriginPattern("*".to_string())]),
                         allowed_headers: BTreeSet::new(),
                     },
                     CorsPreflightMethodPolicy {
-                        method: HttpMethod::Method(SharedHttpMethod::Post(Empty {})),
+                        method: HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})),
                         allowed_origins: BTreeSet::from([OriginPattern(
                             "https://frontend.example.com".to_string(),
                         )]),
@@ -1006,7 +1011,7 @@ mod tests {
                 environment_id: EnvironmentId(uuid::Uuid::nil()),
                 deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
                 route_id: 1,
-                route_match: HttpMethod::Method(SharedHttpMethod::Get(Empty {})).into(),
+                route_match: HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})).into(),
                 path: vec![PathSegment::Literal {
                     value: "notes".to_string(),
                 }],

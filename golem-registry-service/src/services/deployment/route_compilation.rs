@@ -38,7 +38,7 @@ use golem_common::schema::{
     SchemaType,
 };
 use golem_schema::Empty;
-use golem_schema::http::{HttpMethod as SharedHttpMethod, PathSegment as SharedPathSegment};
+use golem_schema::http as schema_http;
 use golem_service_base::custom_api::{
     AgentFilesystemBehaviour, AgentRouteMode, CallAgentBehaviour, CompiledInputSchema,
     CompiledOutputSchema, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
@@ -140,7 +140,7 @@ pub fn compile_fallback_mount(
                 matches!(
                     segment,
                     golem_common::model::agent::PathSegment::Segment(
-                        SharedPathSegment::PathVariable(_)
+                        schema_http::PathSegment::PathVariable(_)
                     )
                 )
             })
@@ -199,7 +199,7 @@ pub(super) fn expand_http_mount(mount: &HttpMountDetails) -> Vec<HttpMountDetail
         let mut absent = mount.clone();
         absent.path_prefix.retain(|segment| {
             !matches!(segment,
-            golem_common::model::agent::PathSegment::Segment(SharedPathSegment::PathVariable(variable))
+            golem_common::model::agent::PathSegment::Segment(schema_http::PathSegment::PathVariable(variable))
                 if variable.variable_name == details.name)
         });
         alternatives.push(absent);
@@ -238,13 +238,13 @@ pub fn add_agent_method_http_routes(
                 .filter(|segment| {
                     matches!(
                         segment,
-                        golem_common::model::agent::PathSegment::Segment(SharedPathSegment::PathVariable(_)
-                            | SharedPathSegment::RemainingPathVariable(_))
+                        golem_common::model::agent::PathSegment::Segment(schema_http::PathSegment::PathVariable(_)
+                            | schema_http::PathSegment::RemainingPathVariable(_))
                     )
                 })
                 .position(|segment| {
                     matches!(segment,
-                    golem_common::model::agent::PathSegment::Segment(SharedPathSegment::PathVariable(variable))
+                    golem_common::model::agent::PathSegment::Segment(schema_http::PathSegment::PathVariable(variable))
                         if variable.variable_name == details.name)
                 });
             match index {
@@ -444,7 +444,7 @@ fn add_durable_stream_route_family(
     current_route_id: &mut i32,
     routes: &mut Vec<UnboundCompiledRoute>,
 ) -> Result<(), &'static str> {
-    base.route_match = HttpMethod::Method(SharedHttpMethod::Put(Empty {})).into();
+    base.route_match = HttpMethod::Method(schema_http::HttpMethod::Put(Empty {})).into();
     let mut session_path = base.path.clone();
     session_path.push(PathSegment::Literal {
         value: "invocations".into(),
@@ -462,39 +462,39 @@ fn add_durable_stream_route_family(
     let endpoints = [
         (
             &session_path,
-            HttpMethod::Method(SharedHttpMethod::Put(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Put(Empty {})),
         ),
         (
             &session_path,
-            HttpMethod::Method(SharedHttpMethod::Head(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Head(Empty {})),
         ),
         (
             &session_path,
-            HttpMethod::Method(SharedHttpMethod::Get(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})),
         ),
         (
             &session_path,
-            HttpMethod::Method(SharedHttpMethod::Delete(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Delete(Empty {})),
         ),
         (
             &stream_path,
-            HttpMethod::Method(SharedHttpMethod::Put(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Put(Empty {})),
         ),
         (
             &stream_path,
-            HttpMethod::Method(SharedHttpMethod::Head(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Head(Empty {})),
         ),
         (
             &stream_path,
-            HttpMethod::Method(SharedHttpMethod::Get(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})),
         ),
         (
             &stream_path,
-            HttpMethod::Method(SharedHttpMethod::Delete(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Delete(Empty {})),
         ),
         (
             &stream_path,
-            HttpMethod::Method(SharedHttpMethod::Post(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})),
         ),
     ];
     let base_endpoint_count = endpoints.len();
@@ -541,14 +541,14 @@ fn add_durable_stream_route_family(
             ]);
         }
         let mut methods = vec![
-            HttpMethod::Method(SharedHttpMethod::Head(Empty {})),
-            HttpMethod::Method(SharedHttpMethod::Get(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Head(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})),
         ];
         if stream {
             methods.extend([
-                HttpMethod::Method(SharedHttpMethod::Put(Empty {})),
-                HttpMethod::Method(SharedHttpMethod::Post(Empty {})),
-                HttpMethod::Method(SharedHttpMethod::Delete(Empty {})),
+                HttpMethod::Method(schema_http::HttpMethod::Put(Empty {})),
+                HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})),
+                HttpMethod::Method(schema_http::HttpMethod::Delete(Empty {})),
             ]);
         }
         for method in methods {
@@ -608,7 +608,7 @@ fn collect_read_only_warnings(
     for http_endpoint in &agent_method.http_endpoint {
         if !matches!(
             http_endpoint.http_method,
-            HttpMethod::Method(SharedHttpMethod::Get(_) | SharedHttpMethod::Head(_))
+            HttpMethod::Method(schema_http::HttpMethod::Get(_) | schema_http::HttpMethod::Head(_))
         ) {
             let rendered = render_agent_http_path(
                 http_mount
@@ -714,7 +714,7 @@ pub fn add_cors_preflight_http_routes(
         compiled_routes.push(UnboundCompiledRoute {
             route_id,
             domain: deployment.domain.clone(),
-            route_match: HttpMethod::Method(SharedHttpMethod::Options(Empty {})).into(),
+            route_match: HttpMethod::Method(schema_http::HttpMethod::Options(Empty {})).into(),
             path: path_segments,
             behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour { method_policies }),
             security: UnboundRouteSecurity::None,
@@ -748,7 +748,7 @@ fn cors_preflight_paths(route: &UnboundCompiledRoute) -> Vec<Vec<PathSegment>> {
     if !stream_path {
         return if matches!(
             method,
-            Some(HttpMethod::Method(SharedHttpMethod::Delete(_)))
+            Some(HttpMethod::Method(schema_http::HttpMethod::Delete(_)))
         ) && !policy.allow_invocation_delete
         {
             Vec::new()
@@ -761,11 +761,13 @@ fn cors_preflight_paths(route: &UnboundCompiledRoute) -> Vec<Vec<PathSegment>> {
         .slots
         .iter()
         .filter(|slot| {
-            (!matches!(method, Some(HttpMethod::Method(SharedHttpMethod::Post(_))))
-                || policy.allow_external_writes && slot.writable())
+            (!matches!(
+                method,
+                Some(HttpMethod::Method(schema_http::HttpMethod::Post(_)))
+            ) || policy.allow_external_writes && slot.writable())
                 && (!matches!(
                     method,
-                    Some(HttpMethod::Method(SharedHttpMethod::Delete(_)))
+                    Some(HttpMethod::Method(schema_http::HttpMethod::Delete(_)))
                 ) || policy.allow_stream_delete)
         })
         .map(|slot| {
@@ -825,7 +827,7 @@ pub fn add_webhook_callback_routes(
         let compiled = UnboundCompiledRoute {
             route_id,
             domain: deployment.domain.clone(),
-            route_match: HttpMethod::Method(SharedHttpMethod::Post(Empty {})).into(),
+            route_match: HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})).into(),
             path: typed_segments,
             behaviour: RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: agent_type.implemented_by.component_id,
@@ -863,7 +865,7 @@ pub fn add_openapi_spec_routes(
         compiled_routes.push(UnboundCompiledRoute {
             route_id,
             domain: deployment.domain.clone(),
-            route_match: HttpMethod::Method(SharedHttpMethod::Get(Empty {})).into(),
+            route_match: HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})).into(),
             path,
             behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format,
@@ -1012,16 +1014,16 @@ pub fn make_invalid_agent_mount_error_maker(
 pub fn render_http_method(method: &HttpMethod) -> String {
     match &method {
         HttpMethod::Method(method) => match method {
-            SharedHttpMethod::Get(_) => "GET".to_string(),
-            SharedHttpMethod::Head(_) => "HEAD".to_string(),
-            SharedHttpMethod::Post(_) => "POST".to_string(),
-            SharedHttpMethod::Put(_) => "PUT".to_string(),
-            SharedHttpMethod::Delete(_) => "DELETE".to_string(),
-            SharedHttpMethod::Connect(_) => "CONNECT".to_string(),
-            SharedHttpMethod::Options(_) => "OPTIONS".to_string(),
-            SharedHttpMethod::Trace(_) => "TRACE".to_string(),
-            SharedHttpMethod::Patch(_) => "PATCH".to_string(),
-            SharedHttpMethod::Custom(custom) => custom.value.clone(),
+            schema_http::HttpMethod::Get(_) => "GET".to_string(),
+            schema_http::HttpMethod::Head(_) => "HEAD".to_string(),
+            schema_http::HttpMethod::Post(_) => "POST".to_string(),
+            schema_http::HttpMethod::Put(_) => "PUT".to_string(),
+            schema_http::HttpMethod::Delete(_) => "DELETE".to_string(),
+            schema_http::HttpMethod::Connect(_) => "CONNECT".to_string(),
+            schema_http::HttpMethod::Options(_) => "OPTIONS".to_string(),
+            schema_http::HttpMethod::Trace(_) => "TRACE".to_string(),
+            schema_http::HttpMethod::Patch(_) => "PATCH".to_string(),
+            schema_http::HttpMethod::Custom(custom) => custom.value.clone(),
         },
         HttpMethod::Any(_) => "<any>".to_string(),
     }
@@ -1032,12 +1034,12 @@ fn render_agent_http_path<'a>(
 ) -> String {
     use golem_common::model::agent::{PathSegment, SystemVariable, SystemVariableSegment};
     path.map(|p| match p {
-        PathSegment::Segment(SharedPathSegment::Literal(v)) => v.value.clone(),
-        PathSegment::Segment(SharedPathSegment::PathVariable(v)) => {
+        PathSegment::Segment(schema_http::PathSegment::Literal(v)) => v.value.clone(),
+        PathSegment::Segment(schema_http::PathSegment::PathVariable(v)) => {
             let name = &v.variable_name;
             format!("{{{name}}}")
         }
-        PathSegment::Segment(SharedPathSegment::RemainingPathVariable(v)) => {
+        PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(v)) => {
             let name = &v.variable_name;
             format!("{{{name}}}+")
         }
@@ -1059,15 +1061,17 @@ fn compile_agent_path_segment(
     use golem_common::model::agent::PathSegment as AgentPathSegment;
 
     match path_segment {
-        AgentPathSegment::Segment(SharedPathSegment::Literal(inner)) => PathSegment::Literal {
-            value: inner.value.clone(),
-        },
-        AgentPathSegment::Segment(SharedPathSegment::PathVariable(inner)) => {
+        AgentPathSegment::Segment(schema_http::PathSegment::Literal(inner)) => {
+            PathSegment::Literal {
+                value: inner.value.clone(),
+            }
+        }
+        AgentPathSegment::Segment(schema_http::PathSegment::PathVariable(inner)) => {
             PathSegment::Variable {
                 display_name: inner.variable_name.to_kebab_case(),
             }
         }
-        AgentPathSegment::Segment(SharedPathSegment::RemainingPathVariable(inner)) => {
+        AgentPathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(inner)) => {
             PathSegment::CatchAll {
                 display_name: inner.variable_name.to_kebab_case(),
             }
@@ -1249,7 +1253,7 @@ mod tests {
                 input_schema: InputSchema::Parameters(vec![]),
                 output_schema: OutputSchema::Unit,
                 http_endpoint: vec![HttpEndpointDetails {
-                    http_method: HttpMethod::Method(SharedHttpMethod::Get(Empty {})),
+                    http_method: HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})),
                     path_suffix: vec![],
                     header_vars: vec![],
                     query_vars: vec![],
@@ -1266,7 +1270,7 @@ mod tests {
             mode,
             http_mount: Some(HttpMountDetails {
                 path_prefix: vec![golem_common::model::agent::PathSegment::Segment(
-                    SharedPathSegment::Literal(LiteralSegment {
+                    schema_http::PathSegment::Literal(LiteralSegment {
                         value: "notes".to_string(),
                     }),
                 )],
@@ -1571,7 +1575,7 @@ mod tests {
         second_endpoint
             .path_suffix
             .push(golem_common::model::agent::PathSegment::Segment(
-                SharedPathSegment::Literal(LiteralSegment {
+                schema_http::PathSegment::Literal(LiteralSegment {
                     value: "other".into(),
                 }),
             ));
@@ -1749,13 +1753,13 @@ mod tests {
         agent.methods[0].output_schema =
             OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::string()))));
         agent.http_mount.as_mut().unwrap().path_prefix = vec![
-            AgentPathSegment::Segment(SharedPathSegment::PathVariable(PathVariable {
+            AgentPathSegment::Segment(schema_http::PathSegment::PathVariable(PathVariable {
                 variable_name: "tenant".into(),
             })),
-            AgentPathSegment::Segment(SharedPathSegment::Literal(LiteralSegment {
+            AgentPathSegment::Segment(schema_http::PathSegment::Literal(LiteralSegment {
                 value: "invocations".into(),
             })),
-            AgentPathSegment::Segment(SharedPathSegment::PathVariable(PathVariable {
+            AgentPathSegment::Segment(schema_http::PathSegment::PathVariable(PathVariable {
                 variable_name: "session".into(),
             })),
         ];
@@ -1946,7 +1950,7 @@ mod tests {
             UnboundCompiledRoute {
                 domain: Domain("example.com".to_string()),
                 route_id: 1,
-                route_match: HttpMethod::Method(SharedHttpMethod::Get(Empty {})).into(),
+                route_match: HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})).into(),
                 path: path.clone(),
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::Plain,
@@ -1984,7 +1988,7 @@ mod tests {
             UnboundCompiledRoute {
                 domain: Domain("example.com".to_string()),
                 route_id: 2,
-                route_match: HttpMethod::Method(SharedHttpMethod::Post(Empty {})).into(),
+                route_match: HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})).into(),
                 path: path.clone(),
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::Plain,
@@ -2041,7 +2045,12 @@ mod tests {
         let get_policy = preflight
             .method_policies
             .iter()
-            .find(|policy| matches!(policy.method, HttpMethod::Method(SharedHttpMethod::Get(_))))
+            .find(|policy| {
+                matches!(
+                    policy.method,
+                    HttpMethod::Method(schema_http::HttpMethod::Get(_))
+                )
+            })
             .expect("missing GET policy");
         assert_eq!(
             get_policy.allowed_origins,
@@ -2055,7 +2064,12 @@ mod tests {
         let post_policy = preflight
             .method_policies
             .iter()
-            .find(|policy| matches!(policy.method, HttpMethod::Method(SharedHttpMethod::Post(_))))
+            .find(|policy| {
+                matches!(
+                    policy.method,
+                    HttpMethod::Method(schema_http::HttpMethod::Post(_))
+                )
+            })
             .expect("missing POST policy");
         assert_eq!(
             post_policy.allowed_origins,
@@ -2068,8 +2082,8 @@ mod tests {
         compiled_routes
             .retain(|route| !matches!(route.behaviour, RouteBehaviour::CorsPreflight(_)));
         for method in [
-            HttpMethod::Method(SharedHttpMethod::Options(Empty {})),
-            HttpMethod::Method(SharedHttpMethod::Custom(
+            HttpMethod::Method(schema_http::HttpMethod::Options(Empty {})),
+            HttpMethod::Method(schema_http::HttpMethod::Custom(
                 golem_schema::http::CustomHttpMethod {
                     value: "OPTIONS".into(),
                 },
@@ -2162,7 +2176,7 @@ mod tests {
     fn warning_emitted_for_read_only_method_bound_to_post() {
         let mut agent = test_agent(AgentMode::Durable, false);
         agent.methods[0].http_endpoint[0].http_method =
-            HttpMethod::Method(SharedHttpMethod::Post(Empty {}));
+            HttpMethod::Method(schema_http::HttpMethod::Post(Empty {}));
         agent.methods[0].read_only = Some(read_only_until_write());
 
         let warnings = run_route_compilation_for_warnings(agent);
@@ -2226,7 +2240,7 @@ mod tests {
     fn no_warning_for_non_read_only_method_bound_to_post() {
         let mut agent = test_agent(AgentMode::Durable, false);
         agent.methods[0].http_endpoint[0].http_method =
-            HttpMethod::Method(SharedHttpMethod::Post(Empty {}));
+            HttpMethod::Method(schema_http::HttpMethod::Post(Empty {}));
 
         let warnings = run_route_compilation_for_warnings(agent);
 

@@ -160,19 +160,19 @@ impl fmt::Display for DeployValidationWarning {
 }
 
 fn render_http_method(method: &HttpMethod) -> &'static str {
-    use golem_schema::http::HttpMethod as SharedHttpMethod;
+    use golem_schema::http as schema_http;
     match method {
         HttpMethod::Method(method) => match method {
-            SharedHttpMethod::Get(_) => "GET",
-            SharedHttpMethod::Head(_) => "HEAD",
-            SharedHttpMethod::Post(_) => "POST",
-            SharedHttpMethod::Put(_) => "PUT",
-            SharedHttpMethod::Delete(_) => "DELETE",
-            SharedHttpMethod::Connect(_) => "CONNECT",
-            SharedHttpMethod::Options(_) => "OPTIONS",
-            SharedHttpMethod::Trace(_) => "TRACE",
-            SharedHttpMethod::Patch(_) => "PATCH",
-            SharedHttpMethod::Custom(_) => "<custom>",
+            schema_http::HttpMethod::Get(_) => "GET",
+            schema_http::HttpMethod::Head(_) => "HEAD",
+            schema_http::HttpMethod::Post(_) => "POST",
+            schema_http::HttpMethod::Put(_) => "PUT",
+            schema_http::HttpMethod::Delete(_) => "DELETE",
+            schema_http::HttpMethod::Connect(_) => "CONNECT",
+            schema_http::HttpMethod::Options(_) => "OPTIONS",
+            schema_http::HttpMethod::Trace(_) => "TRACE",
+            schema_http::HttpMethod::Patch(_) => "PATCH",
+            schema_http::HttpMethod::Custom(_) => "<custom>",
         },
         HttpMethod::Any(_) => "<any>",
     }

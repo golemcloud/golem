@@ -22,7 +22,7 @@ use golem_common::schema::{
     AgentMethodSchema, AgentTypeSchema, FieldSource, InputSchema, OutputSchema, SchemaGraph,
     SchemaType,
 };
-use golem_schema::http::{HttpRouteMode, PathSegment as SharedPathSegment};
+use golem_schema::http::{self as schema_http, HttpRouteMode};
 use golem_service_base::custom_api::{
     DurableStreamRepresentation, DurableStreamRouteLoadPolicy, DurableStreamRoutePolicy,
     DurableStreamSlot, DurableStreamSlotDirection,
@@ -415,13 +415,13 @@ fn resolve_content_type(
 fn validate_path(mount: &HttpMountDetails, endpoint: &HttpEndpointDetails) -> Result<(), String> {
     for segment in mount.path_prefix.iter().chain(&endpoint.path_suffix) {
         match segment {
-            PathSegment::Segment(SharedPathSegment::RemainingPathVariable(variable)) => {
+            PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(variable)) => {
                 return Err(format!(
                     "Durable Streams base path cannot contain greedy variable '{}'",
                     variable.variable_name
                 ));
             }
-            PathSegment::Segment(SharedPathSegment::PathVariable(variable))
+            PathSegment::Segment(schema_http::PathSegment::PathVariable(variable))
                 if RESERVED_PATH_NAMES.contains(&variable.variable_name.as_str()) =>
             {
                 return Err(format!(
@@ -438,8 +438,8 @@ fn validate_path(mount: &HttpMountDetails, endpoint: &HttpEndpointDetails) -> Re
 fn reject_stream_binding(endpoint: &HttpEndpointDetails, name: &str) -> Result<(), String> {
     let path_bound = endpoint.path_suffix.iter().any(|segment| match segment {
         PathSegment::Segment(
-            SharedPathSegment::PathVariable(variable)
-            | SharedPathSegment::RemainingPathVariable(variable),
+            schema_http::PathSegment::PathVariable(variable)
+            | schema_http::PathSegment::RemainingPathVariable(variable),
         ) => variable.variable_name == name,
         _ => false,
     });
@@ -646,7 +646,7 @@ mod tests {
     fn route() -> (HttpMountDetails, HttpEndpointDetails) {
         (
             HttpMountDetails {
-                path_prefix: vec![PathSegment::Segment(SharedPathSegment::Literal(
+                path_prefix: vec![PathSegment::Segment(schema_http::PathSegment::Literal(
                     LiteralSegment {
                         value: "api".into(),
                     },
@@ -1237,22 +1237,18 @@ mod tests {
             SchemaType::string(),
         );
         let (mut mount, endpoint) = route();
-        mount
-            .path_prefix
-            .push(PathSegment::Segment(SharedPathSegment::PathVariable(
-                PathVariable {
-                    variable_name: "id".into(),
-                },
-            )));
+        mount.path_prefix.push(PathSegment::Segment(
+            schema_http::PathSegment::PathVariable(PathVariable {
+                variable_name: "id".into(),
+            }),
+        ));
         assert!(validate_route(&agent, &method, &mount, &endpoint).is_ok());
         let mut path_endpoint = endpoint.clone();
-        path_endpoint
-            .path_suffix
-            .push(PathSegment::Segment(SharedPathSegment::PathVariable(
-                PathVariable {
-                    variable_name: "id".into(),
-                },
-            )));
+        path_endpoint.path_suffix.push(PathSegment::Segment(
+            schema_http::PathSegment::PathVariable(PathVariable {
+                variable_name: "id".into(),
+            }),
+        ));
         assert!(validate_route(&agent, &method, &mount, &path_endpoint).is_err());
         let mut query_endpoint = endpoint.clone();
         query_endpoint.query_vars.push(QueryVariable {
@@ -1276,20 +1272,18 @@ mod tests {
         );
         let (mut mount, mut endpoint) = route();
         mount.path_prefix.push(PathSegment::Segment(
-            SharedPathSegment::RemainingPathVariable(PathVariable {
+            schema_http::PathSegment::RemainingPathVariable(PathVariable {
                 variable_name: "tail".into(),
             }),
         ));
         assert!(validate_route(&agent, &method, &mount, &endpoint).is_err());
 
         let (mount, _) = route();
-        endpoint
-            .path_suffix
-            .push(PathSegment::Segment(SharedPathSegment::PathVariable(
-                PathVariable {
-                    variable_name: "streams".into(),
-                },
-            )));
+        endpoint.path_suffix.push(PathSegment::Segment(
+            schema_http::PathSegment::PathVariable(PathVariable {
+                variable_name: "streams".into(),
+            }),
+        ));
         assert!(validate_route(&agent, &method, &mount, &endpoint).is_err());
     }
 }

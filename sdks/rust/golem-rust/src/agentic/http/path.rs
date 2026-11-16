@@ -14,7 +14,7 @@
 
 use crate::agentic::http::validations::reject_empty_string;
 use crate::golem_agentic::golem::agent::common::{PathSegment, SystemVariable};
-use golem_schema::http::wit::wire::{PathSegment as SharedPathSegment, PathVariable};
+use golem_schema::http::wit::wire::{self as http, PathVariable};
 
 pub fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
     if !path.starts_with('/') {
@@ -60,7 +60,7 @@ pub fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String
             if let Some(variable_name) = name.strip_prefix('*') {
                 reject_empty_string(variable_name, "remaining path variable")?;
                 return Ok(PathSegment::Segment(
-                    SharedPathSegment::RemainingPathVariable(PathVariable {
+                    http::PathSegment::RemainingPathVariable(PathVariable {
                         variable_name: variable_name.to_string(),
                     }),
                 ));
@@ -70,7 +70,7 @@ pub fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String
         match name {
             "agent-type" => Ok(PathSegment::SystemVariable(SystemVariable::AgentType)),
             "agent-version" => Ok(PathSegment::SystemVariable(SystemVariable::AgentVersion)),
-            _ => Ok(PathSegment::Segment(SharedPathSegment::PathVariable(
+            _ => Ok(PathSegment::Segment(http::PathSegment::PathVariable(
                 PathVariable {
                     variable_name: name.to_string(),
                 },
@@ -83,7 +83,7 @@ pub fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String
         ))
     } else {
         reject_empty_string(segment, "Literal path segment")?;
-        Ok(PathSegment::Segment(SharedPathSegment::Literal(
+        Ok(PathSegment::Segment(http::PathSegment::Literal(
             segment.to_string(),
         )))
     }
@@ -94,7 +94,7 @@ mod tests {
 
     use crate::agentic::http::path::parse_path;
     use crate::golem_agentic::golem::agent::common::PathSegment;
-    use golem_schema::http::wit::wire::{PathSegment as SharedPathSegment, PathVariable};
+    use golem_schema::http::wit::wire::{self as http, PathVariable};
     use test_r::test;
 
     #[test]
@@ -103,7 +103,7 @@ mod tests {
         let parsed = parse_path(path).unwrap();
         assert_eq!(parsed.len(), 3);
         match &parsed[2] {
-            PathSegment::Segment(SharedPathSegment::PathVariable(PathVariable {
+            PathSegment::Segment(http::PathSegment::PathVariable(PathVariable {
                 variable_name,
             })) => {
                 assert_eq!(variable_name, "id")
@@ -117,7 +117,7 @@ mod tests {
         let path = "/foo/{*rest}";
         let parsed = parse_path(path).unwrap();
         match &parsed[1] {
-            PathSegment::Segment(SharedPathSegment::RemainingPathVariable(PathVariable {
+            PathSegment::Segment(http::PathSegment::RemainingPathVariable(PathVariable {
                 variable_name,
             })) => {
                 assert_eq!(variable_name, "rest")

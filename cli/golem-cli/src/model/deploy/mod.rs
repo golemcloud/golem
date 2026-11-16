@@ -1346,33 +1346,33 @@ fn render_path(segments: &[PathSegment]) -> String {
 }
 
 fn render_path_segment(segment: &PathSegment) -> String {
-    use golem_schema::http::PathSegment as SharedPathSegment;
+    use golem_schema::http as schema_http;
     match segment {
-        PathSegment::Segment(SharedPathSegment::Literal(segment)) => segment.value.clone(),
+        PathSegment::Segment(schema_http::PathSegment::Literal(segment)) => segment.value.clone(),
         PathSegment::SystemVariable(segment) => format!("{{{}}}", segment.value),
-        PathSegment::Segment(SharedPathSegment::PathVariable(segment)) => {
+        PathSegment::Segment(schema_http::PathSegment::PathVariable(segment)) => {
             format!("{{{}}}", segment.variable_name)
         }
-        PathSegment::Segment(SharedPathSegment::RemainingPathVariable(segment)) => {
+        PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(segment)) => {
             format!("{{*{}}}", segment.variable_name)
         }
     }
 }
 
 fn render_http_method(method: &HttpMethod) -> &str {
-    use golem_schema::http::HttpMethod as SharedHttpMethod;
+    use golem_schema::http as schema_http;
     match method {
         HttpMethod::Method(method) => match method {
-            SharedHttpMethod::Get(_) => "GET",
-            SharedHttpMethod::Head(_) => "HEAD",
-            SharedHttpMethod::Post(_) => "POST",
-            SharedHttpMethod::Put(_) => "PUT",
-            SharedHttpMethod::Delete(_) => "DELETE",
-            SharedHttpMethod::Connect(_) => "CONNECT",
-            SharedHttpMethod::Options(_) => "OPTIONS",
-            SharedHttpMethod::Trace(_) => "TRACE",
-            SharedHttpMethod::Patch(_) => "PATCH",
-            SharedHttpMethod::Custom(method) => &method.value,
+            schema_http::HttpMethod::Get(_) => "GET",
+            schema_http::HttpMethod::Head(_) => "HEAD",
+            schema_http::HttpMethod::Post(_) => "POST",
+            schema_http::HttpMethod::Put(_) => "PUT",
+            schema_http::HttpMethod::Delete(_) => "DELETE",
+            schema_http::HttpMethod::Connect(_) => "CONNECT",
+            schema_http::HttpMethod::Options(_) => "OPTIONS",
+            schema_http::HttpMethod::Trace(_) => "TRACE",
+            schema_http::HttpMethod::Patch(_) => "PATCH",
+            schema_http::HttpMethod::Custom(method) => &method.value,
         },
         HttpMethod::Any(_) => "<any>",
     }

@@ -18,7 +18,7 @@ use crate::base_model::agent::{
 };
 use crate::schema::validation::is_equivalent_cross_graph;
 use crate::schema::{SchemaGraph, SchemaType};
-use golem_schema::http::PathSegment as SharedPathSegment;
+use golem_schema::http as schema_http;
 use golem_schema::http::{FileMapping, FileResponseHeader, valid_decoded_segment};
 use http::{HeaderName, HeaderValue};
 use std::collections::HashSet;
@@ -220,15 +220,17 @@ fn validate_phantom_binding(
                 .filter(|segment| {
                     matches!(
                         segment,
-                        PathSegment::Segment(SharedPathSegment::PathVariable(variable)
-                            | SharedPathSegment::RemainingPathVariable(variable))
+                        PathSegment::Segment(schema_http::PathSegment::PathVariable(variable)
+                            | schema_http::PathSegment::RemainingPathVariable(variable))
                             if variable.variable_name == details.name
                     )
                 })
                 .collect();
             if !matches!(
                 captures.as_slice(),
-                [PathSegment::Segment(SharedPathSegment::PathVariable(_))]
+                [PathSegment::Segment(
+                    schema_http::PathSegment::PathVariable(_)
+                )]
             ) {
                 return Err(invalid(
                     "path selector must name exactly one ordinary mount capture",
@@ -244,8 +246,8 @@ fn validate_phantom_binding(
                 method.http_endpoint.iter().any(|endpoint| {
                     endpoint.path_suffix.iter().any(|segment| match segment {
                         PathSegment::Segment(
-                            SharedPathSegment::PathVariable(variable)
-                            | SharedPathSegment::RemainingPathVariable(variable),
+                            schema_http::PathSegment::PathVariable(variable)
+                            | schema_http::PathSegment::RemainingPathVariable(variable),
                         ) => variable.variable_name == details.name,
                         _ => false,
                     })
@@ -341,7 +343,7 @@ fn validate_router(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidationErr
         .http_mount
         .as_ref()
         .ok_or(HttpAgentValidationError::RouterMount)?;
-    if !mount.path_prefix.iter().all(|segment| matches!(segment, PathSegment::Segment(SharedPathSegment::Literal(literal)) if valid_decoded_segment(&literal.value))) {
+    if !mount.path_prefix.iter().all(|segment| matches!(segment, PathSegment::Segment(schema_http::PathSegment::Literal(literal)) if valid_decoded_segment(&literal.value))) {
         return Err(HttpAgentValidationError::RouterMount);
     }
     if !mount.filesystem_bindings.is_empty() {
@@ -436,9 +438,9 @@ fn validate_filesystem_owner(
     let mut captures = HashSet::new();
     for segment in &mount.path_prefix {
         match segment {
-            PathSegment::Segment(SharedPathSegment::PathVariable(variable))
+            PathSegment::Segment(schema_http::PathSegment::PathVariable(variable))
                 if captures.insert(variable.variable_name.as_str()) => {}
-            PathSegment::Segment(SharedPathSegment::Literal(literal))
+            PathSegment::Segment(schema_http::PathSegment::Literal(literal))
                 if valid_decoded_segment(&literal.value) => {}
             PathSegment::SystemVariable(_) => {}
             _ => {
