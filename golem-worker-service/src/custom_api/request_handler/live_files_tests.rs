@@ -73,7 +73,7 @@ fn endpoint_with_timeout(
     handler.mounted_dispatch = MountedDispatch::new(
         harness.worker_service.clone(),
         &crate::config::HttpSessionLimits {
-            exchange_timeout: timeout,
+            file_lookup_timeout: timeout,
             ..Default::default()
         },
         files,

@@ -531,7 +531,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::RawMessageTooLarge(_) => {
                 Self::payload_too_large(api::error_code::REQUEST_PAYLOAD_TOO_LARGE, value)
             }
-            RequestHandlerError::RawBadGateway | RequestHandlerError::RawDeadline => {
+            RequestHandlerError::RawBadGateway
+            | RequestHandlerError::RawDeadline
+            | RequestHandlerError::RawAcceptanceTimeout => {
                 Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
             }
             RequestHandlerError::RawInternal => {
