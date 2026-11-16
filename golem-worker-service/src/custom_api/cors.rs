@@ -17,7 +17,9 @@ use super::error::RequestHandlerError;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::HttpMethod;
-use golem_service_base::custom_api::{CorsPreflightBehaviour, CorsPreflightMethodPolicy};
+use golem_service_base::custom_api::{
+    CorsPreflightBehaviour, CorsPreflightMethodPolicy, MountFileSource,
+};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use std::collections::BTreeSet;
 use tracing::debug;
@@ -76,10 +78,12 @@ pub fn handle_selected_preflight(
                     .map(|header| (*header).to_owned()),
             );
         }
-        RichRouteBehaviour::HttpRouter(_) => {
+        RichRouteBehaviour::Mount(mount)
+            if matches!(mount.files, MountFileSource::Router { .. }) =>
+        {
             allowed_headers.extend(requested_preflight_headers(request)?)
         }
-        RichRouteBehaviour::AgentFilesystem(_) => allowed_headers.extend(
+        RichRouteBehaviour::Mount(_) => allowed_headers.extend(
             [
                 "range",
                 "if-range",
