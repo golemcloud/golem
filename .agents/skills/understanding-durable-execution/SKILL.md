@@ -95,7 +95,7 @@ even if that direction was already taken. Address getters use the entry; guest-s
 cached effective values. A successful setter invalidates its option cache; the next async getter reads
 and caches the native effective value, including OS rounding and buffer limits. Unset option getters
 still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
-socket has no reserved native port after replay; a new connect returns `connection-broken` rather
+socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
 than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
 reconnects as described below. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect

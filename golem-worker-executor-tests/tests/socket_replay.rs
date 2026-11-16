@@ -528,6 +528,7 @@ async fn p3_tcp_bind_and_configured_options_replay_without_native_bind(
         .as_ref()
         .map_err(|error| anyhow::anyhow!(error.clone()))?;
     let address: SocketAddr = address.parse()?;
+    assert!(address.ip().is_loopback());
     assert_ne!(address.port(), 0);
     assert_eq!(&options[..5], &[1, 3_000_000_000, 4_000_000_000, 7, 42]);
     for expected in [51u8, 42] {
@@ -561,6 +562,14 @@ async fn p3_tcp_bind_and_configured_options_replay_without_native_bind(
         .call("p3_tcp_bound_state", data_value!("a".to_string()))
         .await?;
     assert_eq!(after, before);
+    let listen: Result<(), String> = session
+        .call("p3_tcp_listen", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(listen, Err("ErrorCode::ConnectionBroken".to_string()));
+    let after_listen: Result<(String, Vec<u64>), String> = session
+        .call("p3_tcp_bound_state", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after_listen, before);
     let changed: Result<u8, String> = session
         .call("p3_tcp_hop_limit", data_value!("a".to_string(), Some(63u8)))
         .await?;

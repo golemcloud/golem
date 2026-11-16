@@ -1882,6 +1882,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             "listen",
         );
         let rep = socket.rep();
+        {
+            let mut store = store.as_context_mut();
+            let entry = tcp_entry(durable_worker_ctx::<Ctx, U>(store.data_mut()), rep)
+                .map_err(SocketError::trap)?;
+            if entry.phase == SocketPhase::Bound && !entry.native_bound {
+                return Err(types::ErrorCode::ConnectionBroken.into());
+            }
+        }
         let sockets =
             Access::<U, WasiSockets>::new(store.as_context_mut(), wasi_sockets_view::<Ctx, U>);
         let result =
