@@ -9546,3 +9546,102 @@ async fn an_automatic_update_from_a_promoted_snapshot_that_the_target_cannot_loa
     assert_eq!(accumulated, 10);
     Ok(())
 }
+
+/// An automatic update whose target makes a different host call than the recorded one fails with
+/// the class `Divergence` and the divergence at the recorded `Start`. After a real restart, the
+/// agent metadata and the public oplog still show the class, the index, both calls and the
+/// request of the recorded call.
+#[test]
+#[timeout("120s")]
+async fn a_diverging_automatic_update_keeps_its_class_and_divergence_across_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{ReplayStep, StartIdentityField, UpdateFailureClass};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let source_result = executor
+        .invoke_and_await_agent(&component, &agent_id, "suffix_host_value", data_value!())
+        .await?;
+    assert_eq!(source_result.into_typed::<u32>()?, 7);
+    let updated = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated.revision, false)
+        .await?;
+    wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let from_metadata = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("the update fails");
+    let from_oplog = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::FailedUpdate(params) => Some(params),
+            _ => None,
+        })
+        .expect("the oplog records the failed update");
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(from_metadata.failure_class, UpdateFailureClass::Divergence);
+    assert_eq!(from_oplog.failure_class, UpdateFailureClass::Divergence);
+    assert!(
+        from_oplog
+            .details
+            .as_deref()
+            .is_some_and(|details| details.starts_with("UPDATE_REPLAY_FAILED")),
+        "{:?}",
+        from_oplog.details
+    );
+    let divergence = from_oplog
+        .divergence
+        .clone()
+        .expect("the oplog keeps the divergence");
+    assert_eq!(from_metadata.divergence.as_ref(), Some(&divergence));
+
+    // The index names the recorded `Start` of the call that the source made.
+    let recorded = oplog
+        .iter()
+        .find(|entry| entry.oplog_index == divergence.oplog_index)
+        .expect("the divergence names an entry of the oplog");
+    let PublicOplogEntry::Start(recorded) = &recorded.entry else {
+        panic!("the divergence names a Start: {:?}", recorded.entry);
+    };
+    let (ReplayStep::HostCall(expected), ReplayStep::HostCall(actual)) =
+        (&divergence.expected, &divergence.actual)
+    else {
+        panic!("both steps are host calls: {divergence:?}");
+    };
+    assert_eq!(expected.function_name, recorded.function_name);
+    assert!(expected.function_name.contains("bytes"), "{expected:?}");
+    assert!(actual.function_name.contains("u64"), "{actual:?}");
+    assert!(
+        divergence
+            .mismatched
+            .contains(&StartIdentityField::FunctionName)
+    );
+    assert!(recorded.request.is_some());
+    assert_eq!(expected.request.as_deref(), recorded.request.as_ref());
+    Ok(())
+}

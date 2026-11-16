@@ -651,9 +651,15 @@ impl MessageWithFields for AgentGetView {
                         update_history,
                         "{}",
                         format!(
-                            "{}: Failed update to {}{}{}",
+                            "{}: Failed update to {} ({}){}{}{}",
                             update.timestamp,
                             update.target_revision,
+                            update.failure_class,
+                            update
+                                .divergence
+                                .as_ref()
+                                .map(|divergence| format!(": {divergence}"))
+                                .unwrap_or_default(),
                             update
                                 .details
                                 .as_ref()
@@ -732,6 +738,12 @@ impl MessageWithFields for AgentGetView {
                 &self.metadata.pending_invocation_count,
                 self.metadata.pending_invocation_count > 0,
                 |n| n.to_string(),
+            )
+            .fmt_field_optional(
+                "Update history",
+                &update_history,
+                !update_history.is_empty(),
+                |history| history.trim_end().to_string(),
             )
             .fmt_field_optional(
                 "Failure category",

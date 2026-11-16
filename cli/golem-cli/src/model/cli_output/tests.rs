@@ -906,6 +906,81 @@ fn agent_get_structured_output_masks_secret_config_paths() {
     assert_no_plaintext(&value, &["runtime-secret", "default-secret"]);
 }
 
+/// `agent get` shows the class and the divergence of a failed update in its update history,
+/// and its JSON keeps both fields.
+#[test]
+fn agent_get_renders_the_failure_class_and_divergence_of_a_failed_update() {
+    use crate::model::text_format::MessageWithFields;
+    use golem_common::model::OplogIndex;
+    use golem_common::model::oplog::{
+        PublicDurableFunctionType, ReplayDivergence, ReplayHostCall, ReplayStep,
+        StartIdentityField, UpdateFailureClass,
+    };
+
+    colored::control::set_override(false);
+    let mut metadata = sample_agent_metadata_view();
+    metadata.updates = vec![golem_common::model::agent::UpdateRecord::FailedUpdate(
+        golem_common::model::agent::FailedUpdate {
+            timestamp: "2024-01-01T00:00:00Z".parse().unwrap(),
+            target_revision: golem_common::model::component::ComponentRevision::new(2).unwrap(),
+            details: Some("UPDATE_REPLAY_FAILED: diverged".to_string()),
+            pending_update_index: Some(OplogIndex::from_u64(9)),
+            mode: golem_common::model::agent::AgentUpdateMode::Automatic,
+            snapshot_assisted_details: None,
+            failure_class: UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(7),
+                expected: ReplayStep::HostCall(ReplayHostCall {
+                    function_name: "random::get_random_bytes".to_string(),
+                    durable_function_type: PublicDurableFunctionType::ReadLocal(
+                        golem_schema::Empty {},
+                    ),
+                    parent_start_index: None,
+                    invocation_id: None,
+                    observational_owner: None,
+                    carries_request: true,
+                    request: None,
+                }),
+                actual: ReplayStep::end_of_history(),
+                mismatched: vec![StartIdentityField::FunctionName],
+            })),
+        },
+    )];
+    let view = crate::model::agent::AgentGetView {
+        metadata,
+        precise: true,
+    };
+
+    let history = view
+        .fields()
+        .into_iter()
+        .find_map(|(name, value)| (name == "Update history").then_some(value))
+        .expect("the update history is shown");
+    assert!(
+        history.contains("Failed update to 2 (divergence)"),
+        "{history}"
+    );
+    assert!(
+        history.contains(
+            "Unexpected oplog entry at 7: expected Start { random::get_random_bytes, ReadLocal"
+        ),
+        "{history}"
+    );
+    assert!(
+        history.contains("got the end of the recorded history (mismatched: function-name)"),
+        "{history}"
+    );
+
+    let value = hidden_structured_output(view);
+    let failed = &value["metadata"]["updates"][0];
+    assert_eq!(failed["failureClass"], json!("divergence"));
+    assert_eq!(failed["divergence"]["oplogIndex"], json!(7));
+    assert_eq!(
+        failed["divergence"]["actual"]["type"],
+        json!("EndOfHistory")
+    );
+}
+
 #[test]
 fn component_get_and_list_structured_outputs_mask_secret_payloads() {
     let component = sample_component_view();
