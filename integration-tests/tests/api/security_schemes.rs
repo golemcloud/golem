@@ -17,7 +17,6 @@ use golem_client::api::{
     RegistryServiceGetEnvironmentSecuritySchemeError, RegistryServiceGetSecuritySchemeError,
     RegistryServiceListEnvironmentSecuritySchemesError,
 };
-use golem_common::model::Empty;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
@@ -30,6 +29,7 @@ use golem_common::model::security_scheme::{
     AuthorizationCodePkceConfig, Provider, SecuritySchemeCreation, SecuritySchemeLogin,
     SecuritySchemeName, SecuritySchemeUpdate,
 };
+use golem_schema::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::{assert_eq, assert_ne};

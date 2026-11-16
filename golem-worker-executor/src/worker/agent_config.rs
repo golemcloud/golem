@@ -304,7 +304,6 @@ pub fn validate_agent_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
     use golem_common::model::agent_secret::{
@@ -319,6 +318,7 @@ mod tests {
         AgentConfigDeclarationSchema, AgentConstructorSchema, InputSchema,
     };
     use golem_common::schema::schema_type::{SecretSpec, UrlRestrictions};
+    use golem_schema::Empty;
     use golem_service_base::model::agent_secret::AgentSecret;
     use golem_service_base::model::component::Component;
     use std::collections::{BTreeMap, HashMap};

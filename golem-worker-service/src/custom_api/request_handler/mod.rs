@@ -32,8 +32,8 @@ use crate::custom_api::RichRequest;
 use anyhow::anyhow;
 use golem_schema::schema::render::json_value::to_json_value_redacted;
 use golem_service_base::body_limit::RequestBodyLimit;
-use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_service_base::custom_api::OpenApiSpecFormat;
+use golem_service_base::custom_api::{MountFileSource, OpenApiSpecBehaviour};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use http::StatusCode;
 use poem::{Request, Response};
@@ -133,13 +133,11 @@ impl RequestHandler {
             return finish_selected_response(Ok(response), &request, &matching_route);
         }
 
-        if matches!(
-            matching_route.route.behavior,
-            RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_)
-        ) && request
-            .underlying
-            .headers()
-            .contains_key(http::header::UPGRADE)
+        if matches!(matching_route.route.behavior, RichRouteBehaviour::Mount(_))
+            && request
+                .underlying
+                .headers()
+                .contains_key(http::header::UPGRADE)
         {
             return Err(RequestHandlerError::RawRequest(StatusCode::NOT_IMPLEMENTED).into());
         }
@@ -241,7 +239,7 @@ impl RequestHandler {
                     .handle_webhook_callback_behaviour(request, resolved_route, behaviour)
                     .await
             }
-            RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
+            RichRouteBehaviour::Mount(_) => {
                 self.mounted_dispatch
                     .dispatch(&self.raw_handler, request, resolved_route)
                     .await
@@ -287,8 +285,8 @@ fn finish_selected_response(
     selected: &ResolvedRouteEntry,
 ) -> Result<Response, RequestFailure> {
     let live_files = matches!(
-        selected.route.behavior,
-        RichRouteBehaviour::AgentFilesystem(_)
+        &selected.route.behavior,
+        RichRouteBehaviour::Mount(mount) if matches!(mount.files, MountFileSource::Live { .. })
     );
     match result {
         Ok(mut response) => {
@@ -515,10 +513,10 @@ mod mounted_tests {
             route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
                 header_name: "x-session".into(),
             });
-            let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+            let RouteBehaviour::Mount(router) = &mut route.behavior else {
                 unreachable!()
             };
-            router.static_bindings = golem_common::model::agent::FileMapping::compile_list(
+            router.file_bindings = golem_schema::http::FileMapping::compile_list(
                 mount["mappings"]
                     .as_array()
                     .unwrap()
@@ -527,9 +525,12 @@ mod mounted_tests {
             )
             .unwrap();
             if let Some(files) = input["files"].as_object() {
+                let MountFileSource::Router { file_index, .. } = &mut router.files else {
+                    unreachable!()
+                };
                 for (path, state) in files {
                     assert_eq!(state, "found", "{id}");
-                    router.file_index.push(RouterFileIndexEntry {
+                    file_index.push(RouterFileIndexEntry {
                         path: path.clone(),
                         blob_key: golem_common::model::agent::AgentFileContentHash(
                             golem_common::model::diff::Hash::empty(),

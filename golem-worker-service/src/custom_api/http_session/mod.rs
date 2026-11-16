@@ -54,7 +54,6 @@ pub enum HttpSessionError {
     RetainedInputLimit,
     ResumeExhausted,
     Cancelled,
-    Deadline,
 }
 
 impl HttpSessionError {
@@ -69,7 +68,6 @@ impl HttpSessionError {
             Self::RetainedInputLimit => "frame_limit",
             Self::ResumeExhausted => "resume_exhausted",
             Self::Cancelled => "cancelled",
-            Self::Deadline => "deadline",
         }
     }
 }
@@ -153,6 +151,15 @@ impl HttpSessionInput {
         let permit = self.credits(0).await?;
         self.tx
             .send(Command::InputEof(permit))
+            .await
+            .map_err(|_| HttpSessionError::Cancelled)
+    }
+
+    pub async fn fail_idle_timeout(&self) -> Result<(), HttpSessionError> {
+        // The fixed terminal fits within the envelope allowance, including at the minimum budget.
+        let permit = self.credits(0).await?;
+        self.tx
+            .send(Command::InputIdleFailure(permit))
             .await
             .map_err(|_| HttpSessionError::Cancelled)
     }
@@ -343,11 +350,6 @@ impl HttpSession {
                         close_token.cancel();
                         let _ = tokio::time::timeout(cleanup_limits.cleanup_timeout, &mut session).await;
                         Some(HttpSessionError::Cancelled)
-                    },
-                    _ = tokio::time::sleep(cleanup_limits.exchange_timeout) => {
-                        close_token.cancel();
-                        let _ = tokio::time::timeout(cleanup_limits.cleanup_timeout, &mut session).await;
-                        Some(HttpSessionError::Deadline)
                     },
                 }
             };

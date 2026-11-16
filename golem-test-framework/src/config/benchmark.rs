@@ -494,6 +494,7 @@ impl BenchmarkTestDependencies {
                 &registry_service,
                 false,
                 otlp,
+                &[],
             )
             .await,
         );

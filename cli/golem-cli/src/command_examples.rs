@@ -350,7 +350,13 @@ pub const AGENT_OPLOG: &str = "Examples:
   golem-cli agent oplog 'CounterAgent(\"my-counter\")' --serve
 
   # Write a self-contained HTML viewer of the oplog and open it in the browser
-  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --html oplog.html --open";
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --html oplog.html --open
+
+  # Export an obfuscated report for a bug report: a header, one document per entry and a coverage document
+  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")' --obfuscate
+
+  # Write the obfuscated report into an HTML viewer and open it
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --obfuscate --html report.html --open";
 
 pub const AGENT_REVERT: &str = "Examples:
   # Undo the agent's last N invocations

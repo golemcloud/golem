@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::Empty;
+use golem_schema::Empty;
 use openidconnect::IssuerUrl;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;

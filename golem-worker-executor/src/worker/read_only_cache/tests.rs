@@ -25,7 +25,6 @@ async fn pending_admission_preserves_queued_signal() {
 }
 
 use super::*;
-use golem_common::base_model::Empty;
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentId;
 use golem_common::model::agent::{
@@ -39,6 +38,7 @@ use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
 };
 use golem_common::schema::graph::SchemaGraph;
+use golem_schema::Empty;
 use std::collections::BTreeMap;
 use test_r::test;
 use uuid::Uuid;

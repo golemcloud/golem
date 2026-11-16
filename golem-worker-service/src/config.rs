@@ -453,9 +453,12 @@ pub struct HttpSessionLimits {
     pub retry_deadline: Duration,
     #[serde(with = "humantime_serde")]
     pub cleanup_timeout: Duration,
-    /// Hard duration cap on the whole HTTP exchange, including streaming response delivery.
+    /// Maximum active wait for request-body bytes, excluding downstream backpressure.
     #[serde(with = "humantime_serde")]
-    pub exchange_timeout: Duration,
+    pub request_body_idle_timeout: Duration,
+    /// Deadline for a live-file exchange: lookup, response preparation and response-body delivery.
+    #[serde(with = "humantime_serde")]
+    pub file_lookup_timeout: Duration,
     /// Maximum encoded event size, including the start response head and every subsequent frame.
     pub max_event_bytes: usize,
 }
@@ -474,7 +477,8 @@ impl HttpSessionLimits {
             || self.max_resume_attempts == 0
             || self.retry_deadline.is_zero()
             || self.cleanup_timeout.is_zero()
-            || self.exchange_timeout.is_zero()
+            || self.request_body_idle_timeout.is_zero()
+            || self.file_lookup_timeout.is_zero()
             || self.max_event_bytes == 0
         {
             return Err("HTTP session limits and durations must be non-zero".into());
@@ -513,7 +517,8 @@ impl Default for HttpSessionLimits {
             retry_delay: Duration::from_millis(100),
             retry_deadline: Duration::from_secs(10),
             cleanup_timeout: Duration::from_secs(2),
-            exchange_timeout: Duration::from_secs(300),
+            request_body_idle_timeout: Duration::from_secs(60),
+            file_lookup_timeout: Duration::from_secs(300),
             // The executor permits a 16 MiB encoded item; allow its transport envelope too.
             max_event_bytes: 17 * 1024 * 1024,
         }
@@ -1375,6 +1380,14 @@ mod tests {
         let config = WorkerServiceConfig::default();
 
         assert!(config.http_session.validate().is_ok());
+        assert_eq!(
+            config.http_session.request_body_idle_timeout,
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            config.http_session.file_lookup_timeout,
+            Duration::from_secs(300)
+        );
         assert!(config.route_resolver.trusted_ingress_addresses.is_empty());
     }
 
@@ -1711,7 +1724,11 @@ mod tests {
                 ..Default::default()
             },
             HttpSessionLimits {
-                exchange_timeout: Duration::ZERO,
+                request_body_idle_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                file_lookup_timeout: Duration::ZERO,
                 ..Default::default()
             },
         ];
@@ -1784,12 +1801,24 @@ mod tests {
 
                 [connect_websocket]
                 max_message_size = 4000
+
+                [http_session]
+                request_body_idle_timeout = "2s"
+                file_lookup_timeout = "7s"
             "#,
             ))
             .extract()
             .unwrap();
 
         assert_eq!(config.http_server.http2_max_header_list_size, 1000);
+        assert_eq!(
+            config.http_session.request_body_idle_timeout,
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            config.http_session.file_lookup_timeout,
+            Duration::from_secs(7)
+        );
         assert!(config.http_server.http2_adaptive_window);
         assert_eq!(
             config.http_server.http2_max_pending_accept_reset_streams,
