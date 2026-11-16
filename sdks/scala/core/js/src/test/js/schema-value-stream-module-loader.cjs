@@ -180,7 +180,7 @@ Module._load = function (request) {
   if (request === "golem:core/types@2.0.0") {
     return {
       SchemaValueStream: {
-        wrap: async (iterable) => {
+        wrap: async (iterable, outcome) => {
           state.wraps += 1;
           if (state.failWrapAt === state.wraps) {
             throw new Error(`schema stream wrap ${state.wraps} failed`);
@@ -190,11 +190,11 @@ Module._load = function (request) {
               state.pendingWraps.push(resolve);
             });
           }
-          return { iterable };
+          return { iterable, outcome };
         },
         unwrap: async (stream) => {
           state.unwraps += 1;
-          return stream.iterable;
+          return [stream.iterable, stream.outcome ?? Promise.resolve({ tag: "ok", val: undefined })];
         },
       },
     };
@@ -212,6 +212,9 @@ Module._load = function (request) {
         }
         static create(...args) {
           return new this(...args);
+        }
+        static bindSelf(...args) {
+          return missingHostImport("bindSelf")(...args);
         }
         invokeAndAwait(...args) {
           return missingHostImport("wasmRpcInvokeAndAwait")(...args);
@@ -243,6 +246,11 @@ Module._load = function (request) {
     return {
       DurableStreamReader: durableStreamResource("readers", "read", ["checkpoint", "contentType", "transport"]),
       DurableStreamWriter: durableStreamResource("writers", "append", ["close", "payload", "sequence"]),
+    };
+  }
+  if (request === "golem:websocket/client@1.5.0") {
+    return {
+      WebsocketConnection: { connect: missingHostImport("websocketConnect") },
     };
   }
   if (request === "golem:api/host@1.5.0") {

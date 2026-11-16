@@ -38,10 +38,7 @@ def doubledStream(input: AgentStream[Long]): AgentStream[Long] =
   input.map(_ * 2)
 ```
 
-Build a demand-driven producer from a ZIO Blocks `Stream`. The stream runs only after downstream
-demand, which provides back-pressure. Use a typed value such as `Either[E, A]` for recoverable
-failures; the Golem protocol treats defects as fatal producer failures. Attach `ensuringAsync` when
-the producer owns resources that must be released on completion, failure, or explicit close.
+Build a demand-driven producer from a ZIO Blocks `Stream`. The stream runs only after downstream demand, which provides back-pressure. Throw `StreamError.Failed(typedValue)` for a declared typed terminal failure; ordinary producer errors become typed string failures. Use `Either[E, A]` for per-item errors that do not end the stream. Attach `ensuringAsync` when the producer owns resources that must be released on completion, failure, or explicit close.
 
 ```scala
 import zio.blocks.async.*
@@ -65,8 +62,9 @@ ownership, so the original cannot be pulled, closed, or sent again.
   guarantee; consume them concurrently if either producer may block waiting for demand.
 - Normal `None`, explicit `close`, transport disconnect, producer failure, and fatal invocation
   failure are distinct outcomes.
-- A bare stream has no recoverable terminal error payload. Put `Either[E, A]` (or another explicit
-  result type) in each item when callers must handle an application error and continue.
+- After item EOF, `pull()` awaits the completion outcome. A failure rejects the future once with `golem.schema.StreamError`; later pulls return `None`. Catch the failed future to preserve unrelated sibling streams.
+- `Failed` carries a typed schema value. `Trapped`, `Cancelled`, `Abandoned`, `Interrupted`, and `ResourceExhausted` are host outcomes; guests may author only success or `Failed`. `Cancelled.name` is `AbortError`. An unsettled writer becomes `Abandoned` on normal body completion, or `Trapped` when its body traps.
+- Forward an unread stream to preserve its original outcome; item EOF alone is not proof of success. Explicit close releases the endpoint without awaiting its outcome.
 - Closing cannot interrupt arbitrary producer work already running, and remote cleanup need not
   complete before a later invocation.
 

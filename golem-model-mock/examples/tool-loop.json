@@ -1,0 +1,26 @@
+{
+  "steps": [
+    {
+      "expect": {
+        "model": "scripted-model",
+        "tool_names": ["purchase", "lookup"],
+        "last_message_role": "user",
+        "authorization": "Bearer mock-secret"
+      },
+      "response": {
+        "type": "tool_calls",
+        "calls": [{"id": "call-purchase", "name": "purchase", "arguments": "{\"quantity\":3}"}]
+      }
+    },
+    {
+      "expect": {
+        "model": "scripted-model",
+        "tool_names": [],
+        "last_message_role": "tool",
+        "last_tool_call_id": "call-purchase",
+        "authorization": "Bearer mock-secret"
+      },
+      "response": {"type": "text", "text": "Purchased 3 tickets."}
+    }
+  ]
+}

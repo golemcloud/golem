@@ -440,6 +440,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: AuthCtx,
         _: Option<InvocationContext>,
         _: Option<golem_api_grpc::proto::golem::component::Principal>,
+        _: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         unimplemented!()
     }
@@ -690,6 +691,7 @@ impl WorkerClient for RecordingWorkerClient {
         auth: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
         _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
+        _: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let AgentTarget::Current(agent_id) = agent_id;
         self.agent_ids.lock().unwrap().push(agent_id.clone());

@@ -500,6 +500,7 @@ impl ReplayState {
                             &record,
                             StreamSessionRecord::ConsumerItemValue(_)
                                 | StreamSessionRecord::ConsumerTerminal(_)
+                                | StreamSessionRecord::ConsumerOutcome(_)
                         ) && !record.has_supported_format()
                         {
                             return Err(WorkerExecutorError::runtime(format!(
@@ -515,7 +516,8 @@ impl ReplayState {
                             StreamSessionRecord::ConsumerItemValue(record) => {
                                 Some(record.observation)
                             }
-                            StreamSessionRecord::ConsumerTerminal(record) => {
+                            StreamSessionRecord::ConsumerTerminal(record)
+                            | StreamSessionRecord::ConsumerOutcome(record) => {
                                 Some(record.observation)
                             }
                             _ => None,

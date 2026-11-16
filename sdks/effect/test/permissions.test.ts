@@ -904,7 +904,13 @@ const rpcLayer = (
     drop: () => {},
   }
   return Layer.mergeAll(
-    Layer.succeed(RpcClient, RpcClient.of({ connect: () => Effect.succeed(connection) })),
+    Layer.succeed(
+      RpcClient,
+      RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
+        connect: () => Effect.succeed(connection),
+      }),
+    ),
     Layer.succeed(
       AgentHostClient,
       AgentHostClient.of({

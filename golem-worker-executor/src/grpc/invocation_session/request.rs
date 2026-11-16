@@ -84,7 +84,11 @@ pub(crate) fn build_durable_streaming_request(
             "durable streaming invocation attempt ID must be a non-nil UUIDv4",
         ));
     }
-    require_expected_callee_fingerprint(request.expected_callee_fingerprint, callee_fingerprint)?;
+    require_expected_callee_fingerprint(
+        request.expected_callee_fingerprint,
+        callee_fingerprint,
+        &callee,
+    )?;
     let tool_input = match &invocation {
         AgentInvocation::ExternalTool { input, stdin, .. } => Some(
             ToolInvocationInput {
@@ -695,9 +699,12 @@ pub(super) fn effective_session_identity(
     Ok(effective_identity)
 }
 
+/// A different incarnation is `AgentNotFound`, the same as a caller with an expected fingerprint
+/// gets from admission.
 pub(super) fn require_expected_callee_fingerprint(
     expected: Option<golem_schema::proto::golem::common::Uuid>,
     actual: golem_common::model::AgentFingerprint,
+    agent_id: &AgentId,
 ) -> Result<(), WorkerExecutorError> {
     let expected = expected.ok_or_else(|| {
         WorkerExecutorError::invalid_request(
@@ -705,9 +712,7 @@ pub(super) fn require_expected_callee_fingerprint(
         )
     })?;
     if uuid::Uuid::from(expected) != actual.0 {
-        return Err(WorkerExecutorError::invalid_request(
-            "expected callee fingerprint does not match the active agent incarnation",
-        ));
+        return Err(WorkerExecutorError::worker_not_found(agent_id.clone()));
     }
     Ok(())
 }

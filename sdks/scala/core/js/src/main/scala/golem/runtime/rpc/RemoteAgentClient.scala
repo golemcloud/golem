@@ -22,7 +22,6 @@ import golem.config.ConfigOverride
 import golem.FutureInterop
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.JsSchemaValueTree
-import golem.runtime.rpc.host.AgentHostApi.RegisteredAgentType
 import golem.runtime.rpc.host.WasmRpcApi
 import golem.runtime.rpc.host.WasmRpcApi.WasmRpcClient
 
@@ -33,7 +32,6 @@ import scala.scalajs.js.JavaScriptException
 final case class RemoteAgentClient(
   agentTypeName: String,
   agentId: String,
-  metadata: RegisteredAgentType,
   rpc: RpcInvoker
 ) {
   def invokeAndAwait(

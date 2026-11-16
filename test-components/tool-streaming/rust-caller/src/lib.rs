@@ -828,6 +828,7 @@ fn matrix_typed_input(values: [u32; 3]) -> AgentStream<u32> {
             .write_all(values)
             .await
             .expect("write matrix typed input values");
+        writer.close().await.unwrap();
     });
     input
 }
@@ -1204,6 +1205,7 @@ fn gated_typed_input<T: IntoWire + FromWire + 'static>(items: [T; 3]) -> AgentSt
             .write_all([second, third])
             .await
             .expect("write remaining typed tool input items");
+        writer.close().await.unwrap();
     });
     input
 }
@@ -1436,6 +1438,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     golem_rust::await_promise(gate).await;
                 }
             }
+            writer.close().await.unwrap();
         });
         stream
     }
@@ -1471,6 +1474,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 _ => panic!("unknown producer mode"),
             }
             writer.write_one("completed".to_string()).await.unwrap();
+            writer.close().await.unwrap();
         });
         stream
     }
@@ -3457,7 +3461,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 label: first.label,
                 ordinal: first.ordinal,
             }];
-            while let Some(item) = source.next().await.expect("read direct typed output") {
+            while let Some(item) = source.next().await {
+                let item = item.expect("read direct typed output");
                 items.push(TypedOutputEvidence {
                     label: item.label,
                     ordinal: item.ordinal,
