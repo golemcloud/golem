@@ -261,12 +261,15 @@ only then (`canSettle` in `src/Page.ts`, `settlementFor` in `src/Settlement.ts`)
 the orders and the amount from the database, and opens a checkout of the private one-time product
 `POLAR_SETTLEMENT_PRODUCT_ID` with an ad-hoc fixed price of that amount, discount codes off, and
 the order IDs in the metadata `golem_settled_order_ids`. The amount is what the invoices charged
-for the paid overage, tax included, and the price includes tax (`tax_behavior` `inclusive`), so the
-person pays what the invoices asked. Each order tells how Polar taxed it: with tax on top, its net
-amount is the subtotal after the discount, and the app adds the tax of each metered item. With
-inclusive tax, the amount of an item already holds its tax. No tax setting of the organization or
-of a price changes this. One settlement pays the oldest orders that fit: at most 13, the most IDs
-that fit in a metadata value, and at most $999,999.99, the largest price of Polar.
+for the paid overage, after the discount and with the tax, and the price includes tax
+(`tax_behavior` `inclusive`), so the person pays what the invoices asked. Polar gives the discount
+and the tax only for a whole order, so the webhook shares them over the items
+(`src/OrderTotals.ts`): the discount over the items that are not a proration, by their amounts,
+and the total of the order over all items, by their amounts after the discount. The total holds
+the tax when Polar adds it on top, and the subtotal holds it when the tax is inclusive, so no tax
+setting of the organization or of a price changes the amount. One settlement pays the oldest orders
+that fit: at most 13, the most IDs that fit in a metadata value, and at most $999,999.99, the
+largest price of Polar.
 
 A paid order of the settlement product records a settlement for each order in its metadata that
 the account still owes, and the account moves to the free plan. It settles nothing when its

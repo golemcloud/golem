@@ -102,25 +102,35 @@ describe("Polar billing", () => {
   })
 
   /** A renewal order of `sub_1`: the price of the next period and, by default, paid overage. */
-  const order = (accountId: string, overrides: Record<string, unknown> = {}) => ({
-    id: "order_1",
-    status: "pending",
-    paid: false,
-    created_at: new Date().toISOString(),
-    modified_at: null,
-    billing_reason: "subscription_cycle",
-    customer_id: "cus_1",
-    customer: { id: "cus_1", external_id: accountId },
-    product_id: polarProductId,
-    subscription_id: "sub_1",
-    items: [
-      { product_price_id: fixedPriceId, amount: 2000 },
-      { product_price_id: meteredPriceId, amount: 345 }
-    ],
-    ...overrides
-  })
+  /** An order as Polar sends it: no discount and no tax unless `overrides` give them. */
+  const order = (accountId: string, overrides: Record<string, unknown> = {}) => {
+    const items = (overrides["items"] as ReadonlyArray<{ readonly amount: number }> | undefined) ?? [
+      { product_price_id: fixedPriceId, amount: 2000, tax_amount: 0, proration: false },
+      { product_price_id: meteredPriceId, amount: 345, tax_amount: 0, proration: false }
+    ]
+    const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
+    return {
+      id: "order_1",
+      status: "pending",
+      paid: false,
+      created_at: new Date().toISOString(),
+      modified_at: null,
+      billing_reason: "subscription_cycle",
+      customer_id: "cus_1",
+      customer: { id: "cus_1", external_id: accountId },
+      product_id: polarProductId,
+      subscription_id: "sub_1",
+      subtotal_amount: subtotal,
+      discount_amount: 0,
+      net_amount: subtotal,
+      tax_amount: 0,
+      total_amount: subtotal,
+      items,
+      ...overrides
+    }
+  }
 
-  const priceOnly = { items: [{ product_price_id: fixedPriceId, amount: 2000 }] }
+  const priceOnly = { items: [{ product_price_id: fixedPriceId, amount: 2000, tax_amount: 0, proration: false }] }
   const paidLater = { status: "paid", paid: true, modified_at: new Date(Date.now() + MINUTE).toISOString() }
 
   /** Delivers a webhook as Polar does: Standard Webhooks headers, signed with the secret. */
@@ -1367,7 +1377,10 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
     })
 
-    /** The last order of `sub_1` with tax: $20.00 for the price and $3.45 of paid overage. */
+    /**
+     * The last order of `sub_1` with tax: $20.00 for the price and $3.45 of paid overage. Polar
+     * computes the tax for the whole order, and the items have none.
+     */
     const taxedLastOrder = (taxOnTop: boolean) => ({
       ...lastOrder,
       subtotal_amount: 2345,
@@ -1375,11 +1388,7 @@ describe("Polar billing", () => {
       // Polar adds the tax on top, or takes it out of the subtotal.
       net_amount: taxOnTop ? 2345 : 2094,
       tax_amount: taxOnTop ? 281 : 251,
-      total_amount: taxOnTop ? 2626 : 2345,
-      items: [
-        { product_price_id: fixedPriceId, amount: 2000, tax_amount: taxOnTop ? 240 : 214 },
-        { product_price_id: meteredPriceId, amount: 345, tax_amount: taxOnTop ? 41 : 37 }
-      ]
+      total_amount: taxOnTop ? 2626 : 2345
     })
 
     it("charges the paid overage with the tax that the invoice added on top, and records a payment that includes the tax", async () => {
@@ -1411,6 +1420,28 @@ describe("Polar billing", () => {
       await deliver("order.created", order(accountId, taxedLastOrder(false)))
 
       expect(await page(jar)).toContain("Settle $3.45")
+    })
+
+    it("charges the paid overage of a discounted invoice after the discount, with the tax on what is left", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      // The last order after a cancellation bills only the paid overage: $10.00 with a coupon of
+      // 50%, and 12% tax on top of the $5.00 after the discount.
+      await deliver(
+        "order.created",
+        order(accountId, {
+          ...lastOrder,
+          items: [{ product_price_id: meteredPriceId, amount: 1000, tax_amount: 0, proration: false }],
+          subtotal_amount: 1000,
+          discount_amount: 500,
+          net_amount: 500,
+          tax_amount: 60,
+          total_amount: 560
+        })
+      )
+
+      expect(await page(jar)).toContain("Settle $5.60")
     })
 
     it("keeps the debt when Polar voids the unpaid order of a revoked subscription", async () => {

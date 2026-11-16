@@ -45,8 +45,8 @@ export interface Order {
   readonly createdAt: Date
   readonly modifiedAt: Date
   /**
-   * `amount` is before tax. `total` is what the invoice charges for the item: with its tax when
-   * Polar adds the tax on top, else the amount, which already holds the tax.
+   * `amount` is before the discount and the tax. `total` is what the invoice charges for the item,
+   * after the discount and with the tax (`OrderTotals.itemTotals`).
    */
   readonly items: ReadonlyArray<{
     readonly productPriceId: string | null
@@ -231,7 +231,8 @@ export const tables = `
     items JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   );
-  CREATE INDEX IF NOT EXISTS polar_orders_pending ON polar_orders (account_id, created_at) WHERE status = 'pending';
+  CREATE INDEX IF NOT EXISTS polar_orders_unpaid ON polar_orders (account_id, created_at)
+    WHERE status IN ('pending', 'void');
   CREATE TABLE IF NOT EXISTS overage_settlements (
     order_id TEXT PRIMARY KEY,
     account_id UUID NOT NULL,
@@ -446,8 +447,8 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
     const unpaidOrders = (accountId: string, productId: string | undefined) =>
       query<{ order_id: string; subscription_id: string; status: string; created_at: Date; metered_total: string }>(
         `SELECT o.order_id, o.subscription_id, o.status, o.created_at,
-                coalesce((SELECT sum(coalesce(i.total, i.amount))
-                            FROM jsonb_to_recordset(o.items) AS i("productPriceId" text, amount bigint, total bigint)
+                coalesce((SELECT sum(i.total)
+                            FROM jsonb_to_recordset(o.items) AS i("productPriceId" text, total bigint)
                            WHERE i."productPriceId" = ANY(s.metered_price_ids)), 0)::text AS metered_total
            FROM polar_orders o
            JOIN polar_subscriptions s ON s.subscription_id = o.subscription_id

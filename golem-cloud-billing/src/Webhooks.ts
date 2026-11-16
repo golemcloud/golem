@@ -1,6 +1,7 @@
 import { webhooks } from "@polar-sh/sdk/2026-10"
 import { Data, Effect, Redacted } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
+import { itemTotals } from "./OrderTotals.ts"
 import { SETTLED_ORDERS_METADATA_KEY } from "./Polar.ts"
 import type { RegistryError } from "./Registry.ts"
 import type { RegistryAccountsError } from "./RegistryAccounts.ts"
@@ -57,16 +58,13 @@ const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): S
   pastDueAt: data.past_due_at ? new Date(data.past_due_at) : undefined
 })
 
-/**
- * Whether Polar added the tax on top of the order: then its net amount is the subtotal after the
- * discount. With inclusive tax, Polar takes the tax out of the subtotal. The order tells this
- * itself, so the app does not depend on the tax behavior of the organization or of a price.
- */
-const taxOnTop = (data: OrderPayload["data"]): boolean =>
-  data.net_amount === data.subtotal_amount - (data.discount_amount ?? 0)
-
 const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["data"]): Order => {
-  const addsTax = taxOnTop(data)
+  const items = data.items ?? []
+  const totals = itemTotals({
+    items: items.map((item) => ({ amount: item.amount, proration: item.proration === true })),
+    discountAmount: data.discount_amount,
+    totalAmount: data.total_amount
+  })
   return {
     orderId: data.id,
     accountId,
@@ -74,10 +72,10 @@ const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["
     status: data.status,
     createdAt: new Date(data.created_at),
     modifiedAt: new Date(data.modified_at ?? data.created_at),
-    items: (data.items ?? []).map((item) => ({
+    items: items.map((item, index) => ({
       productPriceId: item.product_price_id,
       amount: item.amount,
-      total: item.amount + (addsTax ? (item.tax_amount ?? 0) : 0)
+      total: totals[index] ?? 0
     }))
   }
 }
@@ -169,8 +167,9 @@ export const makeHandler = Effect.gen(function* () {
     return subscriptions.withAccountLock(
       accountId,
       Effect.gen(function* () {
+        const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
         const unpaid = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
-        const owed = unpaid.filter((order) => order.meteredTotal > 0 && listed.includes(order.orderId))
+        const owed = Settlement.owedOrders(accountSubscriptions, unpaid).filter((order) => listed.includes(order.orderId))
         const notOwed: Array<string> = []
         for (const orderId of listed.filter((orderId) => !owed.some((order) => order.orderId === orderId))) {
           if ((yield* subscriptions.settlementOrderOf(orderId)) !== data.id) {
