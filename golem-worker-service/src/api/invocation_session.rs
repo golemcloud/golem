@@ -5327,7 +5327,7 @@ mod tests {
                 operation: resume.operation as i32,
                 cursors,
                 auth_ctx: None,
-                caller: None,
+                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
             })),
         }
     }
