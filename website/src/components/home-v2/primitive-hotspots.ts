@@ -12,28 +12,11 @@ export function setupPrimitiveHotspots() {
   const buttonFor = (topic: Topic) => buttons.find((b) => b.dataset.topic === topic)!;
   const cardFor = (topic: Topic) => cards.find((c) => c.dataset.primitiveCard === topic)!;
 
-  function placeButtons() {
-    const anchors = [
-      { topic: "actor" as const, element: root.querySelector<HTMLElement>(".actor-id")! },
-      {
-        topic: "invocation" as const,
-        element: root.querySelector<HTMLElement>('[data-invocation="2"]')!,
-      },
-    ];
-    for (const { topic, element } of anchors) {
-      const button = buttonFor(topic);
-      const figure = button.closest("figure")!.getBoundingClientRect();
-      const target = element.getBoundingClientRect();
-      button.style.left = `${target.right - figure.left + (topic === "actor" ? 22 : -14)}px`;
-      button.style.top = `${target.top - figure.top + (topic === "actor" ? target.height / 2 : 12)}px`;
-    }
-  }
-
   function placeCard() {
     if (!active) return;
     const card = cardFor(active);
     const button = buttonFor(active);
-    const anchor = button.getBoundingClientRect();
+    const anchor = button.querySelector<HTMLElement>(".hotspot-icon")!.getBoundingClientRect();
     if (anchor.bottom < 0 || anchor.top > innerHeight) {
       close(false);
       return;
@@ -172,9 +155,19 @@ export function setupPrimitiveHotspots() {
     }
   });
   const refresh = () => {
-    placeButtons();
     placeCard();
   };
+  const introduction = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting || entry.intersectionRatio < 0.8) continue;
+        entry.target.classList.add("is-introduced");
+        introduction.unobserve(entry.target);
+      }
+    },
+    { threshold: 0.8 }
+  );
+  buttons.forEach((button) => introduction.observe(button));
   new ResizeObserver(refresh).observe(root);
   window.addEventListener("resize", refresh);
   window.addEventListener("scroll", placeCard, { capture: true, passive: true });

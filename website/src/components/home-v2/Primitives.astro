@@ -23,7 +23,6 @@ const topics = [
             role="group"
             aria-label="Three calls to the same actor ID reach one actor inside its durable, permissioned VM. The actor retains private state across calls."
           >
-            <span class="diagram-hint">Hover or tap + to explore</span>
             <div class="actor-flow" aria-hidden="true">
               <div class="actor-calls">
                 {calls.map((n) => (
@@ -44,17 +43,22 @@ const topics = [
                 </div>
               </div>
             </div>
-            <button
-              class="diagram-hotspot"
-              data-topic="actor"
-              type="button"
-              aria-label="Explore actor lifetime and calls"
-              aria-haspopup="dialog"
-              aria-expanded="false"
-              aria-controls="primitive-info-actor"
-            >
-              <span aria-hidden="true">+</span>
-            </button>
+            <div class="annotation-footer actor-annotation">
+              <button
+                class="diagram-hotspot"
+                data-topic="actor"
+                type="button"
+                aria-label="Explore actor lifetime and calls"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="primitive-info-actor"
+              >
+                <span class="hotspot-label">Lifetime &amp; calls</span>
+                <span class="hotspot-icon" aria-hidden="true">
+                  +
+                </span>
+              </button>
+            </div>
           </figure>
         ) : (
           <figure
@@ -66,6 +70,7 @@ const topics = [
               <span>
                 Function <i>f</i>
               </span>
+              <span class="inline-annotation-wire" aria-hidden="true" />
               <button
                 class="diagram-hotspot"
                 data-topic="function"
@@ -75,7 +80,10 @@ const topics = [
                 aria-expanded="false"
                 aria-controls="primitive-info-function"
               >
-                <span aria-hidden="true">+</span>
+                <span class="hotspot-label">Identity &amp; middleware</span>
+                <span class="hotspot-icon" aria-hidden="true">
+                  +
+                </span>
               </button>
             </div>
             <div class="function-flow" aria-hidden="true">
@@ -92,17 +100,22 @@ const topics = [
                 </div>
               ))}
             </div>
-            <button
-              class="diagram-hotspot"
-              data-topic="invocation"
-              type="button"
-              aria-label="Explore function durability and state"
-              aria-haspopup="dialog"
-              aria-expanded="false"
-              aria-controls="primitive-info-invocation"
-            >
-              <span aria-hidden="true">+</span>
-            </button>
+            <div class="annotation-footer function-annotation">
+              <button
+                class="diagram-hotspot"
+                data-topic="invocation"
+                type="button"
+                aria-label="Explore function durability and state"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="primitive-info-invocation"
+              >
+                <span class="hotspot-label">Durability &amp; state</span>
+                <span class="hotspot-icon" aria-hidden="true">
+                  +
+                </span>
+              </button>
+            </div>
           </figure>
         )}
         <div class="primitive-examples">
@@ -189,21 +202,14 @@ const topics = [
     font-size: 12px;
     color: #43563c;
   }
-  .diagram-hint {
-    position: absolute;
-    top: 14px;
-    left: 0;
-    color: #59664f;
-    font-size: 10px;
-  }
   .function-label {
     position: absolute;
     top: 0;
-    left: 74px;
+    left: 0;
     display: flex;
     align-items: center;
     height: 44px;
-    gap: 2px;
+    gap: 6px;
     color: #344b31;
     font-size: 12px;
   }
@@ -212,39 +218,116 @@ const topics = [
     font-size: 18px;
   }
   .diagram-hotspot {
-    position: absolute;
     z-index: 1;
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    flex-shrink: 0;
     padding: 0;
     border: 0;
     background: transparent;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
-    transform: translate(-50%, -50%);
+    color: #805014;
+    font:
+      500 13px/1.5 Inter,
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
+    white-space: nowrap;
   }
-  .function-label .diagram-hotspot {
-    position: relative;
-    transform: none;
+  .hotspot-label {
+    text-decoration: underline;
+    text-decoration-color: #b78645;
+    text-underline-offset: 4px;
   }
-  .diagram-hotspot > span {
+  .diagram-hotspot .hotspot-icon {
     display: grid;
     place-items: center;
-    width: 20px;
-    height: 20px;
-    border: 1px solid #617a56;
+    width: 24px;
+    height: 24px;
+    border: 1px solid #ae7631;
     border-radius: 50%;
-    background: #f7f7f0;
-    color: #344b31;
-    font: 15px/1 var(--font-mono);
+    background: #ffce8a;
+    color: #49300f;
+    font: 16px/1 var(--font-mono);
+    transition:
+      transform 0.16s,
+      box-shadow 0.16s;
   }
-  .diagram-hotspot:hover > span,
-  .diagram-hotspot[aria-expanded="true"] > span {
+  .diagram-hotspot:hover .hotspot-icon,
+  .diagram-hotspot:focus-visible .hotspot-icon,
+  .diagram-hotspot[aria-expanded="true"] .hotspot-icon {
     border-color: #8d5410;
     background: #ffce8a;
     color: #49300f;
+    transform: scale(1.08);
+    box-shadow: 0 0 0 4px #ffce8a33;
+  }
+  .annotation-footer {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    padding-top: 18px;
+    min-height: 62px;
+  }
+  .actor-annotation {
+    margin-left: 100px;
+  }
+  .function-annotation {
+    margin-left: 74px;
+    margin-right: 92px;
+  }
+  .annotation-footer::before,
+  .inline-annotation-wire::before {
+    content: "";
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #ae7631;
+  }
+  .annotation-footer::before {
+    top: -2px;
+    left: calc(50% - 2px);
+  }
+  .annotation-footer::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 0;
+    height: 18px;
+    border-left: 1px solid #b78645;
+  }
+  .inline-annotation-wire {
+    position: relative;
+    width: 16px;
+    height: 1px;
+    background: #b78645;
+    flex-shrink: 0;
+  }
+  .inline-annotation-wire::before {
+    top: -1.5px;
+    left: -2px;
+  }
+  .diagram-hotspot.is-introduced .hotspot-icon {
+    animation: callout-intro 0.9s ease-out 1;
+  }
+  @keyframes callout-intro {
+    0% {
+      transform: scale(0.92);
+      box-shadow: 0 0 0 0 #d699424d;
+    }
+    45% {
+      transform: scale(1.08);
+      box-shadow: 0 0 0 6px #d6994229;
+    }
+    100% {
+      transform: scale(1);
+      box-shadow: 0 0 0 11px #d6994200;
+    }
   }
   .primitive-comparison[data-active-topic="actor"] .actor-id,
   .primitive-comparison[data-active-topic="function"] .function-enclosure .primitive-symbol {
@@ -433,7 +516,7 @@ const topics = [
     font-size: 34px;
   }
   .primitive-examples {
-    margin-top: 24px;
+    margin-top: 16px;
   }
   .primitive-examples > p {
     margin: 0 0 9px;
@@ -441,9 +524,8 @@ const topics = [
     color: #59664f;
   }
   .primitive-examples ul {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    display: flex;
+    gap: 12px;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -451,18 +533,21 @@ const topics = [
   .primitive-examples li {
     display: flex;
     align-items: center;
-    justify-content: center;
-    padding: 11px 8px;
-    border: 1px solid #d0dac7;
-    border-radius: 3px;
+    padding: 0;
     color: #344b31;
     font-size: 13px;
     line-height: 1.5;
     white-space: nowrap;
   }
+  .primitive-examples li + li::before {
+    content: "·";
+    margin-right: 12px;
+    color: #7d8b74;
+  }
   @media (max-width: 1100px) {
-    .function-label {
-      left: 60px;
+    .function-annotation {
+      margin-left: 60px;
+      margin-right: 80px;
     }
     .primitive-comparison {
       gap: 32px;
@@ -472,9 +557,6 @@ const topics = [
     }
     .primitive-title h3 {
       font-size: 25px;
-    }
-    .primitive-examples li {
-      padding-inline: 4px;
     }
     .function-call {
       grid-template-columns: 40px 20px minmax(0, 1fr) 20px 60px;
@@ -493,6 +575,12 @@ const topics = [
     }
   }
   @media (max-width: 600px) {
+    .actor-annotation {
+      margin-left: 80px;
+    }
+    .diagram-hotspot {
+      font-size: 12px;
+    }
     .primitive-popover {
       left: 16px;
       right: 16px;
@@ -506,11 +594,7 @@ const topics = [
     .primitive-leader {
       display: none;
     }
-    .primitive-examples ul {
-      gap: 4px;
-    }
     .primitive-examples li {
-      padding: 10px 2px;
       font-size: 12px;
       letter-spacing: -0.01em;
     }
@@ -518,20 +602,34 @@ const topics = [
       grid-template-columns: 58px 22px minmax(0, 1fr);
     }
   }
+  @media (prefers-reduced-motion: reduce) {
+    .primitive-comparison .diagram-hotspot .hotspot-icon {
+      animation: none;
+      transition: none;
+      transform: none;
+    }
+  }
   @media (forced-colors: active) {
     .diagram-hotspot {
       forced-color-adjust: none;
+      color: LinkText;
     }
-    .diagram-hotspot > span {
+    .hotspot-label {
+      text-decoration-color: LinkText;
+    }
+    .primitive-comparison .diagram-hotspot .hotspot-icon {
+      animation: none;
+    }
+    .diagram-hotspot .hotspot-icon {
       background: Canvas;
       color: CanvasText;
     }
-    .diagram-hotspot[aria-expanded="true"] > span {
+    .diagram-hotspot[aria-expanded="true"] .hotspot-icon {
       background: Highlight;
       color: HighlightText;
       border-color: Highlight;
     }
-    .diagram-hotspot > span,
+    .diagram-hotspot .hotspot-icon,
     .primitive-popover {
       border-color: CanvasText;
     }
