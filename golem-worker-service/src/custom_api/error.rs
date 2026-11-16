@@ -79,7 +79,7 @@ pub enum RequestHandlerError {
     RawMessageTooLarge(String),
     #[error("Raw HTTP handler failed")]
     RawInternal,
-    #[error("Raw HTTP handler timed out")]
+    #[error("Live file response timed out")]
     RawDeadline,
 }
 

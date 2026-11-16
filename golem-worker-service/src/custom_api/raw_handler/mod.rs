@@ -94,6 +94,7 @@ impl RawHandler {
             request.underlying.take_body(),
             &mut upload,
             upload_done.clone(),
+            self.limits.request_body_idle_timeout,
         )
         .await?;
         let (status, headers, output_id) = parse_response(response_value)?;
@@ -204,11 +205,12 @@ impl RawHandler {
     }
 }
 
-async fn receive_response_head(
+pub(super) async fn receive_response_head(
     session: &mut HttpSession,
     body: poem::Body,
     upload: &mut Option<AbortOnDropHandle<()>>,
     upload_done: Arc<AtomicBool>,
+    idle_timeout: std::time::Duration,
 ) -> Result<ProtoValue, RequestHandlerError> {
     let mut body = Some(body);
     loop {
@@ -225,6 +227,7 @@ async fn receive_response_head(
                         session.input.clone(),
                         session.cancellation.clone(),
                         upload_done.clone(),
+                        idle_timeout,
                     ));
                 }
             }
@@ -403,15 +406,38 @@ fn decode_bytes(value: &ProtoValue) -> Result<Vec<u8>, RequestHandlerError> {
     Vec::<u8>::from_value(&value).map_err(|_| RequestHandlerError::RawBadGateway)
 }
 
-fn start_upload(
+pub(super) fn start_upload(
     body: poem::Body,
     input: super::http_session::HttpSessionInput,
     cancellation: super::http_session::HttpSessionCancellation,
     done: Arc<AtomicBool>,
+    idle_timeout: std::time::Duration,
 ) -> AbortOnDropHandle<()> {
     AbortOnDropHandle::new(tokio::spawn(async move {
         let mut stream = body.into_bytes_stream();
-        while let Some(chunk) = stream.next().await {
+        loop {
+            // Empty chunks are discarded and do not reset the idle interval. Only time spent
+            // waiting for body bytes counts, not time waiting for the session to accept a chunk.
+            let next = async {
+                loop {
+                    match stream.next().await {
+                        Some(Ok(chunk)) if chunk.is_empty() => continue,
+                        chunk => return chunk,
+                    }
+                }
+            };
+            let chunk = match tokio::time::timeout(idle_timeout, next).await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => {
+                    let _ = input.finish().await;
+                    done.store(true, Ordering::Release);
+                    return;
+                }
+                Err(_) => {
+                    let _ = input.fail_idle_timeout().await;
+                    return;
+                }
+            };
             let Ok(chunk) = chunk else {
                 cancellation.cancel();
                 return;
@@ -420,8 +446,6 @@ fn start_upload(
                 return;
             }
         }
-        let _ = input.finish().await;
-        done.store(true, Ordering::Release);
     }))
 }
 
@@ -526,7 +550,6 @@ fn gate_item(state: &mut OutputState, output: GateOutput) -> Option<Result<Bytes
 
 fn map_session_error(error: super::http_session::HttpSessionError) -> RequestHandlerError {
     match error {
-        super::http_session::HttpSessionError::Deadline => RequestHandlerError::RawDeadline,
         super::http_session::HttpSessionError::MessageTooLarge(error) => {
             RequestHandlerError::RawMessageTooLarge(error)
         }

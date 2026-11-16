@@ -412,7 +412,6 @@ fn limits() -> HttpSessionLimits {
     HttpSessionLimits {
         retry_delay: Duration::ZERO,
         retry_deadline: Duration::from_secs(2),
-        exchange_timeout: Duration::from_secs(5),
         cleanup_timeout: Duration::from_millis(100),
         ..Default::default()
     }
@@ -1406,6 +1405,92 @@ async fn terminal_input_high_water_releases_retention_and_replays_nothing() {
 
 #[test]
 #[test_timeout("10s")]
+async fn request_body_idle_failure_replays_in_order_until_its_terminal_is_persisted() {
+    for high_water in [None, Some(0), Some(1)] {
+        let mut h = harness(2);
+        let mut session = h.start_session();
+        let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+            panic!()
+        };
+        send(&h.response_txs[0], accepted(1, None)).await;
+        let _ = event(&mut session).await;
+        session
+            .input
+            .send_chunk(b"asymmetric".to_vec())
+            .await
+            .unwrap();
+        let invocation_request::Request::InputItem(original) = input(tail.next().await.unwrap())
+        else {
+            panic!()
+        };
+        session.input.fail_idle_timeout().await.unwrap();
+        let invocation_request::Request::StreamEnd(original_end) =
+            input(tail.next().await.unwrap())
+        else {
+            panic!()
+        };
+        drop(h.response_txs.remove(0));
+        let Call::Resume(resume, mut tail) = call(&mut h.calls).await else {
+            panic!()
+        };
+        let mut decision = resumed_accepted(&resume, high_water);
+        if high_water == Some(1) {
+            let Some(invocation_response::Response::Accepted(accepted)) = &mut decision.response
+            else {
+                panic!()
+            };
+            accepted.stream_mappings[0]
+                .high_water
+                .as_mut()
+                .unwrap()
+                .terminal = true;
+        }
+        send(&h.response_txs[0], decision).await;
+        if high_water.is_none() {
+            let invocation_request::Request::InputItem(item) = input(tail.next().await.unwrap())
+            else {
+                panic!("lost buffered bytes")
+            };
+            assert_eq!(item.payload, original.payload);
+            assert_eq!(item.sequence, 0);
+            assert_eq!(item.epoch, 2);
+            send(&h.response_txs[0], ack(0, 2)).await;
+        }
+        if high_water != Some(1) {
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!("lost idle terminal")
+            };
+            assert_eq!(end.outcome, original_end.outcome);
+            assert_eq!(end.authored_by(), StreamTerminalAuthor::Host);
+            assert_eq!(end.producer_sequence, 1);
+            assert_eq!(end.epoch, 2);
+            send(&h.response_txs[0], ack(1, 2)).await;
+        }
+        send(&h.response_txs[0], scalar_result()).await;
+        let actual = event(&mut session).await;
+        if let HttpSessionEvent::Error(error) = &actual {
+            panic!("high_water={high_water:?}: {error:?}");
+        }
+        assert!(
+            matches!(actual, HttpSessionEvent::Result(_)),
+            "high_water={high_water:?}: {actual:?}"
+        );
+        send(&h.response_txs[0], finished()).await;
+        assert!(matches!(
+            event(&mut session).await,
+            HttpSessionEvent::Finished(_)
+        ));
+        assert!(
+            tail.next().await.is_none(),
+            "persisted frames were replayed"
+        );
+        assert!(h.cleanups.try_recv().is_err());
+    }
+}
+
+#[test]
+#[test_timeout("10s")]
 async fn disposal_control_bypasses_a_full_output_event_queue() {
     let mut h = harness(1);
     let mut l = limits();
@@ -2067,6 +2152,330 @@ async fn lifecycle_input_eof_is_not_invocation_cancellation() {
 
 #[test]
 #[test_timeout("10s")]
+fn request_body_idle_timeout_fails_only_the_input_stream() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            for send_prefix in [false, true] {
+                let mut h = harness(1);
+                let l = HttpSessionLimits {
+                    retained_input_bytes: 136,
+                    retained_input_frames: 1,
+                    ..limits()
+                };
+                let mut session =
+                    HttpSession::start_with_transport(start(), h.transport.clone(), l).unwrap();
+                let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                    panic!()
+                };
+                send(&h.response_txs[0], accepted(1, None)).await;
+                let _ = event(&mut session).await;
+                let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
+                let done = Arc::new(AtomicBool::new(false));
+                let upload = crate::custom_api::raw_handler::start_upload(
+                    poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                    session.input.clone(),
+                    session.cancellation.clone(),
+                    done.clone(),
+                    Duration::from_secs(1),
+                );
+                if send_prefix {
+                    tx.send(Ok(bytes::Bytes::from_static(b"a"))).await.unwrap();
+                    assert!(matches!(
+                        input(tail.next().await.unwrap()),
+                        invocation_request::Request::InputItem(_)
+                    ));
+                    send(&h.response_txs[0], ack(0, 1)).await;
+                }
+                tokio::task::yield_now().await;
+                tokio::time::advance(Duration::from_millis(800)).await;
+                // An empty transport chunk does not buy the client another idle interval.
+                tx.send(Ok(bytes::Bytes::new())).await.unwrap();
+                tokio::task::yield_now().await;
+                tokio::time::advance(Duration::from_millis(400)).await;
+                let expiry = tokio::time::Instant::now();
+                upload.await.unwrap();
+                assert_eq!(
+                    tokio::time::Instant::now(),
+                    expiry,
+                    "empty chunks extended the idle interval"
+                );
+                let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+                else {
+                    panic!("missing input failure")
+                };
+                assert_eq!(end.direction(), StreamDirection::Input);
+                assert_eq!(end.authored_by(), StreamTerminalAuthor::Host);
+                assert_eq!(end.producer_sequence, u64::from(send_prefix));
+                assert_eq!(
+                    StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                    StreamTerminal::Failed(StreamError::Interrupted(
+                        "HTTP request body idle timeout".into()
+                    ))
+                );
+                send(&h.response_txs[0], ack(u64::from(send_prefix), 1)).await;
+                assert!(!done.load(Ordering::Acquire));
+                assert!(!session.cancellation.token.is_cancelled());
+                assert!(h.cleanups.try_recv().is_err());
+                send(&h.response_txs[0], scalar_result()).await;
+                assert!(matches!(
+                    event(&mut session).await,
+                    HttpSessionEvent::Result(_)
+                ));
+                send(&h.response_txs[0], finished()).await;
+                assert!(matches!(
+                    event(&mut session).await,
+                    HttpSessionEvent::Finished(_)
+                ));
+                assert!(
+                    tail.next().await.is_none(),
+                    "idle expiry must not send further frames"
+                );
+                assert!(h.cleanups.try_recv().is_err());
+            }
+        });
+}
+
+#[test]
+#[test_timeout("10s")]
+fn guest_input_disposal_stops_the_upload_without_a_late_idle_failure() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut h = harness(1);
+            let mut session = h.start_session();
+            let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                panic!()
+            };
+            send(&h.response_txs[0], accepted(1, None)).await;
+            send(
+                &h.response_txs[0],
+                response(invocation_response::Response::StreamEnd(StreamEnd {
+                    transport_stream_id: INPUT_STREAM_ID,
+                    producer_sequence: 0,
+                    direction: StreamDirection::Input as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        StreamTerminal::ConsumerCancelled { details: None }
+                            .try_into()
+                            .unwrap(),
+                    ),
+                    durable_stream_id: Some(uuid(101)),
+                    durable_offset: offset(0),
+                    epoch: 1,
+                })),
+            )
+            .await;
+            send(&h.response_txs[0], scalar_result()).await;
+            let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(1);
+            let done = Arc::new(AtomicBool::new(false));
+            let mut upload = None;
+            crate::custom_api::raw_handler::receive_response_head(
+                &mut session,
+                poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                &mut upload,
+                done.clone(),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+            assert!(upload.is_none());
+            assert!(
+                tx.is_closed(),
+                "a stopped upload kept polling the request body"
+            );
+            tokio::time::advance(Duration::from_secs(10)).await;
+            send(&h.response_txs[0], finished()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Finished(_)
+            ));
+            assert!(
+                tail.next().await.is_none(),
+                "a stopped upload sent a late input terminal"
+            );
+            assert!(!done.load(Ordering::Acquire));
+            assert!(!session.cancellation.token.is_cancelled());
+            assert!(h.cleanups.try_recv().is_err());
+        });
+}
+
+#[test]
+#[test_timeout("10s")]
+fn steady_upload_and_long_response_are_not_bounded_by_session_duration() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut h = harness(1);
+            let mut session = h.start_session();
+            let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                panic!()
+            };
+            send(&h.response_txs[0], accepted(1, None)).await;
+            let _ = event(&mut session).await;
+            send(&h.response_txs[0], stream_result()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Result(_)
+            ));
+            let mut response_bytes = Vec::new();
+            let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(1);
+            let done = Arc::new(AtomicBool::new(false));
+            let upload = crate::custom_api::raw_handler::start_upload(
+                poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                session.input.clone(),
+                session.cancellation.clone(),
+                done.clone(),
+                Duration::from_secs(60),
+            );
+            for sequence in 0..7 {
+                tokio::time::advance(Duration::from_secs(48)).await;
+                tx.send(Ok(bytes::Bytes::from(vec![sequence as u8])))
+                    .await
+                    .unwrap();
+                let invocation_request::Request::InputItem(item) =
+                    input(tail.next().await.unwrap())
+                else {
+                    panic!("steady upload failed")
+                };
+                assert_eq!(item.sequence, sequence);
+                let input_stream_item::Payload::Value(value) = item.payload.unwrap() else {
+                    panic!()
+                };
+                assert_eq!(
+                    value,
+                    SchemaValue {
+                        value: Some(schema_value::Value::ListValue(ListValue {
+                            elements: vec![SchemaValue {
+                                value: Some(schema_value::Value::U8Value(sequence as u32)),
+                            }]
+                        })),
+                    }
+                );
+                send(&h.response_txs[0], ack(sequence, 1)).await;
+                send(
+                    &h.response_txs[0],
+                    output_bytes(sequence, &[sequence as u8], 1),
+                )
+                .await;
+                response_bytes.extend(event_bytes(event(&mut session).await).unwrap());
+            }
+            drop(tx);
+            upload.await.unwrap();
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!("missing EOF")
+            };
+            assert_eq!(end.producer_sequence, 7);
+            assert_eq!(
+                StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                StreamTerminal::Finished
+            );
+            send(&h.response_txs[0], ack(7, 1)).await;
+            assert!(done.load(Ordering::Acquire));
+            tokio::time::advance(Duration::from_secs(360)).await;
+            send(&h.response_txs[0], output_bytes(7, b"last", 1)).await;
+            response_bytes.extend(event_bytes(event(&mut session).await).unwrap());
+            assert_eq!(response_bytes, b"\0\x01\x02\x03\x04\x05\x06last");
+            send(&h.response_txs[0], output_end(8, 1)).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::StreamEnd(_)
+            ));
+            send(&h.response_txs[0], finished()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Finished(_)
+            ));
+            assert!(tail.next().await.is_none(), "late input terminal after EOF");
+            assert!(!session.cancellation.token.is_cancelled());
+            assert!(h.cleanups.try_recv().is_err());
+        });
+}
+
+#[test]
+#[test_timeout("10s")]
+fn invocation_backpressure_is_not_request_body_idle_time() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut h = harness(1);
+            let mut session = HttpSession::start_with_transport(
+                start(),
+                h.transport.clone(),
+                HttpSessionLimits {
+                    retained_input_bytes: 136,
+                    retained_input_frames: 1,
+                    ..limits()
+                },
+            )
+            .unwrap();
+            let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                panic!()
+            };
+            send(&h.response_txs[0], accepted(1, None)).await;
+            let _ = event(&mut session).await;
+            let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
+            let done = Arc::new(AtomicBool::new(false));
+            let upload = crate::custom_api::raw_handler::start_upload(
+                poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                session.input.clone(),
+                session.cancellation.clone(),
+                done.clone(),
+                Duration::from_secs(1),
+            );
+            tx.send(Ok(bytes::Bytes::from_static(b"ab"))).await.unwrap();
+            assert!(matches!(
+                input(tail.next().await.unwrap()),
+                invocation_request::Request::InputItem(_)
+            ));
+            tokio::time::advance(Duration::from_secs(3)).await;
+            send(&h.response_txs[0], ack(0, 1)).await;
+            let invocation_request::Request::InputItem(item) = input(tail.next().await.unwrap())
+            else {
+                panic!("backpressure expired the upload")
+            };
+            assert_eq!(item.sequence, 1);
+            send(&h.response_txs[0], ack(1, 1)).await;
+            drop(tx);
+            upload.await.unwrap();
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!("missing EOF")
+            };
+            assert_eq!(
+                StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                StreamTerminal::Finished
+            );
+            send(&h.response_txs[0], ack(2, 1)).await;
+            assert!(done.load(Ordering::Acquire));
+            send(&h.response_txs[0], scalar_result()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Result(_)
+            ));
+            send(&h.response_txs[0], finished()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Finished(_)
+            ));
+        });
+}
+
+#[test]
+#[test_timeout("10s")]
 async fn lifecycle_disconnect_active_compute_cancels_once_and_releases_blocked_input() {
     let case = corpus_case("lifecycle-disconnect-active-compute");
     let mut h = harness(1);
@@ -2410,4 +2819,91 @@ async fn lifecycle_serving_owner_drop_releases_resources_without_second_start() 
             .await
             .is_err()
     );
+}
+
+#[test]
+#[test_timeout("10s")]
+fn idle_failure_waits_for_input_credits_without_stopping_output() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut h = harness(1);
+            let mut session = HttpSession::start_with_transport(
+                start(),
+                h.transport.clone(),
+                HttpSessionLimits {
+                    retained_input_bytes: 136,
+                    retained_input_frames: 1,
+                    ..limits()
+                },
+            )
+            .unwrap();
+            let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                panic!()
+            };
+            send(&h.response_txs[0], accepted(1, None)).await;
+            let _ = event(&mut session).await;
+            let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
+            let done = Arc::new(AtomicBool::new(false));
+            let upload = crate::custom_api::raw_handler::start_upload(
+                poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                session.input.clone(),
+                session.cancellation.clone(),
+                done.clone(),
+                Duration::from_secs(1),
+            );
+            tx.send(Ok(bytes::Bytes::from_static(b"a"))).await.unwrap();
+            assert!(matches!(
+                input(tail.next().await.unwrap()),
+                invocation_request::Request::InputItem(_)
+            ));
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(2)).await;
+            tokio::task::yield_now().await;
+            assert!(
+                timeout(Duration::from_millis(30), tail.next())
+                    .await
+                    .is_err(),
+                "terminal must retain its own input credit"
+            );
+            send(&h.response_txs[0], stream_result()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Result(_)
+            ));
+            send(&h.response_txs[0], output_bytes(0, b"before", 1)).await;
+            assert_eq!(event_bytes(event(&mut session).await).unwrap(), b"before");
+            assert!(!session.cancellation.token.is_cancelled());
+            send(&h.response_txs[0], ack(0, 1)).await;
+            upload.await.unwrap();
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!()
+            };
+            assert_eq!(end.producer_sequence, 1);
+            assert_eq!(end.authored_by(), StreamTerminalAuthor::Host);
+            assert!(matches!(
+                StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                StreamTerminal::Failed(StreamError::Interrupted(_))
+            ));
+            send(&h.response_txs[0], ack(1, 1)).await;
+            send(&h.response_txs[0], output_bytes(1, b"after", 1)).await;
+            assert_eq!(event_bytes(event(&mut session).await).unwrap(), b"after");
+            send(&h.response_txs[0], output_end(2, 1)).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::StreamEnd(_)
+            ));
+            send(&h.response_txs[0], finished()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Finished(_)
+            ));
+            assert!(!done.load(Ordering::Acquire));
+            assert!(h.cleanups.try_recv().is_err());
+            drop(tx);
+        });
 }

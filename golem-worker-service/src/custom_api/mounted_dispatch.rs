@@ -45,7 +45,7 @@ impl MountedDispatch {
         Self {
             worker_service,
             initial_files,
-            file_timeout: limits.exchange_timeout,
+            file_timeout: limits.file_lookup_timeout,
         }
     }
 

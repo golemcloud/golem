@@ -160,7 +160,7 @@ does not automatically expand after an agent update.
 Live files use `Cache-Control: no-store` and emit neither ETag nor Last-Modified.
 Golem does not hash mutable files into strong validators. See the
 [timeout configuration](/next/operate/http-gateway#setting-timeouts-and-resource-budgets) for the
-serving deadline and current resource-limit behavior.
+live-file deadline and current resource-limit behavior.
 
 Mounts can configure additional file response headers for both live and static file
 bindings. See the SDK examples in [Serving live agent files](/next/invoke/making-custom-apis/http-routers#serving-live-agent-files).
@@ -233,7 +233,9 @@ Both upload and download apply backpressure: a slow consumer limits how far its
 producer can advance, with bounded transport buffering rather than whole-body buffering.
 Do not collect a body simply to forward it or calculate its length. A handler can
 return a response before upload EOF. Dropping unused input stops its delivery without
-cancelling the response. The host bounds abandoned uploads rather than waiting forever.
+cancelling the response. A body that delivers no bytes for
+[`request_body_idle_timeout`](/next/operate/http-gateway#setting-timeouts-and-resource-budgets)
+fails with an `Interrupted` stream error, which the handler can catch.
 
 Only final statuses 200–599 are accepted. HEAD and statuses 204/205/304 dispose the
 response producer without polling body items. Content-Length is removed for 204,
@@ -294,7 +296,7 @@ mount protection does not make the API description private.
 | Initialization, host, or storage failure (including missing indexed blob) | 500 |
 | CONNECT, TRACE, upgrade request, unsupported transfer coding | 501 |
 | Guest trap, invalid response head, stream/session failure, failed recovery | 502 |
-| Serving exchange deadline | 504 |
+| Live-file deadline (`file_lookup_timeout`) | 504 |
 
 After commitment, a failure aborts/resets the stream (or closes HTTP/1); it cannot
 send a second status, append an error JSON body, or manufacture successful EOF.
