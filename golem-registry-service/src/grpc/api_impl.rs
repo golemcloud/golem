@@ -19,7 +19,9 @@ use crate::services::auth::AuthService;
 use crate::services::card::{CardError, CardService};
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
-use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
+use crate::services::deployment::{
+    DeployedMcpService, DeployedRoutesService, DeploymentError, DeploymentService,
+};
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::mcp_import::McpImportResolver;
 use crate::services::mcp_oauth::McpOAuthService;
@@ -58,6 +60,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeByNamesRequest,
     ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
+    ResolveTypeIdRequest, ResolveTypeIdResponse, ResolveTypeIdSuccessResponse, ResolvedTypeId,
     RevokeCardRequest, RevokeCardResponse, RevokeCardSuccessResponse, RuntimeCardData,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, authenticate_token_response, batch_get_cards_response,
@@ -69,8 +72,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
     get_resource_limits_response, get_tool_deployment_state_response, registry_service_error,
-    resolve_agent_type_by_names_response, resolve_component_response, revoke_card_response,
-    update_worker_connection_limit_response,
+    resolve_agent_type_by_names_response, resolve_component_response, resolve_type_id_response,
+    revoke_card_response, update_worker_connection_limit_response,
 };
 use golem_api_grpc::proto::golem::registry::v1::{
     GetMcpRuntimeCredentialRequest, GetMcpRuntimeCredentialResponse, McpRuntimeBasicCredential,
@@ -95,6 +98,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
+use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_service_base::model::auth::AuthCtx;
@@ -836,6 +840,46 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn resolve_type_id_internal(
+        &self,
+        request: ResolveTypeIdRequest,
+    ) -> Result<ResolveTypeIdSuccessResponse, GrpcApiError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let type_id = TypeId::try_from(request.type_id)?;
+
+        let Some((kind, name)) = self
+            .deployment_service
+            .resolve_type_id(environment_id, type_id)
+            .await?
+        else {
+            return Ok(ResolveTypeIdSuccessResponse { resolved: None });
+        };
+
+        let implemented_by = match kind {
+            TypeIdKind::AgentType => match self
+                .deployment_service
+                .get_deployed_agent_type(environment_id, &AgentTypeName(name.clone()))
+                .await
+            {
+                Ok(deployed) => Some(deployed.implemented_by.into()),
+                Err(DeploymentError::AgentTypeNotFound(_)) => None,
+                Err(error) => return Err(error.into()),
+            },
+            TypeIdKind::Tool => None,
+        };
+
+        Ok(ResolveTypeIdSuccessResponse {
+            resolved: Some(ResolvedTypeId {
+                kind: golem_api_grpc::proto::golem::registry::v1::TypeIdKind::from(kind).into(),
+                name,
+                implemented_by,
+            }),
+        })
+    }
+
     async fn resolve_agent_type_by_names_internal(
         &self,
         request: ResolveAgentTypeByNamesRequest,
@@ -1408,6 +1452,32 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(ResolveAgentTypeByNamesResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn resolve_type_id(
+        &self,
+        request: Request<ResolveTypeIdRequest>,
+    ) -> Result<Response<ResolveTypeIdResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "resolve_type_id",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            type_id = request.type_id,
+        );
+
+        let response = match self
+            .resolve_type_id_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => resolve_type_id_response::Result::Success(result),
+            Err(error) => resolve_type_id_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(ResolveTypeIdResponse {
             result: Some(response),
         }))
     }

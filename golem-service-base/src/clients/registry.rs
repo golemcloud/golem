@@ -34,7 +34,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
     ReportMcpResourceUnauthorizedRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
-    ResolveMcpImportRequest, RevokeCardRequest, RuntimeCardData,
+    ResolveMcpImportRequest, ResolveTypeIdRequest, RevokeCardRequest, RuntimeCardData,
     UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
     batch_get_existing_cards_response, batch_update_resource_usage_response,
     create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
@@ -46,14 +46,15 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_resource_definition_by_name_response, get_resource_limits_response,
     get_tool_deployment_state_response, mcp_runtime_credential,
     report_mcp_resource_unauthorized_response, resolve_agent_type_by_names_response,
-    resolve_component_response, resolve_mcp_import_response, revoke_card_response,
-    update_worker_connection_limit_response,
+    resolve_component_response, resolve_mcp_import_response, resolve_type_id_response,
+    revoke_card_response, update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentTypeName, RegisteredAgentType, RegistryInvalidationEvent, ResolvedAgentType,
+    AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer, RegistryInvalidationEvent,
+    ResolvedAgentType,
 };
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -68,6 +69,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::ToolDeploymentState;
+use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -130,6 +132,41 @@ pub struct ResourceUsageUpdate {
 pub struct McpRuntimeCredential {
     pub credential: Option<McpImportCredential>,
     pub oauth_grant_generation: Option<uuid::Uuid>,
+}
+
+/// What a type ID in an environment names.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTypeId {
+    pub kind: TypeIdKind,
+    /// The agent type or tool name. A name never changes its type ID.
+    pub name: String,
+    /// The component that implements the agent type in the current deployment. `None`
+    /// when the type is not deployed, and always `None` for a tool.
+    pub implemented_by: Option<RegisteredAgentTypeImplementer>,
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::registry::v1::ResolvedTypeId> for ResolvedTypeId {
+    type Error = RegistryServiceError;
+
+    fn try_from(
+        resolved: golem_api_grpc::proto::golem::registry::v1::ResolvedTypeId,
+    ) -> Result<Self, Self::Error> {
+        let kind = resolved.kind().try_into()?;
+        let implemented_by = resolved
+            .implemented_by
+            .map(RegisteredAgentTypeImplementer::try_from)
+            .transpose()?;
+        if kind == TypeIdKind::Tool && implemented_by.is_some() {
+            return Err(RegistryServiceError::internal_client_error(
+                "a tool type ID has no implementing component",
+            ));
+        }
+        Ok(Self {
+            kind,
+            name: resolved.name,
+            implemented_by,
+        })
+    }
 }
 
 impl Debug for McpRuntimeCredential {
@@ -300,6 +337,18 @@ pub trait RegistryService: Send + Sync {
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
     ) -> Result<ResolvedAgentType, RegistryServiceError>;
+
+    /// Resolves the type ID in an agent ID's tag. `None` when the environment never
+    /// assigned it. Also resolves types that are no longer deployed.
+    async fn resolve_type_id(
+        &self,
+        _environment_id: EnvironmentId,
+        _type_id: TypeId,
+    ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "resolve_type_id is not supported by this registry service",
+        ))
+    }
 
     async fn get_active_routes_for_domain(
         &self,
@@ -640,7 +689,7 @@ impl RegistryService for GrpcRegistryService {
             .call("update_worker_connection_limit", move |client| {
                 let request = UpdateWorkerConnectionLimitRequest {
                     account_id: Some(account_id.into()),
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some((*agent_id).into()),
                     added,
                 };
 
@@ -1352,6 +1401,32 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
+    async fn resolve_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        type_id: TypeId,
+    ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("resolve_type_id", move |client| {
+                let request = ResolveTypeIdRequest {
+                    environment_id: Some(environment_id.into()),
+                    type_id: type_id.get(),
+                };
+                Box::pin(client.resolve_type_id(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(resolve_type_id_response::Result::Success(payload)) => {
+                payload.resolved.map(ResolvedTypeId::try_from).transpose()
+            }
+            Some(resolve_type_id_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
     async fn get_active_routes_for_domain(
         &self,
         domain: &Domain,
@@ -1908,5 +1983,69 @@ impl From<String> for RegistryServiceError {
 impl From<&'static str> for RegistryServiceError {
     fn from(value: &'static str) -> Self {
         Self::internal_client_error(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_api_grpc::proto::golem::registry::v1::{
+        ResolvedTypeId as GrpcResolvedTypeId, TypeIdKind as GrpcTypeIdKind,
+    };
+    use golem_common::model::account::AccountEmail;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn grpc_resolved(
+        kind: GrpcTypeIdKind,
+        implemented_by: Option<RegisteredAgentTypeImplementer>,
+    ) -> GrpcResolvedTypeId {
+        GrpcResolvedTypeId {
+            kind: kind.into(),
+            name: "Cart".to_string(),
+            implemented_by: implemented_by.map(Into::into),
+        }
+    }
+
+    fn implementer() -> RegisteredAgentTypeImplementer {
+        RegisteredAgentTypeImplementer {
+            component_id: ComponentId(Uuid::from_u128(9)),
+            component_revision: ComponentRevision::new(3).unwrap(),
+            component_name: "cart".to_string(),
+            account_id: AccountId(Uuid::from_u128(8)),
+            account_email: AccountEmail::new("owner@golem"),
+        }
+    }
+
+    #[test]
+    fn resolved_type_id_conversion_checks_kind_and_implementer() {
+        assert_eq!(
+            ResolvedTypeId::try_from(grpc_resolved(
+                GrpcTypeIdKind::AgentType,
+                Some(implementer())
+            ))
+            .unwrap(),
+            ResolvedTypeId {
+                kind: TypeIdKind::AgentType,
+                name: "Cart".to_string(),
+                implemented_by: Some(implementer()),
+            }
+        );
+        assert_eq!(
+            ResolvedTypeId::try_from(grpc_resolved(GrpcTypeIdKind::Tool, None))
+                .unwrap()
+                .kind,
+            TypeIdKind::Tool
+        );
+        assert!(
+            ResolvedTypeId::try_from(grpc_resolved(GrpcTypeIdKind::Tool, Some(implementer())))
+                .is_err()
+        );
+        assert!(
+            ResolvedTypeId::try_from(grpc_resolved(GrpcTypeIdKind::Unspecified, None)).is_err()
+        );
+        let mut unknown_kind = grpc_resolved(GrpcTypeIdKind::AgentType, None);
+        unknown_kind.kind = 7;
+        assert!(ResolvedTypeId::try_from(unknown_kind).is_err());
     }
 }
