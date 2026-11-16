@@ -216,10 +216,9 @@ fn properties(tool: &Tool) -> BTreeSet<String> {
         .collect()
 }
 
-/// Removes what differs between two reads of the same state: the time of the read, the order of
-/// invocation context attributes, which the server keeps in a hash map, and the live fields of an
-/// agent's metadata. Those come from the executor's status record, which can change while the
-/// agent is idle, such as when it grows its memory or is suspended.
+/// Removes what differs between two reads of the same state: the time of the read and the live
+/// fields of an agent's metadata. Those come from the executor's status record, which can change
+/// while the agent is idle, such as when it grows its memory or is suspended.
 fn comparable(value: &Value) -> Value {
     const TIME_FIELDS: &[&str] = &["generatedAt"];
     const LIVE_AGENT_FIELDS: &[&str] =
@@ -233,15 +232,7 @@ fn comparable(value: &Value) -> Value {
                     !(object.contains_key("totalLinearMemorySize")
                         && LIVE_AGENT_FIELDS.contains(&key.as_str()))
                 })
-                .map(|(key, value)| {
-                    let mut value = comparable(value);
-                    if key == "attributes"
-                        && let Value::Array(attributes) = &mut value
-                    {
-                        attributes.sort_by_key(|attribute| attribute.to_string());
-                    }
-                    (key.clone(), value)
-                })
+                .map(|(key, value)| (key.clone(), comparable(value)))
                 .collect::<Map<_, _>>(),
         ),
         Value::Array(items) => Value::Array(items.iter().map(comparable).collect()),
