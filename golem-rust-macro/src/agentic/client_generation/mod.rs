@@ -405,8 +405,16 @@ pub fn get_remote_client_for_type(
     });
     let bind_self_impl = agent_is_durable.then(|| {
         quote! {
-            /// Binds this incarnation without creating or waiting for its constructor.
-            /// Use this to schedule on self from a constructor.
+            /// Binds the current durable incarnation without creating it or waiting for initialization.
+            ///
+            /// Use this to schedule work on self from inside the constructor. Normal client
+            /// construction reuses an initialized agent without rerunning its constructor,
+            /// but waits for an unfinished constructor. Calling it on self from that
+            /// constructor would deadlock; the agent's identity exists before it finishes.
+            ///
+            /// Scheduled work runs after construction finishes. This does not make awaited
+            /// self-calls reentrant or bypass method permissions. A different client type
+            /// returns an error. Replay preserves the recorded incarnation.
             pub fn #bind_self_ident() -> Result<Self, golem_rust::GolemReflectError> {
                 let (agent_id, phantom_id, wasm_rpc) = golem_rust::agentic::__bind_self(#type_name)?;
                 Ok(Self {

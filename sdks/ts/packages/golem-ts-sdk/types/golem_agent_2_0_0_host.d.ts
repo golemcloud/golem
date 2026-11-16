@@ -41,6 +41,9 @@ declare module 'golem:agent/host@2.0.0' {
   export class WasmRpc {
     /**
      * Creates an RPC client connecting to the given target agent.
+     * For durable targets, creates the target if missing and returns after successful
+     * initialization. An initialized target is reused without rerunning its constructor.
+     * Use `bind-self` to schedule on self from inside an unfinished constructor.
      * `constructor` is a value tree whose root encodes the target agent
      * constructor's parameter list. This fail-fast form traps if the client
      * cannot be created and is intended for statically generated clients.
@@ -48,6 +51,9 @@ declare module 'golem:agent/host@2.0.0' {
     constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
     /**
      * Creates an RPC client connecting to the given target agent.
+     * For durable targets, creates the target if missing and returns after successful
+     * initialization. An initialized target is reused without rerunning its constructor.
+     * Use `bind-self` to schedule on self from inside an unfinished constructor.
      * `constructor` is a value tree whose root encodes the target agent
      * constructor's parameter list. This fallible form returns an RPC error
      * if the client cannot be created and is intended for reflective and
@@ -56,10 +62,17 @@ declare module 'golem:agent/host@2.0.0' {
      */
     static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
     /**
-     * Binds the current agent incarnation without creating or initializing it.
-     * This permits scheduling on self from a constructor. Method calls still
-     * require method authority. Typed clients must validate the returned agent type.
-     * The returned ID and connection preserve the recorded incarnation during replay.
+     * Binds the current durable agent incarnation without creating it or waiting
+     * for its constructor to finish.
+     * Use this to schedule work on self from inside the constructor. The agent's
+     * identity already exists then, but initialization is still in progress.
+     * Normal RPC client construction reuses an initialized agent without running
+     * its constructor again, but waits if initialization is still in progress.
+     * Calling it on self from the constructor would therefore deadlock.
+     * Binding does not make awaited self-calls reentrant. Scheduled work runs
+     * after construction finishes. Method calls still require method authority.
+     * Typed clients must validate the returned agent type. The returned ID and
+     * connection preserve the recorded incarnation during replay.
      * @throws RpcError
      */
     static bindSelf(): [string, WasmRpc];

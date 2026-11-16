@@ -160,7 +160,17 @@ export interface DurableClient<
   M extends Record<string, AnyMethodSpec>,
   F extends ConfigFields,
 > {
-  /** Bind the recorded current incarnation without creating or initializing it. */
+  /**
+   * Bind the current durable incarnation without creating it or waiting for initialization.
+   *
+   * Use this to schedule work on self from inside the constructor. Normal `get` reuses
+   * an initialized agent without rerunning its constructor, but waits for an unfinished
+   * constructor. Calling `get` on self from that constructor would therefore deadlock.
+   *
+   * Scheduled work runs after construction finishes. This does not make awaited
+   * self-calls reentrant or bypass method permissions. A different client type fails
+   * with a typed error. Replay preserves the recorded incarnation.
+   */
   readonly bindSelf: (
     options?: ScopeCardOptions,
   ) => Effect.Effect<

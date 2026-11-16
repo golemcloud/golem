@@ -54,15 +54,32 @@ object AgentClientRuntime {
     }
 
   /**
-   * Bind the recorded current incarnation without creating or initializing an
-   * agent.
+   * Bind the current durable incarnation without creating it or waiting for
+   * initialization.
+   *
+   * Use this to schedule work on self from inside the constructor. Normal
+   * client construction reuses an initialized agent without rerunning its
+   * constructor, but waits for an unfinished constructor. Calling it on self
+   * from that constructor would therefore deadlock.
+   *
+   * Scheduled work runs after construction finishes. This does not make awaited
+   * self-calls reentrant or bypass method permissions. A different client type
+   * returns an error. Replay preserves the recorded incarnation.
    */
   def bindSelfWire[Trait, Constructor](
     agentType: WireAgentClientType[Trait, Constructor]
   ): Either[String, WireResolvedAgent[Trait]] =
     AgentIdentity.bindSelf(agentType.metadata.name).map(remote => WireResolvedAgent(agentType, remote))
 
-  /** Bind self using a typed reflective agent definition. */
+  /**
+   * Bind self using a typed reflective agent definition, without waiting for
+   * initialization.
+   *
+   * Use this for constructor-time self-scheduling, as described by
+   * [[bindSelfWire]]. Normal client construction on self would wait for the
+   * executing constructor to finish and deadlock. This does not make awaited
+   * self-calls reentrant.
+   */
   def bindSelf[Trait, Constructor](
     agentType: AgentType[Trait, Constructor]
   ): Either[String, ResolvedAgent[Trait]] =

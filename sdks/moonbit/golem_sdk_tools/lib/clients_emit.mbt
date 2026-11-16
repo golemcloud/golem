@@ -245,6 +245,9 @@ fn emit_client(
   if durable {
     buf.write_string("///|\n")
     buf.write_string(
+      "/// Binds the current durable incarnation without creating it or waiting for initialization.\n///\n/// Use this to schedule work on self from inside the constructor. Normal `get` reuses\n/// an initialized agent without rerunning its constructor, but waits for an unfinished\n/// constructor. Calling `get` on self from that constructor would therefore deadlock.\n///\n/// Scheduled work runs after construction finishes. This does not make awaited\n/// self-calls reentrant or bypass method permissions. A different client type raises\n/// an error. Replay preserves the recorded incarnation.\n",
+    )
+    buf.write_string(
       "pub fn \{client}::bind_self() -> \{client} raise {\n  { client: @rpc.AgentClient::bind_self(\"\{escape_string_lit(agent.name)}\"), }\n}\n\n",
     )
     buf.write_string("///|\n")

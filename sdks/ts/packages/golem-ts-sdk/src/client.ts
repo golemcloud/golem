@@ -185,7 +185,17 @@ export interface RemoteClientFactory<
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
 > {
-  /** Bind the current durable incarnation without creating or initializing it. */
+  /**
+   * Bind the current durable incarnation without creating it or waiting for initialization.
+   *
+   * Use this to schedule work on self from inside the constructor. Normal `get` reuses
+   * an initialized agent without rerunning its constructor, but waits for an unfinished
+   * constructor. Calling `get` on self from that constructor would therefore deadlock.
+   *
+   * Scheduled work runs after construction finishes. This does not make awaited
+   * self-calls reentrant or bypass method permissions. A different client type throws
+   * an error. Replay preserves the recorded incarnation.
+   */
   bindSelf(options?: RemoteClientOptions): RemoteClient<Methods>;
   /** Address the durable agent with this constructor identity. */
   get(

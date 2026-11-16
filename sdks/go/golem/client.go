@@ -175,8 +175,15 @@ func (a *AgentDefinition[Id, Cfg]) Bind(agentID string) (Client[Id], error) {
 	return bindTypedClient[Id](defs, a.name, agentID)
 }
 
-// BindSelf binds the current durable incarnation without creating or initializing it.
-// A different agent type or an ephemeral owner returns an error.
+// BindSelf binds the current durable incarnation without creating it or waiting for initialization.
+//
+// Use this to schedule work on self from inside the constructor. Normal Get reuses an
+// initialized agent without rerunning its constructor, but waits for an unfinished
+// constructor. Calling Get on self from that constructor would therefore deadlock.
+//
+// Scheduled work runs after construction finishes. This does not make awaited self-calls
+// reentrant or bypass method permissions. A different agent type or an ephemeral owner
+// returns an error. Replay preserves the recorded incarnation.
 func (a *AgentDefinition[Id, Cfg]) BindSelf() (Client[Id], error) {
 	return bindSelfClient[Id](a.name)
 }
