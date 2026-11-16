@@ -21,6 +21,10 @@ pub fn[T : ConfigField] load_field(@schema.TypeTag[T], Array[String]) -> T raise
 
 pub fn[T : ConfigField] load_snapshot_config(@agents.SnapshotRestoreContext, @schema.TypeTag[T]) -> Config[T] raise @common.AgentError
 
+pub fn[T : @schema.IntoSchema] local_entry(@schema.TypeTag[T], Array[String], default_value? : String) -> Array[@agents.AgentConfigDef] raise @common.AgentError
+
+pub fn[T : @schema.WireSchema] wire_local_entry(@schema.WireTypeEncoder, @schema.TypeTag[T], Array[String], default_value? : String) -> Array[@common.AgentConfigDeclaration]
+
 // Errors
 
 // Types and methods

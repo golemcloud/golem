@@ -1,0 +1,192 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/agent_config_moonbit/component"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/agent/host",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
+  "golemcloud/golem_sdk/permissions",
+  "golemcloud/golem_sdk/rpc",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+}
+
+// Values
+pub fn cabi_realloc(Int32, Int32, Int32, Int32) -> Int32
+
+pub fn collect_shape_config_overrides(ShapeConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
+
+pub fn collect_static_defaults_overrides(StaticDefaultsOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
+
+pub fn wasmExportAsyncInitialize(Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportAsyncInvokeGolemAgentGuest(Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportAsyncInvokeGolemToolGuest(Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportAsyncInvokeToolMiddleware(Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportAsyncLoad(Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportAsyncSave(Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportDiscoverAgentTypes() -> Int32
+
+pub fn wasmExportDiscoverAgentTypesPostReturn(Int32) -> Unit
+
+pub fn wasmExportDiscoverToolMiddlewares() -> Int32
+
+pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int32) -> Unit
+
+pub fn wasmExportDiscoverTools() -> Int32
+
+pub fn wasmExportDiscoverToolsPostReturn(Int32) -> Unit
+
+pub fn wasmExportGetDefinition() -> Int32
+
+pub fn wasmExportGetDefinitionPostReturn(Int32) -> Unit
+
+pub fn wasmExportGetTool(Int32, Int32) -> Int32
+
+pub fn wasmExportGetToolMiddleware(Int32, Int32) -> Int32
+
+pub fn wasmExportGetToolMiddlewarePostReturn(Int32) -> Unit
+
+pub fn wasmExportGetToolPostReturn(Int32) -> Unit
+
+pub fn wasmExportInitialize(Int32) -> Int32
+
+pub fn wasmExportInvokeGolemAgentGuest(Int32) -> Int32
+
+pub fn wasmExportInvokeGolemToolGuest(Int32) -> Int32
+
+pub fn wasmExportInvokeToolMiddleware(Int32) -> Int32
+
+pub fn wasmExportLoad(Int32, Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportSave() -> Int32
+
+// Errors
+
+// Types and methods
+pub(all) enum Choice {
+  Text(String)
+  Other(String)
+} derive(ToJson)
+pub impl @schema.FromWire for Choice
+pub impl @schema.IntoSchema for Choice
+pub impl @schema.IntoWire for Choice
+pub impl @schema.WireSchema for Choice
+
+pub(all) struct Node {
+  display_name : String
+  next : Node?
+} derive(ToJson)
+pub impl @schema.FromSchema for Node
+pub impl @schema.FromWire for Node
+pub impl @schema.IntoSchema for Node
+pub impl @schema.IntoWire for Node
+pub impl @schema.WireSchema for Node
+
+#alias(SettingsAlias)
+pub(all) struct Settings {
+  label : String
+  count : UInt32
+} derive(ToJson)
+pub impl @schema.FromSchema for Settings
+pub impl @schema.FromWire for Settings
+pub impl @schema.IntoSchema for Settings
+pub impl @schema.IntoWire for Settings
+pub impl @schema.WireSchema for Settings
+
+pub(all) struct ShapeConfig {
+  max_chars : UInt32
+  tree : Node
+  cleared : String?
+  enabled : Bool
+  values : Array[String]
+}
+
+pub(all) struct ShapeConfigOverride {
+  max_chars : UInt32?
+  tree : Node?
+  cleared : String??
+  enabled : Bool?
+  values : Array[String]?
+}
+pub fn ShapeConfigOverride::empty() -> Self
+pub impl @rpc.AgentConfigOverrides for ShapeConfigOverride
+
+pub(all) struct StaticDefaults {
+  settings : Settings
+  choice : Choice
+  slots : (Int32?, Int32?, String)
+  omitted : String?
+} derive(ToJson)
+
+type StaticDefaultsAgent
+pub fn StaticDefaultsAgent::read(Self) -> String
+
+pub(all) struct StaticDefaultsAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn StaticDefaultsAgentClient::drop(Self) -> Unit
+pub fn StaticDefaultsAgentClient::get(String) -> Self raise @common.AgentError
+pub fn StaticDefaultsAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn StaticDefaultsAgentClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
+pub fn StaticDefaultsAgentClient::get_phantom_with_config(String, @schema.Uuid, StaticDefaultsOverride) -> Self raise @common.AgentError
+pub fn StaticDefaultsAgentClient::get_with_config(String, StaticDefaultsOverride) -> Self raise @common.AgentError
+pub fn StaticDefaultsAgentClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn StaticDefaultsAgentClient::new_phantom_with_config(String, StaticDefaultsOverride) -> Self raise @common.AgentError
+pub fn StaticDefaultsAgentClient::phantom_id(Self) -> @schema.Uuid?
+pub async fn StaticDefaultsAgentClient::read(Self, scope_card? : @permissions.ScopeCard) -> String
+pub fn StaticDefaultsAgentClient::schedule_cancelable_read(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn StaticDefaultsAgentClient::schedule_read(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] StaticDefaultsAgentClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] StaticDefaultsAgentClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
+pub async fn[T] StaticDefaultsAgentClient::scoped_get_phantom_with_config(String, @schema.Uuid, StaticDefaultsOverride, async (Self) -> T) -> T
+pub async fn[T] StaticDefaultsAgentClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] StaticDefaultsAgentClient::scoped_new_phantom_with_config(String, StaticDefaultsOverride, async (Self) -> T) -> T
+pub async fn[T] StaticDefaultsAgentClient::scoped_with_config(String, StaticDefaultsOverride, async (Self) -> T) -> T
+pub fn StaticDefaultsAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
+pub fn StaticDefaultsAgentClient::trigger_read(Self) -> Unit raise @common.AgentError
+
+pub(all) struct StaticDefaultsOverride {
+  settings : Settings?
+  choice : Choice?
+  slots : (Int32?, Int32?, String)?
+  omitted : String??
+}
+pub fn StaticDefaultsOverride::empty() -> Self
+pub impl @rpc.AgentConfigOverrides for StaticDefaultsOverride
+
+type StaticShapeAgent
+pub fn StaticShapeAgent::read(Self) -> String
+
+pub(all) struct StaticShapeAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn StaticShapeAgentClient::drop(Self) -> Unit
+pub fn StaticShapeAgentClient::get() -> Self raise @common.AgentError
+pub fn StaticShapeAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn StaticShapeAgentClient::get_phantom(@schema.Uuid) -> Self raise @common.AgentError
+pub fn StaticShapeAgentClient::get_phantom_with_config(@schema.Uuid, ShapeConfigOverride) -> Self raise @common.AgentError
+pub fn StaticShapeAgentClient::get_with_config(ShapeConfigOverride) -> Self raise @common.AgentError
+pub fn StaticShapeAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn StaticShapeAgentClient::new_phantom_with_config(ShapeConfigOverride) -> Self raise @common.AgentError
+pub fn StaticShapeAgentClient::phantom_id(Self) -> @schema.Uuid?
+pub async fn StaticShapeAgentClient::read(Self, scope_card? : @permissions.ScopeCard) -> String
+pub fn StaticShapeAgentClient::schedule_cancelable_read(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn StaticShapeAgentClient::schedule_read(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] StaticShapeAgentClient::scoped(async (Self) -> T) -> T
+pub async fn[T] StaticShapeAgentClient::scoped_get_phantom(@schema.Uuid, async (Self) -> T) -> T
+pub async fn[T] StaticShapeAgentClient::scoped_get_phantom_with_config(@schema.Uuid, ShapeConfigOverride, async (Self) -> T) -> T
+pub async fn[T] StaticShapeAgentClient::scoped_new_phantom(async (Self) -> T) -> T
+pub async fn[T] StaticShapeAgentClient::scoped_new_phantom_with_config(ShapeConfigOverride, async (Self) -> T) -> T
+pub async fn[T] StaticShapeAgentClient::scoped_with_config(ShapeConfigOverride, async (Self) -> T) -> T
+pub fn StaticShapeAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
+pub fn StaticShapeAgentClient::trigger_read(Self) -> Unit raise @common.AgentError
+
+// Type aliases
+
+// Traits

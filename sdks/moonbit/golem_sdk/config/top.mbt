@@ -46,8 +46,8 @@ fn[T : @schema.IntoSchema] secret_schema_graph_of(
 pub fn[T : @schema.WireSchema + @schema.FromWire] load_config_value(
   key : Array[String],
 ) -> T raise @common.AgentError {
-  let wire_graph = @schema.wire_schema(
-    (@schema.type_tag() : @schema.TypeTag[T]),
+  let wire_graph = canonical_config_graph(
+    @schema.wire_schema((@schema.type_tag() : @schema.TypeTag[T])),
   )
   let wire_value = match @host.get_config_value(key, wire_graph) {
     Ok(value) => value
@@ -186,16 +186,23 @@ pub(open) trait ConfigField {
 
 ///|
 /// Single `LOCAL` config declaration whose value type is `T`'s schema graph.
-fn[T : @schema.IntoSchema] local_entry(
+/// Defaults are canonical JSON data for host resolution, never read fallbacks.
+pub fn[T : @schema.IntoSchema] local_entry(
   tag : @schema.TypeTag[T],
   path : Array[String],
+  default_value? : String,
 ) -> Array[@agents.AgentConfigDef] raise @common.AgentError {
+  let graph = @model.schema_graph_from_wit(
+    canonical_config_graph(@model.schema_graph_to_wit(schema_graph_of(tag))),
+  ) catch {
+    e => raise @common.AgentError::InvalidInput(repr(e))
+  }
   [
     {
       source: @common.AgentConfigSource::LOCAL,
       path,
-      value_type: schema_graph_of(tag),
-      default_value: None,
+      value_type: graph,
+      default_value,
     },
   ]
 }

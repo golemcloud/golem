@@ -16,17 +16,20 @@ pub fn[T : WireConfigField] append_wire_entries_with(
 }
 
 ///|
-fn[T : @schema.WireSchema] wire_local_entry(
+/// Append a static data declaration to the owner's shared schema pool.
+pub fn[T : @schema.WireSchema] wire_local_entry(
   encoder : @schema.WireTypeEncoder,
   tag : @schema.TypeTag[T],
   path : Array[String],
+  default_value? : String,
 ) -> Array[@common.AgentConfigDeclaration] {
+  let graph = canonical_config_graph(@schema.wire_schema(tag))
   [
     {
       source: @common.AgentConfigSource::LOCAL,
       path,
-      value_type: @schema.append_wire_type_with(encoder, tag),
-      default_value: None,
+      value_type: append_config_type(encoder, graph, graph.root),
+      default_value,
     },
   ]
 }

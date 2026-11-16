@@ -118,6 +118,7 @@ test "generate_client_code - all secret config generates no with_config methods"
     {
       name: "AllSecretConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "api_key",
@@ -184,6 +185,7 @@ test "generate_client_code - mixed config generates with_config methods" {
     {
       name: "MixedConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "api_key",
@@ -250,6 +252,7 @@ test "generate_client_code - ephemeral agent supports logical and known phantom 
     {
       name: "MixedConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "api_key",
@@ -291,6 +294,7 @@ test "generate_config_override_types - flat config" {
     {
       name: "MyConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "api_key",
@@ -319,6 +323,7 @@ test "generate_config_override_types - nested config" {
     {
       name: "DbConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         ("host", @lib.ParamType::Simple("String")),
         ("port", @lib.ParamType::Simple("UInt")),
@@ -327,6 +332,7 @@ test "generate_config_override_types - nested config" {
     {
       name: "AppConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         ("db", @lib.ParamType::Simple("DbConfig")),
         ("name", @lib.ParamType::Simple("String")),
@@ -351,6 +357,7 @@ test "generate_config_override_walkers - flat config" {
     {
       name: "MyConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "api_key",
@@ -381,11 +388,13 @@ test "generate_config_override_walkers - nested config" {
     {
       name: "DbConfig",
       package_path: "",
+      field_metadata: {},
       fields: [("host", @lib.ParamType::Simple("String"))],
     },
     {
       name: "AppConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         ("db", @lib.ParamType::Simple("DbConfig")),
         ("name", @lib.ParamType::Simple("String")),
@@ -407,6 +416,7 @@ test "generate_config_override_types - all secret yields empty" {
     {
       name: "AllSecret",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "key1",
@@ -436,6 +446,7 @@ test "pascal_to_snake conversion" {
     {
       name: "DatabaseConfig",
       package_path: "",
+      field_metadata: {},
       fields: [("host", @lib.ParamType::Simple("String"))],
     },
   ]
@@ -450,6 +461,7 @@ test "config_has_overridable_fields - recursion through nested all-secret" {
   let secrets_only : @lib.ConfigTypeInfo = {
     name: "SecretsOnly",
     package_path: "",
+    field_metadata: {},
     fields: [
       (
         "key",
@@ -463,12 +475,14 @@ test "config_has_overridable_fields - recursion through nested all-secret" {
   let parent_all_secret : @lib.ConfigTypeInfo = {
     name: "ParentAllSecret",
     package_path: "",
+    field_metadata: {},
     fields: [("nested", @lib.ParamType::Simple("SecretsOnly"))],
   }
   // Parent that also has a plain leaf => overridable.
   let parent_with_leaf : @lib.ConfigTypeInfo = {
     name: "ParentWithLeaf",
     package_path: "",
+    field_metadata: {},
     fields: [
       ("nested", @lib.ParamType::Simple("SecretsOnly")),
       ("name", @lib.ParamType::Simple("String")),
@@ -489,6 +503,7 @@ test "generate_config_override - nested all-secret config does not dangle" {
     {
       name: "SecretsOnly",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "key",
@@ -501,6 +516,7 @@ test "generate_config_override - nested all-secret config does not dangle" {
     {
       name: "AppConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         ("db", @lib.ParamType::Simple("SecretsOnly")),
         ("name", @lib.ParamType::Simple("String")),
@@ -531,6 +547,7 @@ test "validate_config_types - Secret inside a container is rejected" {
     {
       name: "BadConfig",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "keys",
@@ -575,6 +592,7 @@ test "generate_client_code - no _with_config for all-secret config" {
     {
       name: "SecretsOnly",
       package_path: "",
+      field_metadata: {},
       fields: [
         (
           "key",
@@ -598,11 +616,13 @@ test "validate_config_types - cross-package nested config is rejected" {
     {
       name: "DbConfig",
       package_path: "models",
+      field_metadata: {},
       fields: [("host", @lib.ParamType::Simple("String"))],
     },
     {
       name: "AppConfig",
       package_path: "app",
+      field_metadata: {},
       fields: [("db", @lib.ParamType::Simple("@models.DbConfig"))],
     },
   ]
@@ -624,11 +644,13 @@ test "validate_config_types - same-package qualified ref is allowed" {
     {
       name: "DbConfig",
       package_path: "app",
+      field_metadata: {},
       fields: [("host", @lib.ParamType::Simple("String"))],
     },
     {
       name: "AppConfig",
       package_path: "app",
+      field_metadata: {},
       fields: [("db", @lib.ParamType::Simple("@app.DbConfig"))],
     },
   ]
