@@ -112,9 +112,24 @@ impl OplogExportHtmlWriter {
             }
             _ => PathBuf::from("."),
         };
-        let mut file = tempfile::NamedTempFile::new_in(&parent).with_context(|| {
+        // The file gets the mode that a plain `--html` write gives it: an existing target keeps
+        // its mode, and a new file gets 0666 under the umask instead of the 0600 of a temporary
+        // file.
+        #[cfg(unix)]
+        let file = tempfile::Builder::new()
+            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666))
+            .tempfile_in(&parent);
+        #[cfg(not(unix))]
+        let file = tempfile::NamedTempFile::new_in(&parent);
+        let mut file = file.with_context(|| {
             format!("failed to create a temporary file in {}", parent.display())
         })?;
+        #[cfg(unix)]
+        if let Ok(existing) = std::fs::metadata(path) {
+            file.as_file()
+                .set_permissions(existing.permissions())
+                .with_context(|| format!("failed to set the mode of {}", path.display()))?;
+        }
         let template = VIEWER_TEMPLATE.replacen(TITLE_PLACEHOLDER, &escape_html_text(title), 1);
         let split = template
             .find(DATA_PLACEHOLDER)
@@ -414,6 +429,26 @@ mod tests {
         let doc = embedded(&std::fs::read_to_string(&path).unwrap());
         assert_eq!(doc["entries"][0]["index"], 1);
         assert_eq!(files_in(dir.path()), vec!["report.html"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_html_writer_keeps_the_mode_of_a_plain_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+
+        let plain = dir.path().join("plain.html");
+        std::fs::write(&plain, "x").unwrap();
+        let new = dir.path().join("new.html");
+        write_export(&new, &[]);
+        assert_eq!(mode(&new), mode(&plain));
+
+        let existing = dir.path().join("existing.html");
+        std::fs::write(&existing, "old").unwrap();
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o640)).unwrap();
+        write_export(&existing, &[]);
+        assert_eq!(mode(&existing), 0o640);
     }
 
     #[test]
