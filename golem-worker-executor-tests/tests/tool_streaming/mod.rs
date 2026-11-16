@@ -4375,9 +4375,15 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         environment_state_service: Some(environment_state.clone()),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
-    let (provider_checkpoint_port, provider_checkpoint_server, mut provider_checkpoints) =
-        start_promise_checkpoint_server().await;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+    // A pending TCP read keeps the owner resident while its operation registry is inspected.
+    // A promise wait may suspend the owner and discard that resident registry.
+    let (
+        provider_checkpoint_port,
+        provider_checkpoint_gate_port,
+        provider_checkpoint_server,
+        mut provider_checkpoints,
+    ) = start_crash_checkpoint_server().await;
     let (caller_checkpoint_port, caller_checkpoint_server, mut caller_checkpoints) =
         start_promise_checkpoint_server().await;
     let provider_component = executor
@@ -4430,8 +4436,12 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     );
     let env = HashMap::from([
         (
-            "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+            "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
             provider_checkpoint_port.to_string(),
+        ),
+        (
+            "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+            provider_checkpoint_gate_port.to_string(),
         ),
         (
             "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
@@ -4462,7 +4472,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             .await
     });
     let provider =
-        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4490,14 +4500,10 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             "the tool entity must remain unterminated while its producer gate is blocked"
         );
     }
-    executor
-        .complete_promise(
-            &executor
-                .promise_id(&direct_worker, provider.oplog_idx)
-                .await?,
-            Vec::new(),
-        )
-        .await?;
+    provider
+        .release
+        .send(())
+        .expect("release direct typed output producer");
     let caller = next_promise_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
@@ -4585,8 +4591,8 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
-    let provider_promise =
-        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let _provider_gate =
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4644,7 +4650,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     let _ = invocation.await;
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let resumed_executor = executor.clone();
     let resumed_component = caller_component.clone();
     let resumed_id = decorated_id.clone();
@@ -4660,14 +4666,12 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
-    executor
-        .complete_promise(
-            &executor
-                .promise_id(&decorated_worker, provider_promise.oplog_idx)
-                .await?,
-            Vec::new(),
-        )
-        .await?;
+    let replayed_provider_gate =
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    replayed_provider_gate
+        .release
+        .send(())
+        .expect("release replayed typed output producer");
     let caller_promise = next_promise_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
