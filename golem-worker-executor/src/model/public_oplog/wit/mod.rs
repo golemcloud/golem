@@ -74,6 +74,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
 };
 
+use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FallibleResultParameters,
@@ -82,10 +83,10 @@ use golem_common::model::oplog::{
     SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{Empty, Timestamp};
 use golem_common::schema::{
     SchemaValue, TypedSchemaValue, redact_host_managed_typed_value, redact_host_managed_value,
 };
+use golem_schema::Empty;
 use golem_schema::schema::wit::{
     PermissionCardHandleDropper, QuotaTokenHandleDropper, SecretHandleDropper, decode_value,
     encode_typed, encode_value, reject_quota_handles_in_value_tree, wire,

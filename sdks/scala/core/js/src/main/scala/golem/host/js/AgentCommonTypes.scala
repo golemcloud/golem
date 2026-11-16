@@ -130,24 +130,32 @@ sealed trait JsHttpMethod extends js.Object {
 }
 
 @js.native
-sealed trait JsHttpMethodCustom extends JsHttpMethod {
+sealed trait JsConcreteHttpMethod extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsHttpMethodCustom extends JsConcreteHttpMethod {
   @JSName("val") def value: String = js.native
 }
 
 object JsHttpMethod {
-  def get: JsHttpMethod     = JsShape.tagOnly[JsHttpMethod]("get")
-  def head: JsHttpMethod    = JsShape.tagOnly[JsHttpMethod]("head")
-  def post: JsHttpMethod    = JsShape.tagOnly[JsHttpMethod]("post")
-  def put: JsHttpMethod     = JsShape.tagOnly[JsHttpMethod]("put")
-  def delete: JsHttpMethod  = JsShape.tagOnly[JsHttpMethod]("delete")
-  def connect: JsHttpMethod = JsShape.tagOnly[JsHttpMethod]("connect")
-  def options: JsHttpMethod = JsShape.tagOnly[JsHttpMethod]("options")
-  def trace: JsHttpMethod   = JsShape.tagOnly[JsHttpMethod]("trace")
-  def patch: JsHttpMethod   = JsShape.tagOnly[JsHttpMethod]("patch")
+  private def standard(tag: String): JsHttpMethod =
+    JsShape.tagged[JsHttpMethod]("method", JsShape.tagOnly[JsConcreteHttpMethod](tag))
+
+  def get: JsHttpMethod     = standard("get")
+  def head: JsHttpMethod    = standard("head")
+  def post: JsHttpMethod    = standard("post")
+  def put: JsHttpMethod     = standard("put")
+  def delete: JsHttpMethod  = standard("delete")
+  def connect: JsHttpMethod = standard("connect")
+  def options: JsHttpMethod = standard("options")
+  def trace: JsHttpMethod   = standard("trace")
+  def patch: JsHttpMethod   = standard("patch")
   def any: JsHttpMethod     = JsShape.tagOnly[JsHttpMethod]("any")
 
   def custom(method: String): JsHttpMethod =
-    JsShape.tagged[JsHttpMethod]("custom", method.asInstanceOf[js.Any])
+    JsShape.tagged[JsHttpMethod]("method", JsShape.tagged[JsConcreteHttpMethod]("custom", method))
 }
 
 @js.native
@@ -185,7 +193,12 @@ sealed trait JsPathSegment extends js.Object {
 }
 
 @js.native
-sealed trait JsPathSegmentLiteral extends JsPathSegment {
+sealed trait JsNeutralPathSegment extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsPathSegmentLiteral extends JsNeutralPathSegment {
   @JSName("val") def value: String = js.native
 }
 
@@ -195,27 +208,27 @@ sealed trait JsPathSegmentSystemVariable extends JsPathSegment {
 }
 
 @js.native
-sealed trait JsPathSegmentPathVariable extends JsPathSegment {
+sealed trait JsPathSegmentPathVariable extends JsNeutralPathSegment {
   @JSName("val") def value: JsPathVariable = js.native
 }
 
 @js.native
-sealed trait JsPathSegmentRemainingPathVariable extends JsPathSegment {
+sealed trait JsPathSegmentRemainingPathVariable extends JsNeutralPathSegment {
   @JSName("val") def value: JsPathVariable = js.native
 }
 
 object JsPathSegment {
   def literal(value: String): JsPathSegment =
-    JsShape.tagged[JsPathSegment]("literal", value.asInstanceOf[js.Any])
+    JsShape.tagged[JsPathSegment]("segment", JsShape.tagged[JsNeutralPathSegment]("literal", value))
 
   def systemVariable(value: JsSystemVariable): JsPathSegment =
     JsShape.tagged[JsPathSegment]("system-variable", value.asInstanceOf[js.Any])
 
   def pathVariable(value: JsPathVariable): JsPathSegment =
-    JsShape.tagged[JsPathSegment]("path-variable", value)
+    JsShape.tagged[JsPathSegment]("segment", JsShape.tagged[JsNeutralPathSegment]("path-variable", value))
 
   def remainingPathVariable(value: JsPathVariable): JsPathSegment =
-    JsShape.tagged[JsPathSegment]("remaining-path-variable", value)
+    JsShape.tagged[JsPathSegment]("segment", JsShape.tagged[JsNeutralPathSegment]("remaining-path-variable", value))
 }
 
 @js.native

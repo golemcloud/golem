@@ -794,10 +794,9 @@ stock twice. Completed replay must perform no new put. Neither path promises ext
 effects after process loss, an unknown provider outcome or a partial backend error.
 
 Preserve the stored prefix and hydrated invocation/host-call payloads exactly. Validate each public
-projection losslessly against those records. Public attribute vectors rendered from a HashMap have
-no recorded sequence: compare their complete typed key/value maps, rejecting duplicate keys and
-cardinality changes. Preserve all recorded sequence order elsewhere. Sorting arbitrary JSON or
-dropping fields would weaken the oracle rather than account for that one unordered projection.
+projection losslessly against those records, and compare public entries by exact equality. Span
+attributes are stored and rendered sorted by key, so their order is deterministic and a reordered
+attribute list is a changed entry. Sorting arbitrary JSON or dropping fields would weaken the oracle.
 
 ## Filesystem snapshots on APFS
 

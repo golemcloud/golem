@@ -45,9 +45,7 @@ use golem_cli::bridge_gen::go::tool::GoToolBridgeGenerator;
 use golem_cli::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
 use golem_cli::model::app::ApplicationConfig;
 use golem_cli::sdk_overrides::workspace_root;
-use golem_common::model::agent::{
-    AgentConfigSource, AgentMode, CorsOptions, FileMapping, HttpMountDetails,
-};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, CorsOptions, HttpMountDetails};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{
     DiscriminatorRule, NumericBound, NumericRestrictions, PathDirection, PathKind, PathSpec,
@@ -60,6 +58,7 @@ use golem_common::schema::tool::{
     ResultSpec as ToolResultSpec, StreamSpec, Tool,
 };
 use golem_common::schema::{AgentTypeSchema, AutoInjectedKind, NamedField, Role, SchemaType};
+use golem_schema::http::FileMapping;
 use std::process::Command;
 use tempfile::TempDir;
 use test_r::{test, test_dep};

@@ -1,4 +1,5 @@
 import './config.js'
+import './custom_durability.js'
 import './http.js'
 import './quota_rpc.js'
 import './readonly.js'

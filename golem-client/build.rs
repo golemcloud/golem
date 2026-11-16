@@ -646,7 +646,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::http_api_deployment::HttpApiDeploymentUpdate",
             ),
             // common
-            ("Empty", "golem_common::model::Empty"),
+            ("Empty", "golem_schema::Empty"),
             ("ErrorBody", "golem_common::model::error::ErrorBody"),
             ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
             ("ScanCursor", "golem_common::model::ScanCursor"),

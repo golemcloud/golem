@@ -412,7 +412,7 @@ fn component_metadata_response_pairs_declarations_with_optional_type_ids() {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
-        snapshotting: Snapshotting::Disabled(crate::model::Empty {}),
+        snapshotting: Snapshotting::Disabled(golem_schema::Empty {}),
         config: vec![],
     };
     let allocated_agent = agent("grep");

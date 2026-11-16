@@ -2,7 +2,6 @@ use super::*;
 use crate::bootstrap::Services;
 use crate::config::{ComponentCompilationConfig, LoginConfig, RegistryServiceConfig};
 use golem_common::config::{DbConfig, DbSqliteConfig};
-use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::card::owner::{EmptyOwnerPattern, EnvironmentOwnerPattern};
@@ -15,6 +14,7 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::model::mcp_import::{McpImportAuthInput, McpImportDeployment};
 use golem_common::model::tool::{ToolBindingInput, ToolRegistration};
 use golem_common::model::tool_middleware::{CompiledToolMiddlewareChain, RegisteredToolMiddleware};
+use golem_schema::Empty;
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
 };

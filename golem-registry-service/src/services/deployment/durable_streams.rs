@@ -22,7 +22,7 @@ use golem_common::schema::{
     AgentMethodSchema, AgentTypeSchema, FieldSource, InputSchema, OutputSchema, SchemaGraph,
     SchemaType,
 };
-use golem_schema::http::HttpRouteMode;
+use golem_schema::http::{self as schema_http, HttpRouteMode};
 use golem_service_base::custom_api::{
     DurableStreamRepresentation, DurableStreamRouteLoadPolicy, DurableStreamRoutePolicy,
     DurableStreamSlot, DurableStreamSlotDirection,
@@ -189,7 +189,9 @@ pub(super) fn validate_mode(
             if mode == HttpRouteMode::Sse {
                 if !matches!(
                     endpoint.http_method,
-                    golem_common::model::agent::HttpMethod::Get(_)
+                    golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(_)
+                    )
                 ) {
                     return Err("sse requires GET; use durableStreams".into());
                 }
@@ -413,13 +415,13 @@ fn resolve_content_type(
 fn validate_path(mount: &HttpMountDetails, endpoint: &HttpEndpointDetails) -> Result<(), String> {
     for segment in mount.path_prefix.iter().chain(&endpoint.path_suffix) {
         match segment {
-            PathSegment::RemainingPathVariable(variable) => {
+            PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(variable)) => {
                 return Err(format!(
                     "Durable Streams base path cannot contain greedy variable '{}'",
                     variable.variable_name
                 ));
             }
-            PathSegment::PathVariable(variable)
+            PathSegment::Segment(schema_http::PathSegment::PathVariable(variable))
                 if RESERVED_PATH_NAMES.contains(&variable.variable_name.as_str()) =>
             {
                 return Err(format!(
@@ -435,9 +437,10 @@ fn validate_path(mount: &HttpMountDetails, endpoint: &HttpEndpointDetails) -> Re
 
 fn reject_stream_binding(endpoint: &HttpEndpointDetails, name: &str) -> Result<(), String> {
     let path_bound = endpoint.path_suffix.iter().any(|segment| match segment {
-        PathSegment::PathVariable(variable) | PathSegment::RemainingPathVariable(variable) => {
-            variable.variable_name == name
-        }
+        PathSegment::Segment(
+            schema_http::PathSegment::PathVariable(variable)
+            | schema_http::PathSegment::RemainingPathVariable(variable),
+        ) => variable.variable_name == name,
         _ => false,
     });
     let query_bound = endpoint.query_vars.iter().any(|v| v.variable_name == name);
@@ -574,13 +577,14 @@ fn validate_public_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{
         AgentMode, AgentTypeName, CorsOptions, DurableStreamInputSlotSource,
         DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamSlotOptions,
-        HttpMethod, LiteralSegment, PathVariable, Snapshotting,
+        HttpMethod, Snapshotting,
     };
     use golem_common::schema::{AgentConstructorSchema, NamedField, NamedFieldType, SchemaTypeDef};
+    use golem_schema::Empty;
+    use golem_schema::http::{LiteralSegment, PathVariable};
     use test_r::test;
 
     fn validate_route(
@@ -633,7 +637,7 @@ mod tests {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
+            snapshotting: Snapshotting::Disabled(Default::default()),
             config: vec![],
         };
         (agent, method)
@@ -642,9 +646,11 @@ mod tests {
     fn route() -> (HttpMountDetails, HttpEndpointDetails) {
         (
             HttpMountDetails {
-                path_prefix: vec![PathSegment::Literal(LiteralSegment {
-                    value: "api".into(),
-                })],
+                path_prefix: vec![PathSegment::Segment(schema_http::PathSegment::Literal(
+                    LiteralSegment {
+                        value: "api".into(),
+                    },
+                ))],
                 auth_details: None,
                 phantom_agent: false,
                 phantom_id_binding: None,
@@ -658,7 +664,7 @@ mod tests {
                 openapi_provider_method: None,
             },
             HttpEndpointDetails {
-                http_method: HttpMethod::Post(Empty {}),
+                http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})),
                 path_suffix: vec![],
                 header_vars: vec![],
                 query_vars: vec![],
@@ -801,7 +807,8 @@ mod tests {
             let (agent, method) = fixtures(input, output);
             let (_, mut endpoint) = route();
             if get {
-                endpoint.http_method = HttpMethod::Get(Empty {});
+                endpoint.http_method =
+                    HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {}));
             }
             let error = validate_mode(&agent, &method, &endpoint, mode).unwrap_err();
             assert!(error.contains(message), "{mode:?}: {error}");
@@ -818,7 +825,8 @@ mod tests {
         ] {
             let (agent, method) = fixtures(vec![], SchemaType::stream(Some(element)));
             let (mount, mut endpoint) = route();
-            endpoint.http_method = HttpMethod::Get(Empty {});
+            endpoint.http_method =
+                HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {}));
             assert_eq!(
                 validate_mode(&agent, &method, &endpoint, HttpRouteMode::Sse).unwrap_err(),
                 "sse mode not served yet"
@@ -1223,24 +1231,24 @@ mod tests {
 
     #[test]
     fn stream_input_can_share_constructor_path_name_but_not_method_bindings() {
-        use golem_common::model::agent::{HeaderVariable, QueryVariable};
+        use golem_schema::http::{HeaderVariable, QueryVariable};
         let (agent, method) = fixtures(
             vec![field("id", SchemaType::stream(Some(SchemaType::string())))],
             SchemaType::string(),
         );
         let (mut mount, endpoint) = route();
-        mount
-            .path_prefix
-            .push(PathSegment::PathVariable(PathVariable {
+        mount.path_prefix.push(PathSegment::Segment(
+            schema_http::PathSegment::PathVariable(PathVariable {
                 variable_name: "id".into(),
-            }));
+            }),
+        ));
         assert!(validate_route(&agent, &method, &mount, &endpoint).is_ok());
         let mut path_endpoint = endpoint.clone();
-        path_endpoint
-            .path_suffix
-            .push(PathSegment::PathVariable(PathVariable {
+        path_endpoint.path_suffix.push(PathSegment::Segment(
+            schema_http::PathSegment::PathVariable(PathVariable {
                 variable_name: "id".into(),
-            }));
+            }),
+        ));
         assert!(validate_route(&agent, &method, &mount, &path_endpoint).is_err());
         let mut query_endpoint = endpoint.clone();
         query_endpoint.query_vars.push(QueryVariable {
@@ -1263,19 +1271,19 @@ mod tests {
             SchemaType::string(),
         );
         let (mut mount, mut endpoint) = route();
-        mount
-            .path_prefix
-            .push(PathSegment::RemainingPathVariable(PathVariable {
+        mount.path_prefix.push(PathSegment::Segment(
+            schema_http::PathSegment::RemainingPathVariable(PathVariable {
                 variable_name: "tail".into(),
-            }));
+            }),
+        ));
         assert!(validate_route(&agent, &method, &mount, &endpoint).is_err());
 
         let (mount, _) = route();
-        endpoint
-            .path_suffix
-            .push(PathSegment::PathVariable(PathVariable {
+        endpoint.path_suffix.push(PathSegment::Segment(
+            schema_http::PathSegment::PathVariable(PathVariable {
                 variable_name: "streams".into(),
-            }));
+            }),
+        ));
         assert!(validate_route(&agent, &method, &mount, &endpoint).is_err());
     }
 }

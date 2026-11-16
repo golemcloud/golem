@@ -14,8 +14,9 @@
 
 use golem_common::SafeDisplay;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
-use golem_common::model::{Empty, RetryConfig};
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
+use golem_schema::Empty;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
