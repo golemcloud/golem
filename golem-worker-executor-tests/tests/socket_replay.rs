@@ -443,6 +443,192 @@ async fn p3_tcp_socket_kept_across_invocations_is_lost_after_replay(
     session.finish().await
 }
 
+#[test]
+#[timeout("3m")]
+async fn g2_send_on_a_replayed_connection_reports_connection_broken(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "g2").await?;
+    let connected: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let duplicate: Result<(), String> = session
+        .call("p3_tcp_receive_again", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(duplicate, Err("ErrorCode::InvalidState".to_string()));
+    session.restart_executor().await?;
+    let sent: Result<(), String> = session
+        .call("p3_tcp_send", data_value!("a".to_string(), b"x".to_vec()))
+        .await?;
+    assert_eq!(
+        sent,
+        Err("1 bytes were not accepted: Err(\"ErrorCode::ConnectionBroken\")".to_string())
+    );
+    let received: Result<(), String> = session
+        .call("p3_tcp_receive_again", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(received, Err("ErrorCode::ConnectionBroken".to_string()));
+    assert_eq!(peer.connections().len(), 1);
+    assert!(peer.connections()[0].received.is_empty());
+    session.finish().await
+}
+
+#[test]
+#[timeout("3m")]
+async fn g3_getters_are_equal_before_and_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "g3").await?;
+    let connected: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let before: Result<(String, String), String> = session
+        .call("p3_tcp_addresses", data_value!("a".to_string()))
+        .await?;
+    assert!(before.is_ok(), "{before:?}");
+    session.restart_executor().await?;
+    let after: Result<(String, String), String> = session
+        .call("p3_tcp_addresses", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after, before);
+    assert_eq!(peer.connections().len(), 1);
+    session.finish().await
+}
+
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_bind_and_configured_options_replay_without_native_bind(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "tcp-bind").await?;
+    let bound: Result<(), String> = session
+        .call("p3_tcp_bind", data_value!("a".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let before: Result<(String, Vec<u64>), String> = session
+        .call("p3_tcp_bound_state", data_value!("a".to_string()))
+        .await?;
+    let (address, options) = before
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!(error.clone()))?;
+    let address: SocketAddr = address.parse()?;
+    assert_ne!(address.port(), 0);
+    assert_eq!(&options[..5], &[1, 3_000_000_000, 4_000_000_000, 7, 42]);
+    session.restart_executor().await?;
+    // Occupy the recorded endpoint before reconstruction. Replaying bind must not touch it.
+    let _occupied = tokio::time::timeout(WAIT, async {
+        loop {
+            match TcpListener::bind(address).await {
+                Ok(listener) => break Ok::<_, std::io::Error>(listener),
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::task::yield_now().await
+                }
+                Err(error) => break Err(error),
+            }
+        }
+    })
+    .await??;
+    let after: Result<(String, Vec<u64>), String> = session
+        .call("p3_tcp_bound_state", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after, before);
+    assert_eq!(session.starts("sockets::types::tcp-socket::bind").await?, 1);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let connect: Result<(), String> = session
+        .call(
+            "p3_tcp_connect_existing",
+            data_value!("a".to_string(), peer.port),
+        )
+        .await?;
+    assert_eq!(connect, Err("ErrorCode::ConnectionBroken".to_string()));
+    assert!(peer.connections().is_empty());
+    session.finish().await
+}
+
+#[test]
+#[timeout("3m")]
+async fn p3_failed_tcp_connect_preserves_closed_state_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "tcp-refused").await?;
+    let bound: Result<(), String> = session
+        .call("p3_tcp_bind", data_value!("a".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let unused = TcpListener::bind("127.0.0.1:0").await?;
+    let port = unused.local_addr()?.port();
+    drop(unused);
+    let result: Result<(), String> = session
+        .call(
+            "p3_tcp_connect_existing",
+            data_value!("a".to_string(), port),
+        )
+        .await?;
+    assert_eq!(result, Err("ErrorCode::ConnectionRefused".to_string()));
+    let before: Result<(String, String), String> = session
+        .call("p3_tcp_addresses", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(before, Err("ErrorCode::ConnectionRefused".to_string()));
+    for value in [None, Some(51u8)] {
+        let option: Result<u8, String> = session
+            .call("p3_tcp_hop_limit", data_value!("a".to_string(), value))
+            .await?;
+        assert_eq!(option, Err("ErrorCode::ConnectionRefused".to_string()));
+    }
+    session.restart_executor().await?;
+    let after: Result<(String, String), String> = session
+        .call("p3_tcp_addresses", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after, before);
+    for value in [None, Some(63u8)] {
+        let option: Result<u8, String> = session
+            .call("p3_tcp_hop_limit", data_value!("a".to_string(), value))
+            .await?;
+        assert_eq!(option, Err("ErrorCode::ConnectionRefused".to_string()));
+    }
+    let receive: Result<(), String> = session
+        .call("p3_tcp_receive_again", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(receive, Err("ErrorCode::ConnectionRefused".to_string()));
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::connect")
+            .await?,
+        1
+    );
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let reconnect: Result<(), String> = session
+        .call(
+            "p3_tcp_connect_existing",
+            data_value!("a".to_string(), peer.port),
+        )
+        .await?;
+    assert_eq!(reconnect, Err("ErrorCode::InvalidState".to_string()));
+    assert!(peer.connections().is_empty());
+    session.finish().await
+}
+
 /// A P3 TCP receive that waits on a silent peer when the agent crashes: recovery replays the
 /// completed receives from the oplog and completes the waiting one with `connection-broken`
 /// under its original `Start`, without a new connection.
