@@ -263,7 +263,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .await;
                 }
                 match DurableWorkerCtx::<Ctx>::on_agent_method_failure(
-                    &mut self.store,
+                    self.store,
                     &display_name,
                     error,
                     self.uses_streams,

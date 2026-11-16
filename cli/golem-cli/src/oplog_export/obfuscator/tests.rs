@@ -2841,19 +2841,32 @@ fn fixed_error_text_kept() {
 #[test]
 fn free_error_text_is_one_token() {
     let message = AgentError::TransientError("boom MARKER boom".into()).to_string("");
-    let out = rendered(KeepFlags::default(), &error_entry(&message), None);
-    let node = field(&out.entry, "error");
-    assert!(matches!(node, ReportNode::Str(s) if s.token.is_some() && s.value.is_none()));
-    assert_no_marker(&json(&out.entry), "MARKER");
-    let kept = rendered(
-        KeepFlags {
-            error_text: true,
-            ..KeepFlags::default()
-        },
-        &error_entry(&message),
-        None,
-    );
-    assert!(json(field(&kept.entry, "error")).contains("MARKER"));
+    for entry in [
+        error_entry(&message),
+        with_entry(
+            7,
+            PublicOplogEntry::AgentInvocationFailed(AgentInvocationFailedParams {
+                timestamp: Timestamp::from(0),
+                invocation_id: InvocationId(Uuid::from_u128(1)),
+                error: message.clone(),
+                start_index: OplogIndex::from_u64(3),
+            }),
+        ),
+    ] {
+        let out = rendered(KeepFlags::default(), &entry, None);
+        let node = field(&out.entry, "error");
+        assert!(matches!(node, ReportNode::Str(s) if s.token.is_some() && s.value.is_none()));
+        assert_no_marker(&json(&out.entry), "MARKER");
+        let kept = rendered(
+            KeepFlags {
+                error_text: true,
+                ..KeepFlags::default()
+            },
+            &entry,
+            None,
+        );
+        assert!(json(field(&kept.entry, "error")).contains("MARKER"));
+    }
 }
 
 #[test]
@@ -3560,6 +3573,12 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             span_finished: Some(marker_span_finished()),
         }),
         PublicOplogEntry::Suspend(SuspendParams { timestamp: ts() }),
+        PublicOplogEntry::AgentInvocationFailed(AgentInvocationFailedParams {
+            timestamp: ts(),
+            invocation_id: invocation_id(),
+            error: "MARKER".into(),
+            start_index: OplogIndex::from_u64(3),
+        }),
         PublicOplogEntry::Error(ErrorParams {
             timestamp: ts(),
             kind: OplogErrorKind::Invocation,
@@ -3954,7 +3973,7 @@ fn every_entry_kind_has_no_marker() {
         .iter()
         .map(|e| e.entry.entry_type().to_string())
         .collect();
-    assert_eq!(kinds.len(), 56, "{kinds:?}");
+    assert_eq!(kinds.len(), 57, "{kinds:?}");
     let secrets = every_entry_kind_secrets();
     for entry in &entries {
         let out = rendered(KeepFlags::default(), entry, None);
@@ -4033,6 +4052,11 @@ fn every_entry_kind_keeps_metadata() {
     assert_eq!(
         field(&start.entry, "parentStartIndex"),
         &super::value::number(1)
+    );
+    let failed = render("AgentInvocationFailed");
+    assert_eq!(field(&failed.entry, "startIndex"), &super::value::number(3));
+    assert!(
+        matches!(field(&failed.entry, "invocationId"), ReportNode::Str(s) if s.token.is_some() && s.value.is_none())
     );
     let error = render("Error");
     let retry = serde_json::to_value(field(&error.entry, "retryPolicyState")).unwrap();
