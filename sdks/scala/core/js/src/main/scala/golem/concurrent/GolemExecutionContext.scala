@@ -34,9 +34,10 @@ import scala.scalajs.concurrent.JSExecutionContext
  * Use [[GolemExecutionContext.global]] (or
  * `import golem.concurrent.Implicits.global`) in agent code, and
  * [[GolemExecutionContext.wrap]] for an execution context of your own.
- * Callbacks run by other execution contexts, including
- * `ExecutionContext.parasitic`, run in whatever scope is current when their
- * source completes.
+ * Preparing a wrapper also prepares the wrapped context, so state that the
+ * wrapped context captures at registration is kept. Callbacks run by other
+ * execution contexts, including `ExecutionContext.parasitic`, run in whatever
+ * scope is current when their source completes.
  */
 final class GolemExecutionContext private (
   underlying: ExecutionContext,
@@ -45,11 +46,14 @@ final class GolemExecutionContext private (
 
   @nowarn("cat=deprecation")
   override def prepare(): ExecutionContext =
-    new GolemExecutionContext(underlying, CustomInvocationContext.capture())
+    new GolemExecutionContext(underlying.prepare(), CustomInvocationContext.capture())
 
   override def execute(runnable: Runnable): Unit = {
     val token = if (captured == null) CustomInvocationContext.capture() else captured
+    val scope = DurableScope.waitingFor(token)
+    if (scope != null) scope.taskSubmitted()
     underlying.execute { () =>
+      if (scope != null) scope.taskStarted()
       CustomInvocationContext.run[Unit](token, () => runnable.run())
     }
   }

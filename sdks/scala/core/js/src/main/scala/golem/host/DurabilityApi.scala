@@ -21,10 +21,9 @@ import golem.host.js.schema.JsTypedSchemaValue
 import golem.schema.{FromSchema, IntoSchema, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
 
-import golem.concurrent.{CustomInvocationContext, CustomInvocationToken, GolemExecutionContext}
+import golem.concurrent.{CustomInvocationContext, CustomInvocationToken, DurableScope, GolemExecutionContext}
 
-import scala.collection.mutable
-import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
@@ -281,44 +280,67 @@ object DurabilityApi {
       )
     else {
       implicit val ec: ExecutionContext = GolemExecutionContext.global
-      val parent                        = openScope(CustomInvocationContext.capture())
-      parent.foreach(_.childStarted())
-      val functionName = durableFunctionName(iface, function)
-      val admitted     = attempt {
-        observeFunctionCall(iface, function)
-        DurabilityModule
-          .beginCustomDurableInvocationAsync(
-            functionName,
-            typedToJs(requestSchema.toTyped(request)),
-            DurableFunctionType.toJs(functionType)
-          )
-          .toFuture
-      }
-      admitted.transformWith { outcome =>
-        val live =
-          outcome.toOption.map(raw => raw: js.Any).filter(_.asInstanceOf[JsCustomDurableInvocation].tag == "live")
-        live match {
-          case Some(raw) =>
-            val invocation = new LiveCustomDurableInvocation(raw.asInstanceOf[JsCustomDurableInvocationLive].value)
-            runLive(invocation, parent, forcedCommit)(body)
-          case None =>
-            parent.foreach(_.childClosed())
-            Future.fromTry(outcome.map { raw =>
-              raw.tag match {
-                case "replayed" =>
-                  val persisted = raw.asInstanceOf[JsCustomDurableInvocationReplayed].value
-                  decodeReplay(persistedFromJs(persisted), functionName, functionType)
-                case other => throw new IllegalArgumentException(s"Unknown CustomDurableInvocation tag: $other")
-              }
-            })
-        }
+      val (parent, parentToken)         = DurableScope.admitting(CustomInvocationContext.capture())
+      if (parent != null) parent.childStarted()
+      // Begin and enter in the scope that admits the operation; when the current scope is already
+      // sealed, that is its nearest enclosing open scope.
+      CustomInvocationContext.run(
+        parentToken,
+        () => admit(parent, parentToken, iface, function, functionType, request, forcedCommit)(body)
+      )
+    }
+
+  private def admit[Request, Response](
+    parent: DurableScope | Null,
+    parentToken: CustomInvocationToken,
+    iface: String,
+    function: String,
+    functionType: DurableFunctionType,
+    request: Request,
+    forcedCommit: Boolean
+  )(body: ExecutionContext ?=> Future[Response])(implicit
+    requestSchema: IntoSchema[Request],
+    responseSchema: IntoSchema[Response],
+    responseDecoder: FromSchema[Response],
+    ec: ExecutionContext
+  ): Future[Response] = {
+    val functionName = durableFunctionName(iface, function)
+    val admitted     = attempt {
+      observeFunctionCall(iface, function)
+      DurabilityModule
+        .beginCustomDurableInvocationAsync(
+          functionName,
+          typedToJs(requestSchema.toTyped(request)),
+          DurableFunctionType.toJs(functionType)
+        )
+        .toFuture
+    }
+    admitted.transformWith { outcome =>
+      val live =
+        outcome.toOption.map(raw => raw: js.Any).filter(_.asInstanceOf[JsCustomDurableInvocation].tag == "live")
+      live match {
+        case Some(raw) =>
+          val invocation = new LiveCustomDurableInvocation(raw.asInstanceOf[JsCustomDurableInvocationLive].value)
+          runLive(invocation, parent, parentToken, forcedCommit)(body)
+        case None =>
+          if (parent != null) parent.childClosed()
+          Future.fromTry(outcome.map { raw =>
+            raw.tag match {
+              case "replayed" =>
+                val persisted = raw.asInstanceOf[JsCustomDurableInvocationReplayed].value
+                decodeReplay(persistedFromJs(persisted), functionName, functionType)
+              case other => throw new IllegalArgumentException(s"Unknown CustomDurableInvocation tag: $other")
+            }
+          })
       }
     }
+  }
 
   // Runs in the parent's scope. Every callback registered here captures the operation's scope.
   private def runLive[Response](
     invocation: LiveCustomDurableInvocation,
-    parent: Option[OpenScope],
+    parent: DurableScope | Null,
+    parentToken: CustomInvocationToken,
     forcedCommit: Boolean
   )(body: ExecutionContext ?=> Future[Response])(implicit
     responseSchema: IntoSchema[Response],
@@ -329,16 +351,17 @@ object DurabilityApi {
       catch {
         case error: Throwable =>
           invocation.drop()
-          parent.foreach(_.childClosed())
+          if (parent != null) parent.childClosed()
           throw error
       }
-    val scope = new OpenScope(token)
-    openScopes += scope
+    val scope = DurableScope.open(token, parentToken, parent)
+    // Registered under the child token, so encoding the response, finishing and dropping run in
+    // the operation's scope.
     CustomInvocationContext.run(
       token,
       () =>
         attempt(body)
-          .transformWith(result => scope.bodyFinished().transformWith(_ => complete(invocation, result, forcedCommit)))
+          .transformWith(result => scope.sealWhenIdle().transformWith(_ => complete(invocation, result, forcedCommit)))
           .transform(result => close(invocation, scope, parent, result))
     )
   }
@@ -357,52 +380,25 @@ object DurabilityApi {
   // Drops the invocation in its own scope, then closes the scope and releases the parent.
   private def close[Response](
     invocation: LiveCustomDurableInvocation,
-    scope: OpenScope,
-    parent: Option[OpenScope],
+    scope: DurableScope,
+    parent: DurableScope | Null,
     result: Try[Response]
   ): Try[Response] = {
     val closed = Try {
       try invocation.drop()
       finally {
-        openScopes -= scope
+        scope.close()
         CustomInvocationContext.close(scope.token)
       }
     }
-    parent.foreach(_.childClosed())
+    if (parent != null) parent.childClosed()
     (result, closed) match {
       case (Success(_), Failure(error)) => Failure(error)
       case _                            => result
     }
   }
 
-  /** An open asynchronous operation and the nested operations it waits for. */
-  private final class OpenScope(val token: CustomInvocationToken) {
-    private var openChildren = 0
-    private var finished     = Option.empty[Promise[Unit]]
-
-    def childStarted(): Unit = openChildren += 1
-
-    def childClosed(): Unit = {
-      openChildren -= 1
-      settle()
-    }
-
-    def bodyFinished(): Future[Unit] = {
-      val done = Promise[Unit]()
-      finished = Some(done)
-      settle()
-      done.future
-    }
-
-    private def settle(): Unit =
-      if (openChildren == 0) finished.foreach(_.trySuccess(()))
-  }
-
-  private val openScopes        = mutable.ArrayBuffer.empty[OpenScope]
   private var synchronousBodies = 0
-
-  private def openScope(token: CustomInvocationToken): Option[OpenScope] =
-    openScopes.find(_.token eq token)
 
   private def attempt[A](future: => Future[A]): Future[A] =
     try future

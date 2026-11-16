@@ -94,11 +94,22 @@ globalThis.__golemCustomInvocationContext = customContext;
 
 // A durability host whose async admissions are released by the test, in any order.
 const durability = (() => {
-  const state = { pending: [], replayed: {}, events: customContext.events };
+  const state = { pending: [], replayed: {}, heldFinishes: {}, events: customContext.events };
   state.reset = () => {
     customContext.reset();
     state.pending.length = 0;
     state.replayed = {};
+    state.heldFinishes = {};
+  };
+  // `finishAsync` of a held function name stays pending until the test releases it.
+  state.holdFinish = (functionName) => {
+    state.heldFinishes[functionName] = null;
+  };
+  state.releaseFinish = (functionName) => {
+    const release = state.heldFinishes[functionName];
+    if (typeof release !== "function") throw new Error(`no held finish of ${functionName}`);
+    delete state.heldFinishes[functionName];
+    release();
   };
   state.admit = (functionName) => {
     const index = state.pending.findIndex((admission) => admission.functionName === functionName);
@@ -118,6 +129,11 @@ const durability = (() => {
     }
     static async finishAsync(live, response) {
       state.events.push(`finish ${live.functionName} in ${customContext.currentName()}`);
+      if (live.functionName in state.heldFinishes) {
+        await new Promise((resolve) => {
+          state.heldFinishes[live.functionName] = resolve;
+        });
+      }
     }
     [Symbol.dispose]() {
       state.events.push(`drop ${this.functionName} in ${customContext.currentName()}`);

@@ -133,7 +133,7 @@ def bothRevisions(read: String => Future[String]): Future[List[String]] = {
 }
 ```
 
-Operations started in a body are nested. A parent finishes, or is dropped on failure, only after its nested operations have finished, so a nested operation that never completes keeps its parent open. `durable` is for synchronous bodies only; starting a `durableAsync` operation inside it fails.
+Operations started in a body are nested. A parent finishes, or is dropped on failure, only after its nested operations have finished, so a nested operation that never completes keeps its parent open. A continuation that is already ready to run when the body and its nested operations finish, for example a `flatMap` on a nested operation that just completed, still runs before the parent finishes, and an operation it starts is nested too. An operation started after that point, for example by a callback that waited for a later host call, belongs to the nearest enclosing operation that has not started to finish, or to the root. `durable` is for synchronous bodies only; starting a `durableAsync` operation inside it fails.
 
 The remaining limits:
 

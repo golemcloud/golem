@@ -1834,7 +1834,10 @@ durability outside custom operations, to the Rust poll/drop scope integration, o
 `durableAsync`. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
 `wasm-rquickjs:custom-invocation-context` module, and its `GolemExecutionContext` captures the
 scope when a `Future` callback is registered (`ExecutionContext.prepare`), not when its source
-completes. A Scala parent finishes only after its nested operations close. Callbacks run by
+completes. A Scala parent finishes only after its nested operations close and no task that
+`GolemExecutionContext` submitted in its scope waits to run; it is then sealed (`DurableScope`),
+and an operation started in a sealed scope begins and enters in the nearest admitting ancestor,
+so host and SDK agree on its parent. Callbacks run by
 other execution contexts, and work escaping an outermost operation, are not attributed to it.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the

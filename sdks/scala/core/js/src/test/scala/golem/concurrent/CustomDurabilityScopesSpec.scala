@@ -164,6 +164,87 @@ object CustomDurabilityScopesSpec extends ZIOSpecDefault {
         )
       }
     },
+    test("a parent waits for a nested operation that a ready continuation starts") {
+      scenario {
+        var chain  = Future.successful("")
+        val parent = operation("chain-parent") {
+          chain = operation("first")(Future.successful("first"))
+            .flatMap(_ => operation("second")(Future.successful("second")))
+          Future.successful("parent")
+        }
+        for {
+          _                    <- admit("it::chain-parent")
+          _                    <- admit("it::first")
+          beforeSecondAdmission = parent.value
+          _                    <- admit("it::second")
+          results              <- Future.sequence(List(parent, chain))
+        } yield (beforeSecondAdmission, results, events())
+      }.map { case (beforeSecondAdmission, results, log) =>
+        assertTrue(
+          beforeSecondAdmission.isEmpty,
+          results == List("parent", "second"),
+          log.contains("begin it::second in it::chain-parent"),
+          log.contains("enter it::second in it::chain-parent"),
+          log.indexOf("close it::second") < log.indexOf("finish it::chain-parent in it::chain-parent")
+        )
+      }
+    },
+    test("an operation started while its parent finishes belongs to the nearest open scope") {
+      scenario {
+        host.holdFinish("it::finishing")
+        val lateBody             = Promise[String]()
+        var parentToken          = root
+        var late: Future[String] = Future.successful("")
+        val parent               = operation("finishing") {
+          parentToken = CustomInvocationContext.capture()
+          Future.successful("parent")
+        }
+        for {
+          _            <- admit("it::finishing")
+          _             = CustomInvocationContext.run(parentToken, () => late = operation("late")(lateBody.future))
+          _            <- admit("it::late")
+          _             = host.releaseFinish("it::finishing")
+          parentResult <- parent
+          _             = lateBody.success("late")
+          lateResult   <- late
+        } yield (parentResult, lateResult, events())
+      }.map { case (parentResult, lateResult, log) =>
+        assertTrue(
+          parentResult == "parent",
+          lateResult == "late",
+          log.contains("begin it::late in root"),
+          log.contains("enter it::late in root"),
+          log.indexOf("close it::finishing") < log.indexOf("close it::late")
+        )
+      }
+    },
+    test("wrapping preserves the underlying context's registration-time state") {
+      scenario {
+        var local      = "registration"
+        val underlying = new ExecutionContext {
+          override def prepare(): ExecutionContext = {
+            val captured = local
+            new ExecutionContext {
+              def execute(r: Runnable): Unit = {
+                val previous = local
+                local = captured
+                try r.run()
+                finally local = previous
+              }
+              def reportFailure(t: Throwable): Unit = throw t
+            }
+          }
+          def execute(r: Runnable): Unit        = r.run()
+          def reportFailure(t: Throwable): Unit = throw t
+        }
+        val source  = Promise[Unit]()
+        val direct  = source.future.map(_ => local)(underlying)
+        val wrapped = source.future.map(_ => local)(GolemExecutionContext.wrap(underlying))
+        local = "completion"
+        source.success(())
+        direct.zip(wrapped)
+      }.map { case (direct, wrapped) => assertTrue(direct == "registration", wrapped == "registration") }
+    },
     test("a failed body drops the operation in its own scope and does not finish it") {
       scenario {
         val failed = operation("failing")(Future.failed(new RuntimeException("body failed")))
