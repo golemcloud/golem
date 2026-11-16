@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod account_usage;
+pub mod address_class;
 pub mod agent;
 pub mod agent_config;
 pub mod agent_secret;
