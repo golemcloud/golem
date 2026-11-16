@@ -15,13 +15,13 @@
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{
     LiveStreamEventPayload, LiveStreamPublishError, LiveStreamPublisher, LiveStreamReceiveError,
-    PrimaryLiveStreamSubscriber, ReservedPrimaryLiveStreamSubscriber, StreamTerminalError,
-    live_output_stream_bus,
+    PrimaryLiveStreamSubscriber, ReservedPrimaryLiveStreamSubscriber, live_output_stream_bus,
+    live_stream_bus,
 };
 use crate::worker::suspension::{ExternalActivity, RuntimeSource};
 use crate::workerctx::WorkerCtx;
 use golem_common::base_model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
-use golem_schema::schema::wit::wire::SchemaValueTree;
+use golem_schema::schema::wit::wire::{SchemaValueTree, StreamOutcome};
 use golem_schema::schema::wit::{decode_value_with, encode_value_with_streams};
 use golem_schema::schema::{SchemaValue, SchemaValueStream};
 use golem_service_base::error::worker_executor::InterruptKind;
@@ -30,9 +30,13 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use wasmtime::StoreContextMut;
-use wasmtime::component::{Destination, Source, StreamConsumer, StreamProducer, StreamResult};
+use wasmtime::component::{
+    Destination, FutureProducer, FutureReader, Source, StreamConsumer, StreamProducer,
+    StreamResult, TerminalConsumption,
+};
 
 #[derive(Debug)]
 pub(crate) struct SourceLifecycle {
@@ -180,7 +184,7 @@ pub(super) fn output_stream_pair(
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     interrupt: FrontendInterrupt,
 ) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
-    accounted_output_stream_pair(capacity, runtime_teardown, None, interrupt)
+    accounted_output_stream_pair(capacity, runtime_teardown, None, interrupt, None)
 }
 
 pub(super) fn accounted_output_stream_pair(
@@ -188,11 +192,21 @@ pub(super) fn accounted_output_stream_pair(
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     runtime_source: Option<RuntimeSource>,
     interrupt: FrontendInterrupt,
+    producer_outcome: Option<Arc<crate::durable_host::stream_outcome::ProducerOutcome>>,
 ) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
     let cancellation = CancellationToken::new();
     let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
-    let (publisher, primary) = live_output_stream_bus(capacity, cancellation)
-        .map_err(|error| format!("failed to create live output stream bus: {error:?}"))?;
+    let retained_producer = producer_outcome.clone();
+    let (publisher, primary) = live_stream_bus(capacity, move || {
+        cancellation.cancel();
+        if let Some(producer) = &retained_producer {
+            producer.close_items();
+        }
+    })
+    .map_err(|error| format!("failed to create live output stream bus: {error:?}"))?;
+    if let Some(producer) = &producer_outcome {
+        producer.bind_publication(publisher.clone(), lifecycle.clone());
+    }
     let endpoint = LiveStreamEndpoint {
         primary: Some(primary),
         lifecycle: lifecycle.clone(),
@@ -209,6 +223,7 @@ pub(super) fn accounted_output_stream_pair(
             interrupt,
             runtime_source,
             accepted_items: 0,
+            producer_outcome,
         },
         SchemaValueStream::from_host_endpoint(endpoint),
     ))
@@ -232,7 +247,7 @@ pub(super) fn accounted_byte_output_stream_pair(
     interrupt: FrontendInterrupt,
 ) -> Result<(LiveByteOutputConsumer, SchemaValueStream), String> {
     let (consumer, stream) =
-        accounted_output_stream_pair(capacity, runtime_teardown, runtime_source, interrupt)?;
+        accounted_output_stream_pair(capacity, runtime_teardown, runtime_source, interrupt, None)?;
     Ok((LiveByteOutputConsumer(consumer), stream))
 }
 
@@ -344,11 +359,17 @@ pub(super) struct LiveOutputConsumer {
     interrupt: FrontendInterrupt,
     runtime_source: Option<RuntimeSource>,
     accepted_items: u64,
+    producer_outcome: Option<Arc<crate::durable_host::stream_outcome::ProducerOutcome>>,
 }
 
 impl LiveOutputConsumer {
     fn begin_terminal_publication(&mut self) {
         self.terminal_requested = true;
+        if let Some(outcome) = &self.producer_outcome {
+            outcome.close_items();
+            self.pending = Some(Box::pin(async { Ok(0) }));
+            return;
+        }
         let publisher = self.publisher.clone();
         self.pending = Some(Box::pin(async move {
             let result = publisher.publish_end().await;
@@ -416,6 +437,12 @@ impl LiveOutputConsumer {
 
 impl Drop for LiveOutputConsumer {
     fn drop(&mut self) {
+        if let Some(outcome) = &self.producer_outcome {
+            // Accepted items already belong to the native publication lane. Closing items
+            // never selects an outcome; the invocation scope still owns absent outcomes.
+            outcome.close_items();
+            return;
+        }
         let pending = self.pending.take();
         let terminal_requested = self.terminal_requested;
         let publisher = self.publisher.clone();
@@ -505,9 +532,25 @@ impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for LiveOutputConsumer {
         let publisher = self.publisher.clone();
         match decoded {
             Ok(value) => {
-                self.pending = Some(Box::pin(async move { publisher.publish_item(value).await }));
+                self.pending = Some(match &self.producer_outcome {
+                    Some(outcome) => {
+                        let completion = outcome.publish_item(value);
+                        Box::pin(async move {
+                            completion
+                                .await
+                                .unwrap_or(Err(LiveStreamPublishError::Closed))
+                        })
+                    }
+                    None => Box::pin(async move { publisher.publish_item(value).await }),
+                });
             }
             Err(error) => {
+                if self.producer_outcome.is_some() {
+                    return Poll::Ready(Err(wasmtime::Error::from(
+                        wasmtime::Trap::UnreachableCodeReached,
+                    )
+                    .context(format!("invalid schema stream item: {error}"))));
+                }
                 self.pending_failure = Some(error.clone());
                 self.terminal_requested = true;
                 self.pending = Some(Box::pin(async move {
@@ -563,18 +606,58 @@ pub(super) struct LiveInputProducer {
     lifecycle: Arc<SourceLifecycle>,
     finished: bool,
     interrupt: Option<FrontendInterrupt>,
+    completion: Option<oneshot::Sender<StreamTerminal>>,
+}
+
+struct LiveInputOutcomeProducer(Option<oneshot::Receiver<StreamTerminal>>);
+
+impl<D: Send + 'static> FutureProducer<D> for LiveInputOutcomeProducer {
+    type Item = StreamOutcome;
+
+    fn poll_produce(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        _store: StoreContextMut<D>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<Option<Self::Item>>> {
+        if finish {
+            return Poll::Ready(Ok(None));
+        }
+        let Some(receiver) = self.0.as_mut() else {
+            return Poll::Pending;
+        };
+        let result = std::task::ready!(Pin::new(receiver).poll(cx));
+        self.0 = None;
+        match result {
+            Ok(terminal) => Poll::Ready(
+                crate::durable_host::stream_outcome::encode_outcome(&terminal).map(Some),
+            ),
+            // An early reader drop is not a producer outcome.
+            Err(_) => Poll::Pending,
+        }
+    }
 }
 
 impl LiveInputProducer {
-    pub(super) fn new(endpoint: LiveStreamEndpoint, interrupt: FrontendInterrupt) -> Self {
+    pub(super) fn new<D: Send + 'static>(
+        store: &mut impl wasmtime::AsContextMut<Data = D>,
+        endpoint: LiveStreamEndpoint,
+        interrupt: FrontendInterrupt,
+    ) -> wasmtime::Result<(Self, FutureReader<StreamOutcome>)> {
         let lifecycle = endpoint.lifecycle.clone();
-        Self {
-            subscriber: Some(endpoint.activate()),
-            pending: None,
-            lifecycle,
-            finished: false,
-            interrupt: Some(interrupt),
-        }
+        let (sender, receiver) = oneshot::channel();
+        let outcome = FutureReader::new(store, LiveInputOutcomeProducer(Some(receiver)))?;
+        Ok((
+            Self {
+                subscriber: Some(endpoint.activate()),
+                pending: None,
+                lifecycle,
+                finished: false,
+                interrupt: Some(interrupt),
+                completion: Some(sender),
+            },
+            outcome,
+        ))
     }
 }
 
@@ -647,27 +730,21 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for LiveInputProducer {
                     destination.set_buffer(Some(encoded));
                     Poll::Ready(Ok(StreamResult::Completed))
                 }
-                LiveStreamEventPayload::Terminal {
-                    terminal: StreamTerminal::Finished,
-                    ..
-                } => {
+                LiveStreamEventPayload::Terminal { terminal, .. } => {
                     self.finished = true;
                     self.lifecycle.finish();
-                    Poll::Ready(Ok(StreamResult::Dropped))
-                }
-                LiveStreamEventPayload::Terminal {
-                    authored_by,
-                    terminal,
-                } => {
-                    self.finished = true;
-                    self.lifecycle.finish();
-                    Poll::Ready(Err(wasmtime::Error::from_anyhow(
-                        StreamTerminalError {
-                            authored_by,
-                            terminal,
+                    if let Some(completion) = self.completion.take() {
+                        if destination.remaining(&mut store).is_some() {
+                            destination.register_read_observer(&mut store, move |consumption| {
+                                if consumption == TerminalConsumption::Delivered {
+                                    let _ = completion.send(terminal);
+                                }
+                            })?;
+                        } else {
+                            let _ = completion.send(terminal);
                         }
-                        .into_trap(),
-                    )))
+                    }
+                    Poll::Ready(Ok(StreamResult::Dropped))
                 }
             },
             Some(Err(LiveStreamReceiveError::Closed)) => {
@@ -1052,6 +1129,7 @@ mod tests {
                     authored_by: StreamTerminalAuthor::Guest,
                     terminal: StreamTerminal::Finished,
                 },
+                ..
             }
         ));
     }
@@ -1075,6 +1153,7 @@ mod tests {
                     authored_by: StreamTerminalAuthor::Guest,
                     terminal: StreamTerminal::Finished,
                 },
+                ..
             }
         ));
         tokio::time::timeout(Duration::from_millis(20), async {

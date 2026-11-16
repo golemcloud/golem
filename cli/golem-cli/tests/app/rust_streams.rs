@@ -108,6 +108,7 @@ async fn rust_generated_native_stream_bridge_e2e() {
             fn forward(&self, input: Vec<AgentStream<u32>>) -> Vec<AgentStream<u32>>;
             fn nested(&self, input: AgentStream<AgentStream<u32>>) -> AgentStream<AgentStream<u32>>;
             fn application_error(&self) -> AgentStream<Result<u32, String>>;
+            fn declared_failure(&self) -> AgentStream<u32>;
             fn malformed(&self) -> AgentStream<u32>;
             fn fixed_echo(&self, input: AgentStream<FixedPair>) -> AgentStream<FixedPair>;
             fn fallible_echo(&self, input: AgentStream<FallibleItem>) -> AgentStream<FallibleItem>;
@@ -123,15 +124,16 @@ async fn rust_generated_native_stream_bridge_e2e() {
             }
             fn produce(&self) -> AgentStream<u32> {
                 let (mut writer, stream) = AgentStream::new();
-                spawn_local(async move { let _ = writer.write_all([1, 2, 3]).await; });
+                spawn_local(async move { writer.write_all([1, 2, 3]).await.unwrap(); writer.close().await.unwrap(); });
                 stream
             }
             fn exchange(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
                 let (mut writer, stream) = AgentStream::new();
                 spawn_local(async move {
-                    while let Some(item) = input.next().await.unwrap() {
-                        if writer.write_one(item * 10).await.is_err() { break; }
+                    while let Some(item) = input.next().await {
+                        if writer.write_one(item.unwrap() * 10).await.is_err() { return; }
                     }
+                    writer.close().await.unwrap();
                 });
                 stream
             }
@@ -139,15 +141,30 @@ async fn rust_generated_native_stream_bridge_e2e() {
             fn nested(&self, input: AgentStream<AgentStream<u32>>) -> AgentStream<AgentStream<u32>> { input }
             fn application_error(&self) -> AgentStream<Result<u32, String>> {
                 let (mut writer, stream) = AgentStream::new();
-                spawn_local(async move { writer.write_all([Ok(1), Err("recoverable".to_string()), Ok(2)]).await.unwrap(); });
+                spawn_local(async move { writer.write_all([Ok(1), Err("recoverable".to_string()), Ok(2)]).await.unwrap(); writer.close().await.unwrap(); });
+                stream
+            }
+            fn declared_failure(&self) -> AgentStream<u32> {
+                let (mut writer, stream) = AgentStream::new();
+                spawn_local(async move {
+                    writer.write_all([17, 29]).await.unwrap();
+                    let value = golem_rust::schema::try_into_typed_schema_value(&73u32).unwrap();
+                    writer.finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(value)))).await.unwrap();
+                });
                 stream
             }
             fn malformed(&self) -> AgentStream<u32> {
                 let (mut writer, stream) = golem_rust::schema::wit::new_schema_value_stream();
+                let (completion, outcome) = golem_rust::schema::wit::new_schema_stream_outcome();
                 spawn_local(async move {
                     let _ = writer.write_one(golem_rust::schema::wit::wire::SchemaValueTree { value_nodes: vec![], root: 0 }).await;
+                    drop(writer);
+                    let _ = completion.write(Some(Ok(()))).await;
                 });
-                AgentStream::from_raw(stream)
+                AgentStream::from_schema_stream_with_wire_decoder(
+                    golem_rust::schema::SchemaValueStream::from_native(stream, outcome),
+                    |tree| golem_rust::schema::wit::direct::decode(tree).map_err(|e| e.to_string()),
+                )
             }
             fn fixed_echo(&self, input: AgentStream<FixedPair>) -> AgentStream<FixedPair> { input }
             fn fallible_echo(&self, input: AgentStream<FallibleItem>) -> AgentStream<FallibleItem> { input }
@@ -174,12 +191,12 @@ async fn rust_generated_native_stream_bridge_e2e() {
                 let forwarder = StreamProvider::get(format!("forwarder-{scenario}")).unwrap();
                 if scenario == "basics" {
                 let (mut writer, input) = new_u32_stream();
-                spawn_local(async move { writer.write_all([4, 5]).await.unwrap(); });
+                spawn_local(async move { writer.write_all([4, 5]).await.unwrap(); writer.close().await.unwrap(); });
                 assert_eq!(provider.consume(input).await.unwrap(), vec![4, 5]);
                 assert_eq!(provider.produce().await.unwrap().collect().await.unwrap(), vec![1, 2, 3]);
 
                 let (mut writer, input) = new_u32_stream();
-                spawn_local(async move { writer.write_all([6, 7]).await.unwrap(); });
+                spawn_local(async move { writer.write_all([6, 7]).await.unwrap(); writer.close().await.unwrap(); });
                 assert_eq!(provider.exchange(input).await.unwrap().collect().await.unwrap(), vec![60, 70]);
                 }
 
@@ -195,14 +212,22 @@ async fn rust_generated_native_stream_bridge_e2e() {
 
                 let (mut writer, input) = AgentStream::<AgentStream<u32>>::new();
                 let inner = provider.produce().await.unwrap();
-                spawn_local(async move { writer.write_one(inner).await.unwrap(); });
+                spawn_local(async move { writer.write_one(inner).await.unwrap(); writer.close().await.unwrap(); });
                 let mut outer = forwarder.nested(input).await.unwrap();
                 assert_eq!(outer.next().await.unwrap().unwrap().collect().await.unwrap(), vec![1, 2, 3]);
-                assert!(outer.next().await.unwrap().is_none());
+                assert!(outer.next().await.is_none());
                 }
 
                 if scenario == "errors" {
                 assert_eq!(provider.application_error().await.unwrap().collect().await.unwrap(), vec![Ok(1), Err("recoverable".to_string()), Ok(2)]);
+                let mut failed = provider.declared_failure().await.unwrap();
+                assert_eq!(failed.next().await, Some(Ok(17)));
+                assert_eq!(failed.next().await, Some(Ok(29)));
+                match failed.next().await {
+                    Some(Err(golem_rust::agentic::StreamError::Failed(value))) => assert_eq!(value.value(), &golem_rust::SchemaValue::U32(73)),
+                    other => panic!("unexpected terminal: {other:?}"),
+                }
+                assert!(failed.next().await.is_none());
                 drop(provider.produce().await.unwrap());
                 }
 
@@ -214,7 +239,7 @@ async fn rust_generated_native_stream_bridge_e2e() {
 
                 if scenario == "fatal" {
                     if let Ok(mut malformed) = provider.malformed().await {
-                        assert!(malformed.next().await.is_err());
+                        assert!(matches!(malformed.next().await, Some(Err(_))));
                     }
                     return "native-streams-ok".to_string();
                 }
@@ -244,7 +269,7 @@ async fn rust_generated_native_stream_bridge_e2e() {
 
                 let (mut writer, input) = new_fixed_list_stream();
                 assert!(writer.write_one(vec![1]).await.is_err());
-                spawn_local(async move { writer.write_one(vec![1, 2]).await.unwrap(); });
+                spawn_local(async move { writer.write_one(vec![1, 2]).await.unwrap(); writer.close().await.unwrap(); });
                 assert_eq!(provider.fixed_echo(input).await.unwrap().collect().await.unwrap(), vec![vec![1, 2]]);
 
                 // Reject an invalid tail before preparing the nested stream endpoint.
@@ -258,7 +283,7 @@ async fn rust_generated_native_stream_bridge_e2e() {
 
                 // A write remains pending until a reader accepts its item.
                 let (mut writer, reader) = new_u32_stream();
-                let mut write = Box::pin(async move { writer.write_one(7).await });
+                let mut write = Box::pin(async move { writer.write_one(7).await?; writer.close().await });
                 let pending = std::future::poll_fn(|cx| {
                     std::task::Poll::Ready(std::future::Future::poll(write.as_mut(), cx).is_pending())
                 }).await;

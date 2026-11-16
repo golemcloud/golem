@@ -1034,7 +1034,7 @@ struct RunningAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesyst
 
 struct RunningAgentRuntime<Ctx: WorkerCtx> {
     instance: Instance,
-    store: ObservedPrimaryStore<async_lock::Mutex<Store<Ctx>>>,
+    store: ObservedPrimaryStore<async_lock::Mutex<instance::PrimaryStore<Ctx>>>,
 }
 
 pub(crate) struct ObservedPrimaryStore<T> {

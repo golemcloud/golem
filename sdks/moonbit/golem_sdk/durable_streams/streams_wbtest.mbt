@@ -316,8 +316,8 @@ test "AgentStream source is lazy affine and emits the pending remainder" {
     } noraise {
       _ => fail("transferred reader remained readable")
     }
-    assert_eq(stream.read(), Some(3))
-    assert_eq(stream.read(), Some(11))
+    assert_eq(stream.read(), Some(Ok(3)))
+    assert_eq(stream.read(), Some(Ok(11)))
     assert_true(stream.read() is None)
     assert_eq(reader.checkpoint().offset, "end")
     let unopened = byte_reader("https://example.test/bytes")

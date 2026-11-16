@@ -119,6 +119,8 @@ def finish_cancelled_output(conn, channel):
         send(conn, type="stream-end", channel=channel, direction="output",
              sequence="3" if mode == "output-cancel-partial-packed" else "2",
              outcome=dict(kind="finished"))
+    send(conn, type="stream-end", channel=4, direction="output", sequence="0",
+         outcome=dict(kind="finished"))
     send(conn, type="invocationFinished", outcome=dict(kind="success"))
     signal, _ = listener.accept()
     with signal:
@@ -435,10 +437,14 @@ with connect() as conn:
         sessionToken="original-session",
         mappings=[],
     )
+    mappings = [{"direction": "output", "channel": 2, "streamToken": "output"}]
+    if mode in ("output-cancel-race", "output-cancel-partial-packed", "output-cancel-after-resume-head"):
+        # Keep a sibling open so cancelling one reader still exercises in-flight frames.
+        mappings.append(dict(direction="output", channel=4, streamToken="sibling"))
     send(
         conn,
         type="invocationResult",
-        mappings=[{"direction": "output", "channel": 2, "streamToken": "output"}],
+        mappings=mappings,
         result={
             "kind": "value",
             "graph": {
@@ -525,7 +531,8 @@ with connect() as conn:
                 send(resumed, type="invocationAccepted", attemptId=resume["attemptId"],
                      agentId={"componentId": "component", "agentId": "accepted-agent"},
                      idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="new-session",
-                     mappings=[dict(direction="output", channel=3, streamToken="output")])
+                     mappings=[dict(direction="output", channel=3, streamToken="output"),
+                               dict(direction="output", channel=4, streamToken="sibling")])
                 # No output frame advances this attachment before the cancellation.
                 finish_cancelled_output(resumed, 3)
         else:

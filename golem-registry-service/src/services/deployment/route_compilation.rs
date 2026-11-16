@@ -39,11 +39,12 @@ use golem_common::schema::{
     SchemaType,
 };
 use golem_service_base::custom_api::{
-    AgentFilesystemBehaviour, AgentRouteMode, CallAgentBehaviour, CompiledInputSchema,
-    CompiledOutputSchema, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    CorsPreflightMethodPolicy, HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
-    OriginPattern, PathSegment, PhantomSelection, RequestBodySchema, RouteBehaviour, RouteMatch,
-    RouterMethod, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
+    ConstructorParameter, CorsOptions, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
+    MountAgent, MountAgentMethod, MountBehaviour, MountFileSource, MountTarget,
+    OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern, PathSegment, PhantomSelection,
+    RequestBodySchema, RouteBehaviour, RouteMatch, RouterMethod, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -106,29 +107,40 @@ pub fn compile_fallback_mount(
     route_id: i32,
 ) -> Result<Option<UnboundCompiledRoute>, DeployValidationError> {
     let invalid = make_invalid_agent_mount_error_maker(deployment, mount, agent);
+    let mount_agent = MountAgent {
+        component_id: implementer.component_id,
+        component_revision: implementer.component_revision,
+        agent_type: agent.type_name.clone(),
+        constructor_input: compiled_input(agent, &agent.constructor.input_schema),
+        constructor_parameters: constructor_parameters.clone(),
+    };
     let behavior = if agent.kind == golem_common::schema::AgentTypeKind::HttpRouter {
-        let compile_method = |method: &AgentMethodSchema| RouterMethod {
-            method_name: method.name.clone(),
-            input: compiled_input(agent, &method.input_schema),
-            output: compiled_output(agent, &method.output_schema),
+        let compile_method = |method: &AgentMethodSchema| {
+            MountTarget::AgentMethod(MountAgentMethod {
+                agent: mount_agent.clone(),
+                method: RouterMethod {
+                    method_name: method.name.clone(),
+                    input: compiled_input(agent, &method.input_schema),
+                    output: compiled_output(agent, &method.output_schema),
+                },
+            })
         };
-        RouteBehaviour::HttpRouter(HttpRouterBehaviour {
-            component_id: implementer.component_id,
-            component_revision: implementer.component_revision,
-            agent_type: agent.type_name.clone(),
-            constructor_input: compiled_input(agent, &agent.constructor.input_schema),
+        RouteBehaviour::Mount(MountBehaviour {
             handler: agent
                 .methods
                 .iter()
                 .find(|method| !method.http_endpoint.is_empty())
                 .map(compile_method),
-            openapi_provider_method: mount
+            openapi_provider: mount
                 .openapi_provider_method
                 .as_ref()
                 .and_then(|name| agent.methods.iter().find(|method| &method.name == name))
                 .map(compile_method),
-            static_bindings: mount.static_bindings.clone(),
-            file_index: Vec::new(),
+            file_bindings: mount.static_bindings.clone(),
+            files: MountFileSource::Router {
+                agent: mount_agent,
+                file_index: Vec::new(),
+            },
             file_response_headers: mount.file_response_headers.clone(),
         })
     } else if !mount.filesystem_bindings.is_empty() {
@@ -147,13 +159,11 @@ pub fn compile_fallback_mount(
                 "Filesystem mount captures must bind exactly the constructor parameters".into(),
             ));
         }
-        RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
-            component_id: implementer.component_id,
-            component_revision: implementer.component_revision,
-            agent_type: agent.type_name.clone(),
-            constructor_input: compiled_input(agent, &agent.constructor.input_schema),
-            constructor_parameters,
-            filesystem_bindings: mount.filesystem_bindings.clone(),
+        RouteBehaviour::Mount(MountBehaviour {
+            handler: None,
+            openapi_provider: None,
+            files: MountFileSource::Live { agent: mount_agent },
+            file_bindings: mount.filesystem_bindings.clone(),
             file_response_headers: mount.file_response_headers.clone(),
         })
     } else {

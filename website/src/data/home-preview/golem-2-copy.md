@@ -6,7 +6,7 @@ Draft 2 · Default-visible reading. [Full content, optional details and visual d
 
 **Eyebrow**
 
-Open source application runtime
+Open source app runtime
 
 **Heading**
 
@@ -18,11 +18,7 @@ Build agents, tools and complete apps—with zero infrastructure to assemble per
 
 **Execution foundation**
 
-Your whole VM is durable: memory, stack and files. Golem enforces permissions your code cannot bypass. Waiting uses zero CPU and memory; resume where you left off.
-
-**Supporting line**
-
-Build with your coding agent. Or run a coding agent inside Golem to build and deploy more apps.
+Golem runs your code in lightweight, durable VMs with persistent memory, call stacks and filesystems. The runtime enforces permissions your code cannot bypass. Waiting VMs suspend to zero CPU and RAM.
 
 **Deployment choices**
 
@@ -30,7 +26,7 @@ Local · Self-hosted · Golem Cloud
 
 **Actions**
 
-- Build with your agent →
+- Start building →
 - Explore the platform ↓
 
 **Proof strip**
@@ -51,23 +47,40 @@ Two primitives. A foundation for distributed computing.
 
 **Introduction**
 
-Actors keep state. Functions handle requests and run tools. Compose both on Golem's durable, permissioned runtime to build complete distributed applications.
+Actors keep state. Functions serve as tools and request handlers. Compose both in Golem's durable, permissioned VMs to build complete distributed applications.
 
 **Actors**
 
 Stateful across calls
 
-One durable identity, with private memory, files and databases across calls. Ordinary code keeps its place through waits and restarts. Model an account, agent or app as an actor that wakes when work arrives.
+One stable identity, with private memory, files and databases across calls. Code keeps its place through waits and restarts. Messages to the same actor ID reach the same actor.
 
 **Functions**
 
 Stateless between calls
 
-A fresh VM for each invocation, durable by default while it runs. Private instance state ends with the call. Each function has its own identity, permissions and middleware for requests, tools and independent work.
+A fresh VM for each call, durable by default through waits and interruptions. Private instance state ends with the call. Each function has its own identity, permissions and middleware.
 
-**Below the panels**
+**Actor examples**
 
-A tool is a function with a CLI interface. A request handler is a function with a request/response interface. Expose actors and functions through HTTP, MCP and A2A.
+- Agent
+- App
+- Shopping cart
+
+**Function examples**
+
+- Tool
+- HTTP handler
+- Background job
+
+**Interfaces**
+
+- HTTP
+- MCP
+- A2A
+- CLI
+
+**Link**
 
 Explore actors and functions →
 

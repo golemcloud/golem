@@ -333,7 +333,8 @@ impl
         let mut source = underlying.produce(tag).await?;
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Some(item) = source.next().await.expect("read provider typed output") {
+            while let Some(item) = source.next().await {
+                let item = item.expect("read provider typed output");
                 writer
                     .write_one(presented_typed_output::Item {
                         label: item.label,
@@ -342,6 +343,7 @@ impl
                     .await
                     .expect("write projected typed output");
             }
+            writer.close().await.unwrap();
         });
         Ok(output)
     }

@@ -136,6 +136,7 @@ impl WorkerApi {
                 auth,
                 None,
                 None,
+                None,
             )
             .await?;
 

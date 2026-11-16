@@ -12,15 +12,17 @@ An app can keep its state, files and SQLite database on Golem, serve its interfa
 
 **Actor lifetime and concurrency**
 
-The same actor ID reaches the same durable identity across method calls and host changes. Actors are single-threaded; invocations can interleave at await points.
+The same actor ID reaches the same actor across method calls and host changes. Its identity stays stable while Golem preserves its execution and private state. Actors are single-threaded; invocations can interleave at await points.
 
-**Fresh does not mean forgetful during a call**
+**Function durability and state**
 
 A durable function invocation resumes its own execution after interruption. It retains no private instance state for later independent invocations. A bound tool can receive access to the caller's files without access to its memory.
 
-**Functions are first-class**
+**Function identity and middleware**
 
 Each function has an identity, permissions, middleware and billing of its own. Independent invocations run in separate VMs; the function's identity is distinct from each invocation's VM. Use the same foundation for HTTP request handlers, tools and background work.
+
+Middleware adds policy checks, observability or human approval around a function without changing its implementation.
 
 ## 3. The VM
 

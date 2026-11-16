@@ -10,6 +10,7 @@ pub(all) struct AgentClient {
   phantom_id : @schema.Uuid?
   rpc : @agentHost.WasmRpc
   priv mut default_scope_card : @permissions.ScopeCard?
+  priv bound_agent_id : String?
 }
 
 ///|
@@ -70,6 +71,40 @@ fn make_client(
     phantom_id,
     rpc,
     default_scope_card: None,
+    bound_agent_id: None,
+  }
+}
+
+///|
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn AgentClient::bind_self(agent_type_name : String) -> AgentClient raise {
+  let (id, rpc) = match @agentHost.WasmRpc::bind_self() {
+    Ok(bound) => bound
+    Err(@agentHost.RpcError::RemoteAgentError(error)) => raise error
+    Err(error) => raise error
+  }
+  errdefer rpc.drop()
+  let parsed = @identity.parse(id)
+  if parsed.type_name != agent_type_name {
+    raise @common.AgentError::InvalidType(
+      "self binding expects \{agent_type_name}, identity is \{parsed.type_name}",
+    )
+  }
+  {
+    agent_type_name: parsed.type_name,
+    constructor_input: parsed.input.value,
+    phantom_id: parsed.phantom_id,
+    rpc,
+    default_scope_card: None,
+    bound_agent_id: Some(id),
   }
 }
 
@@ -158,6 +193,9 @@ pub fn AgentClient::get_phantom_with_config(
 pub fn AgentClient::get_agent_id(
   self : AgentClient,
 ) -> String raise @common.AgentError {
+  if self.bound_agent_id is Some(id) {
+    return id
+  }
   @identity.Constructor::from_wire(
     self.agent_type_name,
     self.constructor_input,

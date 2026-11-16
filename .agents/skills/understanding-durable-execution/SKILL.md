@@ -1331,6 +1331,16 @@ existing-only acquisition, reciprocal cold topologies, and reconciler graph shut
 
 Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, principal, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
 
+After admission, executor create and REST create await `Worker::await_initialization`, not
+`WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
+`InvocationId`. A recorded success returns the original fingerprint without starting a Store. A terminal constructor
+Invocation Error or Exited becomes `AgentCreationFailed` with the agent ID and cause. Pending
+initialization uses ordinary startup, never another constructor reservation. An interrupted retry
+remains interrupted. Startup, storage and routing errors keep their operational classification;
+synthetic warm-cache failures cannot establish a recorded constructor failure. A later method
+failure cannot replace constructor success. Forks resolve the retained source initialization key.
+Preparation remains suspended and neither starts nor waits for initialization.
+
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
@@ -2338,12 +2348,23 @@ offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download 
 
 ## Durable RPC exactly-once
 
-`RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
-Deferred durable activation records or replays its own decision (`Recorded`). Non-deferred
-targets return `LiveOnly(PermissionTarget)`; their asynchronous permission check runs only in
-`ResolvedCall::Live`, after resolution, preserving operator authorization and decision telemetry.
-Denials use `persist_*_denial_from_begun` to record on the already-begun call, not begin another
-one. Recorded calls, including incomplete repairs, retain admission without re-authorizing.
+Concrete durable client creation calls `Rpc::create_and_initialize` and waits for the child's
+recorded constructor outcome. Explicit creation requires `Invoke` on `Any` for the concrete child;
+later method calls still require their concrete method permission. The connection's `WriteRemote`
+Start commits before dispatch and supplies the derived creation key. Its `HostResponseGolemRpcCreate.result`
+records success with the actual fingerprint, or a terminal constructor failure or permission
+refusal. Infrastructure errors and interruption leave the call incomplete. Repair reuses its
+Start and key. Completed replay returns the recorded success or failure without contacting the
+child; a reconstructed successful handle retains that fingerprint for existing-only reactivation.
+`wasm-rpc.bind-self()` binds the current durable incarnation without creating, starting or waiting for it. It takes no type argument: the host derives self from the owner context and records a separate local binding call. Its Start records the ID, environment and fingerprint. Completed replay and incomplete repair reconstruct that same binding without target contact, even when a fork changes the current owner.
+
+Typed clients in every SDK validate the type parsed from the returned recorded ID before constructing the client. They reuse the returned connection rather than creating another target. Rust and MoonBit expose fallible `bind_self()`, TypeScript and Effect expose `bindSelf()`, Go exposes `BindSelf()`, and Scala generates `bindSelf()`. Use these for constructor self-scheduling. Do not replace the returned recorded ID with a separate current-environment read. Later scheduling still checks the exact method authority. Phantom-less ephemeral clients remain
+logical per-invocation proxies. Fixed ephemeral handles remain observation/control identities,
+and `create_demand` remains non-running preparation.
+
+Method permission checks run inside `ResolvedCall::Live`, after resolution. Denials use
+`persist_*_denial_from_begun` on that already-begun call. Recorded calls, including incomplete
+repairs, retain admission without re-authorizing.
 
 1. The caller opens a durable call; its own `Start` index is the call identity. Live
    computes the request when it appends the `Start` (`start_live_at_index`), so the request
@@ -3267,7 +3288,7 @@ handle goes through `ensure_websocket_connection_live_access` in
 `durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
-still sees its own gate in the entry applies the policy. With the default
+still sees its own gate in the entry applies the policy. With an explicit
 `reconnect-automatically`, it proceeds to take one pool permit, run the handshake, and
 publish `Live` in a single store window re-verified against the current entry. A queued peer
 therefore re-reads the entry instead of independently reconnecting: a `Live` entry published by
@@ -3295,8 +3316,9 @@ interruption. Tests:
 `websocket_closed_connection_stays_terminal_after_replay`.
 
 The third optional WIT `connect` parameter is `option<reconstruction-policy>`. Absence selects
-`reconnect-automatically`; `report-connection-loss` publishes terminal `SessionLost` at the first
-live access to a reconstructed successful handle, without a pool permit or handshake. Recorded
+`report-connection-loss`, which publishes terminal `SessionLost` at the first live access to a
+reconstructed successful handle, without a pool permit or handshake. Only an explicit
+`reconnect-automatically` opens a replacement connection. Recorded
 send, receive, timeout, error, and close outcomes replay unchanged under either policy. Suspension,
 restart, and crash all use this reconstruction path; the option does not change ordinary live
 disconnect retry behavior. Live `close` on the lost handle reports loss without reconnecting;

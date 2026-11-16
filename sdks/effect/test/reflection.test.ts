@@ -166,6 +166,7 @@ describe("reflection", () => {
     const rpc = Layer.succeed(
       RpcClient,
       RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: (name, input, phantom) =>
           Effect.sync(() => {
             expect(name).toBe("Recursive")
@@ -231,6 +232,7 @@ describe("reflection", () => {
     const rpc = Layer.succeed(
       RpcClient,
       RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: (_name, _input, _phantom, config) =>
           Effect.sync(() => {
             connections.push(config)
@@ -332,7 +334,10 @@ describe("reflection", () => {
             events.push("connection-drop")
           },
         }
-        const rpc = Layer.succeed(RpcClient, { connect: () => Effect.succeed(connection) })
+        const rpc = Layer.succeed(RpcClient, {
+          bindSelf: () => Effect.die("unexpected self binding"),
+          connect: () => Effect.succeed(connection),
+        })
         const host = Layer.succeed(AgentHostClient, {
           getAgentType: () => registration(),
           parseAgentId: () => ["Recursive", { value: { root: 0, valueNodes: [] } }, undefined],
@@ -396,7 +401,10 @@ describe("reflection", () => {
         invoke: () => invocationMetadata,
         drop: () => {},
       } as unknown as RpcConnection
-      const rpc = Layer.succeed(RpcClient, { connect: () => Effect.succeed(connection) })
+      const rpc = Layer.succeed(RpcClient, {
+        bindSelf: () => Effect.die("unexpected self binding"),
+        connect: () => Effect.succeed(connection),
+      })
       const host = Layer.succeed(AgentHostClient, {
         getAgentType: () => registration(),
         makeAgentId: () => 'Recursive("unique")',

@@ -197,7 +197,8 @@ pub(crate) fn calculate_entity_replay_progress(
                     StreamSessionRecord::ConsumerItemValue(record) => {
                         Some(record.observation.clone())
                     }
-                    StreamSessionRecord::ConsumerTerminal(record) => {
+                    StreamSessionRecord::ConsumerTerminal(record)
+                    | StreamSessionRecord::ConsumerOutcome(record) => {
                         Some(record.observation.clone())
                     }
                     _ => None,

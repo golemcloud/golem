@@ -361,6 +361,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             producer_disposal_tasks: Some(crate::worker::tasks::NativeReconstructionTasks::new(
                 &worker.tasks,
             )?),
+            schema_producers: stream_outcome::ProducerOutcomeScope::new(worker.tasks.clone()),
+            schema_output_tasks: Mutex::new(Some(
+                crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks)?,
+            )),
             primary_invocation_start_index: None,
             invocation_principal: None,
             invocation_id: None,

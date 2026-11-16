@@ -29,10 +29,7 @@ pub trait StreamingAgent {
 
     fn status(&self) -> String;
 
-    #[endpoint(
-        put = "/echo",
-        durable_streams(input("input"), output("$result"))
-    )]
+    #[endpoint(put = "/echo", durable_streams(input("input"), output("$result")))]
     fn durable_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
 
     async fn append_external(
@@ -65,6 +62,7 @@ where
                 break;
             }
         }
+        let _ = writer.close().await;
     });
     stream
 }
@@ -105,11 +103,21 @@ impl StreamingAgent for StreamingAgentImpl {
         let (mut writer, output) = AgentStream::new();
         let cancelled_producers = self.cancelled_producers.clone();
         spawn_local(async move {
-            while let Some(value) = input
-                .next()
-                .await
-                .expect("failed to read transform input stream")
-            {
+            while let Some(value) = input.next().await {
+                let value = match value {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let failure =
+                            golem_rust::schema::try_into_typed_schema_value(&error.to_string())
+                                .expect("a stream error message is a valid schema value");
+                        let _ = writer
+                            .finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(
+                                failure,
+                            ))))
+                            .await;
+                        return;
+                    }
+                };
                 if writer.write_one(format!("{prefix}:{value}")).await.is_err() {
                     // The output consumer stopped early; dropping `input`
                     // propagates cancellation to its producer.
@@ -117,6 +125,7 @@ impl StreamingAgent for StreamingAgentImpl {
                     break;
                 }
             }
+            let _ = writer.close().await;
         });
         output
     }
@@ -153,11 +162,26 @@ impl StreamingAgent for StreamingAgentImpl {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
             let mut input = input;
-            while let Some(value) = input.next().await.expect("failed to read input") {
+            while let Some(value) = input.next().await {
+                let value = match value {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let failure =
+                            golem_rust::schema::try_into_typed_schema_value(&error.to_string())
+                                .expect("a stream error message is a valid schema value");
+                        let _ = writer
+                            .finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(
+                                failure,
+                            ))))
+                            .await;
+                        return;
+                    }
+                };
                 if writer.write_one(format!("echo:{value}")).await.is_err() {
                     break;
                 }
             }
+            let _ = writer.close().await;
         });
         output
     }

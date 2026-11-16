@@ -48,6 +48,8 @@ const TEST_TTL: Duration = Duration::from_millis(50);
 
 pub(crate) struct ComponentLoadGate {
     armed: AtomicBool,
+    error:
+        std::sync::Mutex<Option<golem_service_base::error::worker_executor::WorkerExecutorError>>,
     entered: tokio::sync::Semaphore,
     release: tokio::sync::Semaphore,
 }
@@ -56,6 +58,7 @@ impl ComponentLoadGate {
     pub(crate) fn new() -> Self {
         Self {
             armed: AtomicBool::new(false),
+            error: std::sync::Mutex::new(None),
             entered: tokio::sync::Semaphore::new(0),
             release: tokio::sync::Semaphore::new(0),
         }
@@ -63,6 +66,14 @@ impl ComponentLoadGate {
 
     pub(crate) fn arm(&self) {
         self.armed.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn fail_next(
+        &self,
+        error: golem_service_base::error::worker_executor::WorkerExecutorError,
+    ) {
+        *self.error.lock().unwrap() = Some(error);
+        self.arm();
     }
 
     pub(crate) async fn entered(&self) {
@@ -96,6 +107,9 @@ impl ComponentService for GatedComponentService {
         if self.gate.armed.swap(false, Ordering::AcqRel) {
             self.gate.entered.add_permits(1);
             self.gate.release.acquire().await.unwrap().forget();
+            if let Some(error) = self.gate.error.lock().unwrap().take() {
+                return Err(error);
+            }
         }
         self.inner
             .get(engine, component_id, component_revision)

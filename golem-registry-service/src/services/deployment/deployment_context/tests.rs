@@ -35,6 +35,7 @@ use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
 };
+use golem_service_base::custom_api::{MountBehaviour, MountFileSource, MountTarget};
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::repo::Blob;
 use serde_json::json;
@@ -618,8 +619,8 @@ fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
     assert!(
         routes.iter().any(|route| matches!(
             &route.behaviour,
-            golem_service_base::custom_api::RouteBehaviour::HttpRouter(router)
-                if router.static_bindings.len() == 1
+            golem_service_base::custom_api::RouteBehaviour::Mount(mount)
+                if matches!(mount.files, MountFileSource::Router { .. }) && mount.file_bindings.len() == 1
         )),
         "tooling-router-provisioning"
     );
@@ -713,22 +714,22 @@ fn http_mount_compilation_loads_metadata_corpus() {
             );
         } else {
             assert!(errors.is_empty(), "{id}: {errors:?}");
-            let RouteBehaviour::HttpRouter(router) = &routes[0].behaviour else {
+            let RouteBehaviour::Mount(router) = &routes[0].behaviour else {
                 panic!("{id}: expected router")
             };
             assert_eq!(
                 router
                     .handler
                     .as_ref()
-                    .map(|method| method.method_name.as_str()),
+                    .map(|MountTarget::AgentMethod(target)| target.method.method_name.as_str()),
                 case["expect"]["handler"].as_str(),
                 "{id}"
             );
             assert_eq!(
                 router
-                    .openapi_provider_method
+                    .openapi_provider
                     .as_ref()
-                    .map(|method| method.method_name.as_str()),
+                    .map(|MountTarget::AgentMethod(target)| target.method.method_name.as_str()),
                 case["expect"]["provider"].as_str(),
                 "{id}"
             );
@@ -818,36 +819,38 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
     assert!(errors.is_empty(), "{errors:?}");
     drop(files);
     prepare_router_file_indexes(&context, &mut routes).unwrap();
-    let RouteBehaviour::HttpRouter(router) = &routes[0].behaviour else {
+    let RouteBehaviour::Mount(MountBehaviour {
+        files: MountFileSource::Router { agent, file_index },
+        ..
+    }) = &routes[0].behaviour
+    else {
         unreachable!()
     };
     assert_eq!(
-        router
-            .file_index
+        file_index
             .iter()
             .map(|file| file.path.as_str())
             .collect::<Vec<_>>(),
         vec!["/public/a"]
     );
-    assert_eq!(router.component_revision, component.revision);
-    assert_eq!(router.file_index[0].size, 3);
+    assert_eq!(agent.component_revision, component.revision);
+    assert_eq!(file_index[0].size, 3);
     assert_eq!(
-        router.file_index[0]
-            .blob_key
-            .0
-            .as_blake3_hash()
-            .to_hex()
-            .as_str(),
+        file_index[0].blob_key.0.as_blake3_hash().to_hex().as_str(),
         "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
     );
 
     let bytes = desert_rust::serialize_to_byte_vec(&routes).unwrap();
     let reloaded: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&bytes).unwrap();
-    let RouteBehaviour::HttpRouter(router) = &reloaded[0].behaviour else {
+    let RouteBehaviour::Mount(MountBehaviour {
+        files: MountFileSource::Router { file_index, .. },
+        ..
+    }) = &reloaded[0].behaviour
+    else {
         unreachable!()
     };
-    assert_eq!(router.file_index[0].blob_key, key);
-    assert_eq!(router.file_index[0].size, 3);
+    assert_eq!(file_index[0].blob_key, key);
+    assert_eq!(file_index[0].size, 3);
     context
         .components
         .get_mut(&component.component_name)
@@ -996,7 +999,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
     assert!(
         routes
             .iter()
-            .any(|route| matches!(route.behaviour, RouteBehaviour::AgentFilesystem(_)))
+            .any(|route| matches!(&route.behaviour, RouteBehaviour::Mount(mount) if matches!(mount.files, MountFileSource::Live { .. })))
     );
     assert!(
         routes
@@ -1420,12 +1423,16 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
                 golem_service_base::custom_api::RouteMatch::MountPrefix
             ));
             match &routes[0].behaviour {
-                golem_service_base::custom_api::RouteBehaviour::HttpRouter(router) => {
+                golem_service_base::custom_api::RouteBehaviour::Mount(router)
+                    if kind == AgentTypeKind::HttpRouter =>
+                {
                     assert!(router.handler.is_none());
-                    assert_eq!(router.static_bindings.len(), usize::from(static_files));
+                    assert!(matches!(router.files, MountFileSource::Router { .. }));
+                    assert_eq!(router.file_bindings.len(), usize::from(static_files));
                 }
-                golem_service_base::custom_api::RouteBehaviour::AgentFilesystem(filesystem) => {
-                    assert_eq!(filesystem.filesystem_bindings.len(), 1)
+                golem_service_base::custom_api::RouteBehaviour::Mount(filesystem) => {
+                    assert!(matches!(filesystem.files, MountFileSource::Live { .. }));
+                    assert_eq!(filesystem.file_bindings.len(), 1)
                 }
                 _ => panic!("expected fallback descriptor"),
             }

@@ -14794,8 +14794,8 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     use golem_registry_service::services::deployment::DeployedRoutesService;
     use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
     use golem_service_base::custom_api::{
-        CompiledInputSchema, CorsOptions, HttpRouterBehaviour, PathSegment, RouteBehaviour,
-        RouteMatch, RouteSecurity,
+        CompiledInputSchema, CorsOptions, MountAgent, MountBehaviour, MountFileSource, PathSegment,
+        RouteBehaviour, RouteMatch, RouteSecurity,
     };
     use golem_service_base::repo::Blob;
     use std::sync::Arc;
@@ -14845,17 +14845,35 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                 } else {
                     vec![]
                 },
-                behaviour: RouteBehaviour::HttpRouter(HttpRouterBehaviour {
-                    component_id: ComponentId(new_repo_uuid()),
-                    component_revision: ComponentRevision::INITIAL,
-                    agent_type: AgentTypeName(format!("router{id}")),
-                    constructor_input: CompiledInputSchema {
-                        graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
-                        input_schema: InputSchema::Parameters(vec![]),
-                    },
+                behaviour: RouteBehaviour::Mount(MountBehaviour {
                     handler: None,
-                    openapi_provider_method: None,
-                    static_bindings: if protected {
+                    openapi_provider: None,
+                    files: MountFileSource::Router {
+                        agent: MountAgent {
+                            component_id: ComponentId(new_repo_uuid()),
+                            component_revision: ComponentRevision::INITIAL,
+                            agent_type: AgentTypeName(format!("router{id}")),
+                            constructor_input: CompiledInputSchema {
+                                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                                input_schema: InputSchema::Parameters(vec![]),
+                            },
+                            constructor_parameters: vec![],
+                        },
+                        file_index: if protected {
+                            vec![]
+                        } else {
+                            vec![RouterFileIndexEntry {
+                                path: "/public/index.html".into(),
+                                blob_key: AgentFileContentHash(
+                                    golem_common::model::diff::Hash::from(blake3::hash(
+                                        b"gol556-router-blob",
+                                    )),
+                                ),
+                                size: 556,
+                            }]
+                        },
+                    },
+                    file_bindings: if protected {
                         vec![]
                     } else {
                         golem_common::base_model::agent::FileMapping::compile_list([(
@@ -14863,17 +14881,6 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                             "/public/$1",
                         )])
                         .unwrap()
-                    },
-                    file_index: if protected {
-                        vec![]
-                    } else {
-                        vec![RouterFileIndexEntry {
-                            path: "/public/index.html".into(),
-                            blob_key: AgentFileContentHash(golem_common::model::diff::Hash::from(
-                                blake3::hash(b"gol556-router-blob"),
-                            )),
-                            size: 556,
-                        }]
                     },
                     file_response_headers: vec![],
                 }),
@@ -14967,11 +14974,11 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
         .unwrap();
     assert_eq!(routes.routes.len(), 2);
     assert!(matches!(routes.routes[0].security, RouteSecurity::None));
-    let RouteBehaviour::HttpRouter(router) = &routes.routes[0].behavior else {
+    let RouteBehaviour::Mount(router) = &routes.routes[0].behavior else {
         panic!("expected router")
     };
     assert_eq!(
-        router.static_bindings,
+        router.file_bindings,
         vec![FileMapping::Subtree(
             golem_common::model::agent::SubtreeFileMapping {
                 public_prefix: vec!["assets".into()],
@@ -14979,22 +14986,25 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
             }
         )]
     );
-    assert_eq!(router.file_index.len(), 1);
-    assert_eq!(router.file_index[0].path, "/public/index.html");
-    assert_eq!(router.file_index[0].size, 556);
+    let MountFileSource::Router { file_index, .. } = &router.files else {
+        panic!("expected router files")
+    };
+    assert_eq!(file_index.len(), 1);
+    assert_eq!(file_index[0].path, "/public/index.html");
+    assert_eq!(file_index[0].size, 556);
     assert_eq!(
-        router.file_index[0].blob_key,
+        file_index[0].blob_key,
         AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
             b"gol556-router-blob"
         )))
     );
     let grpc: golem_api_grpc::proto::golem::customapi::CompiledRoutes = routes.into();
     let grpc_roundtrip: golem_service_base::custom_api::CompiledRoutes = grpc.try_into().unwrap();
-    let RouteBehaviour::HttpRouter(router) = &grpc_roundtrip.routes[0].behavior else {
+    let RouteBehaviour::Mount(router) = &grpc_roundtrip.routes[0].behavior else {
         panic!("expected gRPC router")
     };
     assert_eq!(
-        router.static_bindings,
+        router.file_bindings,
         vec![FileMapping::Subtree(
             golem_common::model::agent::SubtreeFileMapping {
                 public_prefix: vec!["assets".into()],
@@ -15002,11 +15012,14 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
             }
         )]
     );
-    assert_eq!(router.file_index.len(), 1);
-    assert_eq!(router.file_index[0].path, "/public/index.html");
-    assert_eq!(router.file_index[0].size, 556);
+    let MountFileSource::Router { file_index, .. } = &router.files else {
+        panic!("expected router files")
+    };
+    assert_eq!(file_index.len(), 1);
+    assert_eq!(file_index[0].path, "/public/index.html");
+    assert_eq!(file_index[0].size, 556);
     assert_eq!(
-        router.file_index[0].blob_key,
+        file_index[0].blob_key,
         AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
             b"gol556-router-blob"
         )))
