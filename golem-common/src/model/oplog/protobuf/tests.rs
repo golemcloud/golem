@@ -880,6 +880,7 @@ mod replay_divergence_tests {
     };
     use golem_api_grpc::proto::golem::worker as proto;
     use golem_schema::Empty;
+    use golem_schema::schema::SchemaValueStream;
 
     fn host_call(function_name: &str, request: Option<&str>) -> ReplayHostCall {
         ReplayHostCall {
@@ -957,6 +958,54 @@ mod replay_divergence_tests {
         ReplayHostCall {
             request: Some(Box::new(request)),
             ..host_call(function_name, None)
+        }
+    }
+
+    #[test]
+    fn a_request_without_a_protobuf_form_leaves_only_its_own_host_call() {
+        let live_stream = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::stream(None)),
+            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(42_u32)),
+        );
+        let encodable = "recorded".to_string().into_typed_schema_value().unwrap();
+        for (expected, actual, expected_kept, actual_kept) in [
+            (
+                Some(encodable.clone()),
+                Some(live_stream.clone()),
+                true,
+                false,
+            ),
+            (Some(live_stream), Some(encodable), false, true),
+        ] {
+            let divergence = ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(7),
+                expected: ReplayStep::HostCall(ReplayHostCall {
+                    request: expected.map(Box::new),
+                    ..host_call("http::send", None)
+                }),
+                actual: ReplayStep::HostCall(ReplayHostCall {
+                    request: actual.map(Box::new),
+                    ..host_call("rpc::invoke", None)
+                }),
+                mismatched: vec![StartIdentityField::FunctionName],
+            };
+
+            let decoded: ReplayDivergence = divergence
+                .into_proto_keeping_structure()
+                .try_into()
+                .unwrap();
+
+            let request_of = |step: &ReplayStep| match step {
+                ReplayStep::HostCall(call) => call.request.clone(),
+                other => panic!("expected a host call, got {other}"),
+            };
+            let expected_request = request_of(&decoded.expected);
+            let actual_request = request_of(&decoded.actual);
+            assert_eq!(expected_request.is_some(), expected_kept);
+            assert_eq!(actual_request.is_some(), actual_kept);
+            let kept = expected_request.or(actual_request).unwrap();
+            assert_eq!(kept.value(), &SchemaValue::String("recorded".to_string()));
+            assert_eq!(decoded.mismatched, vec![StartIdentityField::FunctionName]);
         }
     }
 

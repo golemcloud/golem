@@ -123,6 +123,7 @@ impl StreamSession {
                 || !observation.matches_reobserved(&logical)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    index,
                     "unchanged stream outcome",
                     format!("outcome differs from observation at {index}"),
                 )
@@ -134,6 +135,7 @@ impl StreamSession {
             });
             if boundaries.original_index != original_index {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    index,
                     "one logical stream outcome",
                     format!("conflicting outcome at {index}"),
                 )

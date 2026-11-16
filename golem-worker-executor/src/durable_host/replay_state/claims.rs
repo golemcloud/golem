@@ -232,6 +232,69 @@ impl StartClaim {
             && recorded.parent_start_index == self.parent_start_index
     }
 
+    /// The host call that the claim stands for, without its request.
+    pub(crate) fn replay_host_call(&self) -> ReplayHostCall {
+        ReplayHostCall {
+            function_name: self.function_name.to_string(),
+            durable_function_type: self.function_type.clone().into(),
+            parent_start_index: self.parent_start_index,
+            invocation_id: self.invocation_id,
+            observational_owner: self.observational_owner,
+            carries_request: self.carries_request(),
+            request: None,
+        }
+    }
+
+    /// The divergence of the call that the claim stands for from the recorded `Start` at
+    /// `index`.
+    pub(super) fn divergence_from_start(
+        &self,
+        index: OplogIndex,
+        recorded: &RecordedStart,
+    ) -> ReplayDivergence {
+        let expected = recorded.replay_host_call();
+        let actual = self.replay_host_call();
+        let mut mismatched = expected.mismatched_fields(&actual);
+        if self.matches_function_name(&recorded.function_name) {
+            mismatched.retain(|field| *field != StartIdentityField::FunctionName);
+        }
+        ReplayDivergence {
+            oplog_index: index,
+            expected: ReplayStep::HostCall(expected),
+            actual: ReplayStep::HostCall(actual),
+            mismatched,
+        }
+    }
+
+    /// The divergence of the call that the claim stands for from its matching `Start` at
+    /// `index`, which lies in a deleted replay region.
+    pub(crate) fn divergence_in_deleted_region(&self, index: OplogIndex) -> ReplayDivergence {
+        ReplayDivergence {
+            oplog_index: index,
+            expected: ReplayStep::described("a matching Start in a deleted replay region"),
+            actual: ReplayStep::HostCall(self.replay_host_call()),
+            mismatched: Vec::new(),
+        }
+    }
+
+    /// The divergence of the call that the claim stands for from the recorded `entry` at
+    /// `index`, or from the end of the recorded history at `index` when there is no entry.
+    pub(crate) fn divergence_at(
+        &self,
+        index: OplogIndex,
+        entry: Option<&OplogEntry>,
+    ) -> ReplayDivergence {
+        match entry.and_then(RecordedStart::of) {
+            Some(recorded) => self.divergence_from_start(index, &recorded),
+            None => ReplayDivergence {
+                oplog_index: index,
+                expected: entry.map_or_else(ReplayStep::end_of_history, recorded_step),
+                actual: ReplayStep::HostCall(self.replay_host_call()),
+                mismatched: Vec::new(),
+            },
+        }
+    }
+
     /// Human-readable description of the expected `Start`, used as the "expected" side of an
     /// `unexpected_oplog_entry` claim error.
     pub(crate) fn expected_description(&self) -> String {
@@ -266,6 +329,18 @@ pub(super) struct RecordedStart {
 }
 
 impl RecordedStart {
+    pub(super) fn replay_host_call(&self) -> ReplayHostCall {
+        ReplayHostCall {
+            function_name: self.function_name.to_string(),
+            durable_function_type: self.function_type.clone().into(),
+            parent_start_index: self.parent_start_index,
+            invocation_id: self.invocation_id,
+            observational_owner: self.observational_owner,
+            carries_request: self.carries_request,
+            request: None,
+        }
+    }
+
     pub(super) fn of(entry: &OplogEntry) -> Option<Self> {
         match entry {
             OplogEntry::Start {
@@ -295,7 +370,10 @@ pub(crate) enum ReplayStartClaimOutcome {
         entry: Box<OplogEntry>,
     },
     ReplayEnded,
-    DeletedRegion,
+    /// The matching `Start` at `start_index` belongs to a deleted replay region.
+    DeletedRegion {
+        start_index: OplogIndex,
+    },
     /// No matching `Start` remains, but the issuing Store already continued live locally (an
     /// incomplete entity past a deleted region or a replay target that grew after it went live)
     /// while the shared cursor still replays other owners' records. The call is a new live call of
@@ -318,6 +396,7 @@ impl ReplayState {
                 || !st.starts.has_claim(start_index)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    start_index,
                     "claimed incomplete admission Start",
                     format!("Start {start_index} is deleted or has no pending resolver"),
                 ));
@@ -392,22 +471,14 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
-        let expected = claim.expected_description();
-        match self.claim_start_or_replay_end(claim).await? {
+        match self.claim_start_or_replay_end(claim.clone()).await? {
             ReplayStartClaimOutcome::Claimed { handle, entry } => Ok((handle, entry)),
-            ReplayStartClaimOutcome::ReplayEnded => {
-                Err(WorkerExecutorError::unexpected_oplog_entry(
-                    expected,
-                    format!(
-                        "end of replay at {}; no recorded Start remains",
-                        self.last_replayed_index()
-                    ),
-                ))
-            }
-            ReplayStartClaimOutcome::DeletedRegion => {
-                Err(WorkerExecutorError::unexpected_oplog_entry(
-                    expected,
-                    "matching Start belongs to a deleted replay region".to_string(),
+            ReplayStartClaimOutcome::ReplayEnded => Err(WorkerExecutorError::replay_divergence(
+                claim.divergence_at(self.last_replayed_index().next(), None),
+            )),
+            ReplayStartClaimOutcome::DeletedRegion { start_index } => {
+                Err(WorkerExecutorError::replay_divergence(
+                    claim.divergence_in_deleted_region(start_index),
                 ))
             }
             ReplayStartClaimOutcome::StoreAlreadyLive => {
@@ -466,7 +537,7 @@ impl ReplayState {
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
         enum Missing {
             ReplayEnded,
-            DeletedRegion,
+            DeletedRegion(OplogIndex),
             StoreAlreadyLive,
         }
         loop {
@@ -490,11 +561,11 @@ impl ReplayState {
                                 // Draining the cursor can retain calls the guest has not
                                 // reproduced. Exhaustion does not permit changing their identity.
                                 if let Some(invocation_id) = owned_claim.expected_invocation_id()
-                                    && tx.unclaimed_start_with_invocation_id(invocation_id)
+                                    && let Some((index, recorded)) =
+                                        tx.unclaimed_start_with_invocation_id(invocation_id)
                                 {
-                                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                        owned_claim.expected_description(),
-                                        "no matching Start; a Start with the same invocation id exists but does not match",
+                                    return Err(WorkerExecutorError::replay_divergence(
+                                        owned_claim.divergence_from_start(index, &recorded),
                                     ));
                                 }
                                 if tx.cursor.at_replay_tail() {
@@ -515,7 +586,9 @@ impl ReplayState {
                                         // the guest consumes the surviving positional prefix.
                                         Ok((None, Some(BlockedOn::CursorProgress), None))
                                     }
-                                    Some(_) => Ok((None, None, Some(Missing::DeletedRegion))),
+                                    Some(index) => {
+                                        Ok((None, None, Some(Missing::DeletedRegion(index))))
+                                    }
                                     None => match tx.decide_missing_start(&owned_claim).await? {
                                         MissingStart::ReplayEnded => {
                                             Ok((None, None, Some(Missing::ReplayEnded)))
@@ -548,7 +621,9 @@ impl ReplayState {
             }
             match missing {
                 Some(Missing::ReplayEnded) => return Ok(ReplayStartClaimOutcome::ReplayEnded),
-                Some(Missing::DeletedRegion) => return Ok(ReplayStartClaimOutcome::DeletedRegion),
+                Some(Missing::DeletedRegion(start_index)) => {
+                    return Ok(ReplayStartClaimOutcome::DeletedRegion { start_index });
+                }
                 Some(Missing::StoreAlreadyLive) => {
                     return Ok(ReplayStartClaimOutcome::StoreAlreadyLive);
                 }
@@ -687,7 +762,8 @@ impl ReplayState {
                 }))
             }
             ReplayStartClaimOutcome::ReplayEnded => Ok(CustomStartClaimOutcome::ReplayEnded),
-            ReplayStartClaimOutcome::DeletedRegion | ReplayStartClaimOutcome::StoreAlreadyLive => {
+            ReplayStartClaimOutcome::DeletedRegion { .. }
+            | ReplayStartClaimOutcome::StoreAlreadyLive => {
                 Ok(CustomStartClaimOutcome::StoreAlreadyLive)
             }
         }
@@ -704,4 +780,25 @@ pub(crate) enum CustomStartClaimOutcome {
     /// Store already continued live locally, or the `Start` belongs to a deleted replay region, so
     /// the invocation is new for that Store.
     StoreAlreadyLive,
+}
+
+/// The step of the replay that the recorded `entry` stands for.
+pub(crate) fn recorded_step(entry: &OplogEntry) -> ReplayStep {
+    match entry {
+        OplogEntry::AgentInvocationFinished { .. } => ReplayStep::invocation_end(),
+        entry => match RecordedStart::of(entry) {
+            Some(recorded) => ReplayStep::HostCall(recorded.replay_host_call()),
+            None => ReplayStep::described(entry_kind(entry)),
+        },
+    }
+}
+
+/// The name of the kind of `entry`, such as `End`.
+pub(crate) fn entry_kind(entry: &OplogEntry) -> String {
+    let debug = format!("{entry:?}");
+    debug
+        .split([' ', '{', '('])
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }

@@ -689,6 +689,7 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
     let interrupted = store.data().durable_ctx().is_interrupting();
     let output = match classify_guest_call_settlement(
         store.data().agent_id(),
+        store.data().durable_ctx().last_replayed_index(),
         materialized,
         None,
         interrupted,
@@ -916,6 +917,7 @@ fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<(AgentId, WorkerExecut
 
 fn classify_guest_call_settlement<R>(
     own_agent_id: &AgentId,
+    replay_index: OplogIndex,
     result: wasmtime::Result<R>,
     tail_timeout: Option<(std::time::Duration, usize)>,
     interrupted: bool,
@@ -962,6 +964,7 @@ fn classify_guest_call_settlement<R>(
                 },
                 DurableRecoveryFailureKind::Permanent => {
                     WorkerExecutorError::unexpected_oplog_entry(
+                        retry_from.unwrap_or(replay_index),
                         "valid durable recovery data",
                         details,
                     )
@@ -1079,7 +1082,13 @@ pub(crate) async fn run_tool_guest_call<Ctx: WorkerCtx, R>(
     }
     let ctx = store.data().durable_ctx();
     let interrupted = ctx.is_interrupting() || ctx.invocation_deadline_exceeded();
-    let result = classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted);
+    let result = classify_guest_call_settlement(
+        store.data().agent_id(),
+        store.data().durable_ctx().last_replayed_index(),
+        result,
+        None,
+        interrupted,
+    );
     // Normal errors retain the service until Store disposal selects trap versus teardown cleanup.
     run.interrupted = false;
     result
@@ -1211,7 +1220,13 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
     } else {
         None
     };
-    classify_guest_call_settlement(store.data().agent_id(), result, tail_timeout, interrupted)
+    classify_guest_call_settlement(
+        store.data().agent_id(),
+        store.data().durable_ctx().last_replayed_index(),
+        result,
+        tail_timeout,
+        interrupted,
+    )
 }
 
 /// Dispatches a single lowered invocation to the matching typed guest export
@@ -1305,6 +1320,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     || store.data().durable_ctx().invocation_deadline_exceeded();
                 match classify_guest_call_settlement(
                     store.data().agent_id(),
+                    store.data().durable_ctx().last_replayed_index(),
                     result,
                     None,
                     interrupted,
@@ -2484,7 +2500,7 @@ mod tests {
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::caller::Caller;
     use golem_common::model::invocation_context::InvocationContextStack;
-    use golem_common::model::oplog::RawSnapshotData;
+    use golem_common::model::oplog::{RawSnapshotData, ReplayStep};
     use golem_common::schema::TypedSchemaValue;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
@@ -2557,7 +2573,9 @@ mod tests {
         ));
 
         let mut ordinary = Err(WorkerExecutorError::unexpected_oplog_entry(
-            "expected", "actual",
+            OplogIndex::from_u64(1),
+            "expected",
+            "actual",
         ));
         apply_selected_owner_failure(&mut ordinary, operations.selected_owner_failure().unwrap());
         assert!(matches!(ordinary, Err(WorkerExecutorError::Runtime { .. })));
@@ -2606,6 +2624,7 @@ mod tests {
     #[test]
     fn finalization_preserves_divergence_but_not_over_shard_loss() {
         let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+            OplogIndex::from_u64(1),
             "observation",
             "disposal",
         ));
@@ -2647,6 +2666,7 @@ mod tests {
             },
         ] {
             let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
                 "observation",
                 "disposal",
             ));
@@ -2668,6 +2688,7 @@ mod tests {
         retain_invocation_failure(
             &mut result,
             Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
                 "observation",
                 "disposal",
             )),
@@ -2751,7 +2772,8 @@ mod tests {
 
     #[test]
     fn unexpected_oplog_trap_is_propagated_during_replay_only() {
-        let divergence = WorkerExecutorError::unexpected_oplog_entry("End", "Start");
+        let divergence =
+            WorkerExecutorError::unexpected_oplog_entry(OplogIndex::from_u64(4), "End", "Start");
         let error = anyhow::Error::new(divergence.clone()).context("guest call failed");
 
         assert_eq!(replay_divergence_from_trap(&error, false), Some(divergence));
@@ -3345,6 +3367,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     anyhow::Error::new(WorkerExecutorError::Interrupted {
                         kind: InterruptKind::Jump,
@@ -3386,7 +3409,13 @@ mod tests {
                 anyhow::Error::from(expected.clone()).context("host call"),
             ),
         ] {
-            match classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false) {
+            match classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                OplogIndex::from_u64(1),
+                Err(error),
+                None,
+                false,
+            ) {
                 Err(GuestCallSettlementError::Infrastructure(error)) => {
                     assert_eq!(error, expected)
                 }
@@ -3420,6 +3449,7 @@ mod tests {
             assert!(matches!(
                 classify_guest_call_settlement::<()>(
                     &own_agent_id(),
+                    OplogIndex::from_u64(1),
                     Err(wasmtime::Error::from_anyhow(error.context("host call"))),
                     None,
                     false,
@@ -3434,6 +3464,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     anyhow::Error::from(unavailable).context("host call")
                 )),
@@ -3474,14 +3505,20 @@ mod tests {
                 wasmtime::Error::new(error.downcast::<wasmtime::GcHeapOutOfMemory<()>>().unwrap());
             assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_none());
             let error = if outer_failure {
-                match classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false)
-                {
+                match classify_guest_call_settlement::<()>(
+                    &own_agent_id(),
+                    OplogIndex::INITIAL,
+                    Err(error),
+                    None,
+                    false,
+                ) {
                     Err(GuestCallSettlementError::Trap(error)) => error,
                     other => panic!("GC exhaustion must remain a resource trap: {other:?}"),
                 }
             } else {
                 classify_guest_call_settlement(
                     &own_agent_id(),
+                    OplogIndex::INITIAL,
                     Ok::<_, wasmtime::Error>(Err::<(), _>(error)),
                     None,
                     false,
@@ -3508,6 +3545,7 @@ mod tests {
     fn guest_trap_and_settlement_failures_keep_distinct_provenance() {
         let guest_trap = classify_guest_call_settlement(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Ok::<_, wasmtime::Error>(Err::<(), _>(wasmtime::Error::msg("guest trapped"))),
             None,
             false,
@@ -3525,6 +3563,7 @@ mod tests {
         let terminal = StreamTerminal::Failed(StreamError::Interrupted("source lost".into()));
         let result = classify_guest_call_settlement::<()>(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Err(wasmtime::Error::from_anyhow(
                 StreamTerminalError {
                     authored_by: StreamTerminalAuthor::Protocol,
@@ -3561,6 +3600,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     wasmtime::Trap::UnreachableCodeReached.into(),
                 )),
@@ -3572,6 +3612,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
                 )),
@@ -3583,6 +3624,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     wasmtime::Trap::AsyncDeadlock.into(),
                 )),
@@ -3594,6 +3636,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::msg("host task failed")),
                 None,
                 false,
@@ -3603,6 +3646,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::msg("interrupted")),
                 None,
                 true,
@@ -3612,6 +3656,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()).into(),
                 )),
@@ -3743,7 +3788,12 @@ mod tests {
                 instruction_trap(),
             )),
             WorkerExecutorError::recovery_required("payload unavailable").into(),
-            WorkerExecutorError::unexpected_oplog_entry("expected", "actual").into(),
+            WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
+                "expected",
+                "actual",
+            )
+            .into(),
             WorkerExecutorError::runtime("persistence failed").into(),
             GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
             GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into(),
@@ -3810,7 +3860,13 @@ mod tests {
                 "the reproducer must exercise Wasmtime's attached backtrace context"
             );
             let Err(GuestCallSettlementError::Infrastructure(classified)) =
-                classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false)
+                classify_guest_call_settlement::<()>(
+                    &own_agent_id(),
+                    OplogIndex::from_u64(1),
+                    Err(error),
+                    None,
+                    false,
+                )
             else {
                 panic!("host failure must remain infrastructure");
             };
@@ -3835,6 +3891,7 @@ mod tests {
         );
         let result = classify_guest_call_settlement::<()>(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Err(wasmtime::Error::from_anyhow(error)),
             None,
             false,
@@ -3855,6 +3912,7 @@ mod tests {
     fn bare_recovery_required_preserves_its_retry_point() {
         let result = classify_guest_call_settlement::<()>(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
                 WorkerExecutorError::recovery_required_from(
                     "completed prefix payload unavailable",
@@ -3884,6 +3942,7 @@ mod tests {
             .context("failed to download incoming body chunk payload");
         let result = classify_guest_call_settlement::<()>(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
                 DurableRecoveryFailure::new(DurableRecoveryFailureKind::Permanent, inner),
             ))),
@@ -3892,20 +3951,31 @@ mod tests {
         );
 
         let Err(GuestCallSettlementError::Infrastructure(
-            WorkerExecutorError::UnexpectedOplogEntry { expected, got },
+            WorkerExecutorError::UnexpectedOplogEntry { divergence },
         )) = result
         else {
             panic!("permanent recovery failure must remain non-retryable infrastructure");
         };
-        assert_eq!(expected, "valid durable recovery data");
-        assert!(got.contains("failed to download incoming body chunk payload"));
-        assert!(got.contains("payload 123 is missing"));
+        assert_eq!(divergence.oplog_index, OplogIndex::from_u64(1));
+        assert_eq!(
+            divergence.expected,
+            ReplayStep::described("valid durable recovery data")
+        );
+        let ReplayStep::Other(got) = divergence.actual else {
+            panic!("a recovery failure is described by its text");
+        };
+        assert!(
+            got.description
+                .contains("failed to download incoming body chunk payload")
+        );
+        assert!(got.description.contains("payload 123 is missing"));
     }
 
     #[test]
     fn settlement_timeout_is_infrastructure_even_after_root_return() {
         let result = classify_guest_call_settlement(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Ok(()),
             Some((std::time::Duration::from_secs(2), 1)),
             false,

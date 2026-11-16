@@ -658,10 +658,7 @@ fn each_raw_error_has_its_problem() {
     let interrupted = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Restart,
     };
-    let unexpected = WorkerExecutorError::UnexpectedOplogEntry {
-        expected: "a".to_string(),
-        got: "b".to_string(),
-    };
+    let unexpected = WorkerExecutorError::unexpected_oplog_entry(OplogIndex::from_u64(1), "a", "b");
     let previous_failed = WorkerExecutorError::PreviousInvocationFailed {
         error: AgentError::Unknown("trap".to_string()),
         stderr: String::new(),

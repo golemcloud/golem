@@ -37,6 +37,43 @@ impl TryFrom<ReplayDivergence> for proto::ReplayDivergence {
     }
 }
 
+impl ReplayDivergence {
+    /// The protobuf form of the divergence. A request that has no protobuf form is left out of
+    /// its host call; the other request and the rest of the divergence stay as they are.
+    pub fn into_proto_keeping_structure(self) -> proto::ReplayDivergence {
+        let step = |step: ReplayStep| match step {
+            ReplayStep::HostCall(mut call) => {
+                let request = call
+                    .request
+                    .take()
+                    .and_then(|request| (*request).try_into().ok());
+                let call: proto::ReplayHostCall = call
+                    .try_into()
+                    .expect("a host call without a request always has a protobuf form");
+                proto::ReplayStep {
+                    step: Some(proto::replay_step::Step::HostCall(proto::ReplayHostCall {
+                        request,
+                        ..call
+                    })),
+                }
+            }
+            step => step
+                .try_into()
+                .expect("a step without a host call always has a protobuf form"),
+        };
+        proto::ReplayDivergence {
+            oplog_index: self.oplog_index.into(),
+            expected: Some(Box::new(step(self.expected))),
+            actual: Some(Box::new(step(self.actual))),
+            mismatched: self
+                .mismatched
+                .into_iter()
+                .map(|field| proto::StartIdentityField::from(field) as i32)
+                .collect(),
+        }
+    }
+}
+
 impl TryFrom<proto::ReplayDivergence> for ReplayDivergence {
     type Error = String;
 

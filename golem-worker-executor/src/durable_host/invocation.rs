@@ -1004,6 +1004,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         if self.state.durability_is_suppressed() {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::NONE,
                 "recorded agent method failure",
                 "method failure while durability is suppressed",
             ));
@@ -1156,6 +1157,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             if let Some((finished_index, recorded_result)) = response {
                 if !recorded_result.replay_equivalent(&output.result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        finished_index,
                         format!(
                             "{full_function_name} => {:?}",
                             recorded_result.redacted_debug()

@@ -7234,6 +7234,7 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
         request
             .result
             .send(Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
                 "recorded stream observation",
                 "completed entity replay cannot open a live source",
             )))
@@ -8378,15 +8379,18 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
         if terminal != "open" {
             assert!(
                 cancellation
-                    .replay_disposal_is_complete(None, &boundary, true)
+                    .replay_disposal_is_complete(None, &boundary, Some(OplogIndex::from_u64(30)))
                     .await
                     .unwrap()
             );
             let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
             operation
                 .install_recorded_admission_refusal(boundary.clone(), OplogIndex::from_u64(29));
-            let waiting =
-                cancellation.replay_disposal_is_complete(Some(&operation), &boundary, true);
+            let waiting = cancellation.replay_disposal_is_complete(
+                Some(&operation),
+                &boundary,
+                Some(OplogIndex::from_u64(30)),
+            );
             tokio::pin!(waiting);
             assert!(futures::poll!(&mut waiting).is_pending());
             assert_eq!(operation.observed_admission_refusal(), None);
@@ -8402,13 +8406,13 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
         } else {
             assert!(
                 cancellation
-                    .replay_disposal_is_complete(None, &boundary, true)
+                    .replay_disposal_is_complete(None, &boundary, Some(OplogIndex::from_u64(30)))
                     .await
                     .is_err()
             );
             assert!(
                 !cancellation
-                    .replay_disposal_is_complete(None, &boundary, false)
+                    .replay_disposal_is_complete(None, &boundary, None)
                     .await
                     .unwrap()
             );
@@ -8440,7 +8444,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
                 operation
                     .install_recorded_admission_refusal(expected.clone(), OplogIndex::from_u64(29));
                 let waiting =
-                    cancellation.replay_disposal_is_complete(Some(&operation), &boundary, false);
+                    cancellation.replay_disposal_is_complete(Some(&operation), &boundary, None);
                 tokio::pin!(waiting);
                 assert!(futures::poll!(&mut waiting).is_pending());
                 assert_eq!(operation.observed_admission_refusal(), None);
@@ -8495,7 +8499,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
                 .unwrap();
             assert!(
                 cancellation
-                    .replay_disposal_is_complete(None, &boundary, false)
+                    .replay_disposal_is_complete(None, &boundary, None)
                     .await
                     .unwrap()
             );
@@ -8687,7 +8691,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
     let boundary = cancellation.disposal_boundary().unwrap();
     assert!(
         cancellation
-            .replay_disposal_is_complete(None, &boundary, true)
+            .replay_disposal_is_complete(None, &boundary, Some(OplogIndex::from_u64(30)))
             .await
             .unwrap()
     );
@@ -8707,7 +8711,11 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
     );
     assert!(
         unrelated
-            .replay_disposal_is_complete(None, &unrelated.disposal_boundary().unwrap(), true)
+            .replay_disposal_is_complete(
+                None,
+                &unrelated.disposal_boundary().unwrap(),
+                Some(OplogIndex::from_u64(30)),
+            )
             .await
             .is_err()
     );

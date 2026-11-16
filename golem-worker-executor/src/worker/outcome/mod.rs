@@ -861,9 +861,9 @@ pub(in crate::worker) fn recovery_agent_error(error: &WorkerExecutorError) -> Ag
         }),
         WorkerExecutorError::InvocationFailed { error, .. }
         | WorkerExecutorError::PreviousInvocationFailed { error, .. } => error.clone(),
-        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => AgentError::InternalError(
-            format!("Unexpected oplog entry during replay: expected {expected}, got {got}"),
-        ),
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+            AgentError::InternalError(divergence.to_string())
+        }
         WorkerExecutorError::ComponentParseFailed { .. } => {
             AgentError::InternalError(error.to_string())
         }

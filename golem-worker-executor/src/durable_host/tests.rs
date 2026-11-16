@@ -1667,7 +1667,12 @@ fn wallet_cascade_preserves_independent_floor_releases_ceiling_and_replays_ident
         )
         .unwrap()
     );
-    adopt_recorded_wallet_generation(&mut replayed_generation, live_generation).unwrap();
+    adopt_recorded_wallet_generation(
+        OplogIndex::from_u64(1),
+        &mut replayed_generation,
+        live_generation,
+    )
+    .unwrap();
     let replayed_surface = golem_common::model::card::agent_effective_surface_from_wallet(
         &context,
         replayed_wallet.values().map(Arc::as_ref),
@@ -1748,7 +1753,12 @@ fn expiry_generation_outcome_is_stable_when_replayed() {
     let recorded_expiry_generation = generation;
 
     assert!(!remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
-    adopt_recorded_wallet_generation(&mut generation, recorded_expiry_generation).unwrap();
+    adopt_recorded_wallet_generation(
+        OplogIndex::from_u64(1),
+        &mut generation,
+        recorded_expiry_generation,
+    )
+    .unwrap();
 
     assert!(wallet.is_empty());
     assert_eq!(generation, 8);
@@ -1817,7 +1827,12 @@ fn recorded_expiry_events_replay_identically_with_an_earlier_clock() {
         assert!(
             remove_wallet_card(&mut replayed_wallet, &mut replayed_generation, card_id).unwrap()
         );
-        adopt_recorded_wallet_generation(&mut replayed_generation, recorded_generation).unwrap();
+        adopt_recorded_wallet_generation(
+            OplogIndex::from_u64(1),
+            &mut replayed_generation,
+            recorded_generation,
+        )
+        .unwrap();
     }
 
     assert_eq!(replayed_wallet, live_wallet);
@@ -1890,10 +1905,10 @@ fn wallet_replacement_is_atomic_when_generation_would_overflow() {
 fn replay_adopts_recorded_wallet_generation() {
     let mut generation = 10;
 
-    adopt_recorded_wallet_generation(&mut generation, 10).unwrap();
+    adopt_recorded_wallet_generation(OplogIndex::from_u64(1), &mut generation, 10).unwrap();
     assert_eq!(generation, 10);
 
-    adopt_recorded_wallet_generation(&mut generation, 12).unwrap();
+    adopt_recorded_wallet_generation(OplogIndex::from_u64(1), &mut generation, 12).unwrap();
     assert_eq!(generation, 12);
 }
 
@@ -1901,7 +1916,7 @@ fn replay_adopts_recorded_wallet_generation() {
 fn replay_rejects_decreasing_recorded_wallet_generation() {
     let mut generation = 10;
 
-    assert!(adopt_recorded_wallet_generation(&mut generation, 9).is_err());
+    assert!(adopt_recorded_wallet_generation(OplogIndex::from_u64(1), &mut generation, 9).is_err());
     assert_eq!(generation, 10);
 }
 
@@ -1919,6 +1934,7 @@ fn invocation_wallet_pin_establishes_base_before_ordered_mutations() {
 
     assert!(
         apply_invocation_wallet_pin(
+            OplogIndex::from_u64(1),
             &mut wallet,
             wallet_id_hash,
             &mut generation,
@@ -1942,7 +1958,7 @@ fn invocation_wallet_pin_establishes_base_before_ordered_mutations() {
     assert!(!wallet.contains_key(&derived_card.card_id()));
 
     assert!(add_wallet_card(&mut wallet, &mut generation, derived_card.clone()).unwrap());
-    adopt_recorded_wallet_generation(&mut generation, 2).unwrap();
+    adopt_recorded_wallet_generation(OplogIndex::from_u64(1), &mut generation, 2).unwrap();
     assert_eq!(wallet.len(), 2);
     assert_eq!(
         wallet.get(&base_card.card_id()).map(Arc::as_ref),
@@ -1983,7 +1999,16 @@ fn invocation_wallet_pins_share_retained_membership_and_reject_atomically() {
     ] {
         let mut wallet = original.clone();
         let mut generation = 8;
-        assert!(apply_invocation_wallet_pin(&mut wallet, hash, &mut generation, invalid).is_err());
+        assert!(
+            apply_invocation_wallet_pin(
+                OplogIndex::from_u64(1),
+                &mut wallet,
+                hash,
+                &mut generation,
+                invalid
+            )
+            .is_err()
+        );
         assert!(wallet.ptr_eq(&original));
         assert_eq!(generation, 8);
     }
@@ -1992,6 +2017,7 @@ fn invocation_wallet_pins_share_retained_membership_and_reject_atomically() {
     let mut generation = 8;
     assert!(
         !apply_invocation_wallet_pin(
+            OplogIndex::from_u64(1),
             &mut wallet,
             hash,
             &mut generation,
@@ -2005,6 +2031,7 @@ fn invocation_wallet_pins_share_retained_membership_and_reject_atomically() {
     for end in (0..ids.len()).rev() {
         assert!(
             apply_invocation_wallet_pin(
+                OplogIndex::from_u64(1),
                 &mut wallet,
                 hash,
                 &mut generation,

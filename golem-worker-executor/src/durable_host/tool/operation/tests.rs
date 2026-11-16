@@ -570,6 +570,7 @@ async fn historical_admission_refusal_does_not_block_child_validation() {
             let selected = tokio::time::timeout(
                 std::time::Duration::from_secs(1),
                 child.select_infrastructure(WorkerExecutorError::unexpected_oplog_entry(
+                    OplogIndex::from_u64(3),
                     "recorded child result",
                     "different child result",
                 )),

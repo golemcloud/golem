@@ -93,9 +93,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         if agent_mode == AgentMode::Ephemeral
                             && !matches!(agent_invocation, AgentInvocation::AgentInitialization { .. })
                         {
-                            break Err(WorkerExecutorError::unexpected_oplog_entry(
-                                "AgentInitialization for ephemeral initialization replay",
-                                format!("{:?}", agent_invocation.kind()),
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(oplog_index, format!("{:?}", agent_invocation.kind()), "AgentInitialization for ephemeral initialization replay",
                             ));
                         }
                         let scope_card = agent_invocation.scope_card().cloned();
@@ -103,7 +101,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         let payload_scope_card_id =
                             scope_card.as_ref().map(|card| card.scope_card_id);
                         if payload_scope_card_id != recorded_scope_card_id {
-                            break Err(WorkerExecutorError::unexpected_oplog_entry(
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(oplog_index,
                                 "matching invocation scope-card payload and wallet pin",
                                 format!(
                                     "payload scope-card ID {payload_scope_card_id:?}, recorded scope-card ID {recorded_scope_card_id:?}"
@@ -213,7 +211,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             break Err(error);
                         }
                         let recorded_local_failure = store.as_context().data().durable_ctx()
-                            .state.replay_state.invocation_has_recorded_local_failure(oplog_index);
+                            .state.replay_state.recorded_local_failure_of_invocation(oplog_index);
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -295,11 +293,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 number_of_replayed_functions += 1;
                                 continue;
                             }
-                            Ok(ref result) if recorded_local_failure
+                            Ok(ref result) if recorded_local_failure.is_some()
                                 && (result.is_snapshot_replay_divergence()
                                     || matches!(result, InvokeResult::Exited { .. })) =>
                             {
                                 break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    recorded_local_failure.unwrap_or(oplog_index),
                                     "invocation-local method failure",
                                     format!("{result:?}"),
                                 ));

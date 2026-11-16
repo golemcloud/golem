@@ -584,10 +584,8 @@ impl TrapType {
                             // mapped here: it is also used as a generic transient
                             // error wrapper and must remain retriable via the
                             // default policy path (`AgentError::Unknown`).
-                            Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
-                                make_error(AgentError::InternalError(format!(
-                                    "Unexpected oplog entry during replay: expected {expected}, got {got}"
-                                )))
+                            Some(WorkerExecutorError::UnexpectedOplogEntry { divergence }) => {
+                                make_error(AgentError::InternalError(divergence.to_string()))
                             }
                             _ => {
                                 // A bare `?` on an oplog write inside an anyhow host function
@@ -1323,7 +1321,7 @@ mod tests {
     fn unexpected_oplog_entry_is_non_retriable_internal_error() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(
-                golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(OplogIndex::from_u64(3),
                     "OplogEntry::Start",
                     "End { .. }",
                 ),
@@ -1338,7 +1336,7 @@ mod tests {
                 ..
             } => {
                 assert!(
-                    msg.contains("Unexpected oplog entry during replay"),
+                    msg.contains("Unexpected oplog entry at 3"),
                     "unexpected message: {msg}"
                 );
                 assert!(msg.contains("OplogEntry::Start"));
@@ -1496,6 +1494,7 @@ mod tests {
         // classification.
         let wasmtime_error = wasmtime::Error::from(
             golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(3),
                 "OplogEntry::Start",
                 "Cancelled { .. }",
             ),
