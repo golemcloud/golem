@@ -36,6 +36,7 @@ pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod custom_durability_scala;
 pub mod durability;
+pub mod durability_effect;
 pub mod effect_permissions;
 mod entity_fence_waits;
 mod execution_observations;
@@ -411,6 +412,12 @@ test_component!(
     "permissions_effect",
     "golem_it_permissions_effect",
     "golem-it:permissions-effect"
+);
+test_component!(
+    custom_durability_effect,
+    "custom_durability_effect",
+    "golem_it_custom_durability_effect",
+    "golem-it:custom-durability-effect"
 );
 test_component!(
     snapshot_sqlite_effect,

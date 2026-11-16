@@ -130,17 +130,16 @@ do not edit generated files under `golem-temp/`.
 Import `Durability` as a namespace from `@golemcloud/effect-golem`. It is not an Effect service tag
 and must not be yielded as `yield* Durability`.
 
-**Sequential execution only.** `Durability.wrap` and `wrapInfallible` support sequential and
-properly nested operations. The body may await host calls when no unrelated guest work runs during
-the wait. Do not overlap a custom operation with other fibers, concurrent effects, or JavaScript
-promises, even if they only use ordinary host APIs. Its scope remains installed while the body
-waits; sibling effects can be attributed to the wrong operation and cause incorrect replay or
-invocation failure. This misuse is not reliably detected.
+**Concurrent operations.** `Durability.wrap` and `wrapInfallible` operations can run in
+concurrent fibers (`Effect.all`, `Effect.fork`, races) and can nest. Golem records the calls of a
+body under the operation that started them, not under a sibling. Obey these limits:
 
-Await each nested operation before continuing its parent. Do not detach fibers or let work outlive
-the body. On failure or interruption, stop and join outstanding work before the operation closes.
-Structured finalization alone does not make concurrent custom scopes supported. This restriction
-does not apply to ordinary built-in durability when no custom operation is active.
+- A parent operation finishes only after every child operation that started in its body closes.
+- Work that continues after its operation closes (a detached fiber, a promise that is not awaited)
+  runs in the nearest open enclosing operation, or else in the agent invocation. Do not let work
+  continue after the agent method returns.
+- Fibers yield through Promise jobs, so `Effect.yieldNow` does not let host I/O continue. Wait for
+  I/O with an effect such as `Deferred.await`, not with a polling loop.
 
 Library code that performs an effect Golem does not already record (for example, a call through a
 custom transport) can make it durable with `Durability.wrap`. On a live run, the body executes and

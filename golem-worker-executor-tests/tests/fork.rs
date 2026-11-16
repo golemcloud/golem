@@ -1965,6 +1965,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: session.clone(),
             expiry_policy: Some(StreamSessionExpiryPolicy {
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
@@ -1989,6 +1990,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
     let read = |executor: &TestWorkerExecutor| {
         let mut client = executor.client.clone();
         let request = ReadStreamSlotRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             agent_id: Some(source.clone().into()),
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(AuthCtx::System.into()),
@@ -2034,6 +2036,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
             .client
             .clone()
             .append_to_stream_slot(AppendToStreamSlotRequest {
+                route_scope: "[\"environment\",\"1\",\"route\"]".into(),
                 agent_id: Some(source.clone().into()),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),

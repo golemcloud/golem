@@ -87,11 +87,9 @@ const catalogRevision = (
   }, "public", Effect.suspend(() => readRevision("public")))
 ```
 
-Use `Durability.wrap` and `wrapInfallible` sequentially; do not overlap them with other fibers or concurrent effects. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+`Durability.wrap` and `wrapInfallible` operations can run in concurrent fibers and can nest. Each fiber carries the execution scope of its operation, so Golem records the calls of a body under that operation and not under a sibling. A parent operation finishes only after its child operations close. Work that continues after its operation closes runs in the nearest open enclosing operation, or else in the agent invocation; do not let work continue after the agent method returns.
 
-Sequential and properly nested custom operations are supported. A body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
-
-Do not leave detached fibers running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Joining at the end does not make concurrent custom scopes supported.
+Timers in a body (`setTimeout`, `setImmediate`, `Effect.sleep`) sleep in the operation that started them. Fibers yield through Promise jobs, so wait for I/O with an effect such as `Deferred.await`, not with an `Effect.yieldNow` polling loop.
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
