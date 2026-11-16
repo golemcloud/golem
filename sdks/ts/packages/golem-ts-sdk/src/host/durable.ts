@@ -198,7 +198,8 @@ async function runLive(
     }
     while (open.children.size > 0) await Promise.allSettled([...open.children]);
     if (!outcome.ok) throw outcome.error;
-    const response = operation.encode(outcome.value);
+    // Encoding reads the result, so getters it calls belong to this operation.
+    const response = scopes.run(token, () => operation.encode(outcome.value));
     await scopes.run(token, () =>
       LiveCustomDurableInvocation.finishAsync(live, response.wire, forcedCommit),
     );

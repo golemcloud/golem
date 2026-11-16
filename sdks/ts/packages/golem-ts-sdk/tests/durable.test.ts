@@ -474,6 +474,22 @@ describe('durableAsync()', () => {
     expect(unfinishedDrops).toBe(1);
   });
 
+  it('encodes the result in its scope, so getters that encoding reads belong to the operation', async () => {
+    const { durableAsync, FunctionType } = await load();
+
+    await durableAsync(baseSpec(FunctionType), { symbol: 'X' }, async () => ({
+      symbol: 'X',
+      get price() {
+        events.push(`getter@${scope.current.name}`);
+        return 7;
+      },
+    }));
+
+    expect(events.filter((event) => event.startsWith('getter@'))).toEqual([
+      'getter@host-features::fetchQuote',
+    ]);
+  });
+
   it('persists and replays a fallible Result', async () => {
     const { durableAsync, FunctionType, Result } = await load();
     const spec = { ...opSpec(FunctionType, 'maybe'), error: z.object({ code: z.string() }) };
