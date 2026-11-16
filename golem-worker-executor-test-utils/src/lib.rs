@@ -4892,6 +4892,20 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     }
 }
 
+/// Returns the same supplied resource entry for every account initialization.
+/// Tests can retain the entry to observe or change its limits and usage.
+pub struct SharedResourceLimits(pub Arc<AtomicResourceEntry>);
+
+#[async_trait]
+impl ResourceLimits for SharedResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+        Ok(self.0.clone())
+    }
+}
+
 /// A `ResourceLimits` implementation that provides a fixed table element limit
 /// while keeping fuel and memory unlimited. Used by table-limit tests.
 struct FixedTableLimitResourceLimits {

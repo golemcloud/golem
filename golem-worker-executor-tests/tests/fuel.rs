@@ -13,16 +13,15 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::account::AccountId;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+use golem_worker_executor::services::resource_limits::AtomicResourceEntry;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
-    start_with_fuel_tracking, start_with_resource_limits,
+    LastUniqueId, PrecompiledComponent, SharedResourceLimits, TestContext,
+    WorkerExecutorTestDependencies, start_with_fuel_tracking, start_with_resource_limits,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -111,21 +110,6 @@ async fn zero_fuel_suspends_and_unloads_runnable_constructor(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    struct FixedLimits(Arc<AtomicResourceEntry>);
-
-    #[async_trait::async_trait]
-    impl ResourceLimits for FixedLimits {
-        async fn initialize_account(
-            &self,
-            _account_id: AccountId,
-        ) -> Result<
-            Arc<AtomicResourceEntry>,
-            golem_service_base::error::worker_executor::WorkerExecutorError,
-        > {
-            Ok(self.0.clone())
-        }
-    }
-
     let context = TestContext::new(last_unique_id);
     let entry = Arc::new(AtomicResourceEntry::new(
         0,
@@ -134,8 +118,12 @@ async fn zero_fuel_suspends_and_unloads_runnable_constructor(
         u64::MAX,
         AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
     ));
-    let executor =
-        start_with_resource_limits(deps, &context, Arc::new(FixedLimits(entry.clone()))).await?;
+    let executor = start_with_resource_limits(
+        deps,
+        &context,
+        Arc::new(SharedResourceLimits(entry.clone())),
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()

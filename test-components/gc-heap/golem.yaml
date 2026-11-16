@@ -17,14 +17,15 @@ componentTemplates:
   # Composes the Rust agent with the WAT component in `gc-probe`, which satisfies its
   # `golem-it:gc-probe/heap` import.
   rust-gc-probe:
+    build:
+    - command: wasm-tools parse gc-probe/gc_probe.wat -o "{{ cargoTarget }}/gc-probe.wasm"
+      sources:
+      - gc-probe/gc_probe.wat
+      targets:
+      - "{{ cargoTarget }}/gc-probe.wasm"
     presets:
       debug:
         build:
-        - command: wasm-tools parse gc-probe/gc_probe.wat -o "{{ cargoTarget }}/gc-probe.wasm"
-          sources:
-          - gc-probe/gc_probe.wat
-          targets:
-          - "{{ cargoTarget }}/gc-probe.wasm"
         - command: wasm-tools compose "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm" -d "{{ cargoTarget }}/gc-probe.wasm" -o "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm"
           sources:
           - "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
@@ -37,11 +38,6 @@ componentTemplates:
           - command: cp "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_debug.wasm"
       release:
         build:
-        - command: wasm-tools parse gc-probe/gc_probe.wat -o "{{ cargoTarget }}/gc-probe.wasm"
-          sources:
-          - gc-probe/gc_probe.wat
-          targets:
-          - "{{ cargoTarget }}/gc-probe.wasm"
         - command: wasm-tools compose "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm" -d "{{ cargoTarget }}/gc-probe.wasm" -o "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
           sources:
           - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
