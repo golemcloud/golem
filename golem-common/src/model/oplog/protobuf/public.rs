@@ -37,7 +37,6 @@ use crate::base_model::OplogIndex;
 use crate::base_model::durable_stream::{
     StreamItemsRecord, StreamRegisteredRecord, StreamSessionRecord, StreamTerminalRecord,
 };
-use crate::model::Empty;
 use crate::model::card::CardId;
 use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::payload::host_functions::{
@@ -74,6 +73,7 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
+use golem_schema::Empty;
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
     type Error = String;
@@ -1793,9 +1793,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicyState> for PublicR
             State::Counter(n) => Ok(PublicRetryPolicyState::Counter(
                 crate::model::oplog::PublicRetryPolicyStateCounter { count: n },
             )),
-            State::Terminal(_) => Ok(PublicRetryPolicyState::Terminal(
-                crate::base_model::Empty {},
-            )),
+            State::Terminal(_) => Ok(PublicRetryPolicyState::Terminal(golem_schema::Empty {})),
             State::Wrapper(w) => {
                 let inner = w.inner.ok_or("Missing inner in Wrapper")?;
                 Ok(PublicRetryPolicyState::Wrapper(

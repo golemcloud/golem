@@ -4992,12 +4992,12 @@ fn path_dep(path: &str, features: &[&str]) -> Item {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::schema::{
         AgentConstructorSchema, AgentMethodSchema, InputSchema, NamedField, OutputSchema,
         SchemaGraph, SchemaType,
     };
+    use golem_schema::Empty;
     use test_r::test;
 
     #[test]

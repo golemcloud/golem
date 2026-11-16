@@ -15,8 +15,8 @@
 use crate::tls::material::TlsSources;
 use crate::tls::pem::{PemSource, TlsError};
 use golem_common::SafeDisplay;
-use golem_common::model::Empty;
 use golem_common::model::base64::Base64;
+use golem_schema::Empty;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
