@@ -461,7 +461,7 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
     assert_eq!(
         observed_effects
             .iter()
-            .filter(|path| path.as_str() == "/middleware/artifact-touch/golem-user")
+            .filter(|path| path.as_str() == "/middleware/artifact-touch/account")
             .count(),
         2,
         "the authenticated importing identity is visible to middleware before the MCP boundary: {:?}",
@@ -1702,7 +1702,7 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
                     stdin: InputStream,
                     stdout: OutputStream,
                     diagnostics: OutputStream,
-                    principal: golem_rust::tool::Principal,
+                    ctx: golem_rust::tool::InvocationContext,
                 ) -> Result<Rendered, RenderError>;
 
                 /// Record one projectable non-streaming effect.
@@ -1710,7 +1710,7 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
                 async fn touch(
                     &self,
                     item_id: String,
-                    principal: golem_rust::tool::Principal,
+                    ctx: golem_rust::tool::InvocationContext,
                 ) -> Result<Rendered, RenderError>;
 
                 /// This command is intentionally not projectable to MCP.
@@ -1730,9 +1730,9 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
                     mut stdin: InputStream,
                     mut stdout: OutputStream,
                     mut diagnostics: OutputStream,
-                    principal: golem_rust::tool::Principal,
+                    ctx: golem_rust::tool::InvocationContext,
                 ) -> Result<Rendered, RenderError> {{
-                    record_effect(&format!("/provider/{{item_id}}/{{}}", principal_class(&principal))).await;
+                    record_effect(&format!("/provider/{{item_id}}/{{}}", principal_class(ctx.caller().immediate()))).await;
                     let mut bytes = Vec::new();
                     while let Some(chunk) = stdin.next().await {{
                         bytes.extend(chunk.expect("MCP stdin is readable"));
@@ -1750,7 +1750,7 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
                         Ok(Rendered {{
                             id: item_id,
                             revision: 23,
-                            principal: principal_class(&principal).to_string(),
+                            principal: principal_class(ctx.caller().immediate()).to_string(),
                         }})
                     }}
                 }}
@@ -1758,16 +1758,16 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
                 async fn touch(
                     &self,
                     item_id: String,
-                    principal: golem_rust::tool::Principal,
+                    ctx: golem_rust::tool::InvocationContext,
                 ) -> Result<Rendered, RenderError> {{
-                    record_effect(&format!("/provider/{{item_id}}/{{}}", principal_class(&principal))).await;
+                    record_effect(&format!("/provider/{{item_id}}/{{}}", principal_class(ctx.caller().immediate()))).await;
                     if item_id == "reject" {{
                         Err(RenderError::Rejected {{ item_id }})
                     }} else {{
                         Ok(Rendered {{
                             id: item_id,
                             revision: 23,
-                            principal: principal_class(&principal).to_string(),
+                            principal: principal_class(ctx.caller().immediate()).to_string(),
                         }})
                     }}
                 }}
@@ -1782,12 +1782,7 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
             }}
 
             fn principal_class(principal: &golem_rust::tool::Principal) -> &'static str {{
-                match principal {{
-                    golem_rust::tool::Principal::Anonymous => "anonymous",
-                    golem_rust::tool::Principal::Oidc(_) => "oidc",
-                    golem_rust::tool::Principal::Agent(_) => "agent",
-                    golem_rust::tool::Principal::GolemUser(_) => "golem-user",
-                }}
+                principal.kind().as_str()
             }}
 
             async fn record_effect(path: &str) {{
@@ -1822,7 +1817,7 @@ fn write_roundtrip_middleware(ctx: &TestContext, effect_port: u16) {
         ctx.cwd_path_join("middleware/src/counter_agent.rs"),
         formatdoc! {r#"
             use futures_concurrency::prelude::*;
-            use golem_rust::tool::{{InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError, UnderlyingTool}};
+            use golem_rust::tool::{{InputStream, InvocationResult, InvocationContext, OutputStream, RawCustomToolError, Tool, ToolInvokeError, UnderlyingTool}};
             use golem_rust::{{TypedSchemaValue, universal_tool_middleware}};
 
             #[universal_tool_middleware(name = "roundtrip-audit")]
@@ -1834,20 +1829,15 @@ fn write_roundtrip_middleware(ctx: &TestContext, effect_port: u16) {
                 stdin: Option<InputStream>,
                 stdout: Option<OutputStream>,
                 stderr: Option<OutputStream>,
-                principal: Principal,
+                ctx: InvocationContext,
                 underlying: UnderlyingTool,
             ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {{
-                record_effect(&format!("/middleware/{{tool_name}}/{{}}", principal_class(&principal))).await;
+                record_effect(&format!("/middleware/{{tool_name}}/{{}}", principal_class(ctx.caller().immediate()))).await;
                 underlying.invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr).await
             }}
 
             fn principal_class(principal: &Principal) -> &'static str {{
-                match principal {{
-                    Principal::Anonymous => "anonymous",
-                    Principal::Oidc(_) => "oidc",
-                    Principal::Agent(_) => "agent",
-                    Principal::GolemUser(_) => "golem-user",
-                }}
+                principal.kind().as_str()
             }}
 
             async fn record_effect(path: &str) {{

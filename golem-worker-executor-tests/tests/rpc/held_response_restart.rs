@@ -2,10 +2,12 @@ use super::*;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentTarget, InvocationFreshnessDisposition,
 };
+use golem_common::model::caller::Caller;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand};
+use golem_worker_executor_test_utils::callers;
 use pretty_assertions::assert_eq;
 use test_r::test;
 
@@ -50,6 +52,7 @@ impl Rpc for HoldResponseRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -69,6 +72,7 @@ impl Rpc for HoldResponseRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -137,6 +141,7 @@ impl Rpc for HoldResponseRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         key: Option<IdempotencyKey>,
@@ -157,6 +162,7 @@ impl Rpc for HoldResponseRpc {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
                 key,
@@ -183,6 +189,7 @@ impl Rpc for HoldResponseRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
@@ -206,6 +213,7 @@ impl Rpc for HoldResponseRpc {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
                 card,
@@ -231,6 +239,7 @@ impl Rpc for HoldResponseRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
     ) -> Result<(), RpcError> {
@@ -247,6 +256,7 @@ impl Rpc for HoldResponseRpc {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
             )
@@ -738,12 +748,7 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
         golem_common::model::oplog::CreateRequestKind::GetOrCreate
     );
     assert_eq!(create_requests[0].idempotency_key, activations[0].clone());
-    assert_eq!(
-        create_requests[0].principal,
-        Principal::Agent(AgentPrincipal {
-            agent_id: caller.clone(),
-        })
-    );
+    assert_eq!(create_requests[0].caller, callers::agent(caller.clone()));
     let initializations = executor
         .get_oplog(&target, OplogIndex::INITIAL)
         .await?

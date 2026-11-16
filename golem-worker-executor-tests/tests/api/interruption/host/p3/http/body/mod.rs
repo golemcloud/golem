@@ -8,6 +8,7 @@ use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -152,7 +153,7 @@ async fn pending_response_body(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let stored_key = executor

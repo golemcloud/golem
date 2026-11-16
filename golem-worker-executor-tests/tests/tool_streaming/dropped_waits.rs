@@ -16,6 +16,7 @@
 //! agent's next rebuild replays the body.
 
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 /// An agent that has the `clock-race` tool, on its own executor.
@@ -131,9 +132,7 @@ impl ClockToolOwner {
                 vec![command.to_string()],
                 input,
                 InvocationContextStack::fresh(),
-                Principal::GolemUser(GolemUserPrincipal {
-                    account_id: self.context.account_id,
-                }),
+                callers::account(self.context.account_id),
                 None,
             )
             .await?;

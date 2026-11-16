@@ -214,10 +214,11 @@ async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> a
         .await?;
     assert_eq!(authenticated.status(), reqwest::StatusCode::OK);
     let principal: Value = authenticated.json().await?;
-    assert_eq!(principal["value"]["oidc"]["sub"], "fixture-user");
-    assert_eq!(
-        principal["value"]["oidc"]["email"],
-        "fixture-user@example.com"
+    assert_eq!(principal["value"]["kind"], "user");
+    assert_eq!(principal["value"]["ref"]["subject"], "fixture-user");
+    assert!(
+        !principal.to_string().contains("fixture-user@example.com"),
+        "the email must not be part of the caller's reference: {principal}"
     );
 
     let replay = context

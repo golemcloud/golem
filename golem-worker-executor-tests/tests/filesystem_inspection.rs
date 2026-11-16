@@ -22,6 +22,7 @@ use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_service_base::model::FileReadResponse;
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit,
@@ -113,7 +114,7 @@ pub(crate) async fn first_read_frame(
             environment_id: Some(executor.context.default_environment_id.into()),
             file_path: path.into(),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             selection: Some(FileByteSelection::Full.into()),
         })
         .await?
@@ -948,7 +949,7 @@ async fn grpc_read_waits_for_blocking_invocation_and_completes(
         environment_id: Some(context.default_environment_id.into()),
         file_path: "/a.txt".into(),
         auth_ctx: Some(executor.auth_ctx().into()),
-        principal: None,
+        caller: Some(callers::anonymous().into()),
         selection: Some(FileByteSelection::Full.into()),
     }));
     let pending_before_release = tokio::time::timeout(Duration::from_secs(2), &mut read)
@@ -1039,7 +1040,7 @@ async fn exact_file_read_grpc_rejects_unsafe_paths_before_activation(
                 environment_id: Some(context.default_environment_id.into()),
                 file_path: path.into(),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: None,
+                caller: Some(callers::anonymous().into()),
                 selection: Some(FileByteSelection::Full.into()),
             })
             .await?
@@ -1083,7 +1084,7 @@ pub(crate) async fn file_system_node_is_not_found(
             environment_id: Some(executor.context.default_environment_id.into()),
             component_owner_account_id: Some(executor.context.account_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
         })
         .await?
         .into_inner();

@@ -23,9 +23,7 @@ use futures::StreamExt;
 use golem_common::agent_id;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
-use golem_common::model::agent::{
-    AgentMode, AgentTypeName, GolemUserPrincipal, OidcPrincipal, OwnerKind, Principal,
-};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
@@ -74,6 +72,7 @@ use golem_worker_executor::services::environment_state::{
 };
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     AgentInvocationSuccessGateHandle, LastUniqueId, PrecompiledComponent, ReplayAdmissionStage,
     TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
@@ -1019,7 +1018,7 @@ async fn invoke_filesystem_tool(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
     tool_name: &str,
     input: TypedSchemaValue,
@@ -1097,7 +1096,7 @@ async fn invoke_filesystem_tool(
             Vec::new(),
             TypedSchemaValue::new(input_schema, input_value),
             InvocationContextStack::fresh(),
-            principal,
+            caller,
             None,
         )
         .await?;
@@ -1111,7 +1110,7 @@ async fn invoke_filesystem_tool_success(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
     tool_name: &str,
     input: TypedSchemaValue,
@@ -1120,7 +1119,7 @@ async fn invoke_filesystem_tool_success(
         executor,
         worker_id,
         fingerprint,
-        principal,
+        caller,
         definitions,
         tool_name,
         input,
@@ -1387,7 +1386,7 @@ async fn invoke_git_tool_success(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     definition: &golem_common::schema::tool::Tool,
     command: &str,
     fields: BTreeMap<&str, SchemaValue>,
@@ -1397,7 +1396,7 @@ async fn invoke_git_tool_success(
         worker_id,
         fingerprint,
         IdempotencyKey::fresh(),
-        principal,
+        caller,
         definition,
         command,
         fields,
@@ -1410,7 +1409,7 @@ async fn invoke_git_tool_success_with_key(
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
     idempotency_key: IdempotencyKey,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     definition: &golem_common::schema::tool::Tool,
     command: &str,
     mut fields: BTreeMap<&str, SchemaValue>,
@@ -1444,7 +1443,7 @@ async fn invoke_git_tool_success_with_key(
         worker_id,
         fingerprint,
         idempotency_key,
-        principal,
+        caller,
         command_path,
         TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
     )
@@ -1456,7 +1455,7 @@ async fn invoke_git_tool_argv_success(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     definition: &golem_common::schema::tool::Tool,
     args: &[&str],
 ) -> anyhow::Result<Option<SchemaValue>> {
@@ -1476,7 +1475,7 @@ async fn invoke_git_tool_argv_success(
         worker_id,
         fingerprint,
         IdempotencyKey::fresh(),
-        principal,
+        caller,
         command_path,
         *input,
     )
@@ -1488,7 +1487,7 @@ async fn invoke_git_tool_input(
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
     idempotency_key: IdempotencyKey,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     command_path: Vec<String>,
     input: TypedSchemaValue,
 ) -> anyhow::Result<Option<SchemaValue>> {
@@ -1502,7 +1501,7 @@ async fn invoke_git_tool_input(
             command_path,
             input,
             InvocationContextStack::fresh(),
-            principal,
+            caller,
             None,
         )
         .await?;
@@ -1604,7 +1603,7 @@ async fn invoke_web_fetch(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     definition: &golem_common::schema::tool::Tool,
     idempotency_key: IdempotencyKey,
     input: TypedSchemaValue,
@@ -1628,7 +1627,7 @@ async fn invoke_web_fetch(
             Vec::new(),
             TypedSchemaValue::new(input_schema, input_value),
             InvocationContextStack::fresh(),
-            principal,
+            caller,
             None,
         )
         .await?;
@@ -6143,21 +6142,16 @@ async fn rust_generated_client_streams_live_and_handles_edges(
 
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let principal_context: Vec<String> = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: AccountId::new(),
-            }),
+            callers::account(AccountId::new()),
             "principal_context",
             data_value!(),
         )
         .await?
         .into_typed()?;
-    assert_eq!(
-        principal_context,
-        ["golem-user", "golem-user", "golem-user"]
-    );
+    assert_eq!(principal_context, ["account", "account", "account"]);
 
     let marker_result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -10993,7 +10987,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         environment_id: Some(caller_component.environment_id.into()),
         auth_ctx: Some(executor.auth_ctx().into()),
         context: None,
-        principal: None,
+        caller: Some(callers::anonymous().into()),
         freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
         config: Vec::new(),
         attempt_id: None,
@@ -15065,12 +15059,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
             agent_id: Some(worker_id.clone().into()),
             idempotency_key: Some(key.clone().into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: Some(
-                Principal::GolemUser(GolemUserPrincipal {
-                    account_id: context.account_id,
-                })
-                .into(),
-            ),
+            caller: Some(callers::account(context.account_id).into()),
             environment_id: Some(context.default_environment_id.into()),
             component_owner_account_id: Some(context.account_id.into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
@@ -15191,7 +15180,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 operation: ResumeOperation::Takeover as i32,
                 cursors: vec![stdout_cursor.unwrap()],
                 auth_ctx: start.auth_ctx,
-                principal: start.principal,
+                caller: start.caller,
             })),
         })
         .await?;
@@ -15346,12 +15335,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 operation: ResumeOperation::Resume as i32,
                 cursors: Vec::new(),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: Some(
-                    Principal::GolemUser(GolemUserPrincipal {
-                        account_id: context.account_id,
-                    })
-                    .into(),
-                ),
+                caller: Some(callers::account(context.account_id).into()),
             })),
         })
         .await?;
@@ -15484,16 +15468,14 @@ async fn exercise_filesystem_tools(
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     let path = "workspace/filesystem-tools/notes.txt".to_string();
 
     let write = invoke_filesystem_tool_success(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -15526,7 +15508,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "read-file",
         filesystem_tool_input(vec![
@@ -15570,7 +15552,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "edit-file",
         filesystem_tool_input(vec![
@@ -15607,7 +15589,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "read-file",
         filesystem_tool_input(vec![
@@ -15652,7 +15634,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "ls",
         filesystem_tool_input(vec![
@@ -15713,7 +15695,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "grep",
         filesystem_tool_input(vec![
@@ -15812,7 +15794,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "ls",
         filesystem_tool_input(vec![
@@ -15868,7 +15850,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "grep",
         filesystem_tool_input(vec![
@@ -15948,7 +15930,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "edit-file",
         filesystem_tool_input(vec![
@@ -15976,7 +15958,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -16009,7 +15991,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "edit-file",
         filesystem_tool_input(vec![
@@ -16036,7 +16018,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -16062,7 +16044,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "edit-file",
         filesystem_tool_input(vec![
@@ -16090,7 +16072,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "read-file",
         filesystem_tool_input(vec![
@@ -16218,7 +16200,7 @@ async fn exercise_filesystem_tools(
             executor,
             &denied_worker,
             denied_fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definitions,
             tool_name,
             input,
@@ -16410,9 +16392,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
 
     // One call lists or searches the whole flat directory, so its oplog growth must follow the
     // number of names, not the number of names squared.
@@ -16424,7 +16404,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
                 &executor,
                 &worker_id,
                 fingerprint,
-                principal.clone(),
+                caller.clone(),
                 &definitions,
                 format!("{directory}/{index:02}.txt"),
             )
@@ -16434,7 +16414,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definitions,
             "ls",
             ls_tool_input(&directory, None, None, Some(500)),
@@ -16444,7 +16424,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definitions,
             "grep",
             grep_tool_input(&directory, "x", None, &[]),
@@ -16482,7 +16462,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definitions,
             format!("{directory}/{index:03}.txt"),
         )
@@ -16492,7 +16472,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "ls",
         ls_tool_input(directory, None, None, Some(500)),
@@ -16507,7 +16487,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "grep",
         grep_tool_input(directory, "x", None, &["*.none"]),
@@ -16524,7 +16504,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "ls",
         ls_tool_input(directory, None, Some("007.txt"), Some(500)),
@@ -16556,7 +16536,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definitions,
             format!("{root}/{path}"),
         )
@@ -16567,7 +16547,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "ls",
         ls_tool_input(root, Some(2), None, Some(500)),
@@ -16608,7 +16588,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "grep",
         grep_tool_input(root, "x", Some(2), &["mid/*.txt", "z.txt"]),
@@ -16649,7 +16629,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "ls",
         ls_tool_input(root, Some(2), None, Some(500)),
@@ -16663,7 +16643,7 @@ async fn write_filesystem_tool_file(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
     path: String,
 ) -> anyhow::Result<()> {
@@ -16671,7 +16651,7 @@ async fn write_filesystem_tool_file(
         executor,
         worker_id,
         fingerprint,
-        principal,
+        caller,
         definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -16820,7 +16800,7 @@ async fn invoke_filesystem_tool_measuring_oplog(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
     tool_name: &str,
     input: TypedSchemaValue,
@@ -16835,7 +16815,7 @@ async fn invoke_filesystem_tool_measuring_oplog(
         executor,
         worker_id,
         fingerprint,
-        principal,
+        caller,
         definitions,
         tool_name,
         input,
@@ -18338,9 +18318,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     let cwd = string_list(&["/workspace/repo"]);
 
     // Optional arguments reach git from a command line both when given and when left out.
@@ -18348,7 +18326,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         &["init", "-b", "main", "workspace/repo"],
     )
@@ -18361,7 +18339,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &git_definition,
             "config",
             BTreeMap::from([
@@ -18378,7 +18356,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &filesystem_definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -18404,7 +18382,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "add",
         BTreeMap::from([
@@ -18420,7 +18398,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "commit",
         BTreeMap::from([
@@ -18447,7 +18425,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &filesystem_definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -18473,7 +18451,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "add",
         BTreeMap::from([
@@ -18489,7 +18467,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &filesystem_definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -18529,7 +18507,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "config",
         BTreeMap::from([
@@ -18559,7 +18537,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "status",
         BTreeMap::from([
@@ -18621,7 +18599,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         &["-C", "/workspace/repo", "log", "-n", "1", "--oneline"],
     )
@@ -18638,7 +18616,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "diff",
         BTreeMap::from([
@@ -18669,7 +18647,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "diff",
         BTreeMap::from([
@@ -18700,7 +18678,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "checkout",
         BTreeMap::from([
@@ -18738,7 +18716,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "checkout",
         BTreeMap::from([
@@ -18766,7 +18744,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "checkout",
         BTreeMap::from([
@@ -18799,7 +18777,7 @@ struct GitToolHarness {
     caller_component: golem_common::model::component::ComponentDto,
     worker_id: golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     git_definition: golem_common::schema::tool::Tool,
     filesystem_definitions: BTreeMap<ToolName, golem_common::schema::tool::Tool>,
 }
@@ -18909,9 +18887,7 @@ async fn start_git_tool_harness(
     let agent_id = agent_id!("ToolStreamingCaller", instance_name);
     let worker_id = executor.start_agent(&caller_component.id, agent_id).await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     Ok(GitToolHarness {
         context,
         environment_state,
@@ -18919,7 +18895,7 @@ async fn start_git_tool_harness(
         caller_component,
         worker_id,
         fingerprint,
-        principal,
+        caller,
         git_definition,
         filesystem_definitions,
     })
@@ -18930,7 +18906,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.git_definition,
         "init",
         BTreeMap::from([
@@ -18949,7 +18925,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "config",
             BTreeMap::from([
@@ -19015,7 +18991,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "status",
             BTreeMap::from([
@@ -19037,7 +19013,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.filesystem_definitions,
             "write-file",
             filesystem_tool_input(vec![
@@ -19071,7 +19047,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             &harness.worker_id,
             harness.fingerprint,
             cancelled_key.clone(),
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "config",
             BTreeMap::from([
@@ -19124,7 +19100,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal,
+        harness.caller,
         &harness.git_definition,
         "config",
         BTreeMap::from([
@@ -19171,7 +19147,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "commit",
             BTreeMap::from([
@@ -19188,7 +19164,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.filesystem_definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -19214,7 +19190,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.git_definition,
         "add",
         BTreeMap::from([
@@ -19237,7 +19213,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             &harness.worker_id,
             harness.fingerprint,
             key.clone(),
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "commit",
             BTreeMap::from([
@@ -19285,7 +19261,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         caller_component,
         worker_id,
         fingerprint,
-        principal,
+        caller,
         git_definition,
         filesystem_definitions,
     } = harness;
@@ -19307,7 +19283,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
                 &worker_id,
                 fingerprint,
                 key,
-                principal.clone(),
+                caller.clone(),
                 &git_definition,
                 "commit",
                 BTreeMap::from([
@@ -19340,7 +19316,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "log",
         BTreeMap::from([
@@ -19383,7 +19359,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         &executor,
         &isolated_worker,
         isolated_fingerprint,
-        principal.clone(),
+        caller.clone(),
         &git_definition,
         "init",
         BTreeMap::from([
@@ -19398,7 +19374,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         &executor,
         &isolated_worker,
         isolated_fingerprint,
-        principal,
+        caller,
         &filesystem_definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -19849,7 +19825,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.git_definition,
         "clone",
         clone_fields(format!("http://localhost:{port}/repo.git"), "clone"),
@@ -19880,7 +19856,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "clone",
             clone_fields(recovery_url, "recovered"),
@@ -19975,7 +19951,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.git_definition,
         "status",
         BTreeMap::from([
@@ -19996,7 +19972,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.filesystem_definitions,
         "write-file",
         filesystem_tool_input(vec![
@@ -20022,7 +19998,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.git_definition,
         "add",
         BTreeMap::from([
@@ -20039,7 +20015,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "commit",
             BTreeMap::from([
@@ -20056,7 +20032,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.git_definition,
         "push",
         BTreeMap::from([
@@ -20083,7 +20059,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.git_definition,
         "clone",
         BTreeMap::from([
@@ -20164,7 +20140,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             push_path.clone(),
             push_input.clone(),
             InvocationContextStack::fresh(),
-            harness.principal.clone(),
+            harness.caller.clone(),
             None,
         ),
     )
@@ -20201,7 +20177,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "status",
             status_fields.clone(),
@@ -20224,7 +20200,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             push_path,
             push_input,
             InvocationContextStack::fresh(),
-            harness.principal.clone(),
+            harness.caller.clone(),
             None,
         ),
     )
@@ -20237,7 +20213,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "status",
             status_fields,
@@ -20444,7 +20420,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
             &harness.executor,
             &harness.worker_id,
             harness.fingerprint,
-            harness.principal.clone(),
+            harness.caller.clone(),
             &harness.git_definition,
             "ls-remote",
             BTreeMap::from([
@@ -20516,7 +20492,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
         &harness.executor,
         &harness.worker_id,
         harness.fingerprint,
-        harness.principal.clone(),
+        harness.caller.clone(),
         &harness.git_definition,
         "config",
         BTreeMap::from([
@@ -21077,9 +21053,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     let WebFetchHttpServers {
         source_port,
         target_port,
@@ -21100,7 +21074,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             IdempotencyKey::fresh(),
             web_fetch_input(source_url("/html"), None, None, None, None),
@@ -21121,7 +21095,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             IdempotencyKey::fresh(),
             web_fetch_input(source_url("/html"), None, None, None, Some(true)),
@@ -21148,7 +21122,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             IdempotencyKey::fresh(),
             web_fetch_input(source_url("/missing"), None, None, None, None),
@@ -21163,7 +21137,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             IdempotencyKey::fresh(),
             web_fetch_input(source_url("/relative"), None, None, None, None),
@@ -21178,7 +21152,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             IdempotencyKey::fresh(),
             web_fetch_input(source_url("/cross-host"), None, None, None, None),
@@ -21199,7 +21173,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
                 &executor,
                 &worker_id,
                 fingerprint,
-                principal.clone(),
+                caller.clone(),
                 &definition,
                 IdempotencyKey::fresh(),
                 web_fetch_input(source_url("/streaming"), None, Some(5), None, None),
@@ -21221,7 +21195,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             IdempotencyKey::fresh(),
             web_fetch_input(source_url(path), None, None, None, None),
@@ -21234,7 +21208,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definition,
         IdempotencyKey::fresh(),
         web_fetch_input(source_url("/relative"), None, None, Some(0), None),
@@ -21246,7 +21220,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definition,
         IdempotencyKey::fresh(),
         web_fetch_input(
@@ -21265,7 +21239,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             IdempotencyKey::fresh(),
             web_fetch_input(source_url("/slow-stream"), Some(500), None, None, None),
@@ -21289,7 +21263,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definition,
         IdempotencyKey::fresh(),
         web_fetch_input(source_url("/slow-headers"), Some(300), None, None, None),
@@ -21304,7 +21278,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             replay_key.clone(),
             replay_input.clone(),
@@ -21321,7 +21295,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definition,
         interrupted_key.clone(),
         interrupted_input.clone(),
@@ -21368,7 +21342,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definition,
             interrupted_key,
             interrupted_input,
@@ -21382,7 +21356,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             &executor,
             &worker_id,
             fingerprint,
-            principal,
+            caller,
             &definition,
             replay_key,
             replay_input,
@@ -21481,9 +21455,7 @@ async fn native_external_tool_scalar_admission(
         )
         .await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     let key = IdempotencyKey::fresh();
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
@@ -21511,7 +21483,7 @@ async fn native_external_tool_scalar_admission(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         )
         .await
@@ -21531,7 +21503,7 @@ async fn native_external_tool_scalar_admission(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         )
         .await
@@ -21547,7 +21519,7 @@ async fn native_external_tool_scalar_admission(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         )
         .await?;
@@ -21594,7 +21566,7 @@ async fn native_external_tool_scalar_admission(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         )
         .await?;
@@ -21625,7 +21597,7 @@ async fn native_external_tool_scalar_admission(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal,
+            caller,
             None,
         )
         .await?;
@@ -21713,9 +21685,7 @@ async fn native_external_tool_scalar_admission(
             vec!["no-stream".to_string()],
             error_input,
             InvocationContextStack::fresh(),
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: context.account_id,
-            }),
+            callers::account(context.account_id),
             None,
         )
         .await?;
@@ -21749,9 +21719,7 @@ async fn native_external_tool_scalar_admission(
             vec!["no-stream".to_string()],
             input,
             InvocationContextStack::fresh(),
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: context.account_id,
-            }),
+            callers::account(context.account_id),
             None,
         )
         .await?;
@@ -21942,9 +21910,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         Some(deployment),
     );
 
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     let key = IdempotencyKey::fresh();
     let invocation_context = InvocationContextStack::fresh();
     let (first, second) = tokio::join!(
@@ -21953,14 +21919,14 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             context.default_environment_id,
             &key,
             &invocation_context,
-            principal.clone(),
+            caller.clone(),
         ),
         executor.get_or_add_ephemeral_external_tool(
             caller_component.id,
             context.default_environment_id,
             &key,
             &invocation_context,
-            principal.clone(),
+            caller.clone(),
         )
     );
     let first = first?;
@@ -22001,7 +21967,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         )
     };
@@ -22074,7 +22040,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             context.default_environment_id,
             &interrupted_key,
             &InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
         )
         .await?;
     let interrupted_id = interrupted.agent_id();
@@ -22089,7 +22055,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         )
     };
@@ -22121,7 +22087,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             context.default_environment_id,
             &startup_key,
             &InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
         )
         .await?;
     let startup_id = startup.agent_id();
@@ -22138,7 +22104,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         )
     };
@@ -22178,7 +22144,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             context.default_environment_id,
             &fresh_key,
             &InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
         )
         .await?;
     assert_ne!(fresh.agent_id(), owner_id);
@@ -22209,7 +22175,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         );
         tokio::pin!(pending);
@@ -22251,7 +22217,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             vec!["no-stream".to_string()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal.clone(),
+            caller.clone(),
             None,
         )
         .await?;
@@ -22271,7 +22237,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             vec!["no-stream".to_string()],
             input,
             InvocationContextStack::fresh(),
-            principal,
+            caller,
             None,
         )
         .await
@@ -22400,9 +22366,7 @@ async fn native_tool_secret_permissions_and_completed_replay(
                     vec!["echo-secret".to_string()],
                     input,
                     InvocationContextStack::fresh(),
-                    Principal::GolemUser(GolemUserPrincipal {
-                        account_id: context.account_id,
-                    }),
+                    callers::account(context.account_id),
                     None,
                 )
                 .await;
@@ -22991,12 +22955,7 @@ async fn start_external_tool_command(
                 agent_id: Some(worker_id.clone().into()),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: Some(
-                    Principal::GolemUser(GolemUserPrincipal {
-                        account_id: context.account_id,
-                    })
-                    .into(),
-                ),
+                caller: Some(callers::account(context.account_id).into()),
                 environment_id: Some(context.default_environment_id.into()),
                 component_owner_account_id: Some(context.account_id.into()),
                 expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),

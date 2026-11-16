@@ -551,3 +551,7 @@ pub(crate) fn new_reqwest_client_with_tracing() -> reqwest_middleware::ClientWit
         .with(reqwest_tracing::TracingMiddleware::default())
         .build()
 }
+
+/// The Golem issuer of every worker service and executor that the framework starts, so that the
+/// principals of agents and accounts are the same in all of them.
+pub const TEST_GOLEM_ISSUER: &str = "https://issuer.golem-test.example";

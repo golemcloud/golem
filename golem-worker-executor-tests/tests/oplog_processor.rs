@@ -458,6 +458,7 @@ async fn processor_committed_admission_survives_owner_retirement(
                         config: Vec::new(),
                         metadata: metadata.into(),
                         first_entry_index: golem_common::model::oplog::OplogIndex::INITIAL,
+                        caller: golem_common::model::caller::Caller::anonymous(),
                         entries: vec![OplogEntry::GrowMemory {
                             timestamp: golem_common::model::Timestamp::now_utc(),
                             delta: 1,

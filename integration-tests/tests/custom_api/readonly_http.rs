@@ -15,7 +15,7 @@
 //! HTTP integration tests for the read-only agent method feature (issue #3393,
 //! tests H1..H5).
 //!
-//! All six tests (H4 is split into principal-unaware / principal-aware halves)
+//! All six tests (H4 is split into an anonymous half and a credential-carrying half)
 //! exercise the `ReadonlyAgent` agent declared in the shared
 //! `agent-sdk-rust` test component. They drive the worker-service HTTP layer
 //! through `HttpTestContext` and assert the cache-header contract documented
@@ -27,7 +27,7 @@
 //! - `If-None-Match` short-circuits to `304 Not Modified` when the ETag
 //!   matches the current `(fingerprint, oplog-index)`
 //! - `Vary` includes `Authorization` (or the configured session header) for
-//!   principal-aware methods
+//!   public responses
 
 use super::assert_json_content_type;
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
@@ -121,7 +121,7 @@ async fn h1_get_returns_etag_and_cache_control(
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     assert_eq!(
         cache_control, "public, no-cache",
-        "principal-unaware UntilWrite must emit `public, no-cache`"
+        "an anonymous UntilWrite read must emit `public, no-cache`"
     );
 
     let etag = header_str(response.headers().get(ETAG))
@@ -243,12 +243,13 @@ async fn h3_etag_invalidates_after_write(
 }
 
 // ---------------------------------------------------------------------------
-// H4 — principal-unaware uses `public`, principal-aware uses `private` + Vary
+// H4 — an anonymous request is `public` and varies on the credential headers; a request that
+// carries a credential is `private`
 // ---------------------------------------------------------------------------
 
 #[test]
 #[tracing::instrument]
-async fn h4_principal_unaware_uses_public_cache_directive(
+async fn h4_anonymous_request_without_credentials_is_public_with_vary(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
@@ -262,23 +263,24 @@ async fn h4_principal_unaware_uses_public_cache_directive(
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     assert_eq!(
         cache_control, "public, no-cache",
-        "principal-unaware UntilWrite read must emit `public, no-cache`"
+        "an anonymous UntilWrite read must emit `public, no-cache`"
     );
 
-    // No Vary on principal-carrying request header is required for a
-    // principal-unaware method.
-    let vary = header_str(response.headers().get(VARY)).unwrap_or("");
-    assert!(
-        !header_has_token(vary, "Authorization"),
-        "principal-unaware method must NOT add `Authorization` to Vary, got: {vary:?}"
-    );
+    let vary = header_str(response.headers().get(VARY))
+        .expect("expected Vary header for a public read-only response");
+    for header in ["Authorization", "Cookie", "Golem-Token"] {
+        assert!(
+            header_has_token(vary, header),
+            "a public response must add `{header}` to Vary, got: {vary}"
+        );
+    }
 
     Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn h4_principal_aware_uses_private_cache_directive_and_vary(
+async fn h4_token_bearing_request_is_private_no_cache(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
@@ -288,6 +290,7 @@ async fn h4_principal_aware_uses_private_cache_directive_and_vary(
                 .base_url
                 .join("/readonly-agents/h4p-agent/count-for")?,
         )
+        .header("Authorization", "Bearer not-a-session")
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -296,14 +299,7 @@ async fn h4_principal_aware_uses_private_cache_directive_and_vary(
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     assert_eq!(
         cache_control, "private, no-cache",
-        "principal-aware UntilWrite read must emit `private, no-cache`"
-    );
-
-    let vary = header_str(response.headers().get(VARY))
-        .expect("expected Vary header for principal-aware read");
-    assert!(
-        header_has_token(vary, "Authorization"),
-        "principal-aware method must add `Authorization` to Vary, got: {vary}"
+        "a request that carries a credential must get `private, no-cache`"
     );
 
     Ok(())
@@ -328,7 +324,7 @@ async fn h5_ttl_method_returns_max_age(
     let cache_control =
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     // The agent is declared with `#[read_only(cache = "ttl", ttl = "2s")]`
-    // and the method is principal-unaware, so visibility must be `public`
+    // and the request is anonymous, so visibility must be `public`
     // and `max-age` must be 2 seconds (floor of 2s).
     assert_eq!(
         cache_control, "public, max-age=2",

@@ -349,7 +349,7 @@ impl InvocationSession {
                 operation: operation as i32,
                 cursors: checkpoint.cursors(),
                 auth_ctx: Some(AuthCtx::System.into()),
-                principal: None,
+                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
             })),
         };
         Self::connect(deps, request, checkpoint, timeout).await

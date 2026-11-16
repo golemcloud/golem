@@ -7,6 +7,7 @@
 //     http://license.golem.cloud/LICENSE
 
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::{test, timeout};
 
 #[derive(Debug, FromSchema, PartialEq)]
@@ -65,19 +66,8 @@ struct MoonBitLifecycleObservation {
     result_terminal: String,
 }
 
-fn moonbit_principal(subject: &str) -> Principal {
-    Principal::Oidc(OidcPrincipal {
-        sub: subject.to_string(),
-        issuer: "https://moonbit-sdk-acceptance.test".to_string(),
-        email: None,
-        name: None,
-        email_verified: None,
-        given_name: None,
-        family_name: None,
-        picture: None,
-        preferred_username: None,
-        claims: "{}".to_string(),
-    })
+fn moonbit_principal(subject: &str) -> golem_common::model::caller::Caller {
+    callers::user_with_claims("https://moonbit-sdk-acceptance.test", subject, "{}")
 }
 
 async fn assert_moonbit_owner_resources_clean(
@@ -186,9 +176,9 @@ async fn moonbit_generated_and_definition_owned_proxy_match_nested_error_princip
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let owner_agent_id = agent_id.to_string();
 
-    for subject in ["proxy-principal-a", "proxy-principal-b"] {
+    for subject in ["proxy-caller-a", "proxy-caller-b"] {
         let observation: MoonBitMatrixObservation = executor
-            .invoke_and_await_agent_as_principal(
+            .invoke_and_await_agent_as_caller(
                 &stored_component,
                 &agent_id,
                 moonbit_principal(subject),
@@ -202,13 +192,16 @@ async fn moonbit_generated_and_definition_owned_proxy_match_nested_error_princip
         assert_eq!(observation.normalized_source, "MATRIX.SAMPLE");
         assert_eq!(observation.weighted_size, 108);
         assert_eq!(observation.label_summary, "south|east|north");
-        assert_eq!(observation.principal, format!("oidc:{subject}"));
+        assert_eq!(
+            observation.principal,
+            callers::user_text("https://moonbit-sdk-acceptance.test", subject)
+        );
         assert_eq!(observation.owner_agent_id, owner_agent_id);
         assert_eq!(observation.error_field, "request.source");
         assert_eq!(observation.error_reason, "unsupported source");
         assert!(!observation.error_retryable);
         let definition_observation: MoonBitMatrixObservation = executor
-            .invoke_and_await_agent_as_principal(
+            .invoke_and_await_agent_as_caller(
                 &stored_component,
                 &agent_id,
                 moonbit_principal(subject),
@@ -278,10 +271,10 @@ async fn moonbit_reflected_and_generated_runtime_match_success_error_principal_a
         .await?;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let observation: MoonBitMatrixReflectionObservation = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &stored_component,
             &agent_id,
-            moonbit_principal("reflection-principal"),
+            moonbit_principal("reflection-caller"),
             "matrix_core_reflection_observation",
             data_value!(),
         )
@@ -289,7 +282,10 @@ async fn moonbit_reflected_and_generated_runtime_match_success_error_principal_a
         .into_typed()?;
 
     assert_eq!(observation.generated_provider, "moonbit");
-    assert_eq!(observation.generated_principal, "oidc:reflection-principal");
+    assert_eq!(
+        observation.generated_principal,
+        callers::user_text("https://moonbit-sdk-acceptance.test", "reflection-caller")
+    );
     assert_eq!(observation.generated_owner_agent_id, agent_id.to_string());
     let reflected: serde_json::Value = serde_json::from_str(&observation.reflected_json)?;
     assert_eq!(reflected["provider"], "moonbit");
@@ -381,10 +377,10 @@ async fn check_moonbit_resource_observation(
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let owner_agent_id = agent_id.to_string();
     let observation: MoonBitResourceObservation = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &stored_component,
             &agent_id,
-            moonbit_principal("resource-principal"),
+            moonbit_principal("resource-caller"),
             method,
             data_value!(),
         )
@@ -422,7 +418,10 @@ async fn moonbit_resource_secret_returned_handle_runtime(
             assert_eq!(o.secret_second_provider, "moonbit");
             assert!(o.secret_first_revealed);
             assert!(o.secret_second_revealed);
-            assert_eq!(o.secret_principal, "oidc:resource-principal");
+            assert_eq!(
+                o.secret_principal,
+                callers::user_text("https://moonbit-sdk-acceptance.test", "resource-caller")
+            );
             assert_eq!(o.secret_owner_agent_id, owner);
         },
     )
@@ -449,7 +448,10 @@ async fn moonbit_resource_quota_returned_handle_runtime(
             assert!(o.quota_reserved);
             assert!(o.quota_returned_usable);
             assert!(o.quota_original_consumed);
-            assert_eq!(o.quota_principal, "oidc:resource-principal");
+            assert_eq!(
+                o.quota_principal,
+                callers::user_text("https://moonbit-sdk-acceptance.test", "resource-caller")
+            );
             assert_eq!(o.quota_owner_agent_id, owner);
         },
     )

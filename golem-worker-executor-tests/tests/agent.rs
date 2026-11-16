@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_worker_executor_test_utils::callers;
 
 use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_common::model::agent::AgentConfigEntryDto;
@@ -160,7 +161,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 context: None,
-                principal: None,
+                caller: Some(callers::anonymous().into()),
                 freshness_disposition:
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                         as i32,
@@ -243,7 +244,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             environment_id: Some(streaming_component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -742,7 +743,7 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -798,7 +799,7 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -866,7 +867,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -2002,7 +2003,7 @@ fn counter_invocation(
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(executor.auth_ctx().into()),
         context: None,
-        principal: None,
+        caller: Some(callers::anonymous().into()),
         freshness_disposition:
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
         config: Vec::new(),

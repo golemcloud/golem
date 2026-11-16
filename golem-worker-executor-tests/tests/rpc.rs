@@ -25,7 +25,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_result, stream_terminal,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentPrincipal, ParsedAgentKey, Principal};
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::{
@@ -52,6 +52,7 @@ use golem_worker_executor::services::direct_invocation_auth::{
 };
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::worker::EvictionClass;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, RecordingRpc, RpcCheckpoint, TestContext,
     TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, start,
@@ -3179,7 +3180,7 @@ async fn interrupt_output_producer_after_result(
                                     operation: ResumeOperation::Resume as i32,
                                     cursors: Vec::new(),
                                     auth_ctx: Some(executor.auth_ctx().into()),
-                                    principal: None,
+                                    caller: Some(callers::anonymous().into()),
                                 },
                             )),
                         };
@@ -4262,7 +4263,7 @@ async fn streaming_output_resume_restores_exact_cursors(
             } as i32,
             cursors: cursors.into_values().collect(),
             auth_ctx: start.auth_ctx.clone(),
-            principal: start.principal.clone(),
+            caller: start.caller.clone(),
         })),
     };
     let mut recovered_state = InvocationSessionState::default();
@@ -5119,7 +5120,7 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
             operation: ResumeOperation::Resume as i32,
             cursors: Vec::new(),
             auth_ctx: start.auth_ctx.clone(),
-            principal: start.principal.clone(),
+            caller: start.caller.clone(),
         })),
     };
     let (replayed, _) = read_nested_sibling_output(&executor, &resume_request).await?;
@@ -5304,12 +5305,7 @@ fn origin_observer_start(
             ..Default::default()
         }),
         auth_ctx: Some(executor.auth_ctx().into()),
-        principal: Some(
-            Principal::Agent(AgentPrincipal {
-                agent_id: caller.clone(),
-            })
-            .into(),
-        ),
+        caller: Some(callers::agent(caller.clone()).into()),
         environment_id: Some(component.environment_id.into()),
         component_owner_account_id: Some(component.account_id.into()),
         mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
@@ -5902,7 +5898,7 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
             operation: ResumeOperation::Resume as i32,
             cursors: Vec::new(),
             auth_ctx: start.auth_ctx.clone(),
-            principal: start.principal.clone(),
+            caller: start.caller.clone(),
         })),
     };
     let mut resumed_state = InvocationSessionState::default();
@@ -7065,7 +7061,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
             operation: ResumeOperation::Resume as i32,
             cursors: Vec::new(),
             auth_ctx: start.auth_ctx.clone(),
-            principal: start.principal.clone(),
+            caller: start.caller.clone(),
         })),
     };
     let mut final_state = InvocationSessionState::default();
@@ -7375,7 +7371,7 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
             operation: ResumeOperation::Resume as i32,
             cursors: Vec::new(),
             auth_ctx: start.auth_ctx.clone(),
-            principal: start.principal.clone(),
+            caller: start.caller.clone(),
         })),
     };
     let mut final_state = InvocationSessionState::default();
@@ -9033,7 +9029,7 @@ async fn open_invocation_session_with_key(
             idempotency_key: Some(idempotency_key.clone().into()),
             context: None,
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             environment_id: Some(component.environment_id.into()),
             config: Vec::new(),
             component_owner_account_id: Some(component.account_id.into()),

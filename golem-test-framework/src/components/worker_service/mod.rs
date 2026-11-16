@@ -125,7 +125,8 @@ async fn env_vars(
             "GOLEM__REGISTRY_SERVICE__PORT",
             registry_service.grpc_port().to_string(),
         )
-        .with_str("GOLEM__ENVIRONMENT", "local");
+        .with_str("GOLEM__ENVIRONMENT", "local")
+        .with_str("GOLEM__GOLEM_ISSUER", crate::components::TEST_GOLEM_ISSUER);
     let builder = match std::env::var("GOLEM_TEST_GATEWAY_SESSION_STORAGE")
         .as_deref()
         .unwrap_or("redis")

@@ -462,16 +462,13 @@ pub trait TestDsl {
     }
 
     /// Invokes an agent method as the specified `Principal`. Used by the
-    /// read-only cache per-principal partitioning test (issue #3393 T6):
-    /// `uses_principal = true` methods like `get_count_for` must cache
-    /// independently for each principal, while `uses_principal = false`
-    /// methods like `get_count` must share a single cache entry across
-    /// principals.
-    async fn invoke_and_await_agent_as_principal(
+    /// Invokes an agent as the given caller, as the read-only cache tests do: two callers
+    /// never share a cached result.
+    async fn invoke_and_await_agent_as_caller(
         &self,
         component: &ComponentDto,
         agent_id: &ParsedAgentKey,
-        principal: golem_common::model::caller::Caller,
+        caller: golem_common::model::caller::Caller,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
@@ -480,7 +477,7 @@ pub trait TestDsl {
             agent_id,
             None,
             None,
-            Some(principal),
+            Some(caller),
             method_name,
             params,
         )
@@ -493,7 +490,7 @@ pub trait TestDsl {
         agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
-        principal: Option<golem_common::model::caller::Caller>,
+        caller: Option<golem_common::model::caller::Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult>;

@@ -12,6 +12,7 @@ use golem_human_approval::{
     ApprovalDecision, ApprovalOwner, ApprovalRecord, ApprovalServiceConfig, ApprovalState,
     ApprovalStore,
 };
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -161,19 +162,8 @@ fn rate_limit_parameters(
     )
 }
 
-fn oidc_principal(subject: &str) -> Principal {
-    Principal::Oidc(OidcPrincipal {
-        sub: subject.to_string(),
-        issuer: "https://rate-limit.test".to_string(),
-        email: None,
-        name: None,
-        email_verified: None,
-        given_name: None,
-        family_name: None,
-        picture: None,
-        preferred_username: None,
-        claims: "{}".to_string(),
-    })
+fn oidc_principal(subject: &str) -> golem_common::model::caller::Caller {
+    callers::user_with_claims("https://rate-limit.test", subject, "{}")
 }
 
 macro_rules! setup_rate_limit_chain {
@@ -1396,7 +1386,7 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
 
     let agent_id = agent_id!("ToolSecretCaller", "shipped-audit-secret");
     let evidence = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
             oidc_principal("audit-user"),
@@ -1430,7 +1420,7 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
         assert_eq!(record["outcome"]["kind"], "success");
         // The middleware reads the caller from the invocation context: the user who invoked
         // the agent whose call reached the tool.
-        assert_eq!(record["principal"]["kind"], "oidc");
+        assert_eq!(record["principal"]["kind"], "user");
         assert_eq!(record["principal"]["subject"], "audit-user");
         assert!(
             record["owner"]["agentId"]
@@ -2570,11 +2560,11 @@ async fn rate_1_enforces_boundary_before_dispatch_and_partitions_principals(
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let principal_a = oidc_principal("principal-a");
+    let principal_a = oidc_principal("caller-a");
 
     for ordinal in 1..=3 {
         let result: String = executor
-            .invoke_and_await_agent_as_principal(
+            .invoke_and_await_agent_as_caller(
                 &caller_component,
                 &agent_id,
                 principal_a.clone(),
@@ -2586,7 +2576,7 @@ async fn rate_1_enforces_boundary_before_dispatch_and_partitions_principals(
         assert_eq!(result, format!("leaf(a-{ordinal})"));
     }
     let rejected = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
             principal_a,
@@ -2601,10 +2591,10 @@ async fn rate_1_enforces_boundary_before_dispatch_and_partitions_principals(
         .start_agent(&caller_component.id, independent_agent_id.clone())
         .await?;
     let independent: String = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &independent_agent_id,
-            oidc_principal("principal-b"),
+            oidc_principal("caller-b"),
             "middleware_probe_once",
             data_value!("b-1"),
         )
@@ -2669,20 +2659,20 @@ async fn rate_2_distinct_concurrent_owners_share_one_atomic_principal_limit(
     }
 
     let barrier = Arc::new(tokio::sync::Barrier::new(OWNERS));
-    let principal = oidc_principal("shared-principal");
+    let caller = oidc_principal("shared-caller");
     let calls = owners.iter().enumerate().map(|(ordinal, (agent_id, _))| {
         let barrier = barrier.clone();
-        let principal = principal.clone();
+        let caller = caller.clone();
         let executor = &executor;
         let caller_component = &caller_component;
         let agent_id = agent_id.clone();
         async move {
             barrier.wait().await;
             executor
-                .invoke_and_await_agent_as_principal(
+                .invoke_and_await_agent_as_caller(
                     caller_component,
                     &agent_id,
-                    principal,
+                    caller,
                     "middleware_probe_once",
                     data_value!(format!("owner-{ordinal}")),
                 )
@@ -2797,10 +2787,10 @@ async fn accepted_supervisor_crash_checkpoint(
             Vec::new(),
         )
         .await?;
-    let invocation = executor.invoke_and_await_agent_as_principal(
+    let invocation = executor.invoke_and_await_agent_as_caller(
         &caller_component,
         &agent_id,
-        oidc_principal("replay-principal"),
+        oidc_principal("replay-caller"),
         "middleware_probe_once",
         data_value!("rate-limit-crash(first)"),
     );
@@ -2957,10 +2947,10 @@ async fn accepted_supervisor_crash_checkpoint(
     assert_eq!(after_replay.committed_charges, 1);
 
     let fresh: String = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            oidc_principal("replay-principal"),
+            oidc_principal("replay-caller"),
             "middleware_probe_once",
             data_value!("fresh"),
         )
@@ -4271,7 +4261,8 @@ async fn approval_pending_blocks_dispatch_survives_restart_and_approves_once(
     assert_eq!(request.request.policy, "production-change");
     assert_eq!(request.request.tool_name, "middleware-probe");
     assert!(
-        ["anonymous", "oidc", "agent", "golem-user",].contains(&request.request.principal.as_str())
+        ["anonymous", "user", "account", "agent", "tool"]
+            .contains(&request.request.principal.as_str())
     );
     assert!(matches!(
         effects.try_recv(),
