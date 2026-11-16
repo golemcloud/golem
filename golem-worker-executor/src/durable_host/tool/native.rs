@@ -243,7 +243,7 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
         return (Err(error), None);
     }
     ctx.durable_ctx_mut()
-        .set_invocation_principal(Some(invocation.principal.clone()));
+        .set_invocation_caller(Some(invocation.caller.clone()));
     let tasks = match crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks) {
         Ok(tasks) => tasks,
         Err(error) => {
@@ -303,7 +303,7 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
     let native_invocation = NativeToolInvocation {
         command_path: invocation.command_path,
         input: invocation.input,
-        principal: invocation.principal,
+        caller: invocation.caller,
         cancellation,
         stdin,
         stdout,
@@ -537,7 +537,7 @@ impl NativeToolTask {
             stdin: has_stdin,
             stdout: has_stdout,
             stderr: has_stderr,
-            principal,
+            caller,
             result,
         } = self;
         let (worker, key) = accessor.with(|mut access| {
@@ -673,7 +673,7 @@ impl NativeToolTask {
                 has_stderr,
                 EntityCallMode::Synchronous,
                 Some(activation),
-                Some(principal),
+                Some(caller),
                 ToolAttachmentCounterparty::SessionJournal,
             )
             .await

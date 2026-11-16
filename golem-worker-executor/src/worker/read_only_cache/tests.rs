@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::Caller;
 
 #[test]
 async fn pending_admission_preserves_queued_signal() {
@@ -29,7 +30,7 @@ use golem_common::base_model::Empty;
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentId;
 use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, AgentTypeName, CachePolicy, ReadOnlyConfig, Snapshotting,
+    AgentMode, AgentTypeName, CachePolicy, ReadOnlyConfig, Snapshotting,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -85,12 +86,12 @@ fn metadata_with_one_agent_type(
     ComponentMetadata::from_parts(KnownExports::default(), vec![], vec![at], BTreeMap::new())
 }
 
-fn principal(seed: u128) -> Principal {
+fn caller(seed: u128) -> Caller {
     let agent_id = AgentId {
         component_id: ComponentId(Uuid::from_u128(seed)),
         agent_id: format!("agent-{seed}"),
     };
-    Principal::Agent(AgentPrincipal { agent_id })
+    crate::test_callers::agent_caller(agent_id)
 }
 
 fn tuple(values: Vec<SchemaValue>) -> SchemaValue {
@@ -148,8 +149,8 @@ fn streamed_cache_digest_matches_materialized_bytes() {
             digest_bytes(&canonicalize_schema_value(&value))
         );
     }
-    for p in [Principal::anonymous(), principal(17), principal(23)] {
-        assert_eq!(streamed_digest(&p), digest_bytes(&principal_bytes(&p)));
+    for p in [Caller::anonymous(), caller(17), caller(23)] {
+        assert_eq!(streamed_digest(&p), digest_bytes(&caller_bytes(&p)));
     }
 }
 
@@ -269,8 +270,8 @@ fn profile_invocation_payload_passes() {
 fn equal_inputs_produce_equal_keys() {
     let a = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
     let b = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
-    let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
-    let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
+    let ka = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(7), 3);
+    let kb = build_read_only_cache_key("m", &b, &Caller::anonymous(), rev(7), 3);
     assert_eq!(ka, kb);
 }
 
@@ -278,8 +279,8 @@ fn equal_inputs_produce_equal_keys() {
 fn different_inputs_produce_different_keys() {
     let a = tuple(vec![SchemaValue::U32(1)]);
     let b = tuple(vec![SchemaValue::U32(2)]);
-    let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
-    let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
+    let ka = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(7), 3);
+    let kb = build_read_only_cache_key("m", &b, &Caller::anonymous(), rev(7), 3);
     assert_ne!(ka, kb);
 }
 
@@ -287,8 +288,8 @@ fn different_inputs_produce_different_keys() {
 fn swapped_tuple_positions_produce_different_keys() {
     let a = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
     let b = tuple(vec![SchemaValue::U32(2), SchemaValue::U32(1)]);
-    let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
-    let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
+    let ka = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(7), 3);
+    let kb = build_read_only_cache_key("m", &b, &Caller::anonymous(), rev(7), 3);
     assert_ne!(ka, kb);
 }
 
@@ -296,50 +297,90 @@ fn swapped_tuple_positions_produce_different_keys() {
 fn multimodal_field_renames_produce_different_keys() {
     let a = multimodal(vec![("x", SchemaValue::U32(1))]);
     let b = multimodal(vec![("y", SchemaValue::U32(1))]);
-    let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
-    let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
+    let ka = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(7), 3);
+    let kb = build_read_only_cache_key("m", &b, &Caller::anonymous(), rev(7), 3);
     assert_ne!(ka, kb);
 }
 
 #[test]
 fn epoch_in_key_changes_key_when_epoch_bumps() {
     let a = tuple(vec![SchemaValue::U32(1)]);
-    let k1 = build_read_only_cache_key("m", &a, None, rev(1), 1);
-    let k2 = build_read_only_cache_key("m", &a, None, rev(1), 2);
+    let k1 = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(1), 1);
+    let k2 = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(1), 2);
     assert_ne!(k1, k2);
 }
 
 #[test]
 fn component_revision_in_key_changes_key_after_update() {
     let a = tuple(vec![SchemaValue::U32(1)]);
-    let k1 = build_read_only_cache_key("m", &a, None, rev(1), 1);
-    let k2 = build_read_only_cache_key("m", &a, None, rev(2), 1);
+    let k1 = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(1), 1);
+    let k2 = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(2), 1);
     assert_ne!(k1, k2);
 }
 
 #[test]
-fn principal_off_means_principal_digest_is_none() {
+fn cache_key_always_includes_the_caller_digest() {
+    // Two callers never share a key, even for a method that never reads the caller.
     let a = tuple(vec![SchemaValue::U32(1)]);
-    let key = build_read_only_cache_key("m", &a, None, rev(1), 1);
-    assert!(key.principal_digest.is_none());
+    let anonymous = build_read_only_cache_key("m", &a, &Caller::anonymous(), rev(1), 1);
+    let agent = build_read_only_cache_key("m", &a, &caller(1), rev(1), 1);
+    assert_ne!(anonymous, agent);
+    assert_ne!(anonymous.caller_digest, agent.caller_digest);
+    // The same caller gives the same key.
+    assert_eq!(
+        agent,
+        build_read_only_cache_key("m", &a, &caller(1), rev(1), 1)
+    );
 }
 
 #[test]
-fn principal_on_distinguishes_principals() {
+fn cache_key_distinguishes_callers_by_every_field() {
+    use crate::test_callers::{sample_caller, user_principal};
+    use golem_common::model::caller::{Claims, Principal, TokenProvenance, UserPrincipal};
+
     let a = tuple(vec![SchemaValue::U32(1)]);
-    let p1 = principal(1);
-    let p2 = principal(2);
-    let k1 = build_read_only_cache_key("m", &a, Some(&p1), rev(1), 1);
-    let k2 = build_read_only_cache_key("m", &a, Some(&p2), rev(1), 1);
-    assert_ne!(k1, k2);
-    assert!(k1.principal_digest.is_some());
+    let key = |caller: &Caller| build_read_only_cache_key("m", &a, caller, rev(1), 1);
+    let base = sample_caller();
+    let base_key = key(&base);
+
+    // Claims, down to the whitespace.
+    let Principal::User(user) = user_principal() else {
+        unreachable!()
+    };
+    let mut other_claims = base.clone();
+    other_claims.original = Principal::User(UserPrincipal {
+        claims: Claims::from_json(user.claims.as_json().replace(',', ", ")).unwrap(),
+        ..user
+    });
+    assert_ne!(base_key, key(&other_claims));
+
+    // A token.
+    let mut other_token = base.clone();
+    other_token.tokens.push(TokenProvenance {
+        id: Uuid::from_u128(99),
+        maker: None,
+    });
+    assert_ne!(base_key, key(&other_token));
+
+    // The immediate role.
+    let mut other_immediate = base.clone();
+    other_immediate.immediate = Principal::Anonymous;
+    assert_ne!(base_key, key(&other_immediate));
+
+    // Anonymous with and without a token.
+    let mut anonymous_with_token = Caller::anonymous();
+    anonymous_with_token.tokens.push(TokenProvenance {
+        id: Uuid::from_u128(99),
+        maker: None,
+    });
+    assert_ne!(key(&Caller::anonymous()), key(&anonymous_with_token));
 }
 
 #[test]
 fn method_name_changes_the_key() {
     let a = tuple(vec![SchemaValue::U32(1)]);
-    let k1 = build_read_only_cache_key("foo", &a, None, rev(1), 1);
-    let k2 = build_read_only_cache_key("bar", &a, None, rev(1), 1);
+    let k1 = build_read_only_cache_key("foo", &a, &Caller::anonymous(), rev(1), 1);
+    let k2 = build_read_only_cache_key("bar", &a, &Caller::anonymous(), rev(1), 1);
     assert_ne!(k1, k2);
 }
 
@@ -358,6 +399,7 @@ fn classify_non_method_variants_are_mutating() {
 fn classify_load_snapshot_is_mutating() {
     let invocation = AgentInvocation::LoadSnapshot {
         idempotency_key: InvocationId(Uuid::from_u128(1)),
+        caller: Caller::anonymous(),
         snapshot: RawSnapshotData {
             data: vec![1, 2, 3],
             mime_type: "application/octet-stream".to_string(),
@@ -383,7 +425,6 @@ fn resolve_read_only_method_returns_method_with_read_only_config() {
     let agent_type = AgentTypeName("TestAgent".to_string());
     let cfg = ReadOnlyConfig {
         cache_policy: CachePolicy::UntilWrite(Empty {}),
-        uses_principal: false,
     };
     let metadata = metadata_with_one_agent_type(
         agent_type.clone(),
@@ -436,7 +477,7 @@ fn classify_unknown_metadata_is_unknown_assume_mutating() {
         method_name: "m".into(),
         input: tuple(vec![]),
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::anonymous(),
+        caller: Caller::anonymous(),
         scope_card: None,
     };
     assert_eq!(

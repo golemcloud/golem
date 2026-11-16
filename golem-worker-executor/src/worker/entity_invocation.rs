@@ -557,9 +557,7 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedDisposedContext<Ctx> {
                     .drain_interruptibly(interrupt)
                     .await?;
             }
-            self.context
-                .durable_ctx_mut()
-                .set_invocation_principal(None);
+            self.context.durable_ctx_mut().set_invocation_caller(None);
             self.context.set_entity_invocation_scope(None)?;
             self.prepared = true;
             Ok(())
@@ -645,7 +643,7 @@ impl<Ctx: WorkerCtx> RetainedNativeContext<Ctx> {
         crate::durable_host::tool::durability::finish_producer_disposals(&mut self.context.shared)
             .await?;
         self.context.shared.with_worker_ctx(|ctx| {
-            ctx.durable_ctx_mut().set_invocation_principal(None);
+            ctx.durable_ctx_mut().set_invocation_caller(None);
             ctx.set_entity_invocation_scope(None)
         })?;
         self.parent_end_prepared = true;
@@ -1828,11 +1826,7 @@ mod tests {
             EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
             OplogIndex::from_u64(1),
             activation,
-            golem_common::model::agent::Principal::Agent(
-                golem_common::model::agent::AgentPrincipal {
-                    agent_id: owner.agent_id,
-                },
-            ),
+            crate::test_callers::agent_principal(owner.agent_id),
             InvocationExecutionMode::Live,
             InvocationId(Uuid::new_v4()),
             false,

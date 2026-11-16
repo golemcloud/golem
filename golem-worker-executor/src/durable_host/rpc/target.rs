@@ -48,6 +48,7 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
@@ -235,6 +236,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
         let result = loop {
             let rpc = ctx.rpc();
             let interrupt = ctx.create_interrupt_signal().map(Error::from);
+            let caller = Caller::entry(ctx.self_principal());
             let demand = rpc.create_demand(
                 AgentTarget::Current(remote_agent_id.agent_id()),
                 remote_agent_id.environment_id,
@@ -243,6 +245,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
                 ctx.agent_id(),
                 &env,
                 ctx.clone_as_inherited_stack(&span_id),
+                &caller,
                 config.clone(),
                 &auth_ctx,
                 Some(child_key.clone()),
@@ -304,6 +307,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         let rpc = ctx.rpc();
         let created_by = ctx.created_by();
         let agent_id = ctx.agent_id().clone();
+        let caller = Caller::entry(ctx.self_principal());
         let stack = ctx.clone_as_inherited_stack(span.span_id());
         let key = handle
             .idempotency_key_position(ctx)
@@ -332,6 +336,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
                     &agent_id,
                     env,
                     stack,
+                    &caller,
                     config.clone(),
                     &auth_ctx,
                     key,
@@ -454,6 +459,7 @@ pub(super) async fn activate_rpc_target(
     method_name: &str,
     created_by: AccountId,
     agent_id: &AgentId,
+    caller: &Caller,
     env: &[(String, String)],
     stack: InvocationContextStack,
     config: Vec<AgentConfigEntryDto>,
@@ -473,6 +479,7 @@ pub(super) async fn activate_rpc_target(
             agent_id,
             env,
             stack,
+            caller,
             config,
             auth_ctx,
             idempotency_key,
@@ -520,6 +527,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     let demand = {
         let created_by = ctx.created_by();
         let agent_id = ctx.agent_id().clone();
+        let caller = Caller::entry(ctx.self_principal());
         let interrupt_signal = ctx.create_interrupt_signal().map(Error::from);
         let activation = activate_rpc_target(
             rpc.as_ref(),
@@ -527,6 +535,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
             method_name,
             created_by,
             &agent_id,
+            &caller,
             &env,
             stack,
             config.clone(),

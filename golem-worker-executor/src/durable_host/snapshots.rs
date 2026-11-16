@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
@@ -132,9 +133,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key)
             .await;
 
+        let caller = Caller::entry(store.as_context().data().durable_ctx().self_principal());
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
+            caller,
         };
         let agent_id = store.as_context().data().parsed_agent_id();
         let lowered = lower_invocation(
@@ -412,9 +415,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key)
             .await;
 
+        let caller = Caller::entry(store.as_context().data().durable_ctx().self_principal());
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
+            caller,
         };
         let agent_id = store.as_context().data().parsed_agent_id();
         let lowered = match lower_invocation(

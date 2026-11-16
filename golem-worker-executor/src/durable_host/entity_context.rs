@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::caller::{Caller, Principal};
 
 impl PrimaryInvocationBody {
     pub(crate) fn invocation(&self) -> Option<&crate::worker::owner_lane::OwnerInvocationId> {
@@ -129,8 +130,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.entity_tool_operation.clone()
     }
 
-    pub(crate) fn set_invocation_principal(&mut self, principal: Option<Principal>) {
-        self.invocation_principal = principal;
+    pub(crate) fn set_invocation_caller(&mut self, caller: Option<Caller>) {
+        self.invocation_caller = caller;
     }
 
     /// Installs the ID of the running invocation, or removes it when `running` is false.
@@ -155,12 +156,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    pub(crate) fn invocation_principal(&self) -> Principal {
-        self.invocation_principal.clone().unwrap_or_else(|| {
-            Principal::Agent(AgentPrincipal {
-                agent_id: self.owned_agent_id.agent_id.clone(),
-            })
-        })
+    /// The caller of the running invocation. Code that runs without a recorded caller is the agent
+    /// itself in both roles.
+    pub(crate) fn invocation_caller(&self) -> Caller {
+        self.invocation_caller
+            .clone()
+            .unwrap_or_else(|| Caller::entry(self.self_principal()))
+    }
+
+    /// This agent as a principal. It is the only builder of an agent principal in the executor.
+    pub(crate) fn self_principal(&self) -> Principal {
+        self.public_state
+            .worker()
+            .self_principal(self.state.config.resolved_golem_issuer())
     }
 
     pub(crate) fn set_entity_cancellation(

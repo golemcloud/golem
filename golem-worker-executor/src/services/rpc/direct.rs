@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
     fn clone(&self) -> Self {
@@ -223,7 +224,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         config: Vec<AgentConfigEntryDto>,
         self_agent_id: &AgentId,
         self_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
         live_streams_details: &str,
     ) -> Result<Arc<Worker<Ctx>>, RpcError> {
@@ -234,7 +235,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 Worker::get_exact_existing_suspended_for_response(
                     self,
                     owned_agent_id,
-                    principal.clone(),
+                    caller.clone(),
                     Some(expected_fingerprint),
                 )
                 .await?
@@ -292,7 +293,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 None,
                 Some(self_agent_id.clone()),
                 self_stack,
-                principal,
+                caller,
                 freshness_disposition,
                 CreateIntent::Invocation {
                     idempotency_key: Some(request_key.owner_key(method_name)),
@@ -331,17 +332,12 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .cancel_scheduled_invocation(target, key, receipt, owner, auth)
                 .await;
         }
-        let worker = match Worker::get_exact_existing_suspended(
-            self,
-            target,
-            Principal::anonymous(),
-        )
-        .await
-        {
-            Ok(worker) => worker,
-            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
-            Err(error) => return Err(error.into()),
-        };
+        let worker =
+            match Worker::get_exact_existing_suspended(self, target, Caller::anonymous()).await {
+                Ok(worker) => worker,
+                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
+                Err(error) => return Err(error.into()),
+            };
         worker
             .cancel_scheduled_invocation(key, receipt, owner)
             .await
@@ -384,7 +380,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             idempotency_key,
             method_name,
             input,
-            principal,
+            caller,
             ..
         } = &invocation
         else {
@@ -406,7 +402,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .get_existing_with_fingerprint(
                 self,
                 owned_agent_id,
-                principal.clone(),
+                caller.clone(),
                 Some(expected_fingerprint),
             )
             .await?;
@@ -462,6 +458,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -484,6 +481,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_agent_id,
                     self_env,
                     self_stack,
+                    caller,
                     config,
                     auth_ctx,
                     idempotency_key,
@@ -511,9 +509,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             None,
             Some(self_agent_id.clone()),
             &self_stack,
-            Principal::Agent(AgentPrincipal {
-                agent_id: self_agent_id.clone(),
-            }),
+            caller.clone(),
             InvocationFreshnessDisposition::MayExist,
             CreateIntent::Create {
                 exclusive: false,
@@ -538,6 +534,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
@@ -586,9 +583,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 None,
                 Some(self_agent_id.clone()),
                 &self_stack,
-                Principal::Agent(AgentPrincipal {
-                    agent_id: self_agent_id.clone(),
-                }),
+                caller.clone(),
                 freshness_disposition,
                 CreateIntent::Create {
                     exclusive: false,
@@ -614,6 +609,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_agent_id,
                     self_env,
                     self_stack,
+                    caller,
                     config,
                     auth_ctx,
                     idempotency_key,
@@ -636,6 +632,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -669,7 +666,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
-            let principal = caller_agent_principal(self_agent_id);
+            let caller = caller.clone();
             let request_key = idempotency_key
                 .map(InvocationRequestKey::Internal)
                 .unwrap_or_else(|| InvocationRequestKey::external(None, None));
@@ -684,7 +681,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     config,
                     self_agent_id,
                     &self_stack,
-                    principal.clone(),
+                    caller.clone(),
                     freshness_disposition,
                     "live streams require the attached streaming RPC",
                 )
@@ -699,7 +696,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 method_name,
                 input: method_parameters,
                 invocation_context: self_stack,
-                principal,
+                caller,
                 scope_card,
             };
 
@@ -729,6 +726,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_agent_id,
                     self_env,
                     self_stack,
+                    caller,
                     config,
                     auth_ctx,
                     scope_card,
@@ -753,6 +751,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -782,6 +781,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_agent_id,
                     self_env,
                     self_stack,
+                    caller,
                     config,
                     auth_ctx,
                     scope_card,
@@ -807,11 +807,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             InvocationFreshnessDisposition::MayExist,
         )
         .await?;
-        let principal = caller_agent_principal(self_agent_id);
+        let caller = caller.clone();
         let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
             self,
             owned_agent_id,
-            principal.clone(),
+            caller.clone(),
             Some(expected_callee_fingerprint),
         )
         .await?;
@@ -851,7 +851,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 tracing: Some(self_stack.clone().into()),
             }),
             auth_ctx: Some(auth_ctx.clone().into()),
-            principal: Some(principal.clone().into()),
+            caller: Some(caller.clone().into()),
             environment_id: Some(owned_agent_id.environment_id.into()),
             config: config.into_iter().map(Into::into).collect(),
             component_owner_account_id: None,
@@ -883,7 +883,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             method_name,
             input,
             invocation_context: self_stack,
-            principal,
+            caller,
             scope_card,
         };
         let (acceptance_committed, accepted) = tokio::sync::oneshot::channel();
@@ -1130,6 +1130,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
@@ -1162,7 +1163,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
-            let principal = caller_agent_principal(self_agent_id);
+            let caller = caller.clone();
             let request_key = idempotency_key
                 .map(InvocationRequestKey::Internal)
                 .unwrap_or_else(|| InvocationRequestKey::external(None, None));
@@ -1177,7 +1178,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     config,
                     self_agent_id,
                     &self_stack,
-                    principal.clone(),
+                    caller.clone(),
                     freshness_disposition,
                     "live streams cannot be used in fire-and-forget invocations",
                 )
@@ -1192,7 +1193,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 method_name,
                 input: method_parameters,
                 invocation_context: self_stack,
-                principal,
+                caller,
                 scope_card: None,
             };
 
@@ -1219,6 +1220,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_agent_id,
                     self_env,
                     self_stack,
+                    caller,
                     config,
                     auth_ctx,
                 )

@@ -142,7 +142,7 @@ fn create_entry(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }))
@@ -855,7 +855,7 @@ fn agent_metadata_with_identity(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -1632,7 +1632,9 @@ async fn append_pending_invocation(oplog: &dyn Oplog, key: &InvocationId) -> Opl
         .add(OplogEntry::pending_agent_invocation(
             None,
             *key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),

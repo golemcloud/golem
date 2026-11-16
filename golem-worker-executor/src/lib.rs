@@ -39,6 +39,9 @@ pub mod workerctx;
 pub mod span_test_support;
 
 #[cfg(test)]
+pub(crate) mod test_callers;
+
+#[cfg(test)]
 use span_test_support::Tracing;
 #[cfg(test)]
 use test_r::test_dep;

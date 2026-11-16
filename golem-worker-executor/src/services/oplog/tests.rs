@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::Caller;
 
 use super::*;
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
@@ -35,7 +36,7 @@ use futures::FutureExt;
 use golem_common::config::RedisConfig;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -93,7 +94,7 @@ macro_rules! create_oplog_entry {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
         }))
@@ -298,7 +299,7 @@ pub(super) fn make_agent_metadata(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -5361,7 +5362,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                     fields: vec![SchemaValue::String("request".to_string())],
                 },
                 invocation_context: InvocationContextStack::fresh_rounded(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             },
             InvocationContextStack::fresh_rounded(),
@@ -5658,6 +5659,7 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
             metadata: metadata.into(),
             first_entry_index: OplogIndex::INITIAL,
             entries: Vec::new(),
+            caller: golem_common::model::caller::Caller::anonymous(),
         },
         AgentInvocation::AgentMethod {
             idempotency_key: InvocationId(Uuid::new_v4()),
@@ -5666,7 +5668,7 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
                 elements: Vec::new(),
             },
             invocation_context: InvocationContextStack::fresh_rounded(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         },
     ];
@@ -5773,7 +5775,7 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
                     mime_type: None,
                 }),
                 invocation_context: InvocationContextStack::fresh_rounded(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             },
             InvocationContextStack::fresh_rounded(),
@@ -5832,7 +5834,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let payload_value = AgentInvocationPayload::AgentMethod {
             method_name: "large-input".to_string(),
             input,
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         };
         let payload = oplog
@@ -6005,7 +6007,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                     })],
                 },
                 invocation_context: InvocationContextStack::fresh_rounded(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             },
             InvocationContextStack::fresh_rounded(),
@@ -6686,7 +6688,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
         }),
@@ -6858,7 +6860,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
         }),
@@ -13877,7 +13879,7 @@ async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }))
@@ -14077,7 +14079,7 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
         }))

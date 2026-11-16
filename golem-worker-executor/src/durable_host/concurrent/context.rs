@@ -575,11 +575,7 @@ mod tests {
             EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
             OplogIndex::from_u64(1),
             activation,
-            golem_common::model::agent::Principal::Agent(
-                golem_common::model::agent::AgentPrincipal {
-                    agent_id: owner.agent_id,
-                },
-            ),
+            crate::test_callers::agent_principal(owner.agent_id),
             InvocationExecutionMode::Live,
             uuid::Uuid::new_v4().into(),
             false,

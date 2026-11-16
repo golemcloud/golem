@@ -1,5 +1,6 @@
 use super::*;
 use golem_common::model::InvocationId;
+use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Waits, before this generation, with `mark`, ends for the automatic update at the head of
@@ -295,7 +296,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         };
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
+        let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
+            idempotency_key,
+            caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
+        };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
@@ -490,7 +494,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await;
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
+        let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
+            idempotency_key,
+            caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
+        };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,

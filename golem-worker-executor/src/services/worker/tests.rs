@@ -482,7 +482,7 @@ async fn get_recovers_non_agent_external_tool_owner() {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
         }),
@@ -2658,7 +2658,7 @@ fn test_create_entry(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }))

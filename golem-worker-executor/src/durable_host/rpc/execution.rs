@@ -52,6 +52,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
 use golem_common::model::durable_stream::StreamRegistrationInvocation;
@@ -230,6 +231,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
             let rpc = ctx.rpc();
             let created_by = ctx.created_by();
             let agent_id = ctx.agent_id().clone();
+            let caller = Caller::entry(ctx.self_principal());
             let dispatch_freshness = freshness_disposition;
             freshness_disposition = InvocationFreshnessDisposition::MayExist;
 
@@ -255,6 +257,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
                         &agent_id,
                         &prepared.env,
                         stack,
+                        &caller,
                         prepared.config.clone(),
                         &auth_ctx,
                         scope_card.clone(),
@@ -377,6 +380,7 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
                     ctx.agent_id(),
                     &prepared.env,
                     stack,
+                    &Caller::entry(ctx.self_principal()),
                     prepared.config.clone(),
                     &auth_ctx,
                 )
@@ -467,6 +471,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     input: SchemaValue,
     created_by: AccountId,
     agent_id: AgentId,
+    caller: Caller,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     stack: InvocationContextStack,
@@ -511,6 +516,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let input = input.clone();
         let created_by = created_by;
         let agent_id = agent_id.clone();
+        let caller = caller.clone();
         let env = env.clone();
         let stack = stack.clone();
         let auth_ctx = auth_ctx.clone();
@@ -528,6 +534,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                         &method_name,
                         created_by,
                         &agent_id,
+                        &caller,
                         &target_activation.env,
                         stack.clone(),
                         target_activation.config,
@@ -555,6 +562,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 &agent_id,
                 &env,
                 stack,
+                &caller,
                 config,
                 &auth_ctx,
                 scope_card,
@@ -681,6 +689,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
         input,
         ctx.created_by(),
         ctx.agent_id().clone(),
+        Caller::entry(ctx.self_principal()),
         env,
         config,
         ctx.clone_as_inherited_stack(span_id),
@@ -767,6 +776,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
     let rpc = ctx.rpc();
     let created_by = ctx.created_by();
     let agent_id = ctx.agent_id().clone();
+    let caller = Caller::entry(ctx.self_principal());
     let stack = ctx.clone_as_inherited_stack(span_id);
     let activity = ctx.runtime_suspension.as_ref().map(|runtime| {
         runtime.rpc_activity(
@@ -791,6 +801,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                             &method_name,
                             created_by,
                             &agent_id,
+                            &caller,
                             &target_activation.env,
                             stack.clone(),
                             target_activation.config,
@@ -823,6 +834,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                         &agent_id,
                         &env,
                         stack,
+                        &caller,
                         config,
                         &auth_ctx,
                         scope_card,

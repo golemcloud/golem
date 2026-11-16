@@ -179,6 +179,13 @@ impl GolemConfig {
         self.golem_issuer = Some(resolved.clone());
         resolved
     }
+
+    /// The issuer that `resolve_golem_issuer` stored at start.
+    pub fn resolved_golem_issuer(&self) -> &GolemIssuer {
+        self.golem_issuer.as_ref().expect(
+            "the Golem issuer is resolved by bootstrap_and_run_worker_executor before any agent runs",
+        )
+    }
 }
 
 impl SafeDisplay for GolemConfig {

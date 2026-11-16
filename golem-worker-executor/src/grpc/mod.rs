@@ -80,9 +80,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, TypedAgentConfigEntry,
 };
-use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
-};
+use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition, ParsedAgentKey};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
@@ -309,16 +308,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
 pub use events::WorkerEventStream;
 
-fn extract_principal(
-    proto_principal: &Option<golem_api_grpc::proto::golem::component::Principal>,
-) -> Principal {
-    proto_principal
+/// Decodes the caller of a request. A request without a caller, or with one that does not
+/// decode, is refused.
+pub(crate) fn extract_caller(
+    proto_caller: &Option<golem_api_grpc::proto::golem::component::Caller>,
+) -> Result<Caller, WorkerExecutorError> {
+    let proto_caller = proto_caller
         .as_ref()
-        .and_then(|p| {
-            let result: Result<Principal, String> = p.clone().try_into();
-            result.ok()
-        })
-        .unwrap_or_else(Principal::anonymous)
+        .ok_or_else(|| WorkerExecutorError::invalid_request("caller is missing"))?;
+    Caller::try_from(proto_caller.clone()).map_err(|error| {
+        WorkerExecutorError::invalid_request(format!("caller does not decode: {error}"))
+    })
 }
 
 fn extract_owned_agent_id<T>(

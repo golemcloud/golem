@@ -481,7 +481,9 @@ async fn subtree_routes_to_explicit_child_instance_with_inherited_globals_aliase
     );
     assert_eq!(
         result.result.unwrap().value(),
-        &SchemaValue::String("true:Ada:Anonymous(Empty):true".into())
+        &SchemaValue::String(
+            "true:Ada:Caller { original: Anonymous, immediate: Anonymous, tokens: [] }:true".into()
+        )
     );
 }
 

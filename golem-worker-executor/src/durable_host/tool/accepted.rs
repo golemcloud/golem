@@ -1320,7 +1320,7 @@ where
         stdin,
         stdout,
         stderr,
-        principal: context.principal.clone(),
+        caller: context.caller.clone(),
         output_contract: descriptor.output_contract.clone(),
         result_streams: result_streams.clone(),
     };

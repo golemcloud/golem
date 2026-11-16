@@ -245,9 +245,8 @@ use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
-use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, ParsedAgentKey, Principal, ResolvedOwnerContext,
-};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
@@ -396,7 +395,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub(crate) schema_producers: stream_outcome::ProducerOutcomeScope,
     schema_output_tasks: Mutex<Option<crate::worker::tasks::NativeReconstructionTasks>>,
     primary_invocation_start_index: Option<OplogIndex>,
-    invocation_principal: Option<Principal>,
+    invocation_caller: Option<Caller>,
     invocation_id: Option<golem_common::model::OwnedInvocationId>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
@@ -616,7 +615,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 parent,
                 call_mode,
                 activation: scope.activation().clone(),
-                principal: self.invocation_principal(),
+                caller: self.invocation_caller(),
                 descriptor: golem_common::model::entity::EntityInvocationDescriptor::Tool(
                     golem_common::model::entity::ToolInvocationDescriptor {
                         attempt_ordinal: 0,

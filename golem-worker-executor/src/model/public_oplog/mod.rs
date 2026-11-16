@@ -94,7 +94,6 @@ use golem_common::model::oplog::{
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
-use golem_common::schema::agent::FieldSource;
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::{
     InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,

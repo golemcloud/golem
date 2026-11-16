@@ -38,9 +38,8 @@ use golem_common::base_model::durable_stream::{
     StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::model::agent::{
-    AgentMode, AgentTypeName, InvocationFreshnessDisposition, Principal,
-};
+use golem_common::model::agent::{AgentMode, AgentTypeName, InvocationFreshnessDisposition};
+use golem_common::model::caller::Caller;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
@@ -411,7 +410,7 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
             ],
         },
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::anonymous(),
+        caller: Caller::anonymous(),
         scope_card: None,
     };
     (request, metadata, invocation)
@@ -519,12 +518,7 @@ fn durable_request_identity_ignores_tracing_but_preserves_execution_config() {
 fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
     let (mut request, metadata, invocation) = builder_fixture();
     let caller: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
-    request.principal = Some(
-        Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: caller.clone(),
-        })
-        .into(),
-    );
+    request.caller = Some(crate::test_callers::agent_caller(caller.clone()).into());
     request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
         parent: Some(caller.into()),
         ..Default::default()
@@ -565,8 +559,8 @@ fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
     for mutation in 0..9 {
         let mut invalid = request.clone();
         match mutation {
-            0 => invalid.principal = None,
-            1 => invalid.principal = Some(Principal::anonymous().into()),
+            0 => invalid.caller = None,
+            1 => invalid.caller = Some(Caller::anonymous().into()),
             2 => invalid.context.as_mut().unwrap().parent = None,
             3 => {
                 invalid
@@ -650,12 +644,7 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     };
     let (mut request, metadata, invocation) = builder_fixture();
     let caller: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
-    request.principal = Some(
-        Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: caller.clone(),
-        })
-        .into(),
-    );
+    request.caller = Some(crate::test_callers::agent_caller(caller.clone()).into());
     request.auth_ctx = Some(authority_for(&caller.agent_id).into());
     request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
         parent: Some(caller.into()),
@@ -712,12 +701,8 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     parent.name.push_str("-fork");
     fork.context.as_mut().unwrap().parent = Some(parent.clone());
     fork.auth_ctx = Some(authority_for(&parent.name).into());
-    fork.principal = Some(
-        Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: parent.clone().try_into().unwrap(),
-        })
-        .into(),
-    );
+    fork.caller =
+        Some(crate::test_callers::agent_caller(parent.clone().try_into().unwrap()).into());
     fork.attempt_id = Some(uuid::Uuid::new_v4().into());
     for mapping in &mut fork.durable_input_mappings {
         let handle = mapping.handle.as_mut().unwrap();
@@ -1084,7 +1069,7 @@ fn durable_stream_identity_ignores_non_authoritative_account_email() {
     assert_eq!(
         effective_session_identity(&auth_ctx("old@example.com"), &None).unwrap(),
         effective_session_identity(&auth_ctx("new@example.com"), &None).unwrap(),
-        "resume identity must pin the effective principal/grant, not mutable account metadata"
+        "resume identity must pin the effective caller/grant, not mutable account metadata"
     );
 }
 
@@ -1156,7 +1141,7 @@ fn durable_start_failures_use_their_explicit_protocol_reasons() {
             InvocationRejectionReason::InvalidAttachmentState,
         ),
         (
-            "Unauthorized: principal changed",
+            "Unauthorized: caller changed",
             InvocationRejectionReason::Unauthorized,
         ),
         (

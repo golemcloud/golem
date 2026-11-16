@@ -287,9 +287,9 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             .enter_operator_authorized_oplog_processor_invocation()
     });
 
-    let invocation_principal = call.principal();
+    let invocation_caller = call.caller();
     let durable_ctx = store.data_mut().durable_ctx_mut();
-    durable_ctx.set_invocation_principal(invocation_principal);
+    durable_ctx.set_invocation_caller(invocation_caller);
     durable_ctx.set_invocation_id(call.has_invocation_id());
     let call_future = async {
         let result = dispatch_call(&mut store, instance, call, &display_name).await;
@@ -306,7 +306,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .catch_unwind()
         .await;
     let durable_ctx = store.data_mut().durable_ctx_mut();
-    durable_ctx.set_invocation_principal(None);
+    durable_ctx.set_invocation_caller(None);
     durable_ctx.set_invocation_id(false);
 
     if read_only_method.is_some() {
@@ -1318,7 +1318,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             stdin,
             stdout,
             stderr,
-            principal,
+            caller,
         } => {
             let _usage = store.data().durable_ctx().begin_guest_resource_usage();
             store.data().durable_ctx().activate_live_resource_usage();
@@ -1332,7 +1332,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 stdin,
                 stdout,
                 stderr,
-                principal,
+                caller,
             )
             .await;
             let consumed_fuel =
@@ -1847,12 +1847,12 @@ enum LoweredCall {
     Initialize {
         agent_type: String,
         input: SchemaValue,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
     },
     Invoke {
         method_name: String,
         input: SchemaValue,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
@@ -1876,7 +1876,7 @@ enum LoweredCall {
         stdin: bool,
         stdout: bool,
         stderr: bool,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
     },
 }
 
@@ -1889,12 +1889,12 @@ enum PreparedCall {
     Initialize {
         agent_type: String,
         input: core_wire::SchemaValueTree,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
     },
     Invoke {
         method_name: String,
         input: core_wire::SchemaValueTree,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
@@ -1918,7 +1918,7 @@ enum PreparedCall {
         stdin: bool,
         stdout: bool,
         stderr: bool,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
     },
 }
 
@@ -1929,11 +1929,11 @@ impl PreparedCall {
         matches!(self, Self::Invoke { .. } | Self::ExternalTool { .. })
     }
 
-    fn principal(&self) -> Option<golem_common::model::agent::Principal> {
+    fn caller(&self) -> Option<golem_common::model::caller::Caller> {
         match self {
-            Self::Initialize { principal, .. }
-            | Self::Invoke { principal, .. }
-            | Self::ExternalTool { principal, .. } => Some(principal.clone()),
+            Self::Initialize { caller, .. }
+            | Self::Invoke { caller, .. }
+            | Self::ExternalTool { caller, .. } => Some(caller.clone()),
             Self::SaveSnapshot | Self::LoadSnapshot { .. } | Self::ProcessOplogEntries { .. } => {
                 None
             }
@@ -1958,7 +1958,7 @@ fn materialize_call<Ctx: WorkerCtx>(
         LoweredCall::Initialize {
             agent_type,
             input,
-            principal,
+            caller,
         } => {
             let input =
                 encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
@@ -1969,13 +1969,13 @@ fn materialize_call<Ctx: WorkerCtx>(
             PreparedCall::Initialize {
                 agent_type,
                 input,
-                principal,
+                caller,
             }
         }
         LoweredCall::Invoke {
             method_name,
             input,
-            principal,
+            caller,
             expected_output,
         } => {
             let input = {
@@ -1989,7 +1989,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             PreparedCall::Invoke {
                 method_name,
                 input,
-                principal,
+                caller,
                 expected_output,
             }
         }
@@ -2020,7 +2020,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             stdin,
             stdout,
             stderr,
-            principal,
+            caller,
         } => PreparedCall::ExternalTool {
             activation: std::sync::Arc::from(activation),
             tool_name,
@@ -2029,7 +2029,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             stdin,
             stdout,
             stderr,
-            principal,
+            caller,
         },
     })
 }
@@ -2040,9 +2040,7 @@ pub fn lower_invocation(
     agent_id: Option<&ParsedAgentKey>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
     match invocation {
-        AgentInvocation::AgentInitialization {
-            input, principal, ..
-        } => {
+        AgentInvocation::AgentInitialization { input, caller, .. } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
             // The input carrier is already the schema-native parameter-record
             // value the guest export expects. Encoding to the wire tree (which
@@ -2054,14 +2052,14 @@ pub fn lower_invocation(
                 call: LoweredCall::Initialize {
                     agent_type: agent_type.type_name.to_string(),
                     input,
-                    principal,
+                    caller,
                 },
             })
         }
         AgentInvocation::AgentMethod {
             method_name,
             input,
-            principal,
+            caller,
             ..
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
@@ -2104,7 +2102,7 @@ pub fn lower_invocation(
                 call: LoweredCall::Invoke {
                     method_name,
                     input,
-                    principal,
+                    caller,
                     expected_output,
                 },
             })
@@ -2117,7 +2115,7 @@ pub fn lower_invocation(
             stdout,
             stderr,
             activation,
-            principal,
+            caller,
             ..
         } => Ok(LoweredInvocation {
             display_name: format!("{tool_name}:{}", command_path.join("/")),
@@ -2130,7 +2128,7 @@ pub fn lower_invocation(
                 stdin,
                 stdout,
                 stderr,
-                principal,
+                caller,
             },
         }),
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
@@ -2300,7 +2298,8 @@ mod tests {
     use golem_common::base_model::Empty;
     use golem_common::base_model::agent::Snapshotting;
     use golem_common::base_model::component_metadata::KnownExports;
-    use golem_common::model::agent::{AgentTypeName, Principal};
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::caller::Caller;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::RawSnapshotData;
     use golem_common::schema::TypedSchemaValue;
@@ -2649,8 +2648,7 @@ mod tests {
     }
 
     /// Component metadata with one agent type whose `do-work` method takes two
-    /// user-supplied parameters (`count: u32`, `label: string`) plus an
-    /// auto-injected `principal` field.
+    /// parameters (`count: u32`, `label: string`).
     fn metadata() -> ComponentMetadata {
         let method = AgentMethodSchema {
             name: METHOD_NAME.to_string(),
@@ -2659,11 +2657,6 @@ mod tests {
             input_schema: InputSchema::Parameters(vec![
                 NamedField::user_supplied("count", SchemaType::u32()),
                 NamedField::user_supplied("label", SchemaType::string()),
-                NamedField::auto_injected(
-                    "principal",
-                    golem_common::schema::agent::AutoInjectedKind::Principal,
-                    SchemaType::string(),
-                ),
             ]),
             output_schema: OutputSchema::Unit,
             http_endpoint: Vec::new(),
@@ -2714,7 +2707,7 @@ mod tests {
             method_name: METHOD_NAME.to_string(),
             input,
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         }
     }
@@ -2741,6 +2734,7 @@ mod tests {
                     data: vec![1, 2, 3],
                     mime_type: "application/octet-stream".to_string(),
                 },
+                caller: Caller::anonymous(),
             },
             &metadata(),
             Some(&agent_id()),
@@ -2756,6 +2750,7 @@ mod tests {
         let lowered = lower_invocation(
             AgentInvocation::SaveSnapshot {
                 idempotency_key: InvocationId(Uuid::from_u128(3)),
+                caller: Caller::anonymous(),
             },
             &metadata(),
             Some(&agent_id()),

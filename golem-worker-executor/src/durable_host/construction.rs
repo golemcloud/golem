@@ -366,7 +366,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks)?,
             )),
             primary_invocation_start_index: None,
-            invocation_principal: None,
+            invocation_caller: None,
             invocation_id: None,
             owner_execution,
             runtime_suspension: None,
