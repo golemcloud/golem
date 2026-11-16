@@ -76,7 +76,7 @@ add. They are hand-formatted with 2-space indentation and are not
   Golem wit-bindgen fork and regenerate (as `sdks/moonbit/AGENTS.md` says):
   ```sh
   cd sdks/moonbit/golem_sdk
-  ./scripts/install-wit-bindgen.sh   # Golem fork, branch wit-bindgen-golem-1.6 (wit-bindgen-cli 0.59.0)
+  ./scripts/install-wit-bindgen.sh   # Golem fork, pinned rev of branch wit-bindgen-golem-2.0 (wit-bindgen-cli 0.63.0)
   ./scripts/regen-bindings.sh
   ```
   In this checkout the fork binary is at

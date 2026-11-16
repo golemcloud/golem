@@ -60,6 +60,7 @@ use crate::model::text_format::{log_fuzzy_match, log_text_view};
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
+use golem_common::model::invocation_session_public::PublicErrorCode;
 
 use crate::agent_id_display::SourceLanguage;
 use crate::context::GlobalEnvironmentSelector;
@@ -77,11 +78,12 @@ use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest, WorkersMetadataRequest,
 };
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::typed_constructor_parameters;
 use golem_common::model::agent::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
-use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentKey};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -90,9 +92,11 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
+use golem_common::model::{
+    AgentFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
+    OplogIndex, StringFilterComparator,
+};
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
-use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
@@ -230,6 +234,7 @@ impl AgentCommandHandler {
                     agent_type_name,
                     parameters,
                     idempotency_key,
+                    method_name,
                     phantom_id,
                     stream_args,
                 } => {
@@ -237,6 +242,7 @@ impl AgentCommandHandler {
                         agent_type_name,
                         parameters,
                         idempotency_key,
+                        method_name,
                         phantom_id,
                         stream_args,
                     )
@@ -468,14 +474,6 @@ impl AgentCommandHandler {
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
         validate_public_invocation_agent_id(&agent_id, &agent_type)?;
-        let stream_agent_id =
-            if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
-                agent_id
-                    .with_ephemeral_invocation_phantom(&idempotency_key)
-                    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?
-            } else {
-                agent_id.clone()
-            };
 
         let matched_method_name = resolve_agent_method_name(function_name, &agent_type);
         let method_name = match matched_method_name {
@@ -526,12 +524,20 @@ impl AgentCommandHandler {
             },
         };
 
+        let stream_agent_id = invocation_agent_id(
+            &agent_id,
+            &agent_type,
+            self.ctx.account_id().await?,
+            &idempotency_key,
+            &method_name,
+        )?;
+
         // Update agent_id with normalized agent id (and keep the parsed form
         // for language-specific display).
         let agent_id_match = agent_id_match
             .with_canonical_and_parsed(agent_id.to_string().into(), Some(agent_id.clone()));
 
-        let mode = if trigger {
+        if trigger {
             log_action(
                 "Triggering",
                 format!(
@@ -540,7 +546,6 @@ impl AgentCommandHandler {
                     method_name.log_color_highlight()
                 ),
             );
-            AgentInvocationMode::Schedule
         } else {
             log_action(
                 "Invoking",
@@ -550,8 +555,7 @@ impl AgentCommandHandler {
                     method_name.log_color_highlight()
                 ),
             );
-            AgentInvocationMode::Await
-        };
+        }
 
         let method_uses_streams = agent_type
             .methods
@@ -575,6 +579,7 @@ impl AgentCommandHandler {
 
         if method_uses_streams {
             let selected_agent_name = stream_agent_id.to_string();
+            let mut invocation_goal = None;
             let mut connect_handle = if !no_stream && stdout_format == InvocationStdoutFormat::Value
             {
                 let connection = AgentConnection::new(
@@ -586,9 +591,10 @@ impl AgentCommandHandler {
                     self.ctx.allow_insecure(),
                     self.ctx.format(),
                     self.ctx.agent_stream_ping_interval(),
-                    Some(idempotency_key.clone()),
+                    true,
                 )
                 .await?;
+                invocation_goal = connection.invocation_goal();
                 Some(tokio::spawn(async move { connection.run_forever().await }))
             } else {
                 None
@@ -600,7 +606,7 @@ impl AgentCommandHandler {
                     application_name: agent_id_match.environment.application_name.to_string(),
                     environment_name: agent_id_match.environment.environment_name.to_string(),
                     agent_type,
-                    parsed_agent_id: stream_agent_id,
+                    parsed_agent_id: agent_id,
                     method_name,
                     arguments,
                     config: Vec::new(),
@@ -609,6 +615,7 @@ impl AgentCommandHandler {
                     stdout_format,
                     selected_agent_name,
                     session_mode,
+                    invocation_goal,
                 },
             )
             .await;
@@ -639,21 +646,55 @@ impl AgentCommandHandler {
                 self.ctx.allow_insecure(),
                 self.ctx.format(),
                 self.ctx.agent_stream_ping_interval(),
-                if trigger {
-                    None
-                } else {
-                    Some(idempotency_key.clone())
-                },
+                !trigger,
             )
             .await?;
-            Some(tokio::task::spawn(
-                async move { connection.run_forever().await },
+            let goal = connection.invocation_goal();
+            Some((
+                goal,
+                tokio::task::spawn(async move { connection.run_forever().await }),
             ))
         } else {
             None
         };
 
         let environment = &agent_id_match.environment;
+
+        if !trigger {
+            let invocation = invocation_session::invoke_scalar(
+                self.ctx.clone(),
+                invocation_session::ScalarInvocationArgs {
+                    application_name: environment.application_name.to_string(),
+                    environment_name: environment.environment_name.to_string(),
+                    agent_type: agent_type.clone(),
+                    parsed_agent_id: agent_id,
+                    method_name: method_name.clone(),
+                    method_parameters,
+                    idempotency_key,
+                    invocation_goal: connect_handle.as_ref().and_then(|(goal, _)| goal.clone()),
+                },
+            )
+            .await;
+            if let Some((goal, handle)) = connect_handle.take() {
+                if let Some(goal) = goal {
+                    goal.set_output_written();
+                }
+                let _ = timeout(Duration::from_secs(3), handle).await;
+            }
+            let invocation = invocation.map_err(|error| {
+                self.with_previous_invocation_failed_hint(error, &agent_id_match)
+            })?;
+            logln("");
+            self.ctx
+                .log_handler()
+                .log_output(InvokeResultView::new_agent_invoke(
+                    invocation.idempotency_key,
+                    invocation.result,
+                    &agent_type,
+                    &method_name,
+                ))?;
+            return Ok(());
+        }
 
         let request = AgentInvocationRequest {
             app_name: environment.application_name.to_string(),
@@ -666,7 +707,7 @@ impl AgentCommandHandler {
             method_name: method_name.clone(),
             method_parameters: ExternalSchemaValue::try_from(method_parameters)
                 .map_err(anyhow::Error::msg)?,
-            mode,
+            mode: AgentInvocationMode::Schedule,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
             deployment_revision: None,
@@ -683,26 +724,20 @@ impl AgentCommandHandler {
                 self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
             })?;
 
-        if let Some(handle) = connect_handle.take() {
+        // The key the server accepted the invocation under, which cancels and looks it up.
+        let accepted_key = golem_common::model::InvocationId(result.idempotency_key);
+        if let Some((goal, handle)) = connect_handle.take() {
+            if let Some(goal) = goal {
+                goal.set_target(accepted_key);
+                goal.set_output_written();
+            }
             let _ = timeout(Duration::from_secs(3), handle).await;
         }
 
-        if trigger {
-            log_action("Triggered", "invocation");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_trigger(idempotency_key))?;
-        } else {
-            logln("");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_agent_invoke(
-                    idempotency_key,
-                    result,
-                    &agent_type,
-                    &method_name,
-                ))?;
-        }
+        log_action("Triggered", "invocation");
+        self.ctx
+            .log_handler()
+            .log_output(InvokeResultView::new_trigger(accepted_key))?;
 
         Ok(())
     }
@@ -731,7 +766,7 @@ impl AgentCommandHandler {
             self.ctx.allow_insecure(),
             self.ctx.format(),
             self.ctx.agent_stream_ping_interval(),
-            None,
+            false,
         )
         .await?;
 
@@ -748,6 +783,7 @@ impl AgentCommandHandler {
         agent_type_name: AgentTypeName,
         parameters: String,
         idempotency_key: IdempotencyKey,
+        method_name: String,
         phantom_id: Option<Uuid>,
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
@@ -776,11 +812,18 @@ impl AgentCommandHandler {
         })?;
         let typed_parameters =
             typed_constructor_parameters(&agent_type.agent_type, value.into_inner());
-        let agent_id = build_repl_agent_id(
-            &agent_type.agent_type,
+        let agent_id = ParsedAgentKey::try_new(
+            agent_type.agent_type.type_name.clone(),
             typed_parameters,
             phantom_id,
+        )
+        .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
+        let agent_id = invocation_agent_id(
+            &agent_id,
+            &agent_type.agent_type,
+            self.ctx.account_id().await?,
             &idempotency_key,
+            &method_name,
         )?;
         let agent_id = RawAgentId(agent_id.to_string());
 
@@ -793,11 +836,38 @@ impl AgentCommandHandler {
             self.ctx.allow_insecure(),
             self.ctx.format(),
             self.ctx.agent_stream_ping_interval(),
-            Some(idempotency_key),
+            true,
         )
         .await?;
 
-        connection.run_forever().await?;
+        // The REPL writes the accepted invocation ID to stdin once the call returns.
+        let invocation_target = connection.invocation_goal().map(|goal| async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+            if let Ok(Some(line)) = lines.next_line().await {
+                goal.set_target(
+                    line.trim()
+                        .parse::<golem_common::model::InvocationId>()
+                        .context("stdin contains an invalid invocation ID")?,
+                );
+                goal.set_output_written();
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+
+        if let Some(target) = invocation_target {
+            let connection = connection.run_forever();
+            tokio::pin!(connection);
+            tokio::select! {
+                result = &mut connection => result?,
+                result = target => {
+                    result?;
+                    connection.await?;
+                }
+            }
+        } else {
+            connection.run_forever().await?;
+        }
 
         Ok(())
     }
@@ -1253,10 +1323,11 @@ impl AgentCommandHandler {
                 let mut filters = filters;
                 filters.insert(
                     0,
-                    format!(
-                        "name startswith {}(",
-                        agent_type.agent_type.type_name.0.clone()
-                    ),
+                    AgentFilter::new_name(
+                        StringFilterComparator::StartsWith,
+                        format!("{}(", agent_type.agent_type.type_name.0),
+                    )
+                    .to_string(),
                 );
 
                 Ok((
@@ -2676,10 +2747,10 @@ impl AgentCommandHandler {
 pub(crate) fn try_recanonicalize_agent_id_with_parsed(
     agent_id: &RawAgentId,
     component: &ComponentDto,
-) -> (RawAgentId, Option<ParsedAgentId>) {
+) -> (RawAgentId, Option<ParsedAgentKey>) {
     let raw = &agent_id.0;
 
-    // Extract type name and params using ParsedAgentId::parse_agent_type_name
+    // Extract type name and params using ParsedAgentKey::parse_agent_type_name
     // and manual splitting for the params portion
     let Some(paren_pos) = raw.find('(') else {
         return (agent_id.clone(), None);
@@ -2755,7 +2826,7 @@ pub(crate) fn try_recanonicalize_agent_id_with_parsed(
         new_id.push_str(phantom);
     }
 
-    let parsed = ParsedAgentId::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
+    let parsed = ParsedAgentKey::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
 
     (RawAgentId(new_id), parsed)
 }
@@ -2766,12 +2837,19 @@ impl AgentCommandHandler {
         error: anyhow::Error,
         agent_id_match: &AgentIdMatch,
     ) -> anyhow::Error {
-        let Some(service_error) = error.downcast_ref::<ServiceError>() else {
+        let rendered = if let Some(service_error) = error
+            .downcast_ref::<ServiceError>()
+            .filter(|service_error| service_error.is_previous_invocation_failed())
+        {
+            service_error.render()
+        } else if let Some(failure) = error
+            .downcast_ref::<invocation_session::InvocationFailure>()
+            .filter(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed)
+        {
+            failure.to_string()
+        } else {
             return error;
         };
-        if !service_error.is_previous_invocation_failed() {
-            return error;
-        }
 
         let command = render_revert_command(
             &crate::command_name(),
@@ -2785,7 +2863,7 @@ impl AgentCommandHandler {
 
         anyhow!(
             "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
-            service_error.render(),
+            rendered,
             command,
         )
     }
@@ -2813,7 +2891,7 @@ impl AgentCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         agent_id: String,
     ) -> anyhow::Result<AgentIdMatch> {
-        let parsed_agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_id) {
+        let parsed_agent_type_name = match ParsedAgentKey::parse_agent_type_name(&agent_id) {
             Ok(agent_type_name) => agent_type_name,
             Err(err) => {
                 logln("");
@@ -3005,13 +3083,13 @@ impl AgentCommandHandler {
         component: &ComponentDto,
         agent_id: &RawAgentId,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(ParsedAgentId, AgentTypeSchema)>> {
+    ) -> anyhow::Result<Option<(ParsedAgentKey, AgentTypeSchema)>> {
         let component_metadata: ComponentMetadata = component.metadata.clone().into();
         if !component_metadata.is_agent() {
             return Ok(None);
         }
 
-        match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component_metadata) {
+        match ParsedAgentKey::parse_and_resolve_type(&agent_id.0, &component_metadata) {
             Ok((agent_id, agent_type)) => {
                 validate_ordinary_agent_type(&agent_type)?;
                 match function_name {
@@ -3069,7 +3147,8 @@ impl AgentCommandHandler {
                 }
             }
             Err(err) => {
-                let parsed_agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0).ok();
+                let parsed_agent_type_name =
+                    ParsedAgentKey::parse_agent_type_name(&agent_id.0).ok();
 
                 logln("");
                 log_error(format!(
@@ -3357,10 +3436,7 @@ fn secret_config_paths_for_agent_type(
 /// `Ephemeral`, the corresponding equality filter is prepended so the
 /// executor narrows the oplog scan to only the matching mode.
 fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
-    let user_set_mode = filters
-        .iter()
-        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()));
-    if user_set_mode {
+    if user_set_mode_filter(&filters) {
         return filters;
     }
     let mode_filter = match mode {
@@ -3374,12 +3450,15 @@ fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<Stri
     out
 }
 
-/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint,
-/// meaning the caller should not add its own mode overlay.
+/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint anywhere,
+/// also inside `and`, `or`, `not` or parentheses, meaning the caller should not add its own
+/// mode overlay. A filter that does not parse is refused later, when the list builds its
+/// structured filter.
 fn user_set_mode_filter(filters: &[String]) -> bool {
     filters
         .iter()
-        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()))
+        .filter_map(|filter| filter.parse::<AgentFilter>().ok())
+        .any(|filter| filter.mentions_mode())
 }
 
 /// Structured filter matching agents in either durability mode, used for
@@ -3517,30 +3596,35 @@ fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<
     Ok(())
 }
 
-fn build_repl_agent_id(
+/// The agent that runs a user's invocation of `method_name` with `idempotency_key`. The server
+/// derives an ephemeral agent's phantom ID from the owner key of the caller-scoped request key,
+/// so the CLI derives it the same way to stream that agent's output.
+fn invocation_agent_id(
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
-    typed_parameters: TypedSchemaValue,
-    phantom_id: Option<Uuid>,
+    account_id: AccountId,
     idempotency_key: &IdempotencyKey,
-) -> anyhow::Result<ParsedAgentId> {
-    let agent_id =
-        ParsedAgentId::try_new(agent_type.type_name.clone(), typed_parameters, phantom_id)
-            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
-
+    method_name: &str,
+) -> anyhow::Result<ParsedAgentKey> {
     if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+        let owner_key = InvocationRequestKey::external(
+            Some(IdempotencyScope::User(account_id)),
+            Some(idempotency_key),
+        )
+        .owner_key(method_name);
         agent_id
-            .with_ephemeral_invocation_phantom(idempotency_key)
+            .with_ephemeral_invocation_phantom(&owner_key)
             .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
     } else {
-        Ok(agent_id)
+        Ok(agent_id.clone())
     }
 }
 
 fn normalize_public_agent_id(
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
-) -> anyhow::Result<ParsedAgentId> {
-    ParsedAgentId::new_auto_phantom(
+) -> anyhow::Result<ParsedAgentKey> {
+    ParsedAgentKey::new_auto_phantom(
         agent_type.type_name.clone(),
         agent_id.parameters.clone(),
         agent_id.phantom_id,
@@ -3550,7 +3634,7 @@ fn normalize_public_agent_id(
 }
 
 fn validate_public_invocation_agent_id(
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
 ) -> anyhow::Result<()> {
     if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some() {
@@ -3562,7 +3646,7 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
+        AgentListMode, AgentUpdateMode, apply_list_mode_filter, invocation_agent_id,
         is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
         parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
         split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
@@ -3571,7 +3655,8 @@ mod tests {
     use crate::context::GlobalEnvironmentSelector;
     use crate::model::agent::RawAgentId;
     use crate::model::environment::EnvironmentReference;
-    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
@@ -3738,9 +3823,22 @@ mod tests {
 
     #[test]
     fn apply_list_mode_filter_user_mode_filter_case_insensitive() {
-        let input = vec!["MODE == ephemeral".to_string()];
+        let input = vec!["mode == EPHEMERAL".to_string()];
         let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_finds_user_mode_filter_inside_compound_filters() {
+        for filter in [
+            "(mode == ephemeral)",
+            "status == Idle or mode == ephemeral",
+            "not mode == durable",
+        ] {
+            let input = vec!["status == Running".to_string(), filter.to_string()];
+            let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+            assert_eq!(result, input, "filter: {filter}");
+        }
     }
 
     fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
@@ -3771,34 +3869,6 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
         }
-    }
-
-    /// The host fills an auto-injected principal, so the CLI neither asks for
-    /// it nor sends a value for it.
-    #[test]
-    fn method_arguments_skip_the_auto_injected_principal() {
-        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
-        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
-            golem_common::schema::agent::NamedField::user_supplied("amount", SchemaType::s64()),
-            golem_common::schema::agent::NamedField::auto_injected(
-                "principal",
-                golem_common::schema::agent::AutoInjectedKind::Principal,
-                SchemaType::record(vec![]),
-            ),
-        ]);
-        let parsed = parse_method_parameters_with_error_table(
-            &agent_type,
-            "run",
-            vec!["5".into()],
-            &SourceLanguage::Rust,
-        )
-        .unwrap();
-        assert_eq!(
-            parsed,
-            SchemaValue::Record {
-                fields: vec![SchemaValue::S64(5)]
-            }
-        );
     }
 
     #[test]
@@ -3887,59 +3957,74 @@ mod tests {
         assert_eq!(split_agent_id("a(/"), vec!["a(/"]);
     }
 
-    #[test]
-    fn repl_agent_id_derives_stable_phantom_for_ephemeral_invocation() {
-        let idempotency_key = IdempotencyKey::new("repl-invocation".to_string());
-        let first = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
+    fn logical_agent_id(
+        mode: AgentMode,
+        phantom_id: Option<Uuid>,
+    ) -> (ParsedAgentKey, AgentTypeSchema) {
+        let agent_type = test_agent_type_schema(mode);
+        let agent_id = ParsedAgentKey::try_new(
+            agent_type.type_name.clone(),
             empty_typed_parameters(),
-            None,
-            &idempotency_key,
+            phantom_id,
         )
         .unwrap();
-        let second = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
-            empty_typed_parameters(),
-            None,
-            &idempotency_key,
-        )
-        .unwrap();
-
-        assert!(first.phantom_id.is_some());
-        assert_eq!(first.phantom_id, second.phantom_id);
+        (agent_id, agent_type)
     }
 
     #[test]
-    fn repl_agent_id_keeps_durable_agents_non_phantom() {
-        let agent_id = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Durable),
-            empty_typed_parameters(),
-            None,
-            &IdempotencyKey::new("repl-invocation".to_string()),
-        )
-        .unwrap();
+    fn invocation_agent_id_scopes_the_ephemeral_phantom_like_the_server() {
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Ephemeral, None);
+        let key = IdempotencyKey::new("repl-invocation".to_string());
+        let account = AccountId(Uuid::new_v4());
+        let phantom = |account, method| {
+            invocation_agent_id(&agent_id, &agent_type, account, &key, method)
+                .unwrap()
+                .phantom_id
+                .unwrap()
+        };
 
-        assert!(agent_id.phantom_id.is_none());
+        assert_eq!(phantom(account, "run"), phantom(account, "run"));
+        assert_ne!(phantom(account, "run"), phantom(account, "other"));
+        assert_ne!(
+            phantom(account, "run"),
+            phantom(AccountId(Uuid::new_v4()), "run")
+        );
+        // The raw key alone names a different agent than the one the server runs.
+        assert_ne!(
+            Some(phantom(account, "run")),
+            agent_id
+                .with_ephemeral_invocation_phantom(&key)
+                .unwrap()
+                .phantom_id
+        );
     }
 
     #[test]
-    fn repl_agent_id_preserves_explicit_phantom_id() {
-        let explicit_phantom_id = Uuid::new_v4();
-        let agent_id = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
-            empty_typed_parameters(),
-            Some(explicit_phantom_id),
-            &IdempotencyKey::new("repl-invocation".to_string()),
-        )
-        .unwrap();
+    fn invocation_agent_id_keeps_durable_and_explicit_phantom_ids() {
+        let key = IdempotencyKey::new("repl-invocation".to_string());
+        let account = AccountId(Uuid::new_v4());
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Durable, None);
+        assert!(
+            invocation_agent_id(&agent_id, &agent_type, account, &key, "run")
+                .unwrap()
+                .phantom_id
+                .is_none()
+        );
 
-        assert_eq!(agent_id.phantom_id, Some(explicit_phantom_id));
+        let explicit = Uuid::new_v4();
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Ephemeral, Some(explicit));
+        assert_eq!(
+            invocation_agent_id(&agent_id, &agent_type, account, &key, "run")
+                .unwrap()
+                .phantom_id,
+            Some(explicit)
+        );
     }
 
     #[test]
     fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
         let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
-        let agent_id = ParsedAgentId::try_new(
+        let agent_id = ParsedAgentKey::try_new(
             AgentTypeName("repl-agent".to_string()),
             empty_typed_parameters(),
             None,
@@ -3953,7 +4038,7 @@ mod tests {
     #[test]
     fn explicit_ephemeral_phantom_is_rejected_for_public_invocation() {
         let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
-        let agent_id = ParsedAgentId::try_new(
+        let agent_id = ParsedAgentKey::try_new(
             AgentTypeName("repl-agent".to_string()),
             empty_typed_parameters(),
             Some(Uuid::new_v4()),

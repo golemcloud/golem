@@ -15,6 +15,7 @@
 pub use super::call::live_unfinished_handle;
 use super::call::live_unfinished_handle_with_counter;
 use super::*;
+use crate::durable_host::replay_state::ReplayStarts;
 use crate::services::oplog::UnreadableOplog;
 use std::collections::BTreeMap;
 
@@ -49,14 +50,14 @@ fn completed(end_idx: u64) -> Resolution {
     }
 }
 
-// ---- ConcurrentReplayResolver ----
+// ---- ReplayStarts ----
 
 #[test]
 fn resolver_out_of_order_completion() {
     // [S1, S2, E2, E1]: claim both, then resolve E2 before E1.
-    let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx1 = resolver.register(idx(1), None);
-    let mut rx2 = resolver.register(idx(2), None);
+    let mut resolver = ReplayStarts::default();
+    let mut rx1 = resolver.register(idx(1), None).unwrap();
+    let mut rx2 = resolver.register(idx(2), None).unwrap();
     assert!(rx1.try_recv().is_err());
     assert!(rx2.try_recv().is_err());
 
@@ -81,8 +82,8 @@ fn resolver_out_of_order_completion() {
 #[test]
 fn resolver_cancelled() {
     // [S1, Cancelled1]
-    let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx = resolver.register(idx(1), None);
+    let mut resolver = ReplayStarts::default();
+    let mut rx = resolver.register(idx(1), None).unwrap();
     assert!(resolver.resolve_if_pending(
         idx(1),
         idx(2),
@@ -100,25 +101,11 @@ fn resolver_cancelled() {
 }
 
 #[test]
-fn resolver_resolve_before_register_buffers() {
-    let mut resolver = ConcurrentReplayResolver::default();
-    resolver.resolve(idx(1), completed(2));
-    assert!(!resolver.is_pending(idx(1)));
-    let mut rx = resolver.register(idx(1), None);
-    match rx.try_recv() {
-        Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
-            assert_eq!(end_idx, idx(2))
-        }
-        other => panic!("expected pre-resolved receiver, got {other:?}"),
-    }
-}
-
-#[test]
 fn resolver_missing_pending_is_dropped_not_buffered() {
-    let mut resolver = ConcurrentReplayResolver::default();
+    let mut resolver = ReplayStarts::default();
     // No registration: resolve_if_pending must not buffer (this is the unregistered-End case).
     assert!(!resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
-    let mut rx = resolver.register(idx(1), None);
+    let mut rx = resolver.register(idx(1), None).unwrap();
     assert!(rx.try_recv().is_err());
 }
 
@@ -126,9 +113,9 @@ fn resolver_missing_pending_is_dropped_not_buffered() {
 fn resolver_fail_all_pending_incomplete_wakes_everyone() {
     // End-of-replay must wake every still-suspended awaiter as Incomplete, not leave them
     // hanging. A resolved awaiter is already gone and is unaffected.
-    let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx1 = resolver.register(idx(1), None);
-    let mut rx2 = resolver.register(idx(2), None);
+    let mut resolver = ReplayStarts::default();
+    let mut rx1 = resolver.register(idx(1), None).unwrap();
+    let mut rx2 = resolver.register(idx(2), None).unwrap();
     assert!(resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
 
     resolver.fail_all_pending_incomplete();
@@ -148,8 +135,8 @@ fn resolver_fail_all_pending_incomplete_wakes_everyone() {
 
 #[test]
 fn resolver_duplicate_resolution_is_ignored() {
-    let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx = resolver.register(idx(1), None);
+    let mut resolver = ReplayStarts::default();
+    let mut rx = resolver.register(idx(1), None).unwrap();
     assert!(resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     // Second resolution: no longer pending.
     assert!(!resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
@@ -1020,7 +1007,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
         token.is_live_armed(),
         "the tail-gated token must convert to live-armed after the tail exhausts"
     );
-    assert!(replay_state.is_live());
+    assert!(replay_state.at_replay_tail());
 
     token.delivered();
     // With no cleanup sink the marker append is only settlement-tracked via the drain queue;
@@ -1988,6 +1975,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -2005,6 +1993,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
@@ -2031,6 +2020,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2039,6 +2029,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let error_a = {
@@ -2095,6 +2086,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
     let terminal_error: anyhow::Error = TerminalCallError::new(
@@ -2146,6 +2138,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2154,6 +2147,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
     let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
@@ -2234,6 +2228,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let scope = begun.finish(idx(11));
@@ -2250,6 +2245,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let scope = begun.finish(idx(12));
@@ -2266,6 +2262,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let scope = begun.finish(idx(11));
@@ -2285,6 +2282,7 @@ fn call_execution_scope_owns_call_retry_point() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     assert_eq!(scope.retry_from, idx(42));

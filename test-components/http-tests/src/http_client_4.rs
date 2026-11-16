@@ -73,6 +73,11 @@ pub trait HttpClient4 {
 
     async fn post_with_writer_get(&self) -> String;
 
+    /// Reads the server-sent event stream at `/events`, whose events carry no `id:` field, with
+    /// a raw wasip3 GET. Returns `events=[<data>,...]` followed by ` end` when the stream ended,
+    /// or by ` incomplete(<error>) after <n> events` when the body ended with an error.
+    async fn read_sse_without_ids(&self) -> String;
+
     /// Sends a non-idempotent POST concurrently with a GET.
     async fn post_non_idempotent_with_concurrent_get(&self) -> String;
 
@@ -311,6 +316,10 @@ impl HttpClient4 for HttpClient4Impl {
     async fn post_with_writer_get(&self) -> String {
         let port = std::env::var("PORT").unwrap();
         do_post_inference_streamed(&port, true).await
+    }
+
+    async fn read_sse_without_ids(&self) -> String {
+        do_read_sse_without_ids().await
     }
 
     async fn post_non_idempotent_with_concurrent_get(&self) -> String {
@@ -1488,6 +1497,72 @@ async fn do_post_inference_streamed(port: &str, get_after_write: bool) -> String
     match sibling {
         Some(sibling) => format!("{post} | {sibling}"),
         None => post,
+    }
+}
+
+/// Reads `/events` as a server-sent event stream and collects the `data:` field of every complete
+/// event. Each body chunk is committed before the next read, so a crash after a chunk finds it
+/// in the durable oplog.
+async fn do_read_sse_without_ids() -> String {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::wit_future;
+
+    let port = std::env::var("PORT").unwrap();
+    let headers =
+        types::Fields::from_list(&[("accept".to_string(), b"text/event-stream".to_vec())]).unwrap();
+    // Dropping the writer ends the empty request body without trailers, so the recorded
+    // request is complete and the host can resend it.
+    let (_, request_done_rx) = wit_future::new(|| Ok(None));
+    let (request, _transmit) = types::Request::new(headers, None, request_done_rx, None);
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/events")).unwrap();
+
+    let response = match client::send(request).await {
+        Ok(response) => response,
+        Err(error) => return format!("error({error:?})"),
+    };
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    let mut pending = String::new();
+    let mut events = Vec::new();
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        let (result, next_buffer) = body.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(n) => {
+                pending.push_str(&String::from_utf8_lossy(&buffer[..n]));
+                buffer.clear();
+                while let Some(end) = pending.find("\n\n") {
+                    let event: String = pending.drain(..end + 2).collect();
+                    events.extend(
+                        event
+                            .lines()
+                            .filter_map(|line| line.strip_prefix("data: "))
+                            .map(str::to_string),
+                    );
+                }
+                golem_rust::oplog_commit(0);
+            }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("event stream read was cancelled"),
+        }
+    }
+    drop(body);
+    let trailers = trailers.await;
+    let _ = response_done_tx.write(Ok(())).await;
+    let received = format!("events=[{}]", events.join(","));
+    match trailers {
+        Ok(_) => format!("{received} end"),
+        Err(error) => format!(
+            "{received} incomplete({error:?}) after {} events",
+            events.len()
+        ),
     }
 }
 

@@ -220,7 +220,8 @@ private[autowire] object AgentRequestBuilder {
       corsOptions = corsOptions,
       authDetails = authDetails,
       durableStreams =
-        ep.durableStreams.fold[js.UndefOr[JsDurableStreamRouteOptions]](js.undefined)(encodeDurableStreams)
+        ep.durableStreams.fold[js.UndefOr[JsDurableStreamRouteOptions]](js.undefined)(encodeDurableStreams),
+      mode = ep.mode.map(_.wireValue).orUndefined
     )
   }
 
@@ -240,9 +241,6 @@ private[autowire] object AgentRequestBuilder {
     )
     JsDurableStreamRouteOptions(
       slots,
-      options.allowExternalWrites.orUndefined,
-      options.allowStreamDelete.orUndefined,
-      options.allowInvocationDelete.orUndefined,
       load
     )
   }

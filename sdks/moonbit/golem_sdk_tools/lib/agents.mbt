@@ -53,6 +53,7 @@ pub(all) struct HttpEndpointInfo {
   auth : Bool?
   cors : Array[String]
   durable_streams : DurableStreamRouteInfo?
+  mode : String?
 } derive(Debug, Eq)
 
 ///|
@@ -71,9 +72,6 @@ pub(all) struct DurableStreamSlotInfo {
 ///|
 pub(all) struct DurableStreamRouteInfo {
   slots : Array[DurableStreamSlotInfo]
-  allow_external_writes : Bool?
-  allow_stream_delete : Bool?
-  allow_invocation_delete : Bool?
   max_concurrent_readers_per_stream : UInt32?
   max_append_requests_per_second_per_stream : UInt32?
 } derive(Debug, Eq)
@@ -1027,23 +1025,6 @@ fn quoted_value(
 }
 
 ///|
-fn bool_value(
-  value : String,
-  annotation : String,
-  key : String,
-) -> Bool raise AgentParseError {
-  if value == "true" {
-    true
-  } else if value == "false" {
-    false
-  } else {
-    raise AgentParseError(
-      "#derive.\{annotation} property '\{key}' must be true or false",
-    )
-  }
-}
-
-///|
 fn uint_value(
   value : String,
   annotation : String,
@@ -1078,9 +1059,6 @@ fn extract_durable_streams(
 ) -> DurableStreamRouteInfo? raise AgentParseError {
   let slots : Array[DurableStreamSlotInfo] = []
   let mut route_seen = false
-  let mut allow_external_writes : Bool? = None
-  let mut allow_stream_delete : Bool? = None
-  let mut allow_invocation_delete : Bool? = None
   let mut max_readers : UInt32? = None
   let mut max_appends : UInt32? = None
   attrs.each(attr => {
@@ -1130,18 +1108,6 @@ fn extract_durable_streams(
       let props = parse_derive_properties(attr.raw, "durable_streams")
       for key, value in props {
         match key {
-          "allow_external_writes" =>
-            allow_external_writes = Some(
-              bool_value(value, "durable_streams", key),
-            )
-          "allow_stream_delete" =>
-            allow_stream_delete = Some(
-              bool_value(value, "durable_streams", key),
-            )
-          "allow_invocation_delete" =>
-            allow_invocation_delete = Some(
-              bool_value(value, "durable_streams", key),
-            )
           "max_concurrent_readers_per_stream" =>
             max_readers = Some(uint_value(value, "durable_streams", key))
           "max_append_requests_per_second_per_stream" =>
@@ -1159,9 +1125,6 @@ fn extract_durable_streams(
   } else {
     Some({
       slots,
-      allow_external_writes,
-      allow_stream_delete,
-      allow_invocation_delete,
       max_concurrent_readers_per_stream: max_readers,
       max_append_requests_per_second_per_stream: max_appends,
     })
@@ -1183,8 +1146,21 @@ fn extract_endpoint(
           )
         }
         let found : Array[(String, String)] = []
+        let mut mode : String? = None
         props.each(fn(prop) {
           match prop {
+            Labeled("mode", String(value)) => {
+              if mode is Some(_) {
+                raise AgentParseError("Duplicate endpoint mode")
+              }
+              if value != "durableStreams" &&
+                value != "plain" &&
+                value != "sse" &&
+                value != "webSocket" {
+                raise AgentParseError("Unknown HTTP route mode '\{value}'")
+              }
+              mode = Some(value)
+            }
             Labeled(label, String(path)) =>
               if http_methods.contains(label) {
                 found.push((label, path))
@@ -1210,6 +1186,7 @@ fn extract_endpoint(
             auth: None,
             cors: [],
             durable_streams: None,
+            mode,
           })
         }
       }
@@ -1306,6 +1283,7 @@ fn build_endpoint_info(
       auth: None,
       cors: [],
       durable_streams: None,
+      mode: None,
     })
   }
   match endpoint {

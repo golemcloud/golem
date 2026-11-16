@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
+use super::super::call_agent::principal_from_request;
 use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
 use super::super::{RichRequest, RouteExecutionResult};
@@ -77,7 +78,11 @@ impl DurableStreamsHandler {
                 &behaviour.agent_type,
                 &behaviour.constructor_input,
                 &behaviour.constructor_parameters,
-                Some(fork_phantom_id(root_agent_id, fork)),
+                Some(fork_phantom_id(
+                    root_agent_id,
+                    &super::route_scope(route),
+                    fork,
+                )),
             )?,
             None => root_agent_id.clone(),
         };
@@ -125,6 +130,7 @@ impl DurableStreamsHandler {
         if initial_content.len() > self.max_append_body_bytes {
             return Ok(response(StatusCode::PAYLOAD_TOO_LARGE));
         }
+        let principal = principal_from_request(request)?;
         let executor_content_type = (!initial_content.is_empty() && content_type.is_some())
             .then(|| canonical_content_type(declared_slot.representation).to_owned());
         let result = self
@@ -136,6 +142,7 @@ impl DurableStreamsHandler {
                     target_agent_id: Some(target_agent_id.clone().into()),
                     environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
+                    route_scope: super::route_scope(route),
                     session: session.to_owned(),
                     slot: slot.to_owned(),
                     expected_method: route_method(route).to_owned(),
@@ -149,6 +156,7 @@ impl DurableStreamsHandler {
                     initial_content,
                     closed,
                     expiry_policy,
+                    principal: Some(principal.into()),
                 },
             )
             .await?;
@@ -164,7 +172,7 @@ impl DurableStreamsHandler {
                         0,
                         0,
                         golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission::Continuation,
-                        success.invocation_key.clone(),
+                        success.invocation_key,
                     )
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("fork succeeded without stream metadata"))?;
@@ -304,8 +312,10 @@ fn canonical_path(path: &str) -> String {
         .join("/")
 }
 
-pub(super) fn fork_phantom_id(root: &AgentId, fork: &str) -> Uuid {
-    let hash = blake3::hash(format!("{}\0{fork}", root.agent_id).as_bytes());
+pub(super) fn fork_phantom_id(root: &AgentId, route_scope: &str, fork: &str) -> Uuid {
+    let identity = serde_json::to_vec(&(&root.agent_id, route_scope, fork))
+        .expect("string tuple is serializable");
+    let hash = blake3::hash(&identity);
     let mut bytes = [0; 16];
     bytes.copy_from_slice(&hash.as_bytes()[..16]);
     bytes[6] = (bytes[6] & 0x0f) | 0x40;

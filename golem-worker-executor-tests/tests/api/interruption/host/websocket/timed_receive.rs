@@ -75,7 +75,7 @@ const CONNECT: &str = "golem:websocket/client::connect";
 
 fn assert_timed_invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<()> {
     let mut current = false;
@@ -84,7 +84,7 @@ fn assert_timed_invocation(
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.idempotency_key == key);
+                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.invocation_id == key);
                 started += usize::from(current);
             }
             PublicOplogEntry::AgentInvocationFinished(_) if current => terminals += 1,
@@ -230,7 +230,11 @@ async fn pending_timed_receive(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "receive_with_timeout_test",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -247,6 +251,9 @@ async fn pending_timed_receive(
     )
     .await?;
     let mut peer = Peer::start().await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "receive_with_timeout_test")
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -278,7 +285,7 @@ async fn pending_timed_receive(
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == TIMED_RECEIVE)) {
                     let start = timed_receive_start(&entries, 0)?;
-                    assert_timed_invocation(&entries, &key, 0)?;
+                    assert_timed_invocation(&entries, &stored_key, 0)?;
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     return Ok::<_, anyhow::Error>(start);
                 }
@@ -359,7 +366,7 @@ async fn pending_timed_receive(
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        assert_timed_invocation(&stopped, &key, 0)?;
+        assert_timed_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             self::timed_receive_start(&stopped, 0)? == receive_start,
             "interruption must leave the original receive Start open"
@@ -467,7 +474,7 @@ async fn pending_timed_receive(
             executor.commit_oplog(&id).await?;
             let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&repairing, 0)? == receive_start);
-            assert_timed_invocation(&repairing, &key, 0)?;
+            assert_timed_invocation(&repairing, &stored_key, 0)?;
             peer.assert_counts(2, 0)?;
             second.send.send("recovered".to_string()).map_err(|_| anyhow::anyhow!("recovery frame gate closed"))?;
             let resumed = tokio::time::timeout(Duration::from_secs(15), &mut invocation)
@@ -478,7 +485,7 @@ async fn pending_timed_receive(
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&recovered, 1)? == receive_start);
             assert_settled_history(&recovered)?;
-            assert_timed_invocation(&recovered, &key, 1)?;
+            assert_timed_invocation(&recovered, &stored_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "receive_with_timeout_test", data_value!(peer.url.clone(), 300_000u64)).await?;
             ensure!(cached.into_typed::<Option<String>>()? == Some("recovered".to_string()));
@@ -498,6 +505,7 @@ async fn pending_timed_receive(
 
             // Reconstruct completed history with an invocation that performs no network work.
             let noop_key = IdempotencyKey::fresh();
+            let stored_noop_key = executor.external_invocation_key(&id, &noop_key, "noop").await?;
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
             peer.assert_counts(2, 1)?;
@@ -505,8 +513,8 @@ async fn pending_timed_receive(
             ensure!(self::timed_receive_start(&replayed, 1)? == receive_start);
             ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (3, 3));
             assert_settled_history(&replayed)?;
-            assert_timed_invocation(&replayed, &key, 1)?;
-            assert_timed_invocation(&replayed, &noop_key, 1)?;
+            assert_timed_invocation(&replayed, &stored_key, 1)?;
+            assert_timed_invocation(&replayed, &stored_noop_key, 1)?;
 
         } else {
             let retry = tokio::time::timeout(Duration::from_secs(10), executor.invoke_and_await_agent_with_key(&component, &name, &key, "receive_with_timeout_test", data_value!(peer.url.clone(), 300_000u64))).await?;
@@ -527,7 +535,7 @@ async fn pending_timed_receive(
             ensure!(probe.into_typed::<Option<String>>()? == Some("probe".to_string()));
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&failed, 0)? == receive_start);
-            assert_timed_invocation(&failed, &key, 0)?;
+            assert_timed_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
@@ -661,6 +669,9 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
     .await?;
     let pool = worker.websocket_connection_pool();
     let mut peer = Peer::start().await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "receive_with_timeout_test")
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -694,7 +705,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
                     ensure!(starts_named(&entries, CONNECT).len() == 1);
                     ensure!(starts_named(&entries, RECEIVE).is_empty());
                     assert_receive_terminal(&entries, starts[0], 0)?;
-                    assert_timed_invocation(&entries, &key, 0)?;
+                    assert_timed_invocation(&entries, &stored_key, 0)?;
                     return Ok::<_, anyhow::Error>(starts[0]);
                 }
                 tokio::task::yield_now().await;
@@ -717,7 +728,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         ensure!(starts == vec![start]);
         assert_receive_terminal(&complete, start, 1)?;
         assert_settled_history(&complete)?;
-        assert_timed_invocation(&complete, &key, 1)?;
+        assert_timed_invocation(&complete, &stored_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&complete, OplogIndex::INITIAL) == (2, 2));
         tokio::time::timeout(Duration::from_secs(10), async {
             while !worker.stop_if_idle().await {
@@ -755,7 +766,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         ensure!(cached.into_typed::<Option<String>>()?.is_none());
         let after = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(starts_named(&after, TIMED_RECEIVE) == vec![start]);
-        assert_timed_invocation(&after, &key, 1)?;
+        assert_timed_invocation(&after, &stored_key, 1)?;
         assert_receive_terminal(&after, start, 1)?;
         ensure!(raw.try_recv().is_err());
         peer.assert_counts(1, 0)?;

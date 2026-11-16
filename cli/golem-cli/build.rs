@@ -27,6 +27,7 @@ const SUPPORTED_LANGUAGES: &[&str] = &["ts", "effect", "rust", "scala", "moonbit
 
 fn main() {
     export_effect_version().unwrap();
+    export_golem_rust_wit_bindgen_source().unwrap();
     generate_embedded_templates().unwrap();
 
     if should_skip() {
@@ -50,6 +51,31 @@ fn export_effect_version() -> std::io::Result<()> {
         std::io::Error::other("sdks/effect/package.json has no effect dependency")
     })?;
     println!("cargo::rustc-env=GOLEM_EFFECT_VERSION={version}");
+    Ok(())
+}
+
+fn export_golem_rust_wit_bindgen_source() -> std::io::Result<()> {
+    let manifest_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../sdks/rust/golem-rust/Cargo.toml");
+    println!("cargo::rerun-if-changed={}", manifest_path.display());
+    let manifest: toml::Table =
+        toml::from_str(&fs::read_to_string(manifest_path)?).map_err(std::io::Error::other)?;
+    let wit_bindgen = &manifest["dependencies"]["wit-bindgen"];
+    for (key, env_var) in [
+        ("git", "GOLEM_RUST_WIT_BINDGEN_GIT"),
+        ("rev", "GOLEM_RUST_WIT_BINDGEN_REV"),
+        ("version", "GOLEM_RUST_WIT_BINDGEN_VERSION"),
+    ] {
+        let value = wit_bindgen
+            .get(key)
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                std::io::Error::other(format!(
+                    "the wit-bindgen dependency of sdks/rust/golem-rust/Cargo.toml has no {key}"
+                ))
+            })?;
+        println!("cargo::rustc-env={env_var}={value}");
+    }
     Ok(())
 }
 

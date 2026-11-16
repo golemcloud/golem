@@ -15,6 +15,33 @@
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 
+/// The producer's failure, independent of a reader dropping its stream.
+#[derive(
+    Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema, thiserror::Error,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[serde(rename_all = "kebab-case")]
+#[schema(named = "golem.core.StreamError")]
+pub enum StreamError {
+    #[error("agent stream declared failure")]
+    Failed(Box<crate::schema::TypedSchemaValue>),
+    #[error("agent stream trapped: {0}")]
+    Trapped(String),
+    /// An invocation cancellation request was recorded and honoured.
+    #[error("agent stream cancelled")]
+    Cancelled,
+    /// The producing invocation completed with its writer still open.
+    #[error("agent stream abandoned")]
+    Abandoned,
+    #[error("agent stream interrupted: {0}")]
+    Interrupted(String),
+    #[error("agent stream resource exhausted: {0}")]
+    ResourceExhausted(String),
+}
+
+/// A clean producer end or its failure; consumer cancellation is not an outcome.
+pub type StreamOutcome = Result<(), StreamError>;
+
 /// Native counterpart of `golem:core/types@2.0.0::uuid`.
 pub type Uuid = uuid::Uuid;
 
@@ -260,13 +287,16 @@ pub type OplogIndex = u64;
 )]
 pub struct PromiseId {
     pub agent_id: AgentId,
+    /// Fingerprint of the agent incarnation that created the promise.
+    pub fingerprint: Uuid,
     pub oplog_idx: OplogIndex,
 }
 
 impl PromiseId {
-    pub fn new(agent_id: AgentId, oplog_idx: OplogIndex) -> Self {
+    pub fn new(agent_id: AgentId, fingerprint: Uuid, oplog_idx: OplogIndex) -> Self {
         Self {
             agent_id,
+            fingerprint,
             oplog_idx,
         }
     }

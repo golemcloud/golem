@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use futures_concurrency::future::Join;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
@@ -190,7 +190,7 @@ impl InvokeResult {
 pub async fn invoke_and_await_agent(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     method_name: &str,
     params: TypedSchemaValue,
 ) -> InvokeResult {

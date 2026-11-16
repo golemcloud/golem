@@ -112,6 +112,18 @@ async fn test_go_http_router_deployed() {
     assert_eq!(asset.text().await.unwrap(), "immutable asset");
 
     // Live files come from the agent's filesystem as it changes.
+    // A live file read never creates its agent.
+    let missing = client
+        .get(format!("{base}/files/alice/value"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    assert!(
+        ctx.cli([cmd::AGENT, cmd::NEW, "Files(\"alice\")"])
+            .await
+            .success_or_dump()
+    );
     let initial = client
         .get(format!("{base}/files/alice/value"))
         .send()

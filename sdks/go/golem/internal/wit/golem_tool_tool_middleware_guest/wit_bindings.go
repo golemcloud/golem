@@ -33,7 +33,6 @@
 package golem_tool_tool_middleware_guest
 
 import (
-	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
@@ -50,7 +49,6 @@ type ToolMiddleware = golem_tool_common.ToolMiddleware
 type ByteStreamItem = witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]
 type ToolOutputWriter = golem_tool_streams.ToolOutputWriter
 type UnderlyingTool = golem_tool_underlying.UnderlyingTool
-type Principal = golem_agent_common.Principal
 type TypedSchemaValue = golem_core_types.TypedSchemaValue
 
 //go:wasmimport [export]golem:tool/tool-middleware-guest@0.1.0 [stream-new-0]invoke-tool-middleware

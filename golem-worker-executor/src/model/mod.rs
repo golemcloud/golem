@@ -577,9 +577,12 @@ impl TrapType {
                                     )
                                 }) {
                                     TrapType::Interrupt(InterruptKind::ShardLost)
-                                } else if let Some(classified) = error
-                                    .chain()
-                                    .find_map(|e| e.downcast_ref::<ClassifiedHostError>())
+                                } else if let Some(classified) =
+                                    error.downcast_ref::<ClassifiedHostError>().or_else(|| {
+                                        error
+                                            .chain()
+                                            .find_map(|e| e.downcast_ref::<ClassifiedHostError>())
+                                    })
                                 {
                                     match classified.kind {
                                         HostFailureKind::Transient => make_error(

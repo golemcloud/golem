@@ -108,7 +108,7 @@ pub(super) async fn pending_sleep(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, abi.method()))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -124,6 +124,9 @@ pub(super) async fn pending_sleep(
         Principal::anonymous(),
     )
     .await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, abi.method())
+        .await?;
     let admitted_revision = registry.current_limits().monthly_policy_revision;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -147,7 +150,7 @@ pub(super) async fn pending_sleep(
             loop {
                 executor.commit_oplog(&id).await?;
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                if let Some(record) = history::sleep_record(&entries, &key, abi, false)? {
+                if let Some(record) = history::sleep_record(&entries, &stored_key, abi, false)? {
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     info!(?abi, ?entries, ?record, "Committed clock input and open sleep wait under one unfinished method");
                     return Ok::<_, anyhow::Error>(record);
@@ -196,7 +199,7 @@ pub(super) async fn pending_sleep(
             Ok::<_, anyhow::Error>(())
         }).await.context("quota stop and physical settlement exceeded 8s bound")??;
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(history::sleep_record(&stopped, &key, abi, false)? == Some(original));
+        ensure!(history::sleep_record(&stopped, &stored_key, abi, false)? == Some(original));
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         for entry in entries.values() {
@@ -257,7 +260,7 @@ pub(super) async fn pending_sleep(
             let resumed = tokio::time::timeout(Duration::from_secs(5), &mut invocation).await.context("sleep must retain its expired original deadline, not start another duration")???;
             abi.check_result(resumed)?;
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::sleep_record(&recovered, &key, abi, true)? == Some(original), "replay changed recorded now, duration or original wait identity");
+            ensure!(history::sleep_record(&recovered, &stored_key, abi, true)? == Some(original), "replay changed recorded now, duration or original wait identity");
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             history::settled(&recovered)?;
             abi.check_result(executor.invoke_and_await_agent_with_key(&component, &name, &key, abi.method(), data_value!(GUEST_SLEEP.as_secs())).await?)?;
@@ -273,14 +276,17 @@ pub(super) async fn pending_sleep(
             let healthy = tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "healthcheck", data_value!())).await??;
             ensure!(healthy.into_typed::<bool>()?);
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::sleep_record(&replayed, &key, abi, true)? == Some(original));
-            history::invocation(&replayed, &fresh_key, 1)?;
+            ensure!(history::sleep_record(&replayed, &stored_key, abi, true)? == Some(original));
+            let stored_fresh_key = executor
+                .external_invocation_key(&id, &fresh_key, "healthcheck")
+                .await?;
+            history::invocation(&replayed, &stored_fresh_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (3, 3));
             history::settled(&replayed)?;
         } else {
             ensure!(tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &key, abi.method(), data_value!(GUEST_SLEEP.as_secs()))).await?.is_err());
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::sleep_record(&failed, &key, abi, false)? == Some(original));
+            ensure!(history::sleep_record(&failed, &stored_key, abi, false)? == Some(original));
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!failed.iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))));

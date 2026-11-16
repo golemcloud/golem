@@ -17,7 +17,7 @@ use test_r::test;
 use super::*;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::schema::SchemaType;
-use golem_common::schema::agent::{InputSchema, NamedField, ParsedAgentId};
+use golem_common::schema::agent::{InputSchema, NamedField, ParsedAgentKey};
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use golem_common::schema::metadata::TypeId;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, VariantCaseType};
@@ -58,6 +58,7 @@ fn round_trip_primitives() {
     round_trip_all(SchemaValue::Bool(true), SchemaType::bool());
     round_trip_all(SchemaValue::U32(42), SchemaType::u32());
     round_trip_all(SchemaValue::S32(-7), SchemaType::s32());
+    round_trip_all(SchemaValue::S64(-5), SchemaType::s64());
     round_trip_all(
         SchemaValue::String("hello world".into()),
         SchemaType::string(),
@@ -196,7 +197,7 @@ fn build_parsed_agent_id(
     agent_type: &str,
     params_value: SchemaValue,
     schema_ty: SchemaType,
-) -> ParsedAgentId {
+) -> ParsedAgentKey {
     let typed = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
             name: "p".to_string(),
@@ -207,7 +208,7 @@ fn build_parsed_agent_id(
             fields: vec![params_value],
         },
     );
-    ParsedAgentId::new(AgentTypeName(agent_type.to_string()), typed, None)
+    ParsedAgentKey::new(AgentTypeName(agent_type.to_string()), typed, None)
 }
 
 #[test]
@@ -232,21 +233,11 @@ fn render_agent_id_with_phantom() {
         },
     );
     let uuid = uuid::Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let parsed = ParsedAgentId::new(AgentTypeName("my-agent".to_string()), typed, Some(uuid));
+    let parsed = ParsedAgentKey::new(AgentTypeName("my-agent".to_string()), typed, Some(uuid));
     assert_eq!(
         render_agent_id(&parsed, &SourceLanguage::Rust),
         "my-agent(42)[12345678-1234-1234-1234-123456789012]"
     );
-}
-
-#[test]
-fn rust_language_specific_parsed_first() {
-    let ty = SchemaType::option(SchemaType::u32());
-    let graph = SchemaGraph::anonymous(ty.clone());
-    let input_schema = single_param_input_schema(ty);
-    let parsed =
-        parse_agent_id_params("Some(42)", &graph, &input_schema, &SourceLanguage::Rust).unwrap();
-    assert!(matches!(parsed, SchemaValue::Record { .. }));
 }
 
 #[test]
@@ -439,7 +430,7 @@ fn round_trip_rich_constructors() {
 }
 
 #[test]
-fn uuid_display_is_native_and_rejects_old_record_encoding() {
+fn uuid_parses_only_as_a_native_constructor() {
     let ty = SchemaType::uuid();
     let graph = SchemaGraph::anonymous(ty.clone());
     let value =
@@ -630,10 +621,9 @@ fn native_literal_rejections() {
 }
 
 #[test]
-fn float_literals_still_lex_after_quantity_dot_change() {
-    // Making `5.kg()` lex as `5 . kg ( )` must not regress ordinary float
-    // literals (the renderers emit trailing-`.0` floats, but exponents and
-    // hand-typed forms must still parse).
+fn float_literals_parse_in_rust() {
+    // `5.kg()` lexes as `5 . kg ( )`, while ordinary float literals, including
+    // exponents and hand-typed forms, still lex as one number.
     for (input, expected) in [
         ("5.0", 5.0_f64),
         ("-0.0", -0.0_f64),
@@ -644,7 +634,7 @@ fn float_literals_still_lex_after_quantity_dot_change() {
         assert_eq!(
             parse_native(input, SchemaType::f64(), SourceLanguage::Rust),
             SchemaValue::F64(expected),
-            "float literal '{input}' regressed",
+            "float literal '{input}'",
         );
     }
 }

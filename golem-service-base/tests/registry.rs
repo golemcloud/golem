@@ -26,7 +26,7 @@ use golem_common::base_model::api::error_code;
 use golem_common::model::card::{Card, CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
+use golem_common::model::{AgentId, InvocationId, OplogIndex};
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
 };
@@ -122,7 +122,7 @@ async fn call_create_runtime_card(
             component_id: ComponentId::new(),
             agent_id: "runtime-card-test".to_string(),
         },
-        invocation_key: IdempotencyKey::new("runtime-card-test".to_string()),
+        invocation_key: InvocationId(uuid::Uuid::from_u128(1)),
         oplog_index: OplogIndex::from_u64(1),
     };
 

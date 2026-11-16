@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::InvocationId;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Stops a generation whose shard was lost, found by an interrupt or by its oplog refusing a
@@ -135,13 +136,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let phase = agent_phase_span!(self, "create_instance");
         async {
             debug!("Creating the worker instance");
-            if let crate::worker::WorkerInstance::Running(running) =
-                self.parent.instance.lock().await.deletion_runtime_mut()
             {
-                if running.owner_generation_started {
+                let mut lifecycle = self.parent.instance.lock().await;
+                if lifecycle.begin_store_attempt() {
                     *self.parent.release_scope.lock().unwrap() = Default::default();
                 }
-                running.owner_generation_started = false;
             }
             self.permit_state.release_scope = self.parent.release_scope();
             permit.observe_release(&self.permit_state.release_scope);
@@ -250,13 +249,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         *self.parent.unload_cleanup.lock().unwrap() = Some(cleanup);
                         FinalWorkerState::CleanupFailed(err.clone())
                     } else {
-                        FinalWorkerState::Unloaded {
-                            startup_failure: Some(err.clone()),
-                        }
+                        StartupFailure::new(self.parent.agent_mode(), err.clone()).into()
                     };
                     self.parent
                         .stop_internal(
-                            true,
+                            crate::worker::StopOrigin::InvocationLoop,
                             Some(err),
                             UnloadRequest::ordinary(UnloadReason::Failure),
                             final_state,
@@ -289,7 +286,7 @@ pub enum EphemeralStart {
 /// as a schedule whose commit a caller is still repairing.
 pub fn ephemeral_inspection_may_start(
     status: &AgentStatusRecord,
-    initialization_key: &IdempotencyKey,
+    initialization_key: &InvocationId,
     now: Timestamp,
 ) -> bool {
     status.ephemeral_execution_begun
@@ -305,7 +302,7 @@ pub fn ephemeral_inspection_may_start(
 /// for later: its constructor reservation alone does not make it due.
 pub fn ephemeral_start_decision(
     status: &AgentStatusRecord,
-    initialization_key: &IdempotencyKey,
+    initialization_key: &InvocationId,
     now: Timestamp,
 ) -> EphemeralStart {
     if status.ephemeral_execution_begun {

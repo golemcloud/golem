@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::DurableStreamRouteLimits;
 use golem_common::model::agent::{
     DurableStreamRouteOptions, DurableStreamSlotSource, HttpEndpointDetails, HttpMountDetails,
     PathSegment, PhantomIdBinding,
@@ -21,6 +22,7 @@ use golem_common::schema::{
     AgentMethodSchema, AgentTypeSchema, FieldSource, InputSchema, OutputSchema, SchemaGraph,
     SchemaType,
 };
+use golem_schema::http::HttpRouteMode;
 use golem_service_base::custom_api::{
     DurableStreamRepresentation, DurableStreamRouteLoadPolicy, DurableStreamRoutePolicy,
     DurableStreamSlot, DurableStreamSlotDirection,
@@ -28,7 +30,6 @@ use golem_service_base::custom_api::{
 use std::collections::{HashMap, HashSet};
 
 const RESERVED_PATH_NAMES: &[&str] = &["invocations", "streams", "forks"];
-const MAX_CONCURRENT_READERS_PER_STREAM: u32 = 16;
 
 struct DiscoveredSlot {
     canonical_name: String,
@@ -44,6 +45,8 @@ pub(super) fn validate_route(
     method: &AgentMethodSchema,
     mount: &HttpMountDetails,
     endpoint: &HttpEndpointDetails,
+    limits: &DurableStreamRouteLimits,
+    family_id: golem_service_base::custom_api::RouteId,
 ) -> Result<(InputSchema, DurableStreamRoutePolicy), String> {
     validate_path(mount, endpoint)?;
     if let Some(PhantomIdBinding::Query(details)) = &mount.phantom_id_binding
@@ -140,13 +143,116 @@ pub(super) fn validate_route(
         },
     }
 
-    let policy = resolve_policy(slots, endpoint.durable_streams.as_ref())?;
+    let policy = resolve_policy(slots, endpoint.durable_streams.as_ref(), limits, family_id)?;
     Ok((InputSchema::parameters(non_stream_fields), policy))
+}
+
+pub(super) fn validate_mode(
+    agent: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+    endpoint: &HttpEndpointDetails,
+    mode: HttpRouteMode,
+) -> Result<(), String> {
+    if mode != HttpRouteMode::DurableStreams && endpoint.durable_streams.is_some() {
+        return Err("durableStreams options require durableStreams mode".into());
+    }
+    let uses_streams = method.uses_streams(&agent.schema);
+    match mode {
+        HttpRouteMode::Plain if uses_streams => {
+            Err("plain mode not served yet for methods with streams".into())
+        }
+        HttpRouteMode::DurableStreams if !uses_streams => {
+            Err("durableStreams mode requires streams".into())
+        }
+        HttpRouteMode::Sse | HttpRouteMode::WebSocket => {
+            if !uses_streams {
+                return Err(format!("{} requires streams; use plain", mode.as_str()));
+            }
+            let mut inputs = Vec::new();
+            for field in method.input_schema.fields() {
+                collect_stream_representations(
+                    &agent.schema,
+                    &field.schema,
+                    &mut inputs,
+                    &mut HashSet::new(),
+                )?;
+            }
+            let mut outputs = Vec::new();
+            if let OutputSchema::Single(output) = &method.output_schema {
+                collect_stream_representations(
+                    &agent.schema,
+                    output,
+                    &mut outputs,
+                    &mut HashSet::new(),
+                )?;
+            }
+            if mode == HttpRouteMode::Sse {
+                if !matches!(
+                    endpoint.http_method,
+                    golem_common::model::agent::HttpMethod::Get(_)
+                ) {
+                    return Err("sse requires GET; use durableStreams".into());
+                }
+                if !inputs.is_empty() {
+                    return Err("sse accepts no input stream; use durableStreams".into());
+                }
+                if outputs.len() != 1 {
+                    return Err("sse requires exactly one output stream; use durableStreams".into());
+                }
+            }
+            if inputs
+                .iter()
+                .chain(&outputs)
+                .any(|representation| *representation == DurableStreamRepresentation::Bytes)
+            {
+                return Err(format!(
+                    "{} requires item-typed streams, not u8 byte streams; use durableStreams",
+                    mode.as_str()
+                ));
+            }
+            Err(format!("{} mode not served yet", mode.as_str()))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn collect_stream_representations(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    result: &mut Vec<DurableStreamRepresentation>,
+    visiting: &mut HashSet<String>,
+) -> Result<(), String> {
+    if let SchemaType::Ref { id, .. } = ty {
+        if !visiting.insert(id.to_string()) {
+            return Ok(());
+        }
+        let resolved = resolve(graph, ty)?;
+        collect_stream_representations(graph, resolved, result, visiting)?;
+        visiting.remove(id.as_str());
+        return Ok(());
+    }
+    match ty {
+        SchemaType::Stream { inner, .. } => {
+            result.push(validate_stream_element(graph, inner.as_deref(), "stream")?)
+        }
+        SchemaType::Record { fields, .. } => {
+            for field in fields {
+                collect_stream_representations(graph, &field.body, result, visiting)?;
+            }
+        }
+        _ if contains_stream_in_graph(graph, ty) => {
+            return Err("Streams must be direct or record fields; use durableStreams".into());
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn resolve_policy(
     discovered: Vec<DiscoveredSlot>,
     options: Option<&DurableStreamRouteOptions>,
+    limits: &DurableStreamRouteLimits,
+    family_id: golem_service_base::custom_api::RouteId,
 ) -> Result<DurableStreamRoutePolicy, String> {
     let mut overrides = HashMap::new();
     if let Some(options) = options {
@@ -208,56 +314,36 @@ fn resolve_policy(
         return Err(format!("Unknown Durable Streams slot selector '{name}'"));
     }
 
-    let has_writable_slot = slots.iter().any(DurableStreamSlot::writable);
-    let allow_external_writes = options
-        .and_then(|options| options.allow_external_writes)
-        .unwrap_or(true);
-    if options.is_some_and(|options| options.allow_external_writes.is_some()) && !has_writable_slot
-    {
-        return Err(
-            "allow_external_writes cannot be set on a route without a writable input slot".into(),
-        );
+    let load = options.and_then(|options| options.load.as_ref());
+    let readers = load
+        .and_then(|load| load.max_concurrent_readers_per_stream)
+        .unwrap_or(limits.default_concurrent_readers_per_stream);
+    let appends = load
+        .and_then(|load| load.max_append_requests_per_second_per_stream)
+        .unwrap_or(limits.default_append_requests_per_second_per_stream);
+    if readers == 0 || readers > limits.max_concurrent_readers_per_stream {
+        return Err(format!(
+            "max_concurrent_readers_per_stream must be between 1 and {}",
+            limits.max_concurrent_readers_per_stream
+        ));
     }
-
-    let load = options
-        .and_then(|options| options.load.as_ref())
-        .map(|load| DurableStreamRouteLoadPolicy {
-            max_concurrent_readers_per_stream: load.max_concurrent_readers_per_stream,
-            max_append_requests_per_second_per_stream: load
-                .max_append_requests_per_second_per_stream,
-        });
-    if let Some(load) = &load {
-        if !matches!(
-            load.max_concurrent_readers_per_stream,
-            None | Some(1..=MAX_CONCURRENT_READERS_PER_STREAM)
-        ) {
-            return Err(format!(
-                "max_concurrent_readers_per_stream must be between 1 and {MAX_CONCURRENT_READERS_PER_STREAM}"
-            ));
-        }
-        if load.max_append_requests_per_second_per_stream == Some(0) {
-            return Err(
-                "max_append_requests_per_second_per_stream must be greater than zero".into(),
-            );
-        }
-        if !allow_external_writes && load.max_append_requests_per_second_per_stream.is_some() {
-            return Err(
-                "max_append_requests_per_second_per_stream cannot be set when external writes are disabled"
-                    .into(),
-            );
-        }
+    if appends == 0 || appends > limits.max_append_requests_per_second_per_stream {
+        return Err(format!(
+            "max_append_requests_per_second_per_stream must be between 1 and {}",
+            limits.max_append_requests_per_second_per_stream
+        ));
     }
 
     Ok(DurableStreamRoutePolicy {
+        family_id,
         slots,
-        allow_external_writes,
-        allow_stream_delete: options
-            .and_then(|options| options.allow_stream_delete)
-            .unwrap_or(true),
-        allow_invocation_delete: options
-            .and_then(|options| options.allow_invocation_delete)
-            .unwrap_or(true),
-        load,
+        allow_external_writes: true,
+        allow_stream_delete: true,
+        allow_invocation_delete: true,
+        load: Some(DurableStreamRouteLoadPolicy {
+            max_concurrent_readers_per_stream: Some(readers),
+            max_append_requests_per_second_per_stream: Some(appends),
+        }),
     })
 }
 
@@ -497,6 +583,15 @@ mod tests {
     use golem_common::schema::{AgentConstructorSchema, NamedField, NamedFieldType, SchemaTypeDef};
     use test_r::test;
 
+    fn validate_route(
+        agent: &AgentTypeSchema,
+        method: &AgentMethodSchema,
+        mount: &HttpMountDetails,
+        endpoint: &HttpEndpointDetails,
+    ) -> Result<(InputSchema, DurableStreamRoutePolicy), String> {
+        super::validate_route(agent, method, mount, endpoint, &Default::default(), 0)
+    }
+
     fn field(name: &str, schema: SchemaType) -> NamedField {
         NamedField::user_supplied(name, schema)
     }
@@ -571,19 +666,14 @@ mod tests {
                 cors_options: CorsOptions {
                     allowed_patterns: vec![],
                 },
+                mode: None,
                 durable_streams: None,
             },
         )
     }
 
     fn options(slots: Vec<DurableStreamSlotOptions>) -> DurableStreamRouteOptions {
-        DurableStreamRouteOptions {
-            slots,
-            allow_external_writes: None,
-            allow_stream_delete: None,
-            allow_invocation_delete: None,
-            load: None,
-        }
+        DurableStreamRouteOptions { slots, load: None }
     }
 
     fn input_slot(
@@ -611,6 +701,149 @@ mod tests {
             }),
             name: name.map(Into::into),
             content_type: content_type.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn validates_declared_mode_shapes_before_serving_gates() {
+        let item = || SchemaType::stream(Some(SchemaType::string()));
+        let bytes = || SchemaType::stream(Some(SchemaType::u8()));
+        let pair = || SchemaType::record(vec![named("events", item()), named("audit", item())]);
+        let cases = [
+            (
+                HttpRouteMode::Sse,
+                vec![],
+                SchemaType::string(),
+                true,
+                "requires streams; use plain",
+            ),
+            (
+                HttpRouteMode::Sse,
+                vec![],
+                item(),
+                true,
+                "sse mode not served yet",
+            ),
+            (
+                HttpRouteMode::Sse,
+                vec![field("in", item())],
+                SchemaType::string(),
+                true,
+                "no input stream",
+            ),
+            (HttpRouteMode::Sse, vec![], bytes(), true, "item-typed"),
+            (
+                HttpRouteMode::Sse,
+                vec![],
+                pair(),
+                true,
+                "exactly one output",
+            ),
+            (
+                HttpRouteMode::Sse,
+                vec![field("in", item())],
+                item(),
+                true,
+                "no input stream",
+            ),
+            (HttpRouteMode::Sse, vec![], item(), false, "requires GET"),
+            (
+                HttpRouteMode::WebSocket,
+                vec![field("in", item())],
+                item(),
+                false,
+                "webSocket mode not served yet",
+            ),
+            (
+                HttpRouteMode::WebSocket,
+                vec![],
+                pair(),
+                false,
+                "webSocket mode not served yet",
+            ),
+            (
+                HttpRouteMode::WebSocket,
+                vec![field("in", bytes())],
+                item(),
+                false,
+                "item-typed",
+            ),
+            (
+                HttpRouteMode::WebSocket,
+                vec![field("in", item())],
+                bytes(),
+                false,
+                "item-typed",
+            ),
+            (
+                HttpRouteMode::WebSocket,
+                vec![],
+                SchemaType::string(),
+                false,
+                "requires streams; use plain",
+            ),
+            (
+                HttpRouteMode::Plain,
+                vec![],
+                item(),
+                false,
+                "plain mode not served yet",
+            ),
+            (
+                HttpRouteMode::DurableStreams,
+                vec![],
+                SchemaType::string(),
+                false,
+                "requires streams",
+            ),
+        ];
+        for (mode, input, output, get, message) in cases {
+            let (agent, method) = fixtures(input, output);
+            let (_, mut endpoint) = route();
+            if get {
+                endpoint.http_method = HttpMethod::Get(Empty {});
+            }
+            let error = validate_mode(&agent, &method, &endpoint, mode).unwrap_err();
+            assert!(error.contains(message), "{mode:?}: {error}");
+            if message.contains("use plain") {
+                assert!(validate_mode(&agent, &method, &endpoint, HttpRouteMode::Plain).is_ok());
+            } else if !message.contains("not served yet") && mode != HttpRouteMode::DurableStreams {
+                assert!(error.contains("durableStreams"), "{error}");
+            }
+        }
+
+        for element in [
+            SchemaType::list(SchemaType::u8()),
+            SchemaType::binary(Default::default()),
+        ] {
+            let (agent, method) = fixtures(vec![], SchemaType::stream(Some(element)));
+            let (mount, mut endpoint) = route();
+            endpoint.http_method = HttpMethod::Get(Empty {});
+            assert_eq!(
+                validate_mode(&agent, &method, &endpoint, HttpRouteMode::Sse).unwrap_err(),
+                "sse mode not served yet"
+            );
+            assert!(
+                validate_mode(&agent, &method, &endpoint, HttpRouteMode::DurableStreams).is_ok()
+            );
+            assert!(validate_route(&agent, &method, &mount, &endpoint).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_durable_stream_options_on_other_modes() {
+        let (agent, method) = fixtures(vec![], SchemaType::stream(Some(SchemaType::string())));
+        let (_, mut endpoint) = route();
+        endpoint.durable_streams = Some(options(vec![]));
+        for mode in [
+            HttpRouteMode::Plain,
+            HttpRouteMode::Sse,
+            HttpRouteMode::WebSocket,
+        ] {
+            assert_eq!(
+                validate_mode(&agent, &method, &endpoint, mode).unwrap_err(),
+                "durableStreams options require durableStreams mode"
+            );
         }
     }
 
@@ -643,7 +876,22 @@ mod tests {
         assert!(policy.allow_external_writes);
         assert!(policy.allow_stream_delete);
         assert!(policy.allow_invocation_delete);
-        assert_eq!(policy.load, None);
+        assert_eq!(
+            policy
+                .load
+                .as_ref()
+                .unwrap()
+                .max_concurrent_readers_per_stream,
+            Some(16)
+        );
+        assert_eq!(
+            policy
+                .load
+                .as_ref()
+                .unwrap()
+                .max_append_requests_per_second_per_stream,
+            Some(100)
+        );
     }
 
     #[test]
@@ -665,9 +913,6 @@ mod tests {
                 ),
                 output_slot("$result", Some("responses"), Some("application/json")),
             ],
-            allow_external_writes: Some(false),
-            allow_stream_delete: Some(false),
-            allow_invocation_delete: Some(false),
             load: Some(DurableStreamRouteLoadOptions {
                 max_concurrent_readers_per_stream: Some(16),
                 max_append_requests_per_second_per_stream: None,
@@ -694,14 +939,14 @@ mod tests {
                 },
             ]
         );
-        assert!(!policy.allow_external_writes);
-        assert!(!policy.allow_stream_delete);
-        assert!(!policy.allow_invocation_delete);
+        assert!(policy.allow_external_writes);
+        assert!(policy.allow_stream_delete);
+        assert!(policy.allow_invocation_delete);
         assert_eq!(
             policy.load,
             Some(DurableStreamRouteLoadPolicy {
                 max_concurrent_readers_per_stream: Some(16),
-                max_append_requests_per_second_per_stream: None,
+                max_append_requests_per_second_per_stream: Some(100),
             })
         );
     }
@@ -818,49 +1063,69 @@ mod tests {
     }
 
     #[test]
-    fn validates_write_options_and_load_boundaries() {
+    fn validates_configured_load_boundaries_and_resolves_defaults() {
         let (agent, method) = fixtures(
             vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
             SchemaType::string(),
         );
         let (mount, mut endpoint) = route();
-
-        for (readers, appends) in [(Some(0), None), (Some(17), None), (None, Some(0))] {
+        let limits = DurableStreamRouteLimits {
+            default_concurrent_readers_per_stream: 7,
+            max_concurrent_readers_per_stream: 32,
+            default_append_requests_per_second_per_stream: 13,
+            max_append_requests_per_second_per_stream: 50,
+        };
+        let (_, policy) =
+            super::validate_route(&agent, &method, &mount, &endpoint, &limits, 0).unwrap();
+        assert_eq!(
+            policy
+                .load
+                .as_ref()
+                .unwrap()
+                .max_concurrent_readers_per_stream,
+            Some(7)
+        );
+        assert_eq!(
+            policy
+                .load
+                .as_ref()
+                .unwrap()
+                .max_append_requests_per_second_per_stream,
+            Some(13)
+        );
+        for (readers, appends, accepted) in [
+            (Some(0), None, false),
+            (Some(32), None, true),
+            (Some(33), None, false),
+            (None, Some(0), false),
+            (None, Some(50), true),
+            (None, Some(51), false),
+            (None, None, true),
+        ] {
             let mut route_options = options(vec![]);
             route_options.load = Some(DurableStreamRouteLoadOptions {
                 max_concurrent_readers_per_stream: readers,
                 max_append_requests_per_second_per_stream: appends,
             });
             endpoint.durable_streams = Some(route_options);
-            assert!(validate_route(&agent, &method, &mount, &endpoint).is_err());
+            let result = super::validate_route(&agent, &method, &mount, &endpoint, &limits, 0);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "{readers:?}, {appends:?}: {result:?}"
+            );
+            if let Ok((_, policy)) = result {
+                let load = policy.load.unwrap();
+                assert_eq!(
+                    load.max_concurrent_readers_per_stream,
+                    Some(readers.unwrap_or(7))
+                );
+                assert_eq!(
+                    load.max_append_requests_per_second_per_stream,
+                    Some(appends.unwrap_or(13))
+                );
+            }
         }
-
-        let mut route_options = options(vec![]);
-        route_options.allow_external_writes = Some(false);
-        route_options.load = Some(DurableStreamRouteLoadOptions {
-            max_concurrent_readers_per_stream: Some(1),
-            max_append_requests_per_second_per_stream: Some(1),
-        });
-        endpoint.durable_streams = Some(route_options);
-        assert!(validate_route(&agent, &method, &mount, &endpoint).is_err());
-
-        let (_, output_only) = fixtures(vec![], SchemaType::stream(Some(SchemaType::string())));
-        endpoint.durable_streams = Some(options(vec![]));
-        assert!(validate_route(&agent, &output_only, &mount, &endpoint).is_ok());
-        for allow_external_writes in [true, false] {
-            let mut route_options = options(vec![]);
-            route_options.allow_external_writes = Some(allow_external_writes);
-            endpoint.durable_streams = Some(route_options);
-            assert!(validate_route(&agent, &output_only, &mount, &endpoint).is_err());
-        }
-
-        let mut route_options = options(vec![]);
-        route_options.load = Some(DurableStreamRouteLoadOptions {
-            max_concurrent_readers_per_stream: Some(1),
-            max_append_requests_per_second_per_stream: Some(1),
-        });
-        endpoint.durable_streams = Some(route_options);
-        assert!(validate_route(&agent, &method, &mount, &endpoint).is_ok());
     }
 
     #[test]

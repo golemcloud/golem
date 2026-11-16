@@ -72,27 +72,26 @@ use golem_common::base_model::durable_stream::{
     STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRole, StreamAttachmentActivatedRecord,
     StreamAttachmentControlOperation, StreamAttachmentControlRequest,
     StreamAttachmentFinalizationReason, StreamAttachmentFinalizedRecord, StreamAttachmentKey,
-    StreamAttachmentPreparedRecord, StreamBindingRecord, StreamCancelReason, StreamCancelRecord,
-    StreamCancelRole, StreamCascadeDependentResult, StreamCascadeOutboxRecord, StreamEndRecord,
-    StreamEndResult, StreamExternalProducerStateRecord, StreamId, StreamInvocationId,
-    StreamItemsPayload, StreamItemsRecord, StreamOffset, StreamProducerDeletingRecord,
-    StreamRecordReference, StreamRegisteredRecord, StreamRegistrationCoordinate,
-    StreamRegistrationInvocation, StreamRegistrationRecordCoordinate, StreamSessionAttachedRecord,
+    StreamAttachmentPreparedRecord, StreamBindingRecord, StreamCancellationRequest,
+    StreamCascadeDependentResult, StreamCascadeOutboxRecord, StreamEndpointSide, StreamError,
+    StreamExternalProducerStateRecord, StreamId, StreamInvocationId, StreamItemsPayload,
+    StreamItemsRecord, StreamOffset, StreamProducerDeletingRecord, StreamRecordReference,
+    StreamRegisteredRecord, StreamRegistrationCoordinate, StreamRegistrationInvocation,
+    StreamRegistrationRecordCoordinate, StreamSessionAttachedRecord,
     StreamSessionExpiryRefreshedRecord, StreamSessionFinishedRecord,
     StreamSessionInputHighWaterRecord, StreamSessionKey, StreamSessionMapping,
     StreamSessionMappingRecord, StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
-    StreamSourceUnavailableRecord, StreamTerminalAuthor, StreamTopologyPreparedRecord,
+    StreamSourceUnavailableRecord, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
+    StreamTerminalRecord, StreamTopologyPreparedRecord,
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::ShardEpoch;
-use golem_common::model::agent::{AgentError, AgentMode};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{DurableStreamEventSummary, payload::OplogPayload};
-use golem_schema::schema::{
-    SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
-};
+use golem_schema::schema::SchemaFingerprintV1;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -161,7 +160,7 @@ impl RegisteredStream {
                 callee_environment_id: environment_id,
                 callee: producer.clone(),
                 callee_fingerprint: producer_fingerprint,
-                idempotency_key: idempotency_key.clone(),
+                idempotency_key: *idempotency_key,
             },
             StreamRegistrationInvocation::Remote(invocation) => invocation.clone(),
         };
@@ -209,7 +208,7 @@ impl RegisteredStream {
                         callee_environment_id: environment_id,
                         callee: producer.clone(),
                         callee_fingerprint: producer_fingerprint,
-                        idempotency_key: key.clone(),
+                        idempotency_key: *key,
                     },
                     StreamRegistrationInvocation::Remote(invocation) => invocation.clone(),
                 };
@@ -300,27 +299,20 @@ pub struct ProducerOutputRegistration {
 pub(crate) struct PendingCommittedCancellation {
     stream_id: StreamId,
     sequence: u64,
-    role: StreamCancelRole,
-    reason: StreamCancelReason,
     publication: PublicationReceipt,
     event: CommittedProducerStreamEvent,
     outcome: Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
 /// Guest-visible payload reconstructed from a committed producer stream record.
 pub enum CommittedProducerStreamEventPayload {
     Value(Vec<u8>),
     PackedU8(u8),
-    End(StreamEndResult),
-    Cancel {
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
-    },
+    Terminal(StreamTerminal),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
 /// A committed producer event, identified by stream sequence and durable oplog offset.
 pub struct CommittedProducerStreamEvent {
     pub stream_id: StreamId,
@@ -328,6 +320,7 @@ pub struct CommittedProducerStreamEvent {
     pub offset: StreamOffset,
     pub packed_u8_batch_end: Option<StreamOffset>,
     pub terminal_author: Option<StreamTerminalAuthor>,
+    pub terminal_origin: Option<StreamTerminalOrigin>,
     pub nested_handles: Vec<DurableStreamHandle>,
     pub nested_references: Vec<StreamRecordReference>,
     pub payload: CommittedProducerStreamEventPayload,
@@ -338,8 +331,7 @@ impl CommittedProducerStreamEvent {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.payload,
-            CommittedProducerStreamEventPayload::End(_)
-                | CommittedProducerStreamEventPayload::Cancel { .. }
+            CommittedProducerStreamEventPayload::Terminal(_)
         )
     }
 }
@@ -351,7 +343,7 @@ pub struct ProducerWriteOutcome<T> {
     pub replayed: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
 /// A bounded durable read plus the cursor and terminal state needed to continue it.
 pub struct StreamHandleReadResult {
     pub events: Vec<CommittedProducerStreamEvent>,
@@ -394,7 +386,7 @@ pub(crate) struct ExportForkStreamSnapshot {
     pub(crate) terminal: Option<StreamOffset>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 /// Contract and persistence failures detected by the durable stream store.
 pub enum StreamStoreError {
     UnsupportedVersion(u8),
@@ -402,7 +394,7 @@ pub enum StreamStoreError {
     RegistrationDivergence,
     UnknownStream(StreamId),
     AlreadyTerminal(StreamId),
-    FencedByTerminal(CommittedProducerStreamEventPayload),
+    FencedByTerminal(Box<CommittedProducerStreamEvent>),
     ClosedByOtherProducer,
     EventConflict,
     SequenceGap {
@@ -465,14 +457,14 @@ impl std::fmt::Display for StreamStoreError {
 
 impl std::error::Error for StreamStoreError {}
 
-/// Why a durable stream session operation failed. A refused oplog write keeps its type as
-/// `Fenced`, so whoever acts on it reroutes to the shard's new owner; every other failure is the
-/// text the session has always reported.
+/// Why a durable stream session operation failed. Storage failures retain their type, and
+/// an output that stopped before its terminal requires reconstruction rather than success.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionError {
     Fenced(OplogFence),
     /// The oplog of the agent does not read. It keeps its type, so the agent fails with it.
     Unreadable(UnreadableOplog),
+    IncompleteOutput(StreamId),
     Failed(String),
 }
 
@@ -487,8 +479,7 @@ impl SessionError {
         matches!(self, Self::Failed(text) if text.contains(needle))
     }
 
-    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
-    /// other failure is rendered through `otherwise`, which says how that boundary classifies it.
+    /// Retains storage and reconstruction failures; `otherwise` classifies ordinary failures.
     pub(crate) fn into_worker_executor_error(
         self,
         otherwise: impl FnOnce(String) -> WorkerExecutorError,
@@ -496,12 +487,14 @@ impl SessionError {
         match self {
             Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
             Self::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
+            error @ Self::IncompleteOutput(_) => {
+                WorkerExecutorError::recovery_required(error.to_string())
+            }
             Self::Failed(text) => otherwise(text),
         }
     }
 
-    /// Converts for a host function: a fence traps as the lost shard it is, an unreadable oplog
-    /// as the failure of the agent it is, and every other failure traps with its text.
+    /// Converts for a host function, retaining storage and reconstruction failures as typed traps.
     pub(crate) fn into_trap(self) -> anyhow::Error {
         match self {
             Self::Fenced(fence) => {
@@ -509,6 +502,9 @@ impl SessionError {
             }
             Self::Unreadable(unreadable) => {
                 anyhow::Error::from(WorkerExecutorError::from(unreadable))
+            }
+            error @ Self::IncompleteOutput(_) => {
+                anyhow::Error::from(WorkerExecutorError::recovery_required(error.to_string()))
             }
             Self::Failed(text) => anyhow::Error::msg(text),
         }
@@ -532,6 +528,7 @@ impl From<SessionError> for StreamStoreError {
         match error {
             SessionError::Fenced(fence) => Self::Fenced(fence),
             SessionError::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            error @ SessionError::IncompleteOutput(_) => Self::Oplog(error.to_string()),
             SessionError::Failed(text) => Self::Oplog(text),
         }
     }
@@ -593,6 +590,10 @@ impl std::fmt::Display for SessionError {
         match self {
             Self::Fenced(fence) => write!(formatter, "{}", OplogError::Fenced(fence.clone())),
             Self::Unreadable(unreadable) => write!(formatter, "{unreadable}"),
+            Self::IncompleteOutput(stream_id) => write!(
+                formatter,
+                "schema output {stream_id} stopped before its terminal became durable"
+            ),
             Self::Failed(text) => formatter.write_str(text),
         }
     }
@@ -694,6 +695,8 @@ struct ProducerStreamIndex {
 pub struct IndexedConsumerJournal {
     next_read_ordinal: u64,
     terminal: bool,
+    terminal_outcome: Option<(StreamTerminalAuthor, StreamTerminal)>,
+    outcome_observed: bool,
     last_source_offset: Option<StreamOffset>,
     source_unavailable: Option<StreamOffset>,
 }
@@ -1038,7 +1041,7 @@ impl DurableStreamStore {
                                 .unwrap_or(OplogIndex::NONE),
                         )?;
                     }
-                    OplogEntry::StreamEnd {
+                    OplogEntry::StreamTerminal {
                         entity_parent_start_index,
                         record,
                         ..
@@ -1053,29 +1056,7 @@ impl DurableStreamStore {
                             .download_payload(record)
                             .await
                             .map_err(StreamStoreError::Oplog)?;
-                        index.apply_end(
-                            oplog_index,
-                            entity_parent_start_index,
-                            record,
-                            producer_fingerprint,
-                        )?;
-                    }
-                    OplogEntry::StreamCancel {
-                        entity_parent_start_index,
-                        record,
-                        ..
-                    } => {
-                        if !pending_nested_registrations.is_empty() {
-                            return Err(StreamStoreError::CorruptHistory(
-                                "nested registration batch is missing its enclosing item"
-                                    .to_string(),
-                            ));
-                        }
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(StreamStoreError::Oplog)?;
-                        index.apply_cancel(
+                        index.apply_terminal(
                             oplog_index,
                             entity_parent_start_index,
                             record,

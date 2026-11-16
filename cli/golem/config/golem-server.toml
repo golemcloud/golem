@@ -118,6 +118,12 @@ type = "Unrestricted"
 
 [registry_service.domain_registration.available_domains.config]
 
+[registry_service.durable_stream_routes]
+default_append_requests_per_second_per_stream = 100
+default_concurrent_readers_per_stream = 16
+max_append_requests_per_second_per_stream = 1000
+max_concurrent_readers_per_stream = 16
+
 [registry_service.grpc.tls]
 type = "Disabled"
 
@@ -1076,6 +1082,12 @@ type = "Disabled"
 # type = "Unrestricted"
 #
 # [registry_service.domain_registration.available_domains.config]
+#
+# [registry_service.durable_stream_routes]
+# default_append_requests_per_second_per_stream = 100
+# default_concurrent_readers_per_stream = 16
+# max_append_requests_per_second_per_stream = 1000
+# max_concurrent_readers_per_stream = 16
 #
 # [registry_service.grpc.tls]
 # type = "Disabled"

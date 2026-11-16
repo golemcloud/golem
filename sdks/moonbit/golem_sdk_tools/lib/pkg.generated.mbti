@@ -198,9 +198,6 @@ pub(all) struct ConfigTypeInfo {
 
 pub(all) struct DurableStreamRouteInfo {
   slots : Array[DurableStreamSlotInfo]
-  allow_external_writes : Bool?
-  allow_stream_delete : Bool?
-  allow_invocation_delete : Bool?
   max_concurrent_readers_per_stream : UInt32?
   max_append_requests_per_second_per_stream : UInt32?
 } derive(Eq, @debug.Debug)
@@ -230,6 +227,7 @@ pub(all) struct HttpEndpointInfo {
   auth : Bool?
   cors : Array[String]
   durable_streams : DurableStreamRouteInfo?
+  mode : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum HttpFileMapping {

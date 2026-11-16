@@ -62,9 +62,13 @@ class StreamRuntimeTest extends munit.FunSuite {
   private def text(value: Json, name: String): String = Json.asString(field(value, name)).toOption.get
   private def message(kind: String, fields: (String, Json)*): Json =
     Json.parse(StreamSessionProtocol.message(kind, fields.toVector)).toOption.get
-  private def accepted(p: Peer, descriptor: Json, key: Json): Unit = p.send(message("invocationAccepted",
-    "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> key,
-    "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
+  private def accepted(p: Peer, descriptor: Json, key: Json): Unit = {
+    assertNotEquals(key.render, Json.string("00000000-0000-0000-0000-000000000123").render)
+    p.send(message("invocationAccepted",
+      "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+      "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
+      "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
+  }
   private def finish(p: Peer): Unit = {
     p.send(message("invocationResult", "result" -> Json.obj("kind" -> Json.string("none")), "mappings" -> Json.arr(Vector.empty)))
     p.send(message("invocationFinished", "outcome" -> Json.obj("kind" -> Json.string("success"))))

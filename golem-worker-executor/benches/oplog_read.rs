@@ -101,6 +101,12 @@ fn metadata(
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
 }
 
@@ -122,6 +128,7 @@ fn entry(value: u64) -> OplogEntry {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
         kind: OplogErrorKind::Invocation,
+        invocation_id: Some(golem_common::model::InvocationId(uuid::Uuid::from_u128(1))),
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
         retry_policy_state: None,

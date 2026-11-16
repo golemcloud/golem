@@ -4,7 +4,6 @@
 pub async fn initialize(
   agent_type : String,
   input : @types.SchemaValueTree,
-  principal : @common.Principal,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[Unit, @common.AgentError] {
   if @agents.get_agent_instance() is Some(_) {
@@ -12,7 +11,11 @@ pub async fn initialize(
       "initialize", "Agent instance is already initialized",
     )
   } else {
-    @agents.construct_and_set_instance(agent_type, input, principal)
+    @agents.construct_and_set_instance(
+      agent_type,
+      input,
+      @invocationContext.caller().immediate,
+    )
   }
 }
 
@@ -21,13 +24,17 @@ pub async fn initialize(
 pub async fn invoke(
   method_name : String,
   input : @types.SchemaValueTree,
-  principal : @common.Principal,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@types.SchemaValueTree?, @common.AgentError] {
   match @agents.get_agent_instance() {
     None =>
       @agents.panic_with_message("invoke", "Agent instance is not initialized")
-    Some(instance) => instance.interface.invoke(method_name, input, principal)
+    Some(instance) =>
+      instance.interface.invoke(
+        method_name,
+        input,
+        @invocationContext.caller().immediate,
+      )
   }
 }
 

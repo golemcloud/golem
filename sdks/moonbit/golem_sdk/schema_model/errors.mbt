@@ -31,6 +31,8 @@ pub suberror SchemaValueStreamReadError {
   Ownership(String)
   /// The component-model endpoint could not be unwrapped or read.
   Transport(String)
+  /// The producer's terminal outcome, observed after its accepted items.
+  Outcome(@types.StreamError)
 } derive(Debug, Eq)
 
 ///|

@@ -742,19 +742,15 @@ describe('agent metadata (Phase 3)', () => {
     expect(discoveryValue.value).toContain('DeferredDuplicateImpl');
 
     const emptyInput = schemaValueToWit(v.record([]));
-    const invalidInitializeError = await guest
-      .initialize('DeferredInvalidHttp', emptyInput, { tag: 'anonymous' })
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+    const invalidInitializeError = await guest.initialize('DeferredInvalidHttp', emptyInput).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
     expect(invalidInitializeError).toMatchObject({ tag: 'custom-error' });
 
     (globalThis as { currentAgentId?: string }).currentAgentId =
       `DeferredValidAgent(${JSON.stringify(emptyInput)})`;
-    await expect(
-      guest.initialize('DeferredValidAgent', emptyInput, { tag: 'anonymous' }),
-    ).resolves.toBeUndefined();
+    await expect(guest.initialize('DeferredValidAgent', emptyInput)).resolves.toBeUndefined();
     expect(guest.getDefinition()).toBe(get('DeferredValidAgent'));
   });
 });

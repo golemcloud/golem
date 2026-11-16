@@ -47,6 +47,7 @@ import golem.runtime.http.{
   HttpMountDetails,
   HttpRequest,
   HttpResponse,
+  HttpRouteMode,
   HttpRouteParser,
   HttpValidation,
   PathSegment,
@@ -67,9 +68,6 @@ object AgentDefinitionMacro {
   )
   private final case class StreamOptions(
     selector: EndpointSelector,
-    writes: Option[Boolean],
-    streamDelete: Option[Boolean],
-    invocationDelete: Option[Boolean],
     readers: Option[Int],
     appends: Option[Int]
   )
@@ -1048,14 +1046,6 @@ object AgentDefinitionMacro {
         }
       }
 
-    def durableStreamBoolArg(args: List[Term], name: String, index: Int): Option[Boolean] =
-      durableStreamArg(args, name, index).map { value =>
-        stripTerm(value) match {
-          case Literal(BooleanConstant(result)) => result
-          case _                                => report.errorAndAbort(s"@durableStreams argument '$name' must be a boolean literal", value.pos)
-        }
-      }
-
     def durableStreamIntArg(args: List[Term], name: String, index: Int): Option[Int] =
       durableStreamArg(args, name, index).map { value =>
         stripTerm(value) match {
@@ -1119,19 +1109,13 @@ object AgentDefinitionMacro {
       case Apply(Select(New(tpt), _), args)
           if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.durableStreams" =>
         val selected = selector(args, "durableStreams")
-        val readers  = durableStreamIntArg(args, "maxConcurrentReadersPerStream", 5)
-        val appends  = durableStreamIntArg(args, "maxAppendRequestsPerSecondPerStream", 6)
-        if (readers.exists(value => value <= 0 || value > 16))
-          report.errorAndAbort("@durableStreams reader limit must be between 1 and 16")
+        val readers  = durableStreamIntArg(args, "maxConcurrentReadersPerStream", 2)
+        val appends  = durableStreamIntArg(args, "maxAppendRequestsPerSecondPerStream", 3)
+        if (readers.exists(_ <= 0))
+          report.errorAndAbort("@durableStreams reader limit must be positive")
         if (appends.exists(_ <= 0)) report.errorAndAbort("@durableStreams append limit must be positive")
-        val writes = durableStreamBoolArg(args, "allowExternalWrites", 2)
-        if (writes.contains(false) && appends.nonEmpty)
-          report.errorAndAbort("@durableStreams append limit cannot be set when external writes are disabled")
         StreamOptions(
           selected,
-          writes,
-          durableStreamBoolArg(args, "allowStreamDelete", 3),
-          durableStreamBoolArg(args, "allowInvocationDelete", 4),
           readers,
           appends
         )
@@ -1187,6 +1171,13 @@ object AgentDefinitionMacro {
           case Right(p)  => p
         }
 
+        val mode = durableStreamStringArg(args, "mode", 4, "endpoint").map {
+          case "durableStreams" => HttpRouteMode.DurableStreams
+          case "plain"          => HttpRouteMode.Plain
+          case "sse"            => HttpRouteMode.Sse
+          case "webSocket"      => HttpRouteMode.WebSocket
+          case value            => report.errorAndAbort(s"Unknown HTTP route mode '$value'")
+        }
         val selected       = EndpointSelector(methodStr, pathStr)
         val endpointSlots  = slots.filter(_.selector == selected)
         val options        = routeOptions.find(_.selector == selected)
@@ -1201,9 +1192,6 @@ object AgentDefinitionMacro {
                     else DurableStreamSlotSource.Output(slot.slot)
                   DurableStreamSlotOptions(source, slot.name, slot.contentType)
                 },
-                options.flatMap(_.writes),
-                options.flatMap(_.streamDelete),
-                options.flatMap(_.invocationDelete),
                 options.collect {
                   case option if option.readers.nonEmpty || option.appends.nonEmpty =>
                     DurableStreamRouteLoadOptions(option.readers, option.appends)
@@ -1218,7 +1206,8 @@ object AgentDefinitionMacro {
           parsed.queryVars,
           authOverride,
           corsOverride,
-          durableStreams
+          durableStreams,
+          mode
         )
     }
   }

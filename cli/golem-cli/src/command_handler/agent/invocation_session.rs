@@ -19,13 +19,16 @@ use crate::command_handler::log::render_command_output_document;
 use crate::context::Context;
 use crate::error::{NonSuccessfulExit, PipedExitCode};
 use crate::log::{
-    CLOSED_OUTPUT_EXIT_CODE, ClosedOutputHold, end_for_closed_output, eprint_line, is_closed_pipe,
+    CLOSED_OUTPUT_EXIT_CODE, ClosedOutputHold, LogColorize, end_for_closed_output, eprint_line,
+    is_closed_pipe,
 };
 use crate::model::agent::invocation_session::{
     AgentInvocationSessionEvent, AgentInvocationSessionEventKind,
 };
 use crate::model::format::Format;
+use crate::model::text_format::{format_error, format_stderr};
 use anyhow::{Context as _, anyhow, bail};
+use colored::Colorize;
 use golem_client::invocation_session::{
     AdmittedInput, DeliveryTracker, InputReplayBuffer, InvocationSession,
     InvocationSessionRequestProvider, InvocationSessionSender, InvocationSessionStateObserver,
@@ -36,12 +39,12 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
-    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientCancelReason, PublicClientMessage,
-    PublicConfigEntry, PublicInvocationOutcome, PublicInvocationResult, PublicOutputStreamOutcome,
-    PublicResumeOperation, PublicServerCancelReason, PublicServerMessage,
+    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicConfigEntry,
+    PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation,
+    PublicServerMessage, PublicStreamDirection, PublicStreamError, PublicStreamOutcome,
 };
 use golem_common::schema::agent::{
-    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentId,
+    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentKey,
 };
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -51,6 +54,7 @@ use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::validation::value::validate_value;
 use golem_common::schema::{
     BinaryValuePayload, NamedFieldType, ResultValuePayload, SchemaGraph, SchemaType, SchemaValue,
+    TypedSchemaValue,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -99,6 +103,7 @@ struct InvocationSessionCheckpoint {
     idempotency_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_token: Option<String>,
+    accepted_invocation: Option<golem_common::model::OwnedInvocationId>,
     delivered_output_cursors: BTreeMap<String, String>,
     stable_stream_bindings: BTreeMap<String, StableStreamIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,6 +157,7 @@ impl InvocationSessionStateObserver for CliCheckpointObserver {
             return Ok(());
         };
         checkpoint.session_token = state.session_token.clone();
+        checkpoint.accepted_invocation = state.accepted_invocation.clone();
         checkpoint.delivered_output_cursors = state.delivered_output_cursors.clone();
         checkpoint.stable_stream_bindings = state.stable_stream_bindings.clone();
         checkpoint.pending_operation = state
@@ -214,7 +220,6 @@ struct OutputChannel {
 
 struct InputFailure {
     error: anyhow::Error,
-    reason: PublicClientCancelReason,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -229,7 +234,7 @@ pub(super) struct InvocationSessionArgs {
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
-    pub parsed_agent_id: ParsedAgentId,
+    pub parsed_agent_id: ParsedAgentKey,
     pub method_name: String,
     pub arguments: Vec<String>,
     pub config: Vec<AgentConfigEntryDto>,
@@ -238,6 +243,8 @@ pub(super) struct InvocationSessionArgs {
     pub stdout_format: InvocationStdoutFormat,
     pub selected_agent_name: String,
     pub session_mode: InvocationSessionMode,
+    /// Receives the accepted invocation ID, which ends the live output stream.
+    pub invocation_goal: Option<super::stream::InvocationGoal>,
 }
 
 pub(super) fn load_session_idempotency_key(path: &Path) -> anyhow::Result<IdempotencyKey> {
@@ -271,17 +278,6 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         args.stdout_format,
     )?;
 
-    let constructor_parameters = encode_public_schema_value(
-        args.parsed_agent_id.parameters.graph(),
-        &args.parsed_agent_id.parameters.graph().root,
-        args.parsed_agent_id.parameters.value(),
-        |_, _| {
-            Err(PublicSchemaValueError::new(
-                golem_common::model::invocation_session_public::PublicErrorCode::UnsupportedValue,
-                "constructor parameters cannot contain streams",
-            ))
-        },
-    )?;
     let method_parameters = encode_public_schema_value(
         &input_graph,
         &input_graph.root,
@@ -299,14 +295,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 })
         },
     )?;
-    let selector = InvocationSelector {
-        agent_type: args.parsed_agent_id.agent_type.to_string(),
-        application: args.application_name.clone(),
-        constructor_parameters,
-        environment: args.environment_name.clone(),
-        method: args.method_name.clone(),
-        phantom_id: args.parsed_agent_id.phantom_id,
-    };
+    let selector = invocation_selector(
+        &args.application_name,
+        &args.environment_name,
+        &args.parsed_agent_id,
+        &args.method_name,
+    )?;
     let schema_evidence = schema_evidence(&args.agent_type, &method)?;
     let config = args
         .config
@@ -339,6 +333,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 selector: selector.clone(),
                 idempotency_key: idempotency_key_value.clone(),
                 session_token: None,
+                accepted_invocation: None,
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(PendingOperation {
@@ -434,6 +429,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         session_token: checkpoint
             .as_ref()
             .and_then(|checkpoint| checkpoint.session_token.clone()),
+        accepted_invocation: checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.accepted_invocation.clone()),
     };
     let checkpoint_observer = Arc::new(CliCheckpointObserver {
         checkpoint: Mutex::new(checkpoint),
@@ -513,14 +511,24 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     };
     let (output_result_tx, mut output_result_rx) = oneshot::channel();
     let colorize = ctx.should_colorize();
+    let writer_goal = args.invocation_goal.clone();
     std::thread::spawn(move || {
-        let _ = output_result_tx.send(write_output(output_rx, format, colorize));
+        let result = write_output(output_rx, format, colorize);
+        // The writer ends after the invocation returns, on success and on failure, so the
+        // target's finish is shown after the last value.
+        if let Some(goal) = writer_goal {
+            goal.set_output_written();
+        }
+        let _ = output_result_tx.send(result);
     });
 
     let mut output_streams = HashMap::<u32, OutputStream>::new();
     let bindings = session.delivery_tracker();
     let mut failed = false;
     let mut accepted = false;
+    // Events show the key the server accepted the invocation under once it has; before that,
+    // such as for a rejection, the key the session sent.
+    let mut accepted_key = idempotency_key_value.clone();
     let mut stdin_open = has_input;
     let mut input_terminal = !has_input;
     let mut fatal_input_failure = None;
@@ -534,6 +542,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
 
     'session: while !finished {
         let next_unsent_input = input_buffer.next_unsent();
+        let next_input_sequence = input_buffer.next_sequence()?;
         let sender = session.sender();
         tokio::select! {
             biased;
@@ -542,12 +551,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 input_rx.close();
                 let requests = cancel_open_streams(
                     if accepted && !input_terminal {
-                        input_binding.as_ref().and_then(|binding| binding.channel)
+                        input_binding.as_ref().and_then(|binding| binding.channel).map(|channel| (channel, next_input_sequence))
                     } else {
                         None
                     },
                     &output_streams,
-                    PublicClientCancelReason::Cancelled,
+                    "invocation interrupted".to_string(),
                 );
                 cancel_before_close(&mut session, requests).await;
                 bail!(PipedExitCode(130));
@@ -566,12 +575,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 input_rx.close();
                 let requests = cancel_open_streams(
                     if accepted && !input_terminal {
-                        input_binding.as_ref().and_then(|binding| binding.channel)
+                        input_binding.as_ref().and_then(|binding| binding.channel).map(|channel| (channel, next_input_sequence))
                     } else {
                         None
                     },
                     &output_streams,
-                    PublicClientCancelReason::ConsumerDrop,
+                    "output consumer dropped".to_string(),
                 );
                 cancel_before_close(&mut session, requests).await;
                 bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE));
@@ -584,12 +593,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                         input_rx.close();
                         let requests = cancel_open_streams(
                             if accepted && !input_terminal {
-                                input_binding.as_ref().and_then(|binding| binding.channel)
+                                input_binding.as_ref().and_then(|binding| binding.channel).map(|channel| (channel, next_input_sequence))
                             } else {
                                 None
                             },
                             &output_streams,
-                            PublicClientCancelReason::ConsumerDrop,
+                            "output consumer dropped".to_string(),
                         );
                         cancel_before_close(&mut session, requests).await;
                         return Err(error);
@@ -638,10 +647,16 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             frame = session.receive() => {
                 let mut frame = frame?;
                 let server_frame = frame.frame().clone();
-                if let ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. }) =
-                    &server_frame
+                if let ServerFrame::Message(PublicServerMessage::InvocationAccepted {
+                    idempotency_key,
+                    ..
+                }) = &server_frame
                 {
                     accepted = true;
+                    accepted_key = idempotency_key.to_string();
+                    if let Some(goal) = &args.invocation_goal {
+                        goal.set_target(*idempotency_key);
+                    }
                     output_streams.clear();
                     if let Some(binding) = input_binding.as_mut() {
                         let (channel, stream_token) = session
@@ -729,7 +744,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     &source_language,
                     args.stdout_format,
                     structured,
-                    &idempotency_key_value,
+                    &accepted_key,
                     &session_identity,
                     &bindings,
                     &mut output_streams,
@@ -772,8 +787,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         } else {
             None
         };
-        let cancellation_requests =
-            cancel_open_streams(input_channel, &output_streams, failure.reason);
+        let next_input_sequence = input_buffer.next_sequence()?;
+        let cancellation_requests = cancel_open_streams(
+            input_channel.map(|channel| (channel, next_input_sequence)),
+            &output_streams,
+            failure.error.to_string(),
+        );
         for request in cancellation_requests {
             if send_request(&sender, &request, &interrupt).await.is_err() {
                 break;
@@ -810,6 +829,258 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         bail!(NonSuccessfulExit);
     }
     Ok(())
+}
+
+fn invocation_selector(
+    application_name: &str,
+    environment_name: &str,
+    parsed_agent_id: &ParsedAgentKey,
+    method_name: &str,
+) -> anyhow::Result<InvocationSelector> {
+    let constructor_parameters = encode_public_schema_value(
+        parsed_agent_id.parameters.graph(),
+        &parsed_agent_id.parameters.graph().root,
+        parsed_agent_id.parameters.value(),
+        |_, _| {
+            Err(PublicSchemaValueError::new(
+                PublicErrorCode::UnsupportedValue,
+                "constructor parameters cannot contain streams",
+            ))
+        },
+    )?;
+    Ok(InvocationSelector {
+        agent_type: parsed_agent_id.agent_type.to_string(),
+        application: application_name.to_string(),
+        constructor_parameters,
+        environment: environment_name.to_string(),
+        method: method_name.to_string(),
+        phantom_id: parsed_agent_id.phantom_id,
+    })
+}
+
+/// A rejection or failure that the invocation session reported for an invocation.
+#[derive(Debug)]
+pub(crate) struct InvocationFailure {
+    pub code: PublicErrorCode,
+    pub message: String,
+    pub stderr: Option<String>,
+}
+
+impl std::fmt::Display for InvocationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let title = match self.code {
+            PublicErrorCode::InvocationFailed => "Invocation Failed",
+            PublicErrorCode::PreviousInvocationFailed => "Previous Invocation Failed",
+            _ => "Invocation Rejected",
+        };
+        write!(f, "{} ({})", title.log_color_error(), self.code.as_str())?;
+        if let Some(stderr) = self
+            .stderr
+            .as_deref()
+            .filter(|stderr| !stderr.trim().is_empty())
+        {
+            write!(
+                f,
+                "\n\n{}\n{}",
+                "Stderr:".bright_black(),
+                format_stderr(stderr)
+            )?;
+        }
+        if !self.message.trim().is_empty() {
+            write!(
+                f,
+                "\n\n{}\n{}",
+                "Cause:".bright_black(),
+                format_error(&self.message)
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for InvocationFailure {}
+
+pub(super) struct ScalarInvocationArgs {
+    pub application_name: String,
+    pub environment_name: String,
+    pub agent_type: AgentTypeSchema,
+    pub parsed_agent_id: ParsedAgentKey,
+    pub method_name: String,
+    pub method_parameters: SchemaValue,
+    pub idempotency_key: IdempotencyKey,
+    /// Receives the accepted invocation ID, which ends the live output stream.
+    pub invocation_goal: Option<super::stream::InvocationGoal>,
+}
+
+pub(super) struct ScalarInvocation {
+    /// The key the server accepted the invocation under, which cancels and looks it up.
+    pub idempotency_key: golem_common::model::InvocationId,
+    pub result: Option<TypedSchemaValue>,
+}
+
+/// Invokes a method without streams through the invocation session and returns its result, which
+/// the caller renders. The session reports the accepted invocation ID before the result, so the
+/// live output stream knows its target while the invocation runs.
+pub(super) async fn invoke_scalar(
+    ctx: Arc<Context>,
+    args: ScalarInvocationArgs,
+) -> anyhow::Result<ScalarInvocation> {
+    let method = args
+        .agent_type
+        .methods
+        .iter()
+        .find(|method| method.name == args.method_name)
+        .cloned()
+        .ok_or_else(|| anyhow!("Method '{}' not found in agent type", args.method_name))?;
+    let input_graph = public_input_graph(&args.agent_type.schema, &method.input_schema);
+    let method_parameters = encode_public_schema_value(
+        &input_graph,
+        &input_graph.root,
+        &args.method_parameters,
+        |_, _| {
+            Err(PublicSchemaValueError::new(
+                PublicErrorCode::UnsupportedValue,
+                "method parameters cannot contain streams",
+            ))
+        },
+    )?;
+    let initial = PublicClientMessage::InvocationStart {
+        attempt_id: uuid::Uuid::new_v4(),
+        config: Vec::new(),
+        idempotency_key: args.idempotency_key.value.clone(),
+        method_parameters,
+        selector: Box::new(invocation_selector(
+            &args.application_name,
+            &args.environment_name,
+            &args.parsed_agent_id,
+            &args.method_name,
+        )?),
+        version: INVOCATION_SESSION_VERSION,
+    };
+    let connector = if ctx.allow_insecure() {
+        Some(super::stream::insecure_connector()?)
+    } else {
+        None
+    };
+    let mut session = InvocationSession::open(
+        Arc::new(CliSessionRequestProvider::new(ctx.clone())),
+        connector,
+        ReconnectPolicy::Unlimited,
+        InvocationSessionStateSnapshot {
+            delivered_output_cursors: BTreeMap::new(),
+            stable_stream_bindings: BTreeMap::new(),
+            pending_operation: Some(initial),
+            session_token: None,
+            accepted_invocation: None,
+        },
+        false,
+        Arc::new(CliCheckpointObserver {
+            checkpoint: Mutex::new(None),
+            path: None,
+        }),
+    )
+    .await
+    .context("failed to connect to the agent invocation session")?;
+
+    let bindings = session.delivery_tracker();
+    let mut accepted_key = None;
+    let mut result = None;
+    loop {
+        let mut frame = session.receive().await?;
+        let server_frame = frame.frame().clone();
+        frame.mark_delivered()?;
+        let ServerFrame::Message(message) = server_frame else {
+            bail!("the invocation session sent binary stream data for a method without streams");
+        };
+        match message {
+            PublicServerMessage::InvocationAccepted {
+                idempotency_key, ..
+            } => {
+                if let Some(goal) = &args.invocation_goal {
+                    goal.set_target(idempotency_key);
+                }
+                accepted_key = Some(idempotency_key);
+            }
+            PublicServerMessage::InvocationResult { result: value, .. } => {
+                result = match *value {
+                    PublicInvocationResult::Value {
+                        graph: result_graph,
+                        value,
+                    } => {
+                        let Some(output_type) = method.output_schema.schema() else {
+                            bail!("session returned a value for a unit-returning method");
+                        };
+                        let value = decode_invocation_result_value(
+                            &result_graph,
+                            &value,
+                            &args.agent_type.schema,
+                            output_type,
+                            &bindings,
+                        )?;
+                        Some(TypedSchemaValue::new(
+                            SchemaGraph {
+                                defs: args.agent_type.schema.defs.clone(),
+                                root: output_type.clone(),
+                            },
+                            value,
+                        ))
+                    }
+                    PublicInvocationResult::None => {
+                        if !matches!(method.output_schema, OutputSchema::Unit) {
+                            bail!("session returned no result for a value-returning method");
+                        }
+                        None
+                    }
+                    PublicInvocationResult::ToolSuccess { .. }
+                    | PublicInvocationResult::ToolFailure { .. } => {
+                        bail!("native tool result received by the agent invocation command");
+                    }
+                };
+            }
+            PublicServerMessage::InvocationRejected {
+                code,
+                message,
+                stderr,
+                ..
+            }
+            | PublicServerMessage::InvocationFinished {
+                outcome:
+                    PublicInvocationOutcome::Failure {
+                        code,
+                        message,
+                        stderr,
+                    },
+                ..
+            } => {
+                let _ = session.close().await;
+                return Err(InvocationFailure {
+                    code,
+                    message,
+                    stderr,
+                }
+                .into());
+            }
+            PublicServerMessage::InvocationFinished {
+                outcome: PublicInvocationOutcome::Success,
+                ..
+            } => {
+                let _ = session.close().await;
+                return Ok(ScalarInvocation {
+                    idempotency_key: accepted_key
+                        .ok_or_else(|| anyhow!("invocation finished before its acceptance"))?,
+                    result,
+                });
+            }
+            PublicServerMessage::AttachmentRevoked { reason, .. } => {
+                bail!("invocation attachment was revoked: {reason:?}");
+            }
+            PublicServerMessage::OutputStreamItem { .. }
+            | PublicServerMessage::StreamEnd { .. }
+            | PublicServerMessage::InputStreamAck { .. } => {
+                bail!("the invocation session sent stream messages for a method without streams");
+            }
+        }
+    }
 }
 
 fn load_checkpoint(path: &Path) -> anyhow::Result<InvocationSessionCheckpoint> {
@@ -1249,7 +1520,6 @@ fn read_stdin(
                                 binding.parameter_name,
                                 offset + 1
                             ),
-                            reason: PublicClientCancelReason::SourceUnavailable,
                         });
                     }
                 }
@@ -1270,7 +1540,6 @@ fn read_stdin(
                                 binding.parameter_name,
                                 offset + 1
                             ),
-                            reason: PublicClientCancelReason::SourceUnavailable,
                         });
                     }
                 };
@@ -1287,7 +1556,6 @@ fn read_stdin(
                 )
                 .map_err(|error| InputFailure {
                     error: error.into(),
-                    reason: PublicClientCancelReason::SourceUnavailable,
                 })?;
                 let request = ReplayableInput::Value {
                     sequence: offset,
@@ -1308,18 +1576,15 @@ fn read_stdin(
                     if discarded.is_cancelled() {
                         offset = offset.checked_add(1).ok_or_else(|| InputFailure {
                             error: anyhow!("stdin stream offset overflow"),
-                            reason: PublicClientCancelReason::SourceUnavailable,
                         })?;
                         continue;
                     }
                     return Err(InputFailure {
                         error: anyhow!("invocation session ended while reading stdin"),
-                        reason: PublicClientCancelReason::SourceUnavailable,
                     });
                 }
                 offset = offset.checked_add(1).ok_or_else(|| InputFailure {
                     error: anyhow!("stdin stream offset overflow"),
-                    reason: PublicClientCancelReason::SourceUnavailable,
                 })?;
             }
         }
@@ -1353,7 +1618,6 @@ fn read_stdin(
                                     "failed to read raw stdin for parameter '{}': {error}",
                                     binding.parameter_name
                                 ),
-                                reason: PublicClientCancelReason::SourceUnavailable,
                             });
                         }
                     }
@@ -1392,7 +1656,6 @@ fn read_stdin(
                     }
                     return Err(InputFailure {
                         error: anyhow!("invocation session ended while reading stdin"),
-                        reason: PublicClientCancelReason::SourceUnavailable,
                     });
                 }
                 let logical_item_count = if binding.raw_kind == Some(RawStreamKind::U8) {
@@ -1404,7 +1667,6 @@ fn read_stdin(
                     .checked_add(logical_item_count)
                     .ok_or_else(|| InputFailure {
                         error: anyhow!("stdin stream offset overflow"),
-                        reason: PublicClientCancelReason::SourceUnavailable,
                     })?;
                 if eof {
                     break;
@@ -1429,7 +1691,6 @@ fn read_stdin(
         }
         return Err(InputFailure {
             error: anyhow!("invocation session ended before stdin reached EOF"),
-            reason: PublicClientCancelReason::SourceUnavailable,
         });
     }
     Ok(())
@@ -1457,28 +1718,32 @@ fn queue_input(
     };
     let admitted = admitted.map_err(|error| InputFailure {
         error: error.into(),
-        reason: PublicClientCancelReason::SourceUnavailable,
     })?;
     match tx.blocking_send(admitted) {
         Ok(()) => Ok(true),
         Err(_) if cancelled.is_cancelled() || discarded.is_cancelled() => Ok(false),
         Err(_) => Err(InputFailure {
             error: anyhow!("invocation session ended while reading stdin"),
-            reason: PublicClientCancelReason::SourceUnavailable,
         }),
     }
 }
 
 fn cancel_open_streams(
-    input: Option<u32>,
+    input: Option<(u32, u64)>,
     output_streams: &HashMap<u32, OutputStream>,
-    reason: PublicClientCancelReason,
+    message: String,
 ) -> Vec<PublicClientMessage> {
     let mut requests = Vec::new();
-    if let Some(channel) = input {
-        requests.push(PublicClientMessage::StreamCancel {
+    if let Some((channel, sequence)) = input {
+        requests.push(PublicClientMessage::StreamEnd {
             channel,
-            reason,
+            sequence: DecimalU64(sequence),
+            direction: PublicStreamDirection::Input,
+            outcome: PublicStreamOutcome::Failed {
+                error: PublicStreamError::Interrupted {
+                    message: message.clone(),
+                },
+            },
             version: INVOCATION_SESSION_VERSION,
         });
     }
@@ -1489,9 +1754,13 @@ fn cancel_open_streams(
         .collect::<Vec<_>>();
     open_outputs.sort_unstable();
     for channel in open_outputs {
-        requests.push(PublicClientMessage::StreamCancel {
+        requests.push(PublicClientMessage::StreamEnd {
             channel,
-            reason,
+            sequence: DecimalU64(0),
+            direction: PublicStreamDirection::Output,
+            outcome: PublicStreamOutcome::ConsumerCancelled {
+                details: Some(message.clone()),
+            },
             version: INVOCATION_SESSION_VERSION,
         });
     }
@@ -1558,7 +1827,7 @@ fn response_cancels_input(response: &ServerFrame, input_channel: Option<u32>) ->
     };
     matches!(
         response,
-        ServerFrame::Message(PublicServerMessage::StreamCancel { channel, .. })
+        ServerFrame::Message(PublicServerMessage::StreamEnd { direction: PublicStreamDirection::Input, channel, .. })
             if *channel == input_channel
     )
 }
@@ -1613,7 +1882,12 @@ async fn handle_response(
                 emit(output_tx, OutputJob::Event(event)).await?;
             }
         }
-        ServerFrame::Message(PublicServerMessage::InvocationRejected { code, message, .. }) => {
+        ServerFrame::Message(PublicServerMessage::InvocationRejected {
+            code,
+            message,
+            stderr,
+            ..
+        }) => {
             failed = true;
             let reason = code.as_str().to_string();
             if structured {
@@ -1621,8 +1895,10 @@ async fn handle_response(
                 event.agent_id = Some(session_identity.agent_id.clone());
                 event.reason = Some(reason);
                 event.error = Some(message);
+                event.stderr = stderr;
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
+                eprint_agent_stderr(stderr.as_deref());
                 eprint_line(format!("Invocation rejected ({reason}): {message}"));
             }
         }
@@ -1760,7 +2036,8 @@ async fn handle_response(
                 _ => bail!("server sent a client-to-server binary message kind"),
             }
         }
-        ServerFrame::Message(PublicServerMessage::OutputStreamEnd {
+        ServerFrame::Message(PublicServerMessage::StreamEnd {
+            direction: PublicStreamDirection::Output,
             channel,
             sequence,
             outcome,
@@ -1780,21 +2057,21 @@ async fn handle_response(
             }
             stream.terminal = true;
             let (kind, error, reason) = match outcome {
-                PublicOutputStreamOutcome::Ok => (AgentInvocationSessionEventKind::End, None, None),
-                PublicOutputStreamOutcome::Error { code, message } => {
+                PublicStreamOutcome::Finished => (AgentInvocationSessionEventKind::End, None, None),
+                PublicStreamOutcome::Failed { error } => {
                     failed = true;
                     (
                         AgentInvocationSessionEventKind::StreamError,
-                        Some(message),
-                        Some(code.as_str().to_string()),
+                        Some(format!("{error:?}")),
+                        None,
                     )
                 }
-                PublicOutputStreamOutcome::Cancelled { reason } => {
-                    failed |= server_cancellation_is_failure(reason);
+                PublicStreamOutcome::ConsumerCancelled { details } => {
+                    failed = true;
                     (
                         AgentInvocationSessionEventKind::StreamCancel,
-                        None,
-                        Some(format!("{reason:?}")),
+                        Some("output consumer cancelled".to_string()),
+                        details,
                     )
                 }
             };
@@ -1812,41 +2089,46 @@ async fn handle_response(
             }
         }
         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {}
-        ServerFrame::Message(PublicServerMessage::StreamCancel {
-            channel, reason, ..
+        ServerFrame::Message(PublicServerMessage::StreamEnd {
+            direction: PublicStreamDirection::Input,
+            channel,
+            outcome,
+            ..
         }) => {
-            failed |= server_cancellation_is_failure(reason);
-            let output_stream = if let Some(stream) = output_streams.get_mut(&channel) {
-                stream.terminal = true;
-                Some(stream.clone())
-            } else {
-                None
-            };
+            failed |= matches!(outcome, PublicStreamOutcome::Failed { .. });
             if structured {
                 let mut event = event(
-                    AgentInvocationSessionEventKind::StreamCancel,
+                    match outcome {
+                        PublicStreamOutcome::Finished => AgentInvocationSessionEventKind::End,
+                        PublicStreamOutcome::ConsumerCancelled { .. } => {
+                            AgentInvocationSessionEventKind::StreamCancel
+                        }
+                        PublicStreamOutcome::Failed { .. } => {
+                            AgentInvocationSessionEventKind::StreamError
+                        }
+                    },
                     idempotency_key,
                 );
                 event.stream_id = Some(channel as u64);
-                if let Some(stream) = output_stream {
-                    event.parent_stream_id = stream.parent_stream_id.map(u64::from);
-                    event.path = Some(stream.path);
-                }
-                event.reason = Some(format!("{reason:?}"));
+                event.reason = Some(format!("{outcome:?}"));
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprint_line(format!("Stream {channel} was cancelled"));
+                eprint_line(format!("Input stream {channel} ended: {outcome:?}"));
             }
         }
         ServerFrame::Message(PublicServerMessage::AttachmentRevoked { reason, .. }) => {
             bail!("invocation attachment was revoked: {reason:?}");
         }
         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
-            let (outcome, error) = match outcome {
-                PublicInvocationOutcome::Success => ("success".to_string(), None),
-                PublicInvocationOutcome::Failure { code, message } => {
+            let (outcome, error, stderr) = match outcome {
+                PublicInvocationOutcome::Success => ("success".to_string(), None, None),
+                PublicInvocationOutcome::Failure {
+                    code,
+                    message,
+                    stderr,
+                } => {
                     failed = true;
-                    (code.as_str().to_string(), Some(message))
+                    (code.as_str().to_string(), Some(message), stderr)
                 }
             };
             if structured {
@@ -1854,8 +2136,10 @@ async fn handle_response(
                 event.agent_id = Some(session_identity.agent_id.clone());
                 event.outcome = Some(outcome);
                 event.error = error;
+                event.stderr = stderr;
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else if let Some(error) = error {
+                eprint_agent_stderr(stderr.as_deref());
                 eprint_line(format!("Invocation failed: {error}"));
             }
         }
@@ -1863,15 +2147,11 @@ async fn handle_response(
     Ok(failed)
 }
 
-fn server_cancellation_is_failure(reason: PublicServerCancelReason) -> bool {
-    matches!(
-        reason,
-        PublicServerCancelReason::TransportDetached
-            | PublicServerCancelReason::SourceUnavailable
-            | PublicServerCancelReason::ProducerDeleted
-            | PublicServerCancelReason::InvocationFailed
-            | PublicServerCancelReason::ProtocolError
-    )
+/// Shows what a failed invocation wrote to stderr before the failure itself.
+fn eprint_agent_stderr(stderr: Option<&str>) {
+    if let Some(stderr) = stderr {
+        eprint_line(format!("Stderr:\n{}", stderr.trim_end()));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2670,6 +2950,15 @@ mod public_tests {
             },
             idempotency_key: "invocation-key".to_string(),
             session_token: Some("opaque-session-token".to_string()),
+            accepted_invocation: Some(golem_common::model::OwnedInvocationId::new(
+                golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId(
+                        uuid::Uuid::from_u128(4),
+                    ),
+                    agent_id: "counter()".to_string(),
+                },
+                golem_common::model::InvocationId(uuid::Uuid::from_u128(5)),
+            )),
             delivered_output_cursors: BTreeMap::from([(
                 "opaque-stream-token".to_string(),
                 "opaque-cursor".to_string(),
@@ -2692,6 +2981,10 @@ mod public_tests {
         let mut expected = checkpoint();
         write_checkpoint(&path, &expected).unwrap();
         assert_eq!(load_checkpoint(&path).unwrap().selector, expected.selector);
+        assert_eq!(
+            load_checkpoint(&path).unwrap().accepted_invocation,
+            expected.accepted_invocation
+        );
 
         expected
             .delivered_output_cursors
@@ -2995,32 +3288,30 @@ mod public_tests {
             },
         )]);
         assert_eq!(
-            cancel_open_streams(None, &streams, PublicClientCancelReason::ConsumerDrop),
-            vec![PublicClientMessage::StreamCancel {
-                channel: 4,
-                reason: PublicClientCancelReason::ConsumerDrop,
-                version: INVOCATION_SESSION_VERSION,
-            }]
+            cancel_open_streams(Some((3, 7)), &streams, "source unavailable".to_string()),
+            vec![
+                PublicClientMessage::StreamEnd {
+                    channel: 3,
+                    direction: PublicStreamDirection::Input,
+                    sequence: DecimalU64(7),
+                    outcome: PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted {
+                            message: "source unavailable".to_string()
+                        }
+                    },
+                    version: INVOCATION_SESSION_VERSION,
+                },
+                PublicClientMessage::StreamEnd {
+                    channel: 4,
+                    direction: PublicStreamDirection::Output,
+                    sequence: DecimalU64(0),
+                    outcome: PublicStreamOutcome::ConsumerCancelled {
+                        details: Some("source unavailable".to_string())
+                    },
+                    version: INVOCATION_SESSION_VERSION,
+                }
+            ]
         );
-    }
-
-    #[test]
-    fn explicit_and_consumer_drop_cancellation_are_not_cli_failures() {
-        assert!(!server_cancellation_is_failure(
-            PublicServerCancelReason::Cancelled
-        ));
-        assert!(!server_cancellation_is_failure(
-            PublicServerCancelReason::ConsumerDrop
-        ));
-        for reason in [
-            PublicServerCancelReason::TransportDetached,
-            PublicServerCancelReason::SourceUnavailable,
-            PublicServerCancelReason::ProducerDeleted,
-            PublicServerCancelReason::InvocationFailed,
-            PublicServerCancelReason::ProtocolError,
-        ] {
-            assert!(server_cancellation_is_failure(reason));
-        }
     }
 
     #[test]
@@ -3046,31 +3337,39 @@ mod public_tests {
 
     #[test]
     async fn terminal_input_acknowledgement_does_not_consume_item_capacity() {
-        let buffer = InputReplayBuffer::new(2, 2);
-        buffer.push(
-            buffer
-                .admit(
-                    ReplayableInput::Value {
-                        sequence: 0,
-                        value: serde_json::json!(1),
-                    },
-                    1,
-                )
-                .await
-                .unwrap(),
-        );
-        buffer.push(
-            buffer
-                .admit(ReplayableInput::End { sequence: 1 }, 1)
-                .await
-                .unwrap(),
-        );
-        buffer.mark_sent(0).unwrap();
-        buffer.mark_sent(1).unwrap();
-        buffer.acknowledge(1, false).unwrap();
-        assert_eq!(buffer.len(), 1);
-        buffer.acknowledge(1, true).unwrap();
-        assert!(buffer.is_empty());
+        for terminal in [
+            ReplayableInput::End { sequence: 1 },
+            ReplayableInput::Failed {
+                sequence: 1,
+                message: "source unavailable".to_string(),
+            },
+        ] {
+            let buffer = InputReplayBuffer::new(2, 2);
+            buffer.initialize_high_water(9, false).unwrap();
+            buffer.push(
+                buffer
+                    .admit(
+                        ReplayableInput::Value {
+                            sequence: 0,
+                            value: serde_json::json!(1),
+                        },
+                        1,
+                    )
+                    .await
+                    .unwrap(),
+            );
+            buffer.push(buffer.admit(terminal, 1).await.unwrap());
+            assert_eq!(buffer.next_sequence().unwrap(), 9);
+            buffer.mark_sent(0).unwrap();
+            assert_eq!(buffer.next_sequence().unwrap(), 10);
+            buffer.mark_sent(1).unwrap();
+            assert_eq!(buffer.next_sequence().unwrap(), 10);
+            buffer.acknowledge(10, false).unwrap();
+            assert_eq!(buffer.len(), 1);
+            buffer.acknowledge(10, true).unwrap();
+            assert!(buffer.is_empty());
+            assert_eq!(buffer.next_sequence().unwrap(), 10);
+        }
     }
 
     struct BrokenOnFlush;

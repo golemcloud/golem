@@ -323,18 +323,19 @@ mod tests {
             let worker =
                 AgentId::from_agent_id(component.id, &agents[index]).map_err(anyhow::Error::msg)?;
             let history = user.get_oplog(&worker, OplogIndex::INITIAL).await?;
-            let key = &report
-                .acceptance
-                .as_ref()
-                .unwrap()
-                .idempotency_key
-                .as_ref()
-                .unwrap()
-                .value;
+            let key = golem_common::model::InvocationId::from(
+                *report
+                    .acceptance
+                    .as_ref()
+                    .unwrap()
+                    .idempotency_key
+                    .as_ref()
+                    .unwrap(),
+            );
             assert_eq!(history.iter().filter(|entry| matches!(&entry.entry,
                 PublicOplogEntry::AgentInvocationStarted(start)
                     if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation)
-                        if &invocation.idempotency_key.value == key)
+                        if invocation.invocation_id == key)
             )).count(), 1);
             assert_eq!(history.iter().filter(|entry| matches!(&entry.entry,
                 PublicOplogEntry::AgentInvocationFinished(finish) if finish.method_name.as_deref() == Some(method)

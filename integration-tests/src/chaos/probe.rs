@@ -46,7 +46,7 @@
 use crate::chaos::errors::ErrorClass;
 use crate::chaos::history::{OperationRecord, Stream};
 use crate::chaos::workload::{self, WorkloadContext};
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use serde::{Deserialize, Serialize};
@@ -337,7 +337,7 @@ struct ProbeOutcome {
 /// cheap same-key retry buys most of them back. It cannot mask a real problem,
 /// because a definite refusal is not retried.
 async fn probe_one(ctx: &WorkloadContext, agent: &str, key: &str) -> ProbeOutcome {
-    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.to_string());
     let idempotency_key = golem_common::model::IdempotencyKey::new(key.to_string());
 
     let mut attempts = 0u32;

@@ -22,6 +22,7 @@ import golem.host.js.schema.JsSchemaValueTree
 import golem.host.SchemaWireInterop
 import golem.runtime.{AgentMethod, AgentType, OutputCodec, OutputMetadata}
 import golem.runtime.{WireAgentClientType, WireClientMethod}
+import golem.runtime.rpc.host.WasmRpcApi
 import golem.schema.wire.{ConcreteCodec, WitSchemaValueTree}
 import golem.FutureInterop
 import java.util.UUID
@@ -50,6 +51,40 @@ object AgentClientRuntime {
     encodeWireSync(agentType.ctorCodec, agentType.ctorContainsStream, constructorArgs).flatMap { payload =>
       resolveRemote(agentType.metadata.name, payload, phantom, configOverrides)
         .map(remote => WireResolvedAgent(agentType, remote))
+    }
+
+  /**
+   * Bind the current durable incarnation without creating it or waiting for
+   * initialization.
+   *
+   * Use this to schedule work on self from inside the constructor. Normal
+   * client construction reuses an initialized agent without rerunning its
+   * constructor, but waits for an unfinished constructor. Calling it on self
+   * from that constructor would therefore deadlock.
+   *
+   * Scheduled work runs after construction finishes. This does not make awaited
+   * self-calls reentrant or bypass method permissions. A different client type
+   * returns an error. Replay preserves the recorded incarnation.
+   */
+  def bindSelfWire[Trait, Constructor](
+    agentType: WireAgentClientType[Trait, Constructor]
+  ): Either[String, WireResolvedAgent[Trait]] =
+    AgentIdentity.bindSelf(agentType.metadata.name).map(remote => WireResolvedAgent(agentType, remote))
+
+  /**
+   * Bind self using a typed reflective agent definition, without waiting for
+   * initialization.
+   *
+   * Use this for constructor-time self-scheduling, as described by
+   * [[bindSelfWire]]. Normal client construction on self would wait for the
+   * executing constructor to finish and deadlock. This does not make awaited
+   * self-calls reentrant.
+   */
+  def bindSelf[Trait, Constructor](
+    agentType: AgentType[Trait, Constructor]
+  ): Either[String, ResolvedAgent[Trait]] =
+    AgentIdentity.bindSelf(agentType.typeName).map { remote =>
+      ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote)
     }
 
   private def encodeWireSync[A](
@@ -214,6 +249,17 @@ object AgentClientRuntime {
         )
     }
 
+  /**
+   * Pairs a completed result with its invocation metadata. The host omits the
+   * metadata only for a rejected call, whose result future already failed.
+   */
+  private def completedInvocation[A](metadata: Option[InvocationMetadata], value: A): Future[InvocationResult[A]] =
+    FutureInterop.fromEither(
+      metadata
+        .map(InvocationResult(_, value))
+        .toRight(WasmRpcApi.RpcError("protocol-error", Some("completed invocation has no metadata")).toString)
+    )
+
   private def resolveRemote(
     agentTypeName: String,
     payload: JsSchemaValueTree,
@@ -285,7 +331,7 @@ object AgentClientRuntime {
         FutureInterop
           .fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, _, scopeCard)))
           .flatMap { raw =>
-            raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)).map(InvocationResult(raw.metadata, _))
+            raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)).flatMap(completedInvocation(raw.metadata, _))
           }
       }
     }
@@ -477,7 +523,7 @@ object AgentClientRuntime {
         .flatMap(params =>
           FutureInterop.fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, _, scopeCard)))
         )
-        .flatMap(raw => raw.result.map(r => decodeWire(method.output, r)).map(InvocationResult(raw.metadata, _)))
+        .flatMap(raw => raw.result.map(r => decodeWire(method.output, r)).flatMap(completedInvocation(raw.metadata, _)))
     }
     def cancelableAwaitWithMetadata[In, Out](
       method: WireClientMethod[Trait] { type Input = In; type Output = Out },

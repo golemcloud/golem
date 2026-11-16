@@ -56,7 +56,7 @@ Add the agent to an `httpApi` deployment in `golem.yaml` (see `golem-add-http-en
 - A slot is selected by exactly one of `Input` (an `AgentStream` input field, by schema name), `Output` (an `AgentStream` field of the returned struct) or `Result: true` (the returned value: a stream, or a plain result published as JSON). A returned struct of streams gets one slot per field.
 - `Name` replaces the canonical name in URLs and OpenAPI.
 - Only a direct `AgentStream[byte]` slot may set `ContentType` (concrete, non-text, non-JSON); the others use JSON.
-- `NoExternalWrites`, `NoStreamDelete` and `NoInvocationDelete` switch those operations off. `MaxReadersPerStream` is 1–16; `MaxAppendsPerSecond` cannot be combined with `NoExternalWrites`.
+- `MaxReadersPerStream` and `MaxAppendsPerSecond` must be positive and no greater than the installation maximums. Zero selects the installation defaults.
 - A stream input cannot be bound from the path, query or a header; the other inputs can.
 
 Mistakes in a `StreamRoute` are definition errors reported by `golem build`.

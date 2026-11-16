@@ -14,12 +14,117 @@
 
 use super::*;
 
+/// The Store's fixed replay role and its own live-continuation gate. Clones retain the same
+/// gate so Store-independent continuations observe publication by the admitting Store.
+#[derive(Clone, Debug)]
+pub(super) enum StoreReplayState {
+    Primary,
+    CompletedEntityReplay,
+    IncompleteEntityReplay(EntityContinuation),
+    LiveEntity,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct EntityContinuation {
+    live_published: Arc<AtomicBool>,
+}
+
+impl StoreReplayState {
+    pub(super) fn new(mode: Option<InvocationExecutionMode>) -> Self {
+        match mode {
+            None => Self::Primary,
+            Some(InvocationExecutionMode::ReplayingCompleted) => Self::CompletedEntityReplay,
+            Some(InvocationExecutionMode::ReplayingIncomplete) => {
+                Self::IncompleteEntityReplay(EntityContinuation {
+                    live_published: Arc::new(AtomicBool::new(false)),
+                })
+            }
+            Some(InvocationExecutionMode::Live) => Self::LiveEntity,
+        }
+    }
+
+    pub(super) fn initial_entity_mode(&self) -> Option<InvocationExecutionMode> {
+        match self {
+            Self::Primary => None,
+            Self::CompletedEntityReplay => Some(InvocationExecutionMode::ReplayingCompleted),
+            Self::IncompleteEntityReplay(_) => Some(InvocationExecutionMode::ReplayingIncomplete),
+            Self::LiveEntity => Some(InvocationExecutionMode::Live),
+        }
+    }
+
+    pub(super) fn role(&self) -> ReplayToLiveRole {
+        match self {
+            Self::Primary => ReplayToLiveRole::PrimaryAgent,
+            _ => ReplayToLiveRole::NonPrimary,
+        }
+    }
+
+    pub(super) fn is_incomplete_entity(&self) -> bool {
+        matches!(self, Self::IncompleteEntityReplay(_))
+    }
+
+    pub(super) fn continued_live(&self) -> bool {
+        matches!(self, Self::IncompleteEntityReplay(gate) if gate.live_published.load(Ordering::Acquire))
+    }
+
+    pub(super) fn is_live(&self, primary_live_published: bool) -> bool {
+        match self {
+            Self::Primary => primary_live_published,
+            Self::CompletedEntityReplay => false,
+            Self::IncompleteEntityReplay(_) => self.continued_live(),
+            Self::LiveEntity => true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn incomplete_entity_for_test(live_published: Arc<AtomicBool>) -> Self {
+        Self::IncompleteEntityReplay(EntityContinuation { live_published })
+    }
+
+    fn finalization(
+        &self,
+        tool_entity: bool,
+        operation: Option<tool::operation::OwnerToolOperation>,
+    ) -> Result<LiveFinalization, WorkerExecutorError> {
+        match self {
+            Self::Primary => Ok(LiveFinalization::Primary),
+            // A completed parent can settle an incomplete child without becoming live itself.
+            Self::CompletedEntityReplay => Ok(LiveFinalization::CompletedEntityReplay),
+            Self::IncompleteEntityReplay(continuation) if tool_entity => {
+                Ok(LiveFinalization::IncompleteTool {
+                    continuation: continuation.clone(),
+                    operation: operation.ok_or_else(|| {
+                        WorkerExecutorError::runtime(
+                            "Incomplete tool entity has no live-admission operation installed",
+                        )
+                    })?,
+                })
+            }
+            Self::IncompleteEntityReplay(continuation) => {
+                Ok(LiveFinalization::IncompleteBody(continuation.clone()))
+            }
+            Self::LiveEntity => Ok(LiveFinalization::AlreadyLiveEntity),
+        }
+    }
+}
+
+pub(super) enum LiveFinalization {
+    Primary,
+    CompletedEntityReplay,
+    IncompleteBody(EntityContinuation),
+    IncompleteTool {
+        continuation: EntityContinuation,
+        operation: tool::operation::OwnerToolOperation,
+    },
+    AlreadyLiveEntity,
+}
+
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(in crate::durable_host) async fn begin_switch_to_live(
         &self,
     ) -> Result<BeginReplayToLive, WorkerExecutorError> {
         begin_replay_to_live(
-            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
+            &self.state.store_replay_state,
             matches!(
                 self.runtime,
                 OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
@@ -28,12 +133,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &self.public_state,
             &self.linear_memory,
             &self.state.replay_state,
-            if self.runtime == OwnerRuntime::Agent {
-                ReplayToLiveRole::PrimaryAgent
-            } else {
-                ReplayToLiveRole::NonPrimary
-            },
-            self.state.local_live_tail(),
         )
         .await
     }
@@ -81,11 +180,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     + Sync
     + 'static
     + use<Ctx> {
-        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
-        let replaying_incomplete_entity =
-            mode == Some(InvocationExecutionMode::ReplayingIncomplete);
+        let store_replay_state = self.state.store_replay_state.clone();
         let rejected = self.rejects_live_continuation_at_replay_tail()
-            || (!replaying_incomplete_entity && !replay_ended);
+            || (!store_replay_state.is_incomplete_entity() && !replay_ended);
         let replay_state = self.state.replay_state.clone();
         let public_state = self.public_state.clone();
         let linear_memory = self.linear_memory.clone();
@@ -94,19 +191,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
         );
         let tool_operation = self.entity_tool_operation();
-        let local_live_tail = self.state.local_live_tail();
-        let role = if self.runtime == OwnerRuntime::Agent {
-            ReplayToLiveRole::PrimaryAgent
-        } else {
-            ReplayToLiveRole::NonPrimary
-        };
         move || {
             let expected = expected.clone();
             let replay_state = replay_state.clone();
             let public_state = public_state.clone();
             let linear_memory = linear_memory.clone();
             let tool_operation = tool_operation.clone();
-            let local_live_tail = local_live_tail.clone();
+            let store_replay_state = store_replay_state.clone();
             Box::pin(async move {
                 if rejected {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -119,25 +210,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 if replay_ended {
                     begin_replay_to_live(
-                        replaying_incomplete_entity,
+                        &store_replay_state,
                         tool_entity,
                         tool_operation,
                         &public_state,
                         &linear_memory,
                         &replay_state,
-                        role,
-                        local_live_tail,
                     )
                     .await
                 } else {
                     begin_local_live_continuation(
-                        replaying_incomplete_entity,
+                        &store_replay_state,
                         tool_entity,
                         tool_operation,
                         &public_state,
                         &linear_memory,
-                        role,
-                        local_live_tail,
                         &replay_state,
                         replay_state.replay_target(),
                     )
@@ -184,6 +271,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<(OplogIndex, OplogEntry)>> {
         concurrent::drain_queued_dropped_call_events(self).await?;
         let expected = request.expected_description();
+        self.state.refuse_on_bootstrap_cursor(expected)?;
         loop {
             if self.is_live() {
                 return Ok(None);
@@ -265,7 +353,10 @@ impl PendingReplayToLive {
     }
 
     pub(in crate::durable_host) fn role(&self) -> ReplayToLiveRole {
-        self.role
+        match self.finalization {
+            LiveFinalization::Primary => ReplayToLiveRole::PrimaryAgent,
+            _ => ReplayToLiveRole::NonPrimary,
+        }
     }
 
     pub(crate) async fn finish_at(
@@ -274,50 +365,40 @@ impl PendingReplayToLive {
             golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
         >,
     ) -> Result<FinishReplayToLive, WorkerExecutorError> {
-        if self.replaying_incomplete_entity && self.tool_entity {
-            let operation = self.tool_operation.ok_or_else(|| {
-                WorkerExecutorError::runtime(
-                    "Incomplete tool entity has no live-admission operation installed",
-                )
-            })?;
-            match operation
-                .activate_live_attachment_memory_accounting_at(boundary)
-                .await
-            {
-                tool::operation::ToolLiveAdmissionOutcome::Admitted => {}
-                tool::operation::ToolLiveAdmissionOutcome::ResourceExhausted => {
-                    return Ok(FinishReplayToLive::AttachmentAdmissionRejected);
-                }
-                tool::operation::ToolLiveAdmissionOutcome::Cancelled => {
-                    return Ok(FinishReplayToLive::Cancelled);
-                }
-                tool::operation::ToolLiveAdmissionOutcome::Fenced => {
-                    return Err(WorkerExecutorError::runtime(
-                        "Tool operation was fenced during live-memory admission",
-                    ));
+        match self.finalization {
+            LiveFinalization::IncompleteTool {
+                continuation,
+                operation,
+            } => {
+                match operation
+                    .activate_live_attachment_memory_accounting_at(boundary)
+                    .await
+                {
+                    tool::operation::ToolLiveAdmissionOutcome::Admitted => {
+                        continuation.live_published.store(true, Ordering::Release);
+                    }
+                    tool::operation::ToolLiveAdmissionOutcome::ResourceExhausted => {
+                        return Ok(FinishReplayToLive::AttachmentAdmissionRejected);
+                    }
+                    tool::operation::ToolLiveAdmissionOutcome::Cancelled => {
+                        return Ok(FinishReplayToLive::Cancelled);
+                    }
+                    tool::operation::ToolLiveAdmissionOutcome::Fenced => {
+                        return Err(WorkerExecutorError::runtime(
+                            "Tool operation was fenced during live-memory admission",
+                        ));
+                    }
                 }
             }
-        }
-
-        if self.role == ReplayToLiveRole::NonPrimary {
-            self.local_live_tail.store(true, Ordering::Release);
+            LiveFinalization::IncompleteBody(continuation) => {
+                continuation.live_published.store(true, Ordering::Release);
+            }
+            LiveFinalization::Primary
+            | LiveFinalization::CompletedEntityReplay
+            | LiveFinalization::AlreadyLiveEntity => {}
         }
         self.linear_memory.activate_live_usage_if_guest_body();
         Ok(FinishReplayToLive::Live)
-    }
-}
-
-pub(in crate::durable_host) fn store_is_live(
-    entity_execution_mode: Option<InvocationExecutionMode>,
-    local_live_tail: bool,
-    shared_live_published: bool,
-) -> bool {
-    match entity_execution_mode {
-        Some(InvocationExecutionMode::ReplayingCompleted) => false,
-        Some(InvocationExecutionMode::ReplayingIncomplete | InvocationExecutionMode::Live) => {
-            local_live_tail
-        }
-        None => shared_live_published,
     }
 }
 
@@ -376,38 +457,45 @@ async fn await_incomplete_tool_attachment_reconstruction(
 }
 
 pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
-    replaying_incomplete_entity: bool,
+    store_replay_state: &StoreReplayState,
     tool_entity: bool,
     tool_operation: Option<tool::operation::OwnerToolOperation>,
     public_state: &PublicDurableWorkerState<Ctx>,
     linear_memory: &LinearMemoryTracker,
     replay_state: &ReplayState,
-    role: ReplayToLiveRole,
-    local_live_tail: Arc<AtomicBool>,
 ) -> Result<BeginReplayToLive, WorkerExecutorError> {
     await_incomplete_tool_attachment_reconstruction(
-        replaying_incomplete_entity,
+        store_replay_state.is_incomplete_entity(),
         tool_entity,
         tool_operation.as_ref(),
         replay_state,
     )
     .await?;
     activate_incomplete_entity_linear_memory(
-        replaying_incomplete_entity,
+        store_replay_state.is_incomplete_entity(),
         public_state,
         linear_memory,
     )
     .await?;
-    match replay_state.switch_to_live(linear_memory, role).await? {
+    let finalization = store_replay_state.finalization(tool_entity, tool_operation)?;
+    let outcome = if let Some(replay_target) = replay_state.finish_bootstrap_replay().await? {
+        ReplayToLiveOutcome::Live { replay_target }
+    } else {
+        match store_replay_state {
+            StoreReplayState::Primary => replay_state.publish_primary_live(linear_memory).await?,
+            _ => {
+                let replay_target = replay_state.exhaust_replay_prefix().await?;
+                linear_memory.switch_to_live();
+                ReplayToLiveOutcome::Live { replay_target }
+            }
+        }
+    };
+    match outcome {
         ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
         ReplayToLiveOutcome::Live { replay_target } => {
             Ok(BeginReplayToLive::Pending(PendingReplayToLive {
                 replay_target,
-                role,
-                replaying_incomplete_entity,
-                tool_entity,
-                tool_operation,
-                local_live_tail,
+                finalization,
                 linear_memory: linear_memory.clone(),
             }))
         }
@@ -415,37 +503,32 @@ pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
 }
 
 pub(in crate::durable_host) async fn begin_local_live_continuation<Ctx: WorkerCtx>(
-    replaying_incomplete_entity: bool,
+    store_replay_state: &StoreReplayState,
     tool_entity: bool,
     tool_operation: Option<tool::operation::OwnerToolOperation>,
     public_state: &PublicDurableWorkerState<Ctx>,
     linear_memory: &LinearMemoryTracker,
-    role: ReplayToLiveRole,
-    local_live_tail: Arc<AtomicBool>,
     replay_state: &ReplayState,
     replay_target: OplogIndex,
 ) -> Result<PendingReplayToLive, WorkerExecutorError> {
     await_incomplete_tool_attachment_reconstruction(
-        replaying_incomplete_entity,
+        store_replay_state.is_incomplete_entity(),
         tool_entity,
         tool_operation.as_ref(),
         replay_state,
     )
     .await?;
     activate_incomplete_entity_linear_memory(
-        replaying_incomplete_entity,
+        store_replay_state.is_incomplete_entity(),
         public_state,
         linear_memory,
     )
     .await?;
+    let finalization = store_replay_state.finalization(tool_entity, tool_operation)?;
     linear_memory.switch_to_live();
     Ok(PendingReplayToLive {
         replay_target,
-        role,
-        replaying_incomplete_entity,
-        tool_entity,
-        tool_operation,
-        local_live_tail,
+        finalization,
         linear_memory: linear_memory.clone(),
     })
 }

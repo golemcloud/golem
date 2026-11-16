@@ -37,7 +37,8 @@ pub fn Site::serve(
         for ;; {
           match input.read() {
             None => return
-            Some(chunk) =>
+            Some(Err(error)) => raise error
+            Some(Ok(chunk)) =>
               if writer.write_one(chunk) is @schema.PeerDropped {
                 return
               }

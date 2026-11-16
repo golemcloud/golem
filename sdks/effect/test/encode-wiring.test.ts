@@ -14,6 +14,7 @@ import * as rpc from "../src/internal/rpc.js"
 import { method } from "../src/Method.js"
 import * as Permissions from "../src/Permissions.js"
 import * as WitTypes from "../src/WitTypes.js"
+import { hostInvocationMetadata } from "./invocation-metadata.js"
 
 // Runs right after an SDK wire encode has moved the capabilities and before its promise
 // resolves, which is where an interruption used to lose them.
@@ -57,7 +58,7 @@ const Reader = defineAgent({
 })
 
 const layers = (calls: Array<string>) => {
-  const metadata: AgentHost.InvocationMetadata = { agentId: "reader", idempotencyKey: "key" }
+  const metadata: AgentHost.InvocationMetadata = hostInvocationMetadata("reader")
   let serial = 0
   const permissions: Partial<PermissionsClientShape> = {
     deriveFromWallet: () => ({
@@ -75,7 +76,13 @@ const layers = (calls: Array<string>) => {
   } as unknown as RpcConnection
   return Layer.mergeAll(
     Layer.succeed(PermissionsClient, PermissionsClient.of(permissions as PermissionsClientShape)),
-    Layer.succeed(RpcClient, RpcClient.of({ connect: () => Effect.succeed(connection) })),
+    Layer.succeed(
+      RpcClient,
+      RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
+        connect: () => Effect.succeed(connection),
+      }),
+    ),
     Layer.succeed(
       AgentHostClient,
       AgentHostClient.of({

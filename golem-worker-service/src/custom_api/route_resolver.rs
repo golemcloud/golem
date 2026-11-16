@@ -717,7 +717,7 @@ pub(super) mod tests {
                 scheme: Default::default(),
             }),
             _ => RouteBehaviour::CallAgent(CallAgentBehaviour {
-                route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
+                route_mode: golem_service_base::custom_api::AgentRouteMode::Plain,
                 base_path_variables: 0,
                 durable_streams: None,
                 component_id,

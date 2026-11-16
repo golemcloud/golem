@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 #[test]
 async fn pending_admission_preserves_queued_signal() {
     let pending = PendingReadOnlyInvocation::new();
@@ -25,13 +27,13 @@ async fn pending_admission_preserves_queued_signal() {
 use super::*;
 use golem_common::base_model::Empty;
 use golem_common::base_model::component_metadata::KnownExports;
+use golem_common::model::AgentId;
 use golem_common::model::agent::{
     AgentMode, AgentPrincipal, AgentTypeName, CachePolicy, ReadOnlyConfig, Snapshotting,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::RawSnapshotData;
-use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::UnionValuePayload;
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
@@ -355,7 +357,7 @@ fn classify_non_method_variants_are_mutating() {
 #[test]
 fn classify_load_snapshot_is_mutating() {
     let invocation = AgentInvocation::LoadSnapshot {
-        idempotency_key: IdempotencyKey::new("load-snapshot".to_string()),
+        idempotency_key: InvocationId(Uuid::from_u128(1)),
         snapshot: RawSnapshotData {
             data: vec![1, 2, 3],
             mime_type: "application/octet-stream".to_string(),
@@ -426,11 +428,11 @@ fn resolve_read_only_method_returns_none_for_unknown_agent_type() {
 
 #[test]
 fn classify_unknown_metadata_is_unknown_assume_mutating() {
-    use golem_common::model::IdempotencyKey;
     use golem_common::model::invocation_context::InvocationContextStack;
+    use uuid::Uuid;
 
     let m = AgentInvocation::AgentMethod {
-        idempotency_key: IdempotencyKey::new("k".into()),
+        idempotency_key: InvocationId(Uuid::from_u128(2)),
         method_name: "m".into(),
         input: tuple(vec![]),
         invocation_context: InvocationContextStack::fresh(),

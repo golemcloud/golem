@@ -33,7 +33,7 @@ pub(super) fn starts(entries: &[PublicOplogEntryWithIndex], name: &str) -> Vec<O
 
 pub(super) fn assert_invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<OplogIndex> {
     let mut current = false;
@@ -42,7 +42,7 @@ pub(super) fn assert_invocation(
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.idempotency_key == key);
+                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.invocation_id == key);
                 if current {
                     started.push(entry.oplog_index);
                 }
@@ -151,7 +151,7 @@ fn start_parent(
 
 fn inspect_pending(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) -> anyhow::Result<Option<PendingBody>> {
     let parents = starts(entries, BODY);
     let chunks = starts(entries, CHUNK);
@@ -226,7 +226,7 @@ fn inspect_pending(
 
 pub(super) fn pending_body(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) -> anyhow::Result<Option<PendingBody>> {
     ensure!(
         !entries
@@ -260,7 +260,7 @@ fn assert_retained(
 
 pub(super) fn retained_pending(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     original: PendingBody,
 ) -> anyhow::Result<Option<PendingBody>> {
     assert_retained(entries, original)?;
@@ -280,7 +280,7 @@ pub(super) fn retained_pending(
 
 pub(super) fn recovered_body(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     original: PendingBody,
     retained: PendingBody,
 ) -> anyhow::Result<()> {

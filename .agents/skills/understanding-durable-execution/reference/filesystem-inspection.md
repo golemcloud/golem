@@ -32,8 +32,23 @@ reads blob storage without activating an agent. Directory listing remains a sepa
 
 ## Scheduling through production
 
-1. Shared `ActiveAgents` activation survives an individual waiter's cancellation. Existing
-   initialization, replay, failure, update and ephemeral lifecycle rules apply. There is no
+1. Reads and listings never create an agent. `grpc/invocation.rs::get_existing_running`
+   first reads `Worker::get_latest_metadata`, which decides absence and rejects a failed
+   agent without loading it. It then resolves the target through
+   `Worker::get_exact_existing_suspended`, which cannot create an agent and so closes the
+   race with a concurrent delete, and starts it. A missing or deleted agent gives
+   `FileReadHead::Absent` for reads and `GetFileSystemNodeResult::NotFound` for listings, so an
+   HTTP mount answers 404 as for an unknown file. An agent answers the same way while a delete
+   runs on its cached generation or once the delete removed its durable state
+   (`Worker::answers_as_deleted`): `ensure_not_being_deleted` refuses it before the lookup, and
+   `not_found_if_deleting` turns the failure of a call that the delete overtook into
+   `AgentNotFound`, so a racing read is absent and never recreates the agent. A delete that
+   failed before removing durable state leaves the agent in place, so its reads keep the
+   deletion error, and a generation retired for a lost shard keeps its error unchanged. The wallet, cancel and connect paths use the same existing-only lookup and answer
+   `AgentNotFound` for a missing or deleting agent; cancel and connect still reject reserved
+   owners. Shared `ActiveAgents` activation survives an individual waiter's
+   cancellation. Existing initialization, replay, failure, update and ephemeral lifecycle rules
+   apply. There is no
    filesystem-read-specific admission limit, semaphore, timeout or error.
 2. Reads and listings enter the existing `QueuedWorkerInvocation` deque. The constructor must
    complete first: creation reserves its idempotency key before ordinary invocation admission,
@@ -87,6 +102,17 @@ loss aborts the external stream; there is no durable read reattachment contract.
   `golem-service-base/tests/fixtures/http-handlers/corpus.json`, with IDs in assertion failures.
   It exercises actual guest initialization, concurrent first reads, replay after unload,
   initializer failure, prior writes, EOF/drop/update ordering and the same exact path across update.
+- `file_reads_and_listings_of_a_missing_or_deleted_agent_are_not_found_and_create_nothing`
+  proves that reads and listings of a missing or deleted agent create nothing.
+  `tests/api/mod.rs::reads_and_management_racing_each_deletion_stage_find_no_agent` gates the
+  delete before runtime stop, before durable-state removal and before cache removal, and fails
+  cache removal once: at each point every read and management path answers as for a missing
+  agent. `reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent` waits until a read,
+  listing and wallet read are queued behind guest work, then deletes the agent: they answer the
+  same way. `reads_after_a_delete_failed_before_removing_state_keep_the_deletion_error` proves
+  that an agent left in place by a failed delete is not reported missing.
+  `tests/api/mod.rs::wallet_cancel_and_connect_of_a_missing_or_deleted_agent_create_nothing` is
+  a smoke test of absence for the management paths.
 - `services/agent_filesystem/lifecycle/{inspection,inspection_stream}/tests.rs` tests descriptor
   safety, range boundaries, bounded chunks, early EOF, backpressure without expiry and consumer cleanup.
 - `worker/mod.rs` tests transient cancellation pruning and lifecycle failure delivery.

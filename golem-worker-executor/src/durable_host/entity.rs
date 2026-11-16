@@ -135,9 +135,9 @@ pub struct EntityInvocationDurability {
 /// Caller identity captured in guest admission order, before asynchronous dispatch or replay claims.
 #[derive(Clone)]
 pub(crate) struct EntityInvocationKeyContext {
-    caller_key: golem_common::model::IdempotencyKey,
+    caller_key: golem_common::model::InvocationId,
     logical_position: Option<OplogIndex>,
-    stream_session_idempotency_key: golem_common::model::IdempotencyKey,
+    stream_session_idempotency_key: golem_common::model::InvocationId,
 }
 
 impl EntityInvocationKeyContext {
@@ -161,8 +161,8 @@ impl EntityInvocationKeyContext {
         };
         let stream_parent_key = ctx
             .entity_invocation_scope()
-            .map(|scope| scope.stream_session_idempotency_key().clone())
-            .unwrap_or_else(|| caller_key.clone());
+            .map(|scope| *scope.stream_session_idempotency_key())
+            .unwrap_or(caller_key);
         let stream_session_idempotency_key =
             derive_entity_stream_session_key(&stream_parent_key, logical_position, attempt_ordinal);
         Ok(Self {
@@ -174,10 +174,10 @@ impl EntityInvocationKeyContext {
 }
 
 fn derive_entity_stream_session_key(
-    parent: &golem_common::model::IdempotencyKey,
+    parent: &golem_common::model::InvocationId,
     logical_position: Option<OplogIndex>,
     attempt_ordinal: u64,
-) -> golem_common::model::IdempotencyKey {
+) -> golem_common::model::InvocationId {
     let mut stream_name = b"golem:entity-stream-session:v1\0".to_vec();
     match logical_position {
         Some(position) => {
@@ -189,7 +189,7 @@ fn derive_entity_stream_session_key(
             stream_name.extend_from_slice(&attempt_ordinal.to_be_bytes());
         }
     }
-    golem_common::model::IdempotencyKey::derived_from_bytes(parent, &stream_name)
+    uuid::Uuid::new_v5(&parent.0, &stream_name).into()
 }
 
 fn entity_span_started(
@@ -345,7 +345,7 @@ impl EntityInvocationDurability {
         let request = HostRequestEntityInvocation {
             metadata: encoded_metadata,
             input: strip_typed_streams(&input),
-            stream_session_idempotency_key: key_context.stream_session_idempotency_key.clone(),
+            stream_session_idempotency_key: key_context.stream_session_idempotency_key,
         };
         let started_input = request.input.clone();
         let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
@@ -382,7 +382,7 @@ impl EntityInvocationDurability {
             get_ctx,
             parent,
             key_context,
-            key_context.stream_session_idempotency_key.clone(),
+            key_context.stream_session_idempotency_key,
             handle,
             metadata,
             started_input,
@@ -521,7 +521,7 @@ impl EntityInvocationDurability {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
         key_context: &EntityInvocationKeyContext,
-        stream_session_idempotency_key: golem_common::model::IdempotencyKey,
+        stream_session_idempotency_key: golem_common::model::InvocationId,
         mut handle: DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
         metadata: EntityInvocationRequest,
         input: TypedSchemaValue,
@@ -533,14 +533,16 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let (owner, invocation_scope_card, interest) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            (
-                ctx.state.owned_agent_id.clone(),
-                ctx.current_invocation_scope_card(),
-                ctx.state.owner_wallet.interest.clone(),
-            )
-        });
+        let (owner, invocation_scope_card, enclosing_invocation_id, interest) =
+            store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                (
+                    ctx.state.owned_agent_id.clone(),
+                    ctx.current_invocation_scope_card(),
+                    ctx.current_invocation_id(),
+                    ctx.state.owner_wallet.interest.clone(),
+                )
+            });
         let invocation_id = EntityInvocationId::new(
             OwnedAgentEntityId {
                 owner: owner.clone(),
@@ -559,10 +561,15 @@ impl EntityInvocationDurability {
         let calling_principal = Principal::Agent(AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         });
-        let idempotency_key = golem_common::model::IdempotencyKey::derived(
-            &key_context.caller_key,
-            key_context.logical_position.unwrap_or(handle.start_index()),
-        );
+        let idempotency_key = uuid::Uuid::new_v5(
+            &key_context.caller_key.0,
+            format!(
+                "oplog-index-{}",
+                key_context.logical_position.unwrap_or(handle.start_index())
+            )
+            .as_bytes(),
+        )
+        .into();
         let operation = metadata.operation;
         let resolved_position = resolve_recorded_plan(
             store,
@@ -617,6 +624,7 @@ impl EntityInvocationDurability {
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(metadata.authority_wallet)
         .with_invocation_scope_card(invocation_scope_card)
+        .with_enclosing_invocation_id(enclosing_invocation_id)
         .with_span_started(span_started);
         Ok(Self {
             handle,
@@ -726,13 +734,14 @@ impl EntityInvocationDurability {
             scope.activation().clone(),
             scope.calling_principal().clone(),
             InvocationExecutionMode::Live,
-            scope.idempotency_key().clone(),
+            *scope.idempotency_key(),
             scope.logical_key_positions(),
-            scope.stream_session_idempotency_key().clone(),
+            *scope.stream_session_idempotency_key(),
         )
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(scope.authority_wallet().to_vec())
         .with_invocation_scope_card(scope.invocation_scope_card().cloned())
+        .with_enclosing_invocation_id(scope.enclosing_invocation_id().cloned())
         .with_span_started(
             scope
                 .span_started()

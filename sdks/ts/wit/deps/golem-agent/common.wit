@@ -3,6 +3,7 @@ package golem:agent@2.0.0;
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
     metadata-envelope, agent-id, account-id, component-id};
+  use golem:core/http@2.0.0.{http-route-mode, durable-stream-route-options};
   use wasi:clocks/types@0.3.0.{duration};
 
   enum agent-mode {
@@ -158,31 +159,8 @@ interface common {
     query-vars:   list<query-variable>,
     auth-details: option<auth-details>,
     cors-options: cors-options,
+    mode: option<http-route-mode>,
     durable-streams: option<durable-stream-route-options>,
-  }
-
-  record durable-stream-route-options {
-    slots: list<durable-stream-slot-options>,
-    allow-external-writes: option<bool>,
-    allow-stream-delete: option<bool>,
-    allow-invocation-delete: option<bool>,
-    load: option<durable-stream-route-load-options>,
-  }
-
-  record durable-stream-slot-options {
-    source: durable-stream-slot-source,
-    name: option<string>,
-    content-type: option<string>,
-  }
-
-  variant durable-stream-slot-source {
-    input(string),
-    output(string),
-  }
-
-  record durable-stream-route-load-options {
-    max-concurrent-readers-per-stream: option<u32>,
-    max-append-requests-per-second-per-stream: option<u32>,
   }
 
   variant http-method {
@@ -258,6 +236,14 @@ interface common {
 
   record golem-user-principal {
     account-id: account-id
+  }
+
+  /// The principals that caused an invocation.
+  record caller {
+    /// The principal at the root of the call tree.
+    original:  principal,
+    /// The principal that made this call.
+    immediate: principal,
   }
 
   record agent-constructor {

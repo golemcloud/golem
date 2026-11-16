@@ -19,8 +19,7 @@
 //! loss replays the exact attempt. Only an authoritative attachment-state rejection changes
 //! Resume to Takeover (or vice versa); epoch rejection is terminal rather than guessed around.
 
-use golem_api_grpc::proto::golem::worker::{InvocationAccepted, InvocationStart, StreamCancel};
-use golem_common::model::{AgentId, IdempotencyKey as ModelIdempotencyKey};
+use golem_api_grpc::proto::golem::worker::{InvocationAccepted, InvocationStart, StreamEnd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Semaphore, mpsc};
@@ -48,6 +47,7 @@ pub use crate::config::HttpSessionLimits;
 pub enum HttpSessionError {
     InvalidStart(String),
     Rejected,
+    InvocationIdentityConflict(String),
     Protocol(String),
     TransportUnavailable,
     MessageTooLarge(String),
@@ -62,6 +62,7 @@ impl HttpSessionError {
         match self {
             Self::InvalidStart(_) => "invalid_start",
             Self::Rejected => "rejected",
+            Self::InvocationIdentityConflict(_) => "invocation_identity_conflict",
             Self::Protocol(_) => "protocol",
             Self::TransportUnavailable => "transport_unavailable",
             Self::MessageTooLarge(_) => "message_too_large",
@@ -78,9 +79,7 @@ pub enum HttpSessionEvent {
     Accepted(InvocationAccepted),
     Result(Box<golem_api_grpc::proto::golem::worker::InvocationSessionResult>),
     OutputItem(golem_api_grpc::proto::golem::worker::OutputStreamItem),
-    OutputEnd(golem_api_grpc::proto::golem::worker::OutputStreamEnd),
-    OutputError(golem_api_grpc::proto::golem::worker::OutputStreamError),
-    StreamCancel(StreamCancel),
+    StreamEnd(StreamEnd),
     Finished(golem_api_grpc::proto::golem::worker::InvocationSessionCompletion),
     Error(HttpSessionError),
 }
@@ -91,9 +90,7 @@ impl std::fmt::Debug for HttpSessionEvent {
             Self::Accepted(_) => "Accepted",
             Self::Result(_) => "Result",
             Self::OutputItem(_) => "OutputItem",
-            Self::OutputEnd(_) => "OutputEnd",
-            Self::OutputError(_) => "OutputError",
-            Self::StreamCancel(_) => "StreamCancel",
+            Self::StreamEnd(_) => "StreamEnd",
             Self::Finished(_) => "Finished",
             Self::Error(_) => "Error",
         })
@@ -310,6 +307,11 @@ impl HttpSession {
         let cleanup_limits = limits.clone();
         let cleanup_events = event_tx.clone();
         let terminal_error = failure.clone();
+        let cleanup_identity = Arc::new(OnceLock::new());
+        let accepted_cleanup_identity = cleanup_identity.clone();
+        // An unkeyed request's invocation ID needs no fingerprint, so cleanup can target it even
+        // when the session ends before Accepted arrives.
+        let prepared_cleanup_identity = prepared_unkeyed_identity(&prepared_start);
         let session_span = info_span!(
             "http_invocation_session",
             agent = ?cleanup_start.agent_id,
@@ -325,6 +327,7 @@ impl HttpSession {
                     control_rx,
                     event_tx,
                     completed,
+                    accepted_cleanup_identity,
                     close_token.clone(),
                 );
                 tokio::pin!(session);
@@ -364,26 +367,23 @@ impl HttpSession {
                     crate::metrics::record_http_session_explicit_cancellation();
                 }
             }
-            if !completion.load(Ordering::Acquire) {
-                // Prepared identity is final and private, even before Accepted arrives.
-                if let (Some(agent), Some(key)) =
-                    (cleanup_start.agent_id, cleanup_start.idempotency_key)
-                    && let Ok(agent) = AgentId::try_from(agent)
-                {
-                    let started = Instant::now();
-                    let cleanup = tokio::time::timeout(
-                        cleanup_limits.cleanup_timeout,
-                        cleanup_transport.cleanup(agent, ModelIdempotencyKey::new(key.value)),
-                    )
-                    .await;
-                    let outcome = match cleanup {
-                        Ok(CleanupOutcome::FinishedUnconfirmed) => "rpc_finished_unconfirmed",
-                        Ok(CleanupOutcome::RpcFailure) => "rpc_failure",
-                        Err(_) => "timeout",
-                    };
-                    debug!(outcome, "HTTP session cleanup finished");
-                    crate::metrics::record_http_session_cleanup_outcome(outcome, started.elapsed());
-                }
+            if !completion.load(Ordering::Acquire)
+                && let Some((agent, key)) =
+                    cleanup_identity.get().cloned().or(prepared_cleanup_identity)
+            {
+                let started = Instant::now();
+                let cleanup = tokio::time::timeout(
+                    cleanup_limits.cleanup_timeout,
+                    cleanup_transport.cleanup(agent, key),
+                )
+                .await;
+                let outcome = match cleanup {
+                    Ok(CleanupOutcome::FinishedUnconfirmed) => "rpc_finished_unconfirmed",
+                    Ok(CleanupOutcome::RpcFailure) => "rpc_failure",
+                    Err(_) => "timeout",
+                };
+                debug!(outcome, "HTTP session cleanup finished");
+                crate::metrics::record_http_session_cleanup_outcome(outcome, started.elapsed());
             }
         }.instrument(session_span));
         Ok(Self {
@@ -406,3 +406,18 @@ impl HttpSession {
 
 #[cfg(test)]
 pub(super) mod tests;
+
+fn prepared_unkeyed_identity(
+    start: &InvocationStart,
+) -> Option<(
+    golem_common::model::AgentId,
+    golem_common::model::InvocationId,
+)> {
+    let request_key =
+        golem_common::model::InvocationRequestKey::try_from(start.request_key.clone()?).ok()?;
+    let golem_common::model::InvocationRequestKey::Unkeyed(uuid) = request_key else {
+        return None;
+    };
+    let agent = golem_common::model::AgentId::try_from(start.agent_id.clone()?).ok()?;
+    Some((agent, golem_common::model::InvocationId(uuid)))
+}

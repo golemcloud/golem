@@ -68,7 +68,8 @@ Awaited RPC is interruptible: fiber interruption cancels the result handle. Canc
 effort; remote side effects may already have happened. Triggering and scheduling methods whose
 schema contains a live stream is rejected because streams require an awaited invocation. An
 ephemeral call returns `{ metadata, value }`, and an ephemeral trigger/schedule exposes invocation
-metadata. Config overrides are passed as the second argument to `client.get`/`newPhantom`.
+metadata: the target `agentId` and the typed `invocationId`. `InvocationId.format` and
+`InvocationId.parse` convert an invocation ID to and from its `<agent-id>.<uuid>` text form. Config overrides are passed as the second argument to `client.get`/`newPhantom`.
 
 Use `defineAgentClient` for caller-owned clients. A full client definition has a declared name,
 constructor schema, lifecycle mode, and methods; it exposes `agentId` and `client` factories without
