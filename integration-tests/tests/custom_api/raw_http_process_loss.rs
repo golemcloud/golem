@@ -292,6 +292,88 @@ async fn steady_request_body_preserves_bytes_over_many_idle_intervals(
     Ok(())
 }
 
+async fn explicit_cancellations(metrics_port: u16) -> anyhow::Result<u64> {
+    let metrics = reqwest::get(format!("http://127.0.0.1:{metrics_port}/metrics"))
+        .await?
+        .text()
+        .await?;
+    Ok(metrics
+        .lines()
+        .find_map(|line| line.strip_prefix("http_session_explicit_cancellations_total "))
+        .map(|value| value.trim().parse::<f64>())
+        .transpose()?
+        .unwrap_or_default() as u64)
+}
+
+#[test]
+#[timeout("2m")]
+async fn unread_incomplete_body_does_not_wait_for_acceptance_through_an_outage(
+    context: &RawHttpProcessLossContext,
+    cluster: &WorkerExecutorClusterControlStub,
+) -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let ports = free_ports().await?;
+    let _service = spawn_worker_service(
+        &context.http.user.deps,
+        ports,
+        &[(
+            "GOLEM__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
+            "2s".into(),
+        )],
+    )
+    .await;
+    cluster
+        .kill_all_and_wait(60_000)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let result = async {
+        let request = format!(
+            "POST /raw/echo HTTP/1.1\r\nHost: {}\r\nContent-Length: 100\r\n\r\nx",
+            context.http.host_header.to_str()?
+        );
+        let mut connected = TcpStream::connect(("127.0.0.1", ports[2])).await?;
+        connected.write_all(request.as_bytes()).await?;
+        let mut disconnected = TcpStream::connect(("127.0.0.1", ports[2])).await?;
+        disconnected.write_all(request.as_bytes()).await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        drop(disconnected);
+
+        let mut head = Vec::new();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            let mut buffer = [0u8; 1024];
+            while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = connected.read(&mut buffer).await?;
+                anyhow::ensure!(read > 0, "connection closed before a response head");
+                head.extend_from_slice(&buffer[..read]);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("an unread body waited for acceptance without a bound"))??;
+        anyhow::ensure!(
+            head.starts_with(b"HTTP/1.1 504"),
+            "unexpected response: {}",
+            String::from_utf8_lossy(&head)
+        );
+
+        // The disconnected client sees no response, so the ended sessions are counted instead.
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while explicit_cancellations(ports[0]).await? < 2 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("a disconnected request kept its session"))??;
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    cluster.restart_all().await;
+    result
+}
+
 #[test]
 #[timeout("3m")]
 async fn lifecycle_serving_process_loss(context: &RawHttpProcessLossContext) -> anyhow::Result<()> {

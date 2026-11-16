@@ -219,6 +219,14 @@ EOF. It does not interrupt the invocation or cancel another stream; the handler
 can catch the error and return its own response. There is no whole-handler or
 streaming-response deadline.
 
+A request with a nonzero `Content-Length` or a chunked HTTP/1 body also waits at
+most `request_body_idle_timeout` for the invocation to accept it, for example
+while no executor owns the agent's shard or while the agent's instance loads. On
+expiry the gateway returns 504 and cancels the request, so a client that
+disconnects in the middle of a body does not hold the request for the whole
+outage. A request without a body keeps waiting for acceptance. Raise the limit
+for agents whose instances take longer than that to load.
+
 `file_lookup_timeout` separately bounds a live-file exchange: lookup, response
 preparation and response-body delivery. There is no separate executor file-read
 deadline. Expiry returns 504 before response commitment or aborts a started

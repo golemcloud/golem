@@ -95,6 +95,7 @@ impl RawHandler {
             &mut upload,
             upload_done.clone(),
             self.limits.request_body_idle_timeout,
+            has_request_body,
         )
         .await?;
         let (status, headers, output_id) = parse_response(response_value)?;
@@ -211,16 +212,23 @@ pub(super) async fn receive_response_head(
     upload: &mut Option<AbortOnDropHandle<()>>,
     upload_done: Arc<AtomicBool>,
     idle_timeout: std::time::Duration,
+    has_request_body: bool,
 ) -> Result<ProtoValue, RequestHandlerError> {
     let mut body = Some(body);
+    // Before acceptance nothing polls the body, so the HTTP server does not notice a client
+    // that disconnects mid-body. The acceptance wait of such a request is bounded instead.
+    let mut acceptance_deadline =
+        has_request_body.then(|| tokio::time::Instant::now() + idle_timeout);
     loop {
-        match session
-            .events
-            .recv()
-            .await
-            .ok_or(RequestHandlerError::RawBadGateway)?
-        {
+        let event = match acceptance_deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, session.events.recv())
+                .await
+                .map_err(|_| RequestHandlerError::RawAcceptanceTimeout)?,
+            None => session.events.recv().await,
+        };
+        match event.ok_or(RequestHandlerError::RawBadGateway)? {
             HttpSessionEvent::Accepted(_) => {
+                acceptance_deadline = None;
                 if upload.is_none() {
                     *upload = Some(start_upload(
                         body.take().ok_or(RequestHandlerError::RawBadGateway)?,

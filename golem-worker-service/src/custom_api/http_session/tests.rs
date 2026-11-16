@@ -2241,6 +2241,117 @@ fn request_body_idle_timeout_fails_only_the_input_stream() {
 
 #[test]
 #[test_timeout("10s")]
+fn unread_request_body_bounds_only_the_wait_for_acceptance() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            const IDLE: Duration = Duration::from_secs(1);
+            let idle = IDLE;
+            async fn receive(
+                session: &mut HttpSession,
+                body_rx: mpsc::Receiver<Result<bytes::Bytes, std::io::Error>>,
+                upload: &mut Option<tokio_util::task::AbortOnDropHandle<()>>,
+                has_request_body: bool,
+            ) -> Result<(), crate::custom_api::error::RequestHandlerError> {
+                crate::custom_api::raw_handler::receive_response_head(
+                    session,
+                    poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(
+                        body_rx,
+                    )),
+                    upload,
+                    Arc::new(AtomicBool::new(false)),
+                    IDLE,
+                    has_request_body,
+                )
+                .await
+                .map(|_| ())
+            }
+
+            // An incomplete body that is never polled, and no acceptance.
+            let h = harness(1);
+            let mut session = h.start_session();
+            let (tx, rx) = mpsc::channel(1);
+            tx.send(Ok(bytes::Bytes::from_static(b"x"))).await.unwrap();
+            let started = tokio::time::Instant::now();
+            let result = timeout(
+                Duration::from_secs(30),
+                receive(&mut session, rx, &mut None, true),
+            )
+            .await
+            .expect("the acceptance wait of an unread body is unbounded");
+            assert!(matches!(
+                result,
+                Err(crate::custom_api::error::RequestHandlerError::RawAcceptanceTimeout)
+            ));
+            assert_eq!(started.elapsed(), idle);
+
+            // A bodyless request keeps waiting for acceptance.
+            let h = harness(1);
+            let mut session = h.start_session();
+            let (_tx, rx) = mpsc::channel(1);
+            assert!(
+                timeout(idle * 10, receive(&mut session, rx, &mut None, false))
+                    .await
+                    .is_err()
+            );
+
+            // After acceptance the response head may take longer than the bound.
+            let h = harness(1);
+            let mut session = h.start_session();
+            let (_tx, rx) = mpsc::channel(1);
+            send(&h.response_txs[0], accepted(1, None)).await;
+            let response_tx = h.response_txs[0].clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(idle * 5).await;
+                send(&response_tx, scalar_result()).await;
+            });
+            let mut upload = None;
+            receive(&mut session, rx, &mut upload, true)
+                .await
+                .expect("an accepted handler was bounded by the acceptance wait");
+            assert!(upload.is_some());
+
+            // Dropping the unread input after acceptance does not bring the bound back.
+            let h = harness(1);
+            let mut session = h.start_session();
+            let (_tx, rx) = mpsc::channel(1);
+            send(&h.response_txs[0], accepted(1, None)).await;
+            send(
+                &h.response_txs[0],
+                response(invocation_response::Response::StreamEnd(StreamEnd {
+                    transport_stream_id: INPUT_STREAM_ID,
+                    producer_sequence: 0,
+                    direction: StreamDirection::Input as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        StreamTerminal::ConsumerCancelled { details: None }
+                            .try_into()
+                            .unwrap(),
+                    ),
+                    durable_stream_id: Some(uuid(101)),
+                    durable_offset: offset(0),
+                    epoch: 1,
+                })),
+            )
+            .await;
+            let response_tx = h.response_txs[0].clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(idle * 5).await;
+                send(&response_tx, scalar_result()).await;
+            });
+            let mut upload = None;
+            receive(&mut session, rx, &mut upload, true)
+                .await
+                .expect("dropping the input brought back the acceptance bound");
+            assert!(upload.is_none());
+        });
+}
+
+#[test]
+#[test_timeout("10s")]
 fn guest_input_disposal_stops_the_upload_without_a_late_idle_failure() {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2282,6 +2393,7 @@ fn guest_input_disposal_stops_the_upload_without_a_late_idle_failure() {
                 &mut upload,
                 done.clone(),
                 Duration::from_secs(1),
+                true,
             )
             .await
             .unwrap();

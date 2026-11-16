@@ -81,6 +81,8 @@ pub enum RequestHandlerError {
     RawInternal,
     #[error("Live file response timed out")]
     RawDeadline,
+    #[error("Invocation was not accepted within the request body idle timeout")]
+    RawAcceptanceTimeout,
 }
 
 impl RequestHandlerError {
@@ -123,7 +125,8 @@ impl SafeDisplay for RequestHandlerError {
             | Self::RawBadGateway
             | Self::RawMessageTooLarge(_)
             | Self::RawInternal
-            | Self::RawDeadline => self.to_string(),
+            | Self::RawDeadline
+            | Self::RawAcceptanceTimeout => self.to_string(),
         }
     }
 }
