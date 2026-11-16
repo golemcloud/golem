@@ -27,7 +27,7 @@ use golem_common::model::card::{
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
-use poem::{IntoResponse, Request};
+use poem::{Endpoint, EndpointExt, IntoEndpoint, IntoResponse, Request};
 use poem_openapi::SecurityScheme;
 use poem_openapi::auth::{ApiKey, Bearer};
 use std::collections::BTreeSet;
@@ -35,7 +35,6 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
-pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
 static EMPTY_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> = LazyLock::new(BTreeSet::new);
 
 #[derive(SecurityScheme)]
@@ -52,22 +51,33 @@ pub struct GolemBearer(TokenSecret);
 )]
 pub struct GolemCookie(TokenSecret);
 
-/// A bearer token that is not a well-formed token secret cannot belong to any account,
-/// so it gets the same response as a well-formed token that no account owns.
-async fn bearer_checker(_: &Request, bearer: Bearer) -> poem::Result<TokenSecret> {
-    TokenSecret::from_str(&bearer.token).map_err(|_| could_not_authenticate())
+async fn bearer_checker(_: &Request, bearer: Bearer) -> Option<TokenSecret> {
+    TokenSecret::from_str(&bearer.token).ok()
 }
 
-fn could_not_authenticate() -> poem::Error {
-    poem::Error::from_response(
-        poem::web::Json(ErrorBody {
-            code: AUTH_UNAUTHORIZED.to_string(),
-            error: "Could not authenticate user using token".to_string(),
-            cause: None,
+/// The response to a request without usable credentials. It is the same response that the
+/// services give to a well-formed token that no account owns.
+fn could_not_authenticate() -> poem::Response {
+    poem::web::Json(ErrorBody {
+        code: AUTH_UNAUTHORIZED.to_string(),
+        error: "Could not authenticate user using token".to_string(),
+        cause: None,
+    })
+    .with_status(http::StatusCode::UNAUTHORIZED)
+    .into_response()
+}
+
+/// Answers every failure of the OpenAPI security schemes with the JSON 401 of
+/// `could_not_authenticate`. poem-openapi reports a missing, unparseable or malformed credential
+/// as its own `AuthorizationError`, whose default response has a plain-text body.
+pub fn with_json_auth_errors(
+    endpoint: impl IntoEndpoint,
+) -> impl Endpoint<Output = poem::Response> {
+    endpoint
+        .into_endpoint()
+        .catch_error(|_: poem_openapi::error::AuthorizationError| async {
+            could_not_authenticate()
         })
-        .with_status(http::StatusCode::UNAUTHORIZED)
-        .into_response(),
-    )
 }
 
 async fn cookie_checker(_: &Request, cookie: ApiKey) -> Option<TokenSecret> {
@@ -135,10 +145,11 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
         use poem::web::cookie::CookieJar;
         use poem::web::headers::{Authorization, HeaderMapExt, authorization::Bearer as BearerWeb};
 
-        fn extract_bearer_token(req: &Request) -> Option<Result<TokenSecret, &'static str>> {
+        fn extract_bearer_token(req: &Request) -> Option<GolemSecurityScheme> {
             req.headers()
                 .typed_get::<Authorization<BearerWeb>>()
-                .map(|Authorization(bearer)| TokenSecret::from_str(bearer.token()))
+                .and_then(|Authorization(bearer)| TokenSecret::from_str(bearer.token()).ok())
+                .map(|token| GolemSecurityScheme::Bearer(GolemBearer(token)))
         }
 
         fn extract_cookie_token(cookie_jar: &CookieJar) -> Option<GolemSecurityScheme> {
@@ -153,20 +164,12 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
             e
         })?;
 
-        let result = match extract_bearer_token(req) {
-            Some(Ok(token)) => GolemSecurityScheme::Bearer(GolemBearer(token)),
-            bearer => match extract_cookie_token(cookie_jar) {
-                Some(cookie) => cookie,
-                None if bearer.is_some() => return Err(could_not_authenticate()),
-                None => {
-                    tracing::info!("No valid token or cookie present, returning error");
-                    return Err(poem::Error::from_string(
-                        AUTH_ERROR_MESSAGE,
-                        http::StatusCode::UNAUTHORIZED,
-                    ));
-                }
-            },
-        };
+        let result = extract_bearer_token(req)
+            .or_else(|| extract_cookie_token(cookie_jar))
+            .ok_or_else(|| {
+                tracing::info!("No valid token or cookie present, returning error");
+                poem::Error::from_response(could_not_authenticate())
+            })?;
 
         Ok(WrappedGolemSecuritySchema(result))
     }
@@ -484,8 +487,9 @@ mod invocation_scope_tests {
 
 #[cfg(test)]
 mod test {
-    use super::AUTH_ERROR_MESSAGE;
-    use super::{COOKIE_KEY, GolemSecurityScheme, WrappedGolemSecuritySchema};
+    use super::{
+        COOKIE_KEY, GolemSecurityScheme, WrappedGolemSecuritySchema, with_json_auth_errors,
+    };
     use http::StatusCode;
     use poem::{
         EndpointExt, Request,
@@ -573,7 +577,10 @@ mod test {
     }
 
     fn make_openapi() -> poem::Route {
-        poem::Route::new().nest("/", OpenApiService::new(TestApi, "test", "1.0"))
+        poem::Route::new().nest(
+            "/",
+            with_json_auth_errors(OpenApiService::new(TestApi, "test", "1.0")),
+        )
     }
 
     fn make_non_openapi() -> poem::Route {
@@ -598,16 +605,7 @@ mod test {
         response.assert_text(format!("cookie: {VALID_UUID}")).await;
     }
 
-    async fn no_auth(api: poem::Route) {
-        let client = TestClient::new(api);
-        let response = client.get("/test").send().await;
-        response.assert_status(StatusCode::UNAUTHORIZED);
-        response.assert_text(AUTH_ERROR_MESSAGE).await;
-    }
-
-    async fn malformed_bearer_auth(api: poem::Route) {
-        let client = TestClient::new(api);
-        let response = make_bearer_request(&client, "rotated-token").await;
+    async fn assert_unauthorized(response: TestResponse) {
         response.assert_status(StatusCode::UNAUTHORIZED);
         response.assert_content_type("application/json; charset=utf-8");
         response
@@ -616,6 +614,31 @@ mod test {
                 "error": "Could not authenticate user using token",
             }))
             .await;
+    }
+
+    async fn no_auth(api: poem::Route) {
+        let client = TestClient::new(api);
+        assert_unauthorized(client.get("/test").send().await).await;
+    }
+
+    async fn malformed_bearer_auth(api: poem::Route) {
+        let client = TestClient::new(api);
+        assert_unauthorized(make_bearer_request(&client, "rotated-token").await).await;
+    }
+
+    async fn unparseable_authorization_header(api: poem::Route) {
+        let client = TestClient::new(api);
+        let response = client
+            .get("/test")
+            .header(http::header::AUTHORIZATION, format!("Basic {VALID_UUID}"))
+            .send()
+            .await;
+        assert_unauthorized(response).await;
+    }
+
+    async fn malformed_cookie_only_auth(api: poem::Route) {
+        let client = TestClient::new(api);
+        assert_unauthorized(make_cookie_request(&client, "rotated-token").await).await;
     }
 
     async fn conflict_bearer_valid(api: poem::Route) {
@@ -666,6 +689,16 @@ mod test {
     }
 
     #[test]
+    async fn unparseable_authorization_header_openapi() {
+        unparseable_authorization_header(make_openapi()).await;
+    }
+
+    #[test]
+    async fn malformed_cookie_only_auth_openapi() {
+        malformed_cookie_only_auth(make_openapi()).await;
+    }
+
+    #[test]
     async fn conflict_bearer_valid_openapi() {
         conflict_bearer_valid(make_openapi()).await;
     }
@@ -704,6 +737,16 @@ mod test {
     #[test]
     async fn malformed_bearer_auth_non_openapi() {
         malformed_bearer_auth(make_non_openapi()).await;
+    }
+
+    #[test]
+    async fn unparseable_authorization_header_non_openapi() {
+        unparseable_authorization_header(make_non_openapi()).await;
+    }
+
+    #[test]
+    async fn malformed_cookie_only_auth_non_openapi() {
+        malformed_cookie_only_auth(make_non_openapi()).await;
     }
 
     #[test]

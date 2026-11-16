@@ -48,11 +48,26 @@ async fn server_refuses_well_known_token_on_non_loopback_address(_tracing: &Trac
 
 #[test]
 #[timeout("10m")]
-async fn malformed_token_is_reported_as_unauthorized(_tracing: &Tracing) {
+async fn unauthenticated_requests_get_json_unauthorized(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
-    ctx.add_env_var("GOLEM_AUTH_TOKEN", "rotated-token");
 
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for path in [
+        "/v1/me/token".to_string(),
+        format!("/v1/components/{}/workers/agent", uuid::Uuid::new_v4()),
+    ] {
+        let response = client
+            .get(format!("http://127.0.0.1:{}{path}", ctx.router_port()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "AUTH_UNAUTHORIZED", "{path}: {body}");
+    }
+
+    ctx.add_env_var("GOLEM_AUTH_TOKEN", "rotated-token");
     let output = ctx.cli([cmd::ACCOUNT, "usage", "show"]).await;
 
     assert!(!output.success());
