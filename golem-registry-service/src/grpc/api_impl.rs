@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::error::GrpcApiError;
-use crate::repo::component::ComponentRevisionSelection;
 use crate::repo::registry_change::RegistryChangeRepo;
 use crate::services::account_usage::{AccountUsageService, ResourceUsageUpdate};
 use crate::services::auth::AuthService;
@@ -488,12 +487,7 @@ impl RegistryServiceGrpcApi {
 
         let result = self
             .component_service
-            .download_component_wasm(
-                component_id,
-                revision,
-                ComponentRevisionSelection::Any,
-                &AuthCtx::System,
-            )
+            .download_internal_component_wasm(component_id, revision, &AuthCtx::System)
             .await?;
         Ok(result)
     }
@@ -511,12 +505,7 @@ impl RegistryServiceGrpcApi {
 
         let component = self
             .component_service
-            .get_component_revision(
-                component_id,
-                revision,
-                ComponentRevisionSelection::Any,
-                &AuthCtx::System,
-            )
+            .get_internal_component_revision(component_id, revision, &AuthCtx::System)
             .await?;
 
         Ok(GetComponentMetadataSuccessResponse {

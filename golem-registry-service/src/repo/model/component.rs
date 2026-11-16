@@ -31,6 +31,7 @@ use golem_service_base::model::component::Component;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -471,6 +472,14 @@ pub struct ComponentAuthExtRevisionRecord {
     pub environment_tool_compatibility_mode: String,
     pub environment_version_check: bool,
     pub environment_security_overrides: bool,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentExactRevisionRecord {
+    #[sqlx(flatten)]
+    pub record: ComponentAuthExtRevisionRecord,
+    pub component_deleted_at: Option<SqlDateTime>,
+    pub latest_deletion_revision: Option<i64>,
 }
 
 impl ComponentAuthExtRevisionRecord {

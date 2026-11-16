@@ -17,8 +17,8 @@ use crate::repo::environment::DbEnvironmentRepo;
 use crate::repo::model::BindFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::component::{
-    ComponentAuthExtRevisionRecord, ComponentExtRevisionRecord, ComponentRepoError,
-    ComponentRevisionIdentityRecord, ComponentRevisionRecord,
+    ComponentAuthExtRevisionRecord, ComponentExactRevisionRecord, ComponentExtRevisionRecord,
+    ComponentRepoError, ComponentRevisionIdentityRecord, ComponentRevisionRecord,
 };
 use crate::repo::registry_change::{RequiresNotificationSignal, RequiresSignalExt};
 use async_trait::async_trait;
@@ -39,19 +39,6 @@ use sqlx::{Database, Row};
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
-
-/// Selects which revisions a read of an exact `(component ID, revision)` returns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ComponentRevisionSelection {
-    /// A revision of the component as it is now: the component is not deleted, and the revision
-    /// is newer than the latest deletion of the component.
-    Current,
-    /// Any revision that is not a deletion tombstone, also after the component is deleted or
-    /// recreated.
-    Retained,
-    /// Any revision, including a deletion tombstone.
-    Any,
-}
 
 #[async_trait]
 pub trait ComponentRepo: Send + Sync {
@@ -107,8 +94,7 @@ pub trait ComponentRepo: Send + Sync {
         &self,
         component_id: Uuid,
         revision_id: i64,
-        selection: ComponentRevisionSelection,
-    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExactRevisionRecord>>;
 
     async fn list_staged(
         &self,
@@ -284,10 +270,9 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         component_id: Uuid,
         revision_id: i64,
-        selection: ComponentRevisionSelection,
-    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExactRevisionRecord>> {
         self.repo
-            .get_by_id_and_revision(component_id, revision_id, selection)
+            .get_by_id_and_revision(component_id, revision_id)
             .instrument(Self::span_id_and_revision(component_id, revision_id))
             .await
     }
@@ -913,13 +898,19 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         &self,
         component_id: Uuid,
         revision_id: i64,
-        selection: ComponentRevisionSelection,
-    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExactRevisionRecord>> {
         let revision = self
             .with_ro("get_by_id_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT c.environment_id, c.name,
+                           c.deleted_at AS component_deleted_at,
+                           (
+                               SELECT MAX(deleted_cr.revision_id)
+                               FROM component_revisions deleted_cr
+                               WHERE deleted_cr.component_id = c.component_id
+                                   AND deleted_cr.deleted
+                           ) AS latest_deletion_revision,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata,
@@ -943,25 +934,12 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     JOIN component_revisions cr ON c.component_id = cr.component_id
                     WHERE c.component_id = $1
                         AND cr.revision_id = $2
-                        AND ($3 OR c.deleted_at IS NULL)
-                        AND ($3 OR cr.revision_id > COALESCE(
-                            (
-                                SELECT MAX(deleted_cr.revision_id)
-                                FROM component_revisions deleted_cr
-                                WHERE deleted_cr.component_id = c.component_id
-                                    AND deleted_cr.deleted
-                            ),
-                            -1
-                        ))
-                        AND ($4 OR NOT cr.deleted)
                         AND e.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
                         AND a.deleted_at IS NULL
                 "#})
                 .bind(component_id)
-                .bind(revision_id)
-                .bind(selection != ComponentRevisionSelection::Current)
-                .bind(selection == ComponentRevisionSelection::Any),
+                .bind(revision_id),
             )
             .await?;
 

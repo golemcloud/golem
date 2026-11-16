@@ -18,7 +18,6 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use super::permission_share::{PermissionShareError, PermissionShareService};
 use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::card::CardRepo;
-use crate::repo::component::ComponentRevisionSelection;
 use crate::repo::environment::EnvironmentDefaultCardRef;
 use crate::repo::model::card::{CardRecord, CardRepoError};
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -388,10 +387,9 @@ impl CardService {
             if let CardManagedBy::AgentInitial(managed_by) = managed_by {
                 let component = self
                     .component_service
-                    .get_component_revision(
+                    .get_source_component_revision(
                         managed_by.component_id,
                         managed_by.component_revision,
-                        ComponentRevisionSelection::Current,
                         &AuthCtx::System,
                     )
                     .await
@@ -456,20 +454,18 @@ impl CardService {
                 .map_err(Into::into),
             Some(CardManagedBy::AgentInitial(managed_by)) => Ok(self
                 .component_service
-                .get_component_revision(
+                .get_internal_component_revision(
                     managed_by.component_id,
                     managed_by.component_revision,
-                    ComponentRevisionSelection::Any,
                     &AuthCtx::System,
                 )
                 .await?
                 .account_email),
             Some(CardManagedBy::ComponentInitial(managed_by)) => Ok(self
                 .component_service
-                .get_component_revision(
+                .get_internal_component_revision(
                     managed_by.component_id,
                     managed_by.component_revision,
-                    ComponentRevisionSelection::Any,
                     &AuthCtx::System,
                 )
                 .await?
