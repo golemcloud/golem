@@ -31,6 +31,7 @@ mod retry_policies;
 mod rpc_auth;
 mod security_schemes;
 pub(crate) mod streaming_rpc;
+mod tool_env_overlay;
 
 use golem_test_framework::config::EnvBasedTestDependencies;
 use test_r::inherit_test_dep;
