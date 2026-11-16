@@ -1,8 +1,7 @@
 error[E0080]: evaluation panicked: Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.caller() (golem_rust::agentic::InvocationContext), and store ctx.caller().original().principal_ref() as a PrincipalRef.
  --> $RUST/core/src/panic.rs
   |
-  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
-  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `golem_rust::caller::Rule8::<golem_rust::caller::Principal>::REJECTED` failed here
+  = note: evaluation of `golem_rust::caller::Rule8::<golem_rust::caller::Principal>::REJECTED` failed here
   |
  ::: src/caller.rs
   |
