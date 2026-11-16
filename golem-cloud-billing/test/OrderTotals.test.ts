@@ -36,6 +36,30 @@ describe("itemTotals", () => {
     ])
   })
 
+  it("gives a cent that is left to the first item when the remainders are equal", () => {
+    // 12054 × w / 10045 leaves the remainder 2009 for each item.
+    expect(itemTotals({ items: [item(41), item(10001), item(1), item(1), item(1)], discountAmount: 0, amount: 12054 })).toEqual([
+      50, 12001, 1, 1, 1
+    ])
+  })
+
+  it("rounds the share of a proration credit down, like the other shares", () => {
+    // 1000 × w / 1161 gives 861.33, -291.99 and 430.66. Rounded down: 861, -292 and 430, and the
+    // cent that is left goes to the largest remainder, 0.66.
+    expect(itemTotals({ items: [item(1000), item(-339, true), item(500)], discountAmount: 0, amount: 1000 })).toEqual([
+      861, -292, 431
+    ])
+  })
+
+  it("shares large amounts exactly", () => {
+    expect(itemTotals({ items: [item(99_999_998), item(1)], discountAmount: 0, amount: 99_999_999 })).toEqual([
+      99_999_998, 1
+    ])
+    expect(itemTotals({ items: [item(60_000_001), item(39_999_998)], discountAmount: 0, amount: 99_999_998 })).toEqual([
+      60_000_000, 39_999_998
+    ])
+  })
+
   it("gives nothing when the invoice charges nothing", () => {
     expect(itemTotals({ items: [item(2000), item(345)], discountAmount: 2345, amount: 0 })).toEqual([0, 0])
     expect(itemTotals({ items: [], discountAmount: 0, amount: 0 })).toEqual([])

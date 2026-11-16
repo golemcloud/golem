@@ -26,19 +26,26 @@ export const itemTotals = (order: {
 /**
  * Splits `amount` by `weights` into whole cents that add up to `amount`: each share is rounded
  * down, and the cents that are left go to the largest remainders, the first item first on a tie.
- * Nothing to split, or no positive weight, gives 0 to each.
+ * Nothing to split, or no positive weight, gives 0 to each. The arithmetic is on integers, so that
+ * equal remainders compare equal and a product of two amounts stays exact.
  */
 const share = (amount: number, weights: ReadonlyArray<number>): ReadonlyArray<number> => {
   const sum = weights.reduce((total, weight) => total + weight, 0)
   if (amount <= 0 || sum <= 0) {
     return weights.map(() => 0)
   }
-  const exact = weights.map((weight) => (amount * weight) / sum)
-  const shares = exact.map((value) => Math.floor(value))
+  const divisor = BigInt(sum)
+  const parts = weights.map((weight, index) => {
+    const product = BigInt(amount) * BigInt(weight)
+    // BigInt division rounds toward zero; a negative weight (a proration credit) rounds down.
+    const quotient = product / divisor - (product < 0n && product % divisor !== 0n ? 1n : 0n)
+    return { index, quotient, remainder: product - quotient * divisor }
+  })
+  const shares = parts.map((part) => Number(part.quotient))
   let left = amount - shares.reduce((total, value) => total + value, 0)
-  const byRemainder = exact
-    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
-    .sort((a, b) => b.remainder - a.remainder || a.index - b.index)
+  const byRemainder = [...parts].sort((a, b) =>
+    a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1
+  )
   for (const { index } of byRemainder) {
     if (left <= 0) break
     shares[index] = (shares[index] ?? 0) + 1
