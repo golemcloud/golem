@@ -19,7 +19,7 @@ use futures::FutureExt;
 use golem_common::model::account_path::AccountSegment;
 use golem_common::model::plan_dimension::{
     DeclaredBounds, DeclaredMax, DimensionBoundsError, DimensionDeclaration, EffectiveBounds,
-    EndpointSource, InstallationAvailability, PlanDimension,
+    EndpointSource, InstallationAvailability, OperatingValue, PlanDimension,
 };
 use golem_registry_service::repo::account_guard::{
     DbGuards, GuardClass, GuardMode, GuardSet, guard_key,
@@ -484,6 +484,183 @@ pub async fn test_plan_seed_keeps_later_edits(deps: &Deps) {
     let current = repo.get_definition(plan_id).await.unwrap().unwrap();
     assert!(current.record.current_revision == 1);
     assert!(current.policy == range(None, 99));
+}
+
+const RATE: PlanDimension = PlanDimension::OplogWritesPerSecond;
+
+fn with_default(
+    dimension: PlanDimension,
+    min: Option<u64>,
+    max: Option<DeclaredMax>,
+    default: DeclaredMax,
+) -> PlanPolicy {
+    PlanPolicy::from([(
+        dimension,
+        DimensionDeclaration {
+            bounds: DeclaredBounds { min, max },
+            operating: Some(OperatingValue {
+                default,
+                user_configurable: true,
+            }),
+        },
+    )])
+}
+
+/// A rejected policy and a check of the error it must produce.
+type Rejection = (PlanPolicy, fn(&PlanStorageRepoError) -> bool);
+
+fn rate(min: Option<u64>, max: Option<u64>, default: DeclaredMax) -> PlanPolicy {
+    with_default(RATE, min, max.map(DeclaredMax::Finite), default)
+}
+
+/// An operating default must be a value of the dimension and lie within the declaration's own
+/// bounds. A rejected create, seed or edit writes nothing.
+pub async fn test_plan_operating_defaults_are_validated(deps: &Deps) {
+    use DeclaredMax::{Finite, Unlimited};
+    let repo = &deps.plan_storage_repo;
+    let root = root(deps).await;
+    let top = RATE.rule().finite_max;
+
+    let rejected: Vec<Rejection> = vec![
+        // Zero is outside the rate's finite values.
+        (rate(None, Some(100), Finite(0)), |error| {
+            matches!(
+                error,
+                PlanStorageRepoError::InvalidDefault {
+                    dimension: RATE,
+                    error: DimensionBoundsError::OutsideDomain { value: 0, .. },
+                }
+            )
+        }),
+        // The finite values end below the runtime's unlimited sentinel.
+        (rate(None, None, Finite(top + 1)), |error| {
+            matches!(
+                error,
+                PlanStorageRepoError::InvalidDefault {
+                    dimension: RATE,
+                    error: DimensionBoundsError::OutsideDomain { .. },
+                }
+            )
+        }),
+        // Above the declared maximum, and below the declared minimum.
+        (rate(None, Some(100), Finite(101)), |error| {
+            matches!(
+                error,
+                PlanStorageRepoError::InvalidDefault {
+                    dimension: RATE,
+                    error: DimensionBoundsError::Incompatible { .. },
+                }
+            )
+        }),
+        (rate(Some(10), Some(100), Finite(9)), |error| {
+            matches!(
+                error,
+                PlanStorageRepoError::InvalidDefault {
+                    dimension: RATE,
+                    error: DimensionBoundsError::Incompatible { .. },
+                }
+            )
+        }),
+        // Unlimited exceeds a finite maximum.
+        (rate(None, Some(100), Unlimited), |error| {
+            matches!(
+                error,
+                PlanStorageRepoError::UnlimitedDefaultAboveMaximum { dimension: RATE }
+            )
+        }),
+        // A dimension without an unbounded value cannot default to unlimited.
+        (with_default(DIMENSION, None, None, Unlimited), |error| {
+            matches!(
+                error,
+                PlanStorageRepoError::InvalidDefault {
+                    dimension: DIMENSION,
+                    error: DimensionBoundsError::UnboundedNotAllowed { .. },
+                }
+            )
+        }),
+    ];
+
+    let plan_id = define(deps, root.account_id, rate(None, Some(100), Finite(50))).await;
+    let before = repo.get_definition(plan_id).await.unwrap().unwrap();
+    for (policy, expected) in &rejected {
+        let created_id = Uuid::new_v4();
+        let_assert!(
+            Err(error) = repo
+                .create_definition(root.account_id, created_id, name(), policy.clone(), actor())
+                .await
+        );
+        assert!(expected(&error), "create: {error:?} for {policy:?}");
+        assert!(repo.get_definition(created_id).await.unwrap().is_none());
+
+        let seeded_id = Uuid::new_v4();
+        let_assert!(
+            Err(error) = repo
+                .seed_definition(root.account_id, seeded_id, name(), policy.clone(), actor())
+                .await
+        );
+        assert!(expected(&error), "seed: {error:?} for {policy:?}");
+        assert!(repo.get_definition(seeded_id).await.unwrap().is_none());
+
+        let_assert!(Err(error) = edit(repo.as_ref(), plan_id, policy.clone()).await);
+        assert!(expected(&error), "edit: {error:?} for {policy:?}");
+        let after = repo.get_definition(plan_id).await.unwrap().unwrap();
+        assert!(after.record.current_revision == before.record.current_revision);
+        assert!(after.policy == before.policy);
+        assert!(
+            repo.get_definition_revision(plan_id, 1)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    // Defaults at the edges of the domain and of the bounds are kept as written.
+    let accepted = [
+        rate(None, Some(100), Finite(1)),
+        rate(Some(10), Some(100), Finite(10)),
+        rate(None, Some(100), Finite(100)),
+        rate(None, None, Finite(top)),
+        rate(None, None, Unlimited),
+        with_default(RATE, None, Some(Unlimited), Unlimited),
+        with_default(DIMENSION, None, Some(Finite(5)), Finite(0)),
+    ];
+    for policy in accepted {
+        let created_id = Uuid::new_v4();
+        repo.create_definition(root.account_id, created_id, name(), policy.clone(), actor())
+            .await
+            .unwrap();
+        assert!(
+            repo.get_definition(created_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .policy
+                == policy
+        );
+
+        let seeded_id = Uuid::new_v4();
+        assert!(
+            repo.seed_definition(root.account_id, seeded_id, name(), policy.clone(), actor())
+                .await
+                .unwrap()
+        );
+        assert!(
+            repo.get_definition(seeded_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .policy
+                == policy
+        );
+
+        let revision = edit(repo.as_ref(), plan_id, policy.clone()).await.unwrap();
+        assert!(
+            repo.get_definition_revision(plan_id, revision)
+                .await
+                .unwrap()
+                == Some(policy)
+        );
+    }
 }
 
 pub async fn test_plan_edit_scales_with_members(deps: &Deps) {

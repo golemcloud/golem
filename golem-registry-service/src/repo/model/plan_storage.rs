@@ -46,6 +46,15 @@ pub enum PlanStorageRepoError {
         dimension: PlanDimension,
         error: DimensionBoundsError,
     },
+    #[error("Dimension {dimension:?} of the definition has an invalid default: {error}")]
+    InvalidDefault {
+        dimension: PlanDimension,
+        error: DimensionBoundsError,
+    },
+    #[error(
+        "Dimension {dimension:?} of the definition has an unlimited default above its finite maximum"
+    )]
+    UnlimitedDefaultAboveMaximum { dimension: PlanDimension },
     #[error("The change leaves account {account_id} without a valid {dimension:?} value: {error}")]
     Incompatible {
         account_id: Uuid,

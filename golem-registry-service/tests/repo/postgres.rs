@@ -1340,6 +1340,11 @@ async fn test_plan_seed_keeps_later_edits(#[dimension(postgres_variant)] deps: &
 }
 
 #[test]
+async fn test_plan_operating_defaults_are_validated(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_operating_defaults_are_validated(deps).await;
+}
+
+#[test]
 async fn test_plan_edit_scales_with_members(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::plan_storage::test_plan_edit_scales_with_members(deps).await;
 }
