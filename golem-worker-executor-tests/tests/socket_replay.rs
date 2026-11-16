@@ -820,3 +820,6 @@ async fn an_open_p2_tcp_socket_does_not_block_snapshots(
     );
     session.finish().await
 }
+
+#[path = "socket_replay_gaps.rs"]
+mod gaps;
