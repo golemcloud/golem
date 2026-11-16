@@ -41,14 +41,15 @@ use golem_common::model::oplog::{
     PublicOplogEntryWithIndex,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, Empty, IdempotencyKey, InvocationId, InvocationRequestKey,
-    OplogIndex, Timestamp,
+    AgentFingerprint, AgentId, IdempotencyKey, InvocationId, InvocationRequestKey, OplogIndex,
+    Timestamp,
 };
 use golem_common::schema::{
     BinaryValuePayload, FromSchema, IntoSchema, IntoTypedSchemaValue, NamedFieldType, QuantitySpec,
     QuantityValue, SchemaGraph, SchemaType, SchemaValue, TextValuePayload, TypedSchemaValue,
     VariantValuePayload,
 };
+use golem_schema::Empty;
 use proptest::prelude::*;
 use std::collections::HashMap;
 use test_r::test;
