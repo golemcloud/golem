@@ -71,78 +71,66 @@ async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
+    let reference = &corpus["reference"];
+    let agent_type = reference["agentType"].as_str().unwrap();
+    let entries = |layer: &str| {
+        reference[layer]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(path, value)| AgentConfigEntryDto {
+                path: vec![path.clone()],
+                value: value.clone().into(),
+            })
+            .collect()
+    };
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_rust)
-        .with_agent_config(
-            "StaticDefaultsAgent",
-            vec![AgentConfigEntryDto {
-                path: vec!["settings".into()],
-                value: serde_json::json!({"label":"deployment","count":43}).into(),
-            }],
-        )
+        .with_agent_config(agent_type, entries("deployment"))
         .store()
         .await?;
-    let declaration = &component
-        .metadata
-        .agent_types
-        .iter()
-        .find(|agent| agent.declaration.type_name.0 == "StaticDefaultsAgent")
-        .expect("real metadata extraction retains the declaring agent")
-        .declaration;
-    assert_eq!(declaration.source_language, "rust");
-    for (name, expected_default) in [
-        ("settings", Some(r#"{"label":"code-default","count":31}"#)),
-        ("choice", Some(r#""selected:value""#)),
-        ("slots", Some(r#"[null,7,"retained"]"#)),
-        ("omitted", None),
-    ] {
-        let field = declaration
-            .config
-            .iter()
-            .find(|field| field.path == [name])
-            .expect("extracted config retains exact field paths");
-        assert_eq!(field.default_value.as_deref(), expected_default);
-    }
-    let agent_id = agent_id!("StaticDefaultsAgent", "captured-defaults");
+    let agent_id = agent_id!(agent_type, "captured-defaults");
     let worker_id = executor
         .start_agent_with(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            vec![AgentConfigEntryDto {
-                path: vec!["settings".into()],
-                value: serde_json::json!({"label":"creation","count":59}).into(),
-            }],
+            entries("creation"),
         )
         .await?;
-    let expected = serde_json::json!({
-        "settings": {"label":"creation","count":59},
-        "choice": {"Text":"selected:value"},
-        "slots": [null,7,"retained"],
-        "omitted": null,
-    });
-    let actual = executor
-        .invoke_and_await_agent(&component, &agent_id, "read", data_value!())
-        .await?
-        .into_typed::<String>()?;
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&actual)?,
-        expected
-    );
+    let deployed_agent_id = agent_id!(agent_type, "deployment-defaults");
+    let reads = [
+        (&deployed_agent_id, &reference["expectedDeploymentRead"]),
+        (&agent_id, &reference["expectedRead"]),
+    ];
+    for (id, expected) in reads {
+        let actual = executor
+            .invoke_and_await_agent(&component, id, "read", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(
+            &serde_json::from_str::<serde_json::Value>(&actual)?,
+            expected
+        );
+    }
 
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
     let executor = start(deps, &context).await?;
-    let actual = executor
-        .invoke_and_await_agent(&component, &agent_id, "read", data_value!())
-        .await?
-        .into_typed::<String>()?;
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&actual)?,
-        expected
-    );
+    for (id, expected) in reads {
+        let actual = executor
+            .invoke_and_await_agent(&component, id, "read", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(
+            &serde_json::from_str::<serde_json::Value>(&actual)?,
+            expected
+        );
+    }
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     for entry in &oplog {
         if let PublicOplogEntry::Start(_) = &entry.entry {
