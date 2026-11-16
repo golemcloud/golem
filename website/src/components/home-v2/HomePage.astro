@@ -126,6 +126,13 @@ const capabilityIds = ["budget", "journal", "coordinate", "operate"];
           </div><Primitives /><div class="primitive-access">
             <div class="primitive-interfaces">
               <h3>{t(2, "Interfaces heading")}</h3>
+              <div class="primitive-client">
+                <Icon name="function" size={28} />
+                <div>
+                  <h4>{t(2, "Client heading")}</h4>
+                  <p>{t(2, "Client description")}</p>
+                </div>
+              </div>
               <ul aria-label="Available interfaces">
                 {
                   lines(t(2, "Interfaces")).map((entry, i) => {

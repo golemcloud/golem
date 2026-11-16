@@ -436,6 +436,30 @@ html:has(.g2-page) {
   font-size: 18px;
   line-height: 1.4;
 }
+.primitive-client {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.primitive-client > svg {
+  flex: 0 0 28px;
+  color: #536f49;
+}
+.primitive-client > div {
+  min-width: 0;
+}
+.primitive-client h4 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  line-height: 1.4;
+}
+.primitive-client p {
+  margin: 0;
+  color: #59664f;
+  font-size: 13px;
+  line-height: 1.6;
+}
 .primitive-interfaces ul {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

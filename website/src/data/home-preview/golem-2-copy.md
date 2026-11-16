@@ -81,6 +81,14 @@ In practice
 
 Call actors and functions.
 
+**Client heading**
+
+Type-safe clients
+
+**Client description**
+
+The bridge generator creates clients for your actors and tools.
+
 **Interfaces**
 
 - HTTP / REST | Apps & APIs
