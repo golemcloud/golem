@@ -1,28 +1,24 @@
 import { Effect, Layer, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
-import type pg from "pg"
+import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import * as App from "../src/App.ts"
 import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
-import { makePool } from "../src/Database.ts"
+import * as Cleanup from "../src/Cleanup.ts"
+import * as Database from "../src/Database.ts"
+import * as Metering from "../src/Metering.ts"
+import * as Migrations from "../src/Migrations.ts"
+import * as Polar from "../src/Polar.ts"
+import * as RegistryAccounts from "../src/RegistryAccounts.ts"
+import * as Subscriptions from "../src/Subscriptions.ts"
+import * as UsagePush from "../src/UsagePush.ts"
+import { migrate, RegistryDatabase, type Workload } from "./registry.ts"
 import { dropSchema, queryPool, testConfig } from "./support.ts"
-
-/** Builds the services once, which applies the migrations, then releases them. */
-const startServices = (config: BillingConfigShape) =>
-  Effect.runPromise(
-    Effect.scoped(
-      Layer.build(
-        App.services.pipe(
-          Layer.provide(FetchHttpClient.layer),
-          Layer.provide(Layer.succeed(BillingConfig, config))
-        )
-      )
-    )
-  )
 
 /**
  * The tables of Better Auth, of the Polar subscriptions and orders, of the usage push, of the
- * cleanup, of the deletion holds and of the usage settlements, in the order of their names.
+ * cleanup, of the deletion holds, and of the usage settlements and their history, in the order of
+ * their names.
  */
 const appTables = [
   "account",
@@ -33,57 +29,116 @@ const appTables = [
   "polar_webhook_deliveries",
   "session",
   "usage_events",
+  "usage_settlement_history",
   "usage_settlements",
   "user",
   "verification"
 ]
 
-describe("migrations", () => {
-  let config: BillingConfigShape
+const polarConfig = Layer.succeed(Polar.PolarConfig, {
+  apiUrl: new URL("https://polar.test"),
+  accessToken: Redacted.make("polar-test-token")
+})
+
+/** Builds the services of the web app once, then releases them. */
+const startWebApp = (config: BillingConfigShape) =>
+  Effect.runPromise(
+    Effect.scoped(
+      Layer.build(
+        App.services.pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(Layer.succeed(BillingConfig, config)))
+      )
+    )
+  )
+
+/** One run of `push-usage` with `config`. */
+const pushUsage = (config: BillingConfigShape) =>
+  Effect.runPromise(
+    UsagePush.pushUsage(new Date()).pipe(
+      Effect.provide(
+        Layer.mergeAll(Metering.layer, Polar.layer).pipe(
+          Layer.provideMerge(Database.layer),
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(Layer.succeed(BillingConfig, config)),
+          Layer.provide(polarConfig)
+        )
+      )
+    )
+  )
+
+/** One run of `cleanup-deleted-accounts` with `config`. */
+const cleanup = (config: BillingConfigShape) =>
+  Effect.runPromise(
+    Cleanup.cleanupDeletedAccounts.pipe(
+      Effect.provide(
+        Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
+          Layer.provideMerge(Database.layer),
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(Layer.succeed(BillingConfig, config)),
+          Layer.provide(polarConfig)
+        )
+      )
+    )
+  )
+
+describe("migrate", () => {
   let pool: pg.Pool
+  const schemas: Array<string> = []
 
   beforeAll(() => {
-    config = testConfig()
-    pool = queryPool(config)
+    pool = queryPool(testConfig())
   })
 
   afterAll(async () => {
-    await dropSchema(pool, config.db.schema)
+    for (const schema of schemas) {
+      await dropSchema(pool, schema)
+    }
     await pool.end()
   })
 
-  const columns = async (table: string) =>
-    Object.fromEntries(
-      (
-        await pool.query<{ column_name: string; data_type: string }>(
-          `SELECT column_name, data_type FROM information_schema.columns
-           WHERE table_schema = $1 AND table_name = $2`,
-          [config.db.schema, table]
-        )
-      ).rows.map((row) => [row.column_name, row.data_type])
-    )
+  /** A configuration with a new schema that an administrator created, with no tables. */
+  const emptySchema = async (): Promise<BillingConfigShape> => {
+    const config = testConfig()
+    schemas.push(config.db.schema)
+    await pool.query(`CREATE SCHEMA "${config.db.schema}"`)
+    return config
+  }
 
-  it("creates the tables of the billing app in its schema only", async () => {
-    await startServices(config)
+  const tablesIn = async (schema: string) =>
+    (
+      await pool.query<{ table_name: string }>(
+        `SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name`,
+        [schema]
+      )
+    ).rows.map((row) => row.table_name)
 
-    const tablesIn = async (schema: string) =>
-      (
-        await pool.query<{ table_name: string }>(
-          `SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name`,
-          [schema]
-        )
-      ).rows.map((row) => row.table_name)
+  const columnsIn = async (schema: string) =>
+    (
+      await pool.query<{ table_name: string; column_name: string; data_type: string }>(
+        `SELECT table_name, column_name, data_type FROM information_schema.columns
+         WHERE table_schema = $1 ORDER BY table_name, column_name`,
+        [schema]
+      )
+    ).rows
+
+  it("creates every table of the billing app in its schema only", async () => {
+    const config = await emptySchema()
+
+    await migrate(config)
 
     expect(await tablesIn(config.db.schema)).toEqual(appTables)
+    expect([...Migrations.appTables].sort()).toEqual(appTables)
     // The registry service keeps its tables in `public`.
     expect(await tablesIn("public")).toEqual([])
   })
 
   it("stores the Golem account ID as a nullable unique uuid", async () => {
-    await startServices(config)
+    const config = await emptySchema()
 
-    expect((await columns("user"))["golem_account_id"]).toBe("uuid")
-    expect((await columns("session"))["golem_token"]).toBe("text")
+    await migrate(config)
+
+    const columns = (await columnsIn(config.db.schema)).filter((column) => column.table_name !== "verification")
+    expect(columns).toContainEqual({ table_name: "user", column_name: "golem_account_id", data_type: "uuid" })
+    expect(columns).toContainEqual({ table_name: "session", column_name: "golem_token", data_type: "text" })
     const unique = await pool.query(
       `SELECT 1 FROM pg_indexes WHERE schemaname = $1 AND tablename = 'user'
        AND indexdef LIKE 'CREATE UNIQUE INDEX%(golem_account_id)'`,
@@ -92,69 +147,107 @@ describe("migrations", () => {
     expect(unique.rowCount).toBe(1)
   })
 
-  it("starts again on a migrated schema", async () => {
-    await startServices(config)
-    await expect(startServices(config)).resolves.toBeDefined()
+  it("changes nothing on a migrated schema", async () => {
+    const config = await emptySchema()
+    await migrate(config)
+    const before = await columnsIn(config.db.schema)
+
+    await migrate(config)
+
+    expect(await columnsIn(config.db.schema)).toEqual(before)
   })
 
-  it("starts with a pool of one connection", async () => {
-    const single = testConfig()
+  it("migrates with a pool of one connection", async () => {
+    const config = await emptySchema()
+
+    await expect(migrate({ ...config, db: { ...config.db, maxConnections: 1 } })).resolves.toBeUndefined()
+  })
+
+  it("lets runs that start together migrate one after the other", async () => {
+    const config = await emptySchema()
+
+    await Promise.all([migrate(config), migrate(config), migrate(config)])
+
+    expect(await tablesIn(config.db.schema)).toEqual(appTables)
+  })
+
+  it("fails with a message that names the schema when the schema is missing, and creates nothing", async () => {
+    const config = testConfig()
+
+    await expect(migrate(config)).rejects.toThrow(`the schema ${config.db.schema} does not exist`)
+
+    const schema = await pool.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [config.db.schema])
+    expect(schema.rowCount).toBe(0)
+  })
+
+  it("lets the web app, the usage push and the cleanup create no table, and name migrate when one is missing", async () => {
+    // The test user may create tables, so an empty schema afterwards shows that none of them tried.
+    const config = await emptySchema()
+    const migrateFirst = /has no table .*\. Run `node main\.mjs migrate` as the owner of the schema first/
+
+    await expect(startWebApp(config)).rejects.toThrow(migrateFirst)
+    await expect(pushUsage(config)).rejects.toThrow(migrateFirst)
+    await expect(cleanup(config)).rejects.toThrow(migrateFirst)
+
+    expect(await tablesIn(config.db.schema)).toEqual([])
+  })
+})
+
+describe("database roles", () => {
+  const registry = new RegistryDatabase()
+  const workloads: ReadonlyArray<Workload> = ["web", "push", "cleanup"]
+
+  beforeAll(() => registry.create(), 60_000)
+  afterAll(() => registry.drop())
+
+  /** Runs `body` with a connection as the role of `config`. */
+  const asRole = async <A>(config: BillingConfigShape, body: (client: pg.Client) => Promise<A>): Promise<A> => {
+    const client = new pg.Client(Database.connectionOptions(config.db))
+    await client.connect()
     try {
-      await expect(startServices({ ...single, db: { ...single.db, maxConnections: 1 } })).resolves.toBeDefined()
+      return await body(client)
     } finally {
-      await dropSchema(pool, single.db.schema)
+      await client.end()
     }
+  }
+
+  it("lets the owner of the schema own every table, with no privilege on the registry tables", async () => {
+    const tables = await registry.admin.query<{ table_name: string; table_owner: string }>(
+      `SELECT tablename AS table_name, tableowner AS table_owner FROM pg_tables
+       WHERE schemaname = $1 ORDER BY tablename`,
+      [registry.ownerConfig.db.schema]
+    )
+    expect(tables.rows).toEqual(appTables.map((table_name) => ({ table_name, table_owner: registry.roles.owner })))
+
+    await asRole(registry.ownerConfig, (client) =>
+      expect(client.query("SELECT 1 FROM public.accounts")).rejects.toThrow(/permission denied/)
+    )
   })
 
-  it("lets replicas that start together migrate one after the other", async () => {
-    const concurrent = testConfig()
-    try {
-      await Promise.all([startServices(concurrent), startServices(concurrent), startServices(concurrent)])
-      expect((await pool.query(`SELECT count(*)::int AS n FROM "${concurrent.db.schema}"."user"`)).rows).toEqual([
-        { n: 0 }
-      ])
-    } finally {
-      await dropSchema(pool, concurrent.db.schema)
-    }
-  })
+  it.each(workloads)("does not let the %s role change the schema or write the usage settlements", async (workload) => {
+    const accountId = await registry.account()
 
-  it("runs as a role that owns only its schema and cannot read the registry tables", async () => {
-    // The setup of the hosted deployment: the role owns the schema of the app and has no
-    // privilege on the database or on the tables of the registry service in `public`.
-    const restricted = testConfig()
-    // A role name that differs from the schema name: the default `search_path` starts with
-    // `"$user"`, which would otherwise select the schema of the app by name.
-    const role = `${restricted.db.schema}_role`
-    const registryTable = `"public"."${restricted.db.schema}_tokens"`
-    await pool.query(`CREATE ROLE "${role}" LOGIN PASSWORD 'restricted'`)
-    await pool.query(`CREATE SCHEMA "${restricted.db.schema}" AUTHORIZATION "${role}"`)
-    await pool.query(`CREATE TABLE ${registryTable} (secret text NOT NULL)`)
-    const rolePool = makePool({
-      ...restricted.db,
-      username: role,
-      password: Redacted.make("restricted"),
-      maxConnections: 1
+    await asRole(registry.configs[workload], async (client) => {
+      await expect(client.query("CREATE TABLE IF NOT EXISTS usage_events (event_id TEXT)")).rejects.toThrow(
+        /permission denied/
+      )
+      await expect(
+        client.query("INSERT INTO usage_settlements (account_id, settled_through) VALUES ($1, now())", [accountId])
+      ).rejects.toThrow(/permission denied/)
+      await expect(
+        client.query(
+          `INSERT INTO usage_settlement_history (account_id, settled_through, operator, reason)
+           VALUES ($1, now(), 'operator', 'reason')`,
+          [accountId]
+        )
+      ).rejects.toThrow(/permission denied/)
+      await expect(client.query("SELECT 1 FROM usage_settlement_history")).rejects.toThrow(/permission denied/)
     })
-    try {
-      await startServices({
-        ...restricted,
-        db: { ...restricted.db, username: role, password: Redacted.make("restricted") }
-      })
+  })
 
-      const tables = await pool.query<{ table_name: string; table_owner: string }>(
-        `SELECT tablename AS table_name, tableowner AS table_owner FROM pg_tables
-         WHERE schemaname = $1 ORDER BY tablename`,
-        [restricted.db.schema]
-      )
-      expect(tables.rows).toEqual(
-        appTables.map((table_name) => ({ table_name, table_owner: role }))
-      )
-      await expect(rolePool.query(`SELECT secret FROM ${registryTable}`)).rejects.toThrow(/permission denied/)
-    } finally {
-      await rolePool.end()
-      await pool.query(`DROP TABLE IF EXISTS ${registryTable}`)
-      await dropSchema(pool, restricted.db.schema)
-      await pool.query(`DROP ROLE IF EXISTS "${role}"`)
-    }
+  it("starts the web app, the usage push and the cleanup with the grants of their roles", async () => {
+    await expect(startWebApp(registry.configs.web)).resolves.toBeDefined()
+    await expect(pushUsage(registry.configs.push)).resolves.toEqual({ created: 0, sent: 0, held: 0 })
+    await expect(cleanup(registry.configs.cleanup)).resolves.toEqual({ deletedCustomers: 0, unsettled: 0, deletedUsers: 0 })
   })
 })

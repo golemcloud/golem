@@ -1,23 +1,62 @@
 import { randomUUID } from "node:crypto"
 import { readdir, readFile } from "node:fs/promises"
-import { Redacted } from "effect"
+import { Effect, Layer, Redacted } from "effect"
 import pg from "pg"
-import type { BillingConfigShape } from "../src/BillingConfig.ts"
+import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
+import * as Database from "../src/Database.ts"
+import * as Migrations from "../src/Migrations.ts"
 import { postgres, testConfig } from "./support.ts"
 
 const migrations = new URL("../../golem-registry-service/db/migration/postgres/", import.meta.url)
 
-/** The registry tables that the database role of the billing app can read. */
-export const meteringTables = [
-  "account_usage_stats",
-  "account_monthly_policy_revisions",
-  "account_monthly_policy_attribution"
-]
+/** A workload of the billing app, which connects with its own database role. */
+export type Workload = "web" | "push" | "cleanup"
 
-/** The registry columns that the database role of the billing app can read, for each table. */
-export const accountColumns: Readonly<Record<string, ReadonlyArray<string>>> = {
-  accounts: ["account_id", "deleted_at"]
+/**
+ * The privileges of the role of each workload, as `ci-scripts/setup-cloud-billing.sh` of
+ * golem-cloud grants them: the privileges, and a table of the app or a `public.` table of the
+ * registry. No workload can write `usage_settlements` or `usage_settlement_history`: an operator
+ * script records a settlement as the admin user. A foreign key cascade runs as the owner of the
+ * referencing table, so the cleanup deletes the sessions and GitHub accounts of a user with
+ * DELETE on `user` alone.
+ */
+export const workloadGrants: Readonly<Record<Workload, ReadonlyArray<readonly [string, string]>>> = {
+  web: [
+    ["SELECT, INSERT, UPDATE", "user"],
+    ["SELECT, INSERT, UPDATE, DELETE", "session"],
+    ["SELECT, INSERT, UPDATE", "account"],
+    ["SELECT, INSERT, DELETE", "verification"],
+    ["SELECT, INSERT, UPDATE", "polar_subscriptions"],
+    ["SELECT, INSERT, UPDATE", "polar_orders"],
+    ["SELECT, INSERT", "polar_webhook_deliveries"],
+    ["SELECT", "usage_events"],
+    ["SELECT", "usage_settlements"],
+    ["SELECT, INSERT, UPDATE, DELETE", "deletion_holds"],
+    ["SELECT (account_id, deleted_at)", "public.accounts"]
+  ],
+  push: [
+    ["SELECT, INSERT, UPDATE", "usage_events"],
+    ["SELECT", "polar_subscriptions"],
+    ["SELECT", "public.account_monthly_policy_revisions"],
+    ["SELECT", "public.account_monthly_policy_attribution"]
+  ],
+  cleanup: [
+    ["SELECT (golem_account_id), DELETE", "user"],
+    ["SELECT", "polar_subscriptions"],
+    ["SELECT", "polar_orders"],
+    ["SELECT", "usage_events"],
+    ["SELECT", "usage_settlements"],
+    ["SELECT, INSERT", "deleted_account_cleanups"],
+    ["SELECT, DELETE", "deletion_holds"],
+    ["SELECT (account_id, deleted_at)", "public.accounts"]
+  ]
 }
+
+/** Runs `Migrations.migrate` with `config`, as `node main.mjs migrate` does. */
+export const migrate = (config: BillingConfigShape): Promise<void> =>
+  Effect.runPromise(
+    Migrations.migrate.pipe(Effect.provide(Database.layer), Effect.provide(Layer.succeed(BillingConfig, config)))
+  )
 
 export interface Dimensions {
   readonly computeFuel?: bigint
@@ -61,14 +100,23 @@ const usageKeyOf = (period: Period) => `${period.year}-${String(period.month).pa
 
 /**
  * A database with the tables of the registry service in `public`, as in the hosted deployment,
- * and a billing app configuration that connects as a role that can read only the metering tables.
- * In a database that other test files share, the DDL of the registry migrations would race with
- * the schema introspection of Better Auth.
+ * and a role for each workload of the billing app with the grants of `workloadGrants`. The owner
+ * role owns the schema of the app and applies the migrations; the tests write their rows as the
+ * owner. In a database that other test files share, the DDL of the registry migrations would race
+ * with the schema introspection of Better Auth.
  */
 export class RegistryDatabase {
   readonly database = `registry_${randomUUID().replaceAll("-", "")}`
-  readonly role = `${this.database}_billing`
-  readonly config: BillingConfigShape
+  readonly roles: Readonly<Record<Workload | "owner", string>> = {
+    owner: `${this.database}_owner`,
+    web: `${this.database}_web`,
+    push: `${this.database}_push`,
+    cleanup: `${this.database}_cleanup`
+  }
+  /** The configuration of the owner role, which owns the schema and every table of the app. */
+  readonly ownerConfig: BillingConfigShape
+  /** The configuration of each workload, which connects with the role of the workload. */
+  readonly configs: Readonly<Record<Workload, BillingConfigShape>>
   readonly admin: pg.Pool
   private readonly server: pg.Pool
 
@@ -77,34 +125,38 @@ export class RegistryDatabase {
     this.server = new pg.Pool({ ...db, user: db.username, max: 1 })
     this.admin = new pg.Pool({ ...db, user: db.username, database: this.database, max: 2 })
     const base = testConfig()
-    this.config = {
+    const as = (role: string): BillingConfigShape => ({
       ...base,
-      db: {
-        ...base.db,
-        database: this.database,
-        username: this.role,
-        password: Redacted.make("metering"),
-        registrySchema: "public"
-      }
-    }
+      db: { ...base.db, database: this.database, username: role, password: Redacted.make(role), registrySchema: "public" }
+    })
+    this.ownerConfig = as(this.roles.owner)
+    this.configs = { web: as(this.roles.web), push: as(this.roles.push), cleanup: as(this.roles.cleanup) }
   }
 
-  /** Creates the database, applies every registry migration and grants as the setup wizard does. */
+  /**
+   * Creates the database and applies every registry migration. Then, as the setup wizard does,
+   * creates the schema of the app for the owner role, runs `migrate` as the owner, and grants each
+   * workload role its privileges.
+   */
   async create(): Promise<void> {
     await this.server.query(`CREATE DATABASE "${this.database}"`)
     const files = (await readdir(migrations)).filter((file) => file.endsWith(".sql")).sort()
     for (const file of files) {
       await this.admin.query(await readFile(new URL(file, migrations), "utf8"))
     }
-    // The grants of ci-scripts/setup-cloud-billing.sh in golem-cloud.
-    await this.admin.query(`CREATE ROLE "${this.role}" LOGIN PASSWORD 'metering'`)
-    await this.admin.query(`CREATE SCHEMA "${this.config.db.schema}" AUTHORIZATION "${this.role}"`)
-    await this.admin.query(`GRANT USAGE ON SCHEMA public TO "${this.role}"`)
-    await this.admin.query(
-      `GRANT SELECT ON ${meteringTables.map((table) => `public.${table}`).join(", ")} TO "${this.role}"`
-    )
-    for (const [table, columns] of Object.entries(accountColumns)) {
-      await this.admin.query(`GRANT SELECT (${columns.join(", ")}) ON public.${table} TO "${this.role}"`)
+    const schema = `"${this.ownerConfig.db.schema}"`
+    for (const role of Object.values(this.roles)) {
+      await this.admin.query(`CREATE ROLE "${role}" LOGIN PASSWORD '${role}'`)
+    }
+    await this.admin.query(`CREATE SCHEMA ${schema} AUTHORIZATION "${this.roles.owner}"`)
+    await migrate(this.ownerConfig)
+    for (const [workload, grants] of Object.entries(workloadGrants) as Array<[Workload, typeof workloadGrants.web]>) {
+      const role = `"${this.roles[workload]}"`
+      await this.admin.query(`GRANT USAGE ON SCHEMA ${schema}, public TO ${role}`)
+      for (const [privileges, table] of grants) {
+        const name = table.startsWith("public.") ? table : `${schema}."${table}"`
+        await this.admin.query(`GRANT ${privileges} ON ${name} TO ${role}`)
+      }
     }
   }
 
@@ -112,7 +164,9 @@ export class RegistryDatabase {
   async drop(): Promise<void> {
     await closePool(this.admin)
     await this.server.query(`DROP DATABASE IF EXISTS "${this.database}" WITH (FORCE)`)
-    await this.server.query(`DROP ROLE IF EXISTS "${this.role}"`)
+    for (const role of Object.values(this.roles)) {
+      await this.server.query(`DROP ROLE IF EXISTS "${role}"`)
+    }
     await this.server.end()
   }
 

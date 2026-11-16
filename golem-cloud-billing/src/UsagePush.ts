@@ -1,10 +1,10 @@
 import { Data, Effect, Scope } from "effect"
 import pg from "pg"
 import { type MicroUnits, type Period, toMicroUnits } from "./BillableUsage.ts"
-import { connectionOptions, Database, withAdvisoryLock } from "./Database.ts"
+import { connectionOptions, Database, requireTables, type SchemaError } from "./Database.ts"
 import { Metering, type MeteringError } from "./Metering.ts"
 import { Polar, type PolarError, type PolarEvent } from "./Polar.ts"
-import { billableStatuses, tables as subscriptionTables } from "./Subscriptions.ts"
+import { billableStatuses, tableNames as subscriptionTables } from "./Subscriptions.ts"
 
 /**
  * The usage push: sends the billable overage of every account to the meters of Polar.
@@ -102,7 +102,7 @@ const advisoryLock = (options: pg.ClientConfig, key: string): Effect.Effect<void
 
 export const pushUsage = (
   now: Date
-): Effect.Effect<PushSummary, UsagePushError | MeteringError | PolarError, Database | Metering | Polar> =>
+): Effect.Effect<PushSummary, UsagePushError | MeteringError | PolarError | SchemaError, Database | Metering | Polar> =>
   Effect.scoped(
     Effect.gen(function* () {
       const { pool, config } = yield* Database
@@ -111,11 +111,8 @@ export const pushUsage = (
       const query = <R extends pg.QueryResultRow>(text: string, values: ReadonlyArray<unknown> = []) =>
         Effect.tryPromise({ try: () => pool.query<R>(text, [...values]), catch: failure })
 
+      yield* requireTables(subscriptionTables)
       yield* advisoryLock(connectionOptions(config), "golem-cloud-billing/usage-push")
-      yield* Effect.tryPromise({
-        try: () => withAdvisoryLock(config, "golem-cloud-billing/migrations", () => pool.query(subscriptionTables)),
-        catch: failure
-      })
 
       let created = 0
       const current = periodOf(now)

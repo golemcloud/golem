@@ -12,7 +12,8 @@ describe("canCheckOut", () => {
     cancelAtPeriodEnd: false,
     modifiedAt: new Date("2026-11-04T10:00:00Z"),
     meteredPriceIds: [],
-    pastDueAt: undefined
+    pastDueAt: undefined,
+    endedAt: undefined
   })
 
   it.each<[PlanState, string, boolean]>([

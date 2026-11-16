@@ -3,7 +3,6 @@ import { Effect, Layer, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import * as App from "../src/App.ts"
 import { BillingConfig } from "../src/BillingConfig.ts"
 import * as Cleanup from "../src/Cleanup.ts"
 import * as Database from "../src/Database.ts"
@@ -51,10 +50,10 @@ describe("cleanup of deleted accounts", () => {
     Effect.runPromise(
       Cleanup.cleanupDeletedAccounts.pipe(
         Effect.provide(
-          Layer.mergeAll(RegistryAccounts.layer, Subscriptions.commandLayer, Polar.layer).pipe(
+          Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
             Layer.provideMerge(Database.layer),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(Layer.succeed(BillingConfig, registry.config)),
+            Layer.provide(Layer.succeed(BillingConfig, registry.configs.cleanup)),
             Layer.provide(
               Layer.succeed(Polar.PolarConfig, { apiUrl: new URL(polarUrl), accessToken: Redacted.make(polarToken) })
             )
@@ -116,19 +115,8 @@ describe("cleanup of deleted accounts", () => {
 
   beforeAll(async () => {
     await registry.create()
-    pool = queryPool(registry.config)
+    pool = queryPool(registry.ownerConfig)
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => polar.fetch(input, init))
-    // The web app creates the tables of Better Auth.
-    await Effect.runPromise(
-      Effect.scoped(
-        Layer.build(
-          App.services.pipe(
-            Layer.provide(FetchHttpClient.layer),
-            Layer.provide(Layer.succeed(BillingConfig, registry.config))
-          )
-        )
-      )
-    )
   }, 60_000)
 
   afterAll(async () => {
@@ -212,17 +200,35 @@ describe("cleanup of deleted accounts", () => {
     expect(await recordedHolds()).toEqual([])
   })
 
-  it("deletes the customer and the user of an early revocation after an administrator settles the usage", async () => {
-    // The subscription ended before its period end, and the push sent usage after the newest order.
-    const { accountId, userId } = await deletedAccount()
-    await pool.query("UPDATE polar_subscriptions SET current_period_end = now() + interval '20 days' WHERE account_id = $1", [
-      accountId
-    ])
-    await pool.query(
+  /** A usage event that the push sent to Polar now. */
+  const sentEvent = (accountId: string) =>
+    pool.query(
       `INSERT INTO usage_events (event_id, account_id, period, dimension, from_micro_units, to_micro_units, sent_at)
-       VALUES ('event_early', $1, '2026-11', 'compute', 0, 5, now())`,
+       VALUES ($1, $2, '2026-11', 'compute', 0, 5, clock_timestamp())`,
+      [`${accountId}:2026-11:compute:5`, accountId]
+    )
+
+  it("deletes the customer and the user of an early revocation, whose later usage Polar drops", async () => {
+    // Polar revoked the subscription before its period end, after the push sent usage that no
+    // order bills.
+    const { accountId, userId } = await deletedAccount()
+    await pool.query(
+      `UPDATE polar_subscriptions
+          SET current_period_end = now() + interval '20 days', ended_at = now() - interval '1 minute'
+        WHERE account_id = $1`,
       [accountId]
     )
+    await sentEvent(accountId)
+
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await rowsOf(userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
+  })
+
+  it("deletes the customer and the user after an operator records a usage settlement", async () => {
+    // The subscription ended at its period end, and its last order never came.
+    const { accountId, userId } = await deletedAccount()
+    await pool.query("UPDATE polar_subscriptions SET ended_at = current_period_end WHERE account_id = $1", [accountId])
+    await sentEvent(accountId)
     expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 1, deletedUsers: 0 })
 
     await pool.query("INSERT INTO usage_settlements (account_id, settled_through) VALUES ($1, clock_timestamp())", [

@@ -32,13 +32,18 @@ describe("push-usage", () => {
   })
 })
 
-describe("settle-usage", () => {
-  it("refuses a value that is not the ID of a Golem account, before it reads a setting", async () => {
+describe("migrate", () => {
+  it("logs the missing setting before it fails, without the secrets", async () => {
     const lines: Array<string> = []
+    const env = {
+      GOLEM__DB__CONFIG__DATABASE: "golem",
+      GOLEM__DB__CONFIG__USERNAME: "golem_cloud_billing",
+      GOLEM__DB__CONFIG__PASSWORD: "database-password-for-no-log"
+    }
 
     const exit = await Effect.runPromiseExit(
-      Commands.settleUsage("octocat@example.com").pipe(
-        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
+      Commands.migrate.pipe(
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
         Effect.provide(Logger.layer([Logger.map(Logger.formatJson, (line) => void lines.push(line))]))
       )
     )
@@ -47,10 +52,11 @@ describe("settle-usage", () => {
     expect(lines.map((line) => JSON.parse(line))).toEqual([
       expect.objectContaining({
         level: "ERROR",
-        message: "The usage settlement failed",
-        annotations: { error: "settle-usage needs the ID of a Golem account, not octocat@example.com" }
+        message: "The database migrations failed",
+        annotations: { error: expect.stringContaining("GOLEM__DB__CONFIG__HOST") }
       })
     ])
+    expect(lines.join("\n")).not.toContain("for-no-log")
   })
 })
 
