@@ -702,6 +702,37 @@ impl TestWorkerExecutor {
         principal: Principal,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        self.invoke_external_tool_with_env_overlay(
+            environment_id,
+            agent_id,
+            expected_fingerprint,
+            idempotency_key,
+            tool_name,
+            command_path,
+            input,
+            invocation_context,
+            principal,
+            scope_card,
+            Default::default(),
+        )
+        .await
+    }
+
+    /// Starts an external tool invocation on an existing agent with an env overlay.
+    pub async fn invoke_external_tool_with_env_overlay(
+        &self,
+        environment_id: EnvironmentId,
+        agent_id: &AgentId,
+        expected_fingerprint: AgentFingerprint,
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+        env_overlay: golem_common::model::entity::EnvOverlay,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let services = self
             .services
             .as_ref()
@@ -727,6 +758,7 @@ impl TestWorkerExecutor {
                 invocation_context,
                 principal,
                 scope_card,
+                env_overlay,
             )
             .await
     }

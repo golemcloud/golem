@@ -141,6 +141,7 @@ pub async fn invoke(
                 idempotency_key: key.value,
                 attempt_id: uuid::Uuid::new_v4(),
                 expected_deployment_revision: Some(deployment.deployment_revision),
+                env_overlay: Default::default(),
             },
             Box::pin(ReceiverStream::new(receiver)),
             auth,

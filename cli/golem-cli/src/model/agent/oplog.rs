@@ -145,6 +145,16 @@ fn render_oplog_attribution_lines(attribution: &PublicOplogEntryAttribution) -> 
                 lines.push(format_entity_invocation(pad, ancestor, false));
             }
             lines.push(format_entity_invocation(pad, &context.invocation, true));
+            if let Some(env_overlay) = &context.invocation.env_overlay {
+                lines.push(format!(
+                    "{pad}env overlay:       {}",
+                    env_overlay
+                        .iter()
+                        .map(|(name, value)| format!("{name}={value}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
             if let Some(PublicEntityInvocationOperation::Tool(tool)) = &context.invocation.operation
             {
                 lines.push(format!(
@@ -1592,6 +1602,7 @@ mod tests {
                 name: "authorize".to_string(),
             },
             start_index: golem_common::model::OplogIndex::from_u64(7),
+            env_overlay: None,
             call_mode: PublicEntityCallMode::Synchronous,
             operation: None,
         };
@@ -1601,6 +1612,10 @@ mod tests {
                 name: "filesystem".to_string(),
             },
             start_index: golem_common::model::OplogIndex::from_u64(11),
+            env_overlay: Some(std::collections::BTreeMap::from([
+                ("COLUMNS".to_string(), "132".to_string()),
+                ("TERM".to_string(), "xterm".to_string()),
+            ])),
             call_mode: PublicEntityCallMode::Asynchronous,
             operation: Some(PublicEntityInvocationOperation::Tool(
                 PublicToolInvocationOperation {
@@ -1629,6 +1644,7 @@ mod tests {
                 "entity chain:",
                 "tool middleware authorize (start #7, synchronous)",
                 "tool filesystem (start #11, asynchronous) [current]",
+                "env overlay:       COLUMNS=132 TERM=xterm",
                 "tool command:      files lookup",
                 "stdin requested:   true",
                 "stdout requested:  false",

@@ -1,5 +1,8 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
 use clock_race_tool_guest_client::ClockRaceClient;
+use env_overlay_probe_tool_guest_client::{
+    EnvOverlayObservation as ToolEnvOverlayObservation, EnvOverlayProbeClient,
+};
 use environment_probe_tool_guest_client::{
     EnvironmentProbeClient, EnvironmentProbeEvidence as ToolEnvironmentProbeEvidence,
 };
@@ -571,6 +574,49 @@ impl EnvironmentProbeCaller for EnvironmentProbeCallerImpl {
             marker,
             secret,
             reserved,
+        }
+    }
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct EnvOverlayObservation {
+    pub term: Option<String>,
+    pub columns: Option<String>,
+    pub lines: Option<String>,
+    pub golem_agent_id: Option<String>,
+}
+
+/// Calls `env-overlay-probe` from the agent's primary instance.
+#[agent_definition]
+pub trait EnvOverlayCaller {
+    fn new(name: String) -> Self;
+
+    async fn observe_env_overlay(&self) -> EnvOverlayObservation;
+}
+
+struct EnvOverlayCallerImpl;
+
+#[agent_implementation]
+impl EnvOverlayCaller for EnvOverlayCallerImpl {
+    fn new(_name: String) -> Self {
+        Self
+    }
+
+    async fn observe_env_overlay(&self) -> EnvOverlayObservation {
+        let ToolEnvOverlayObservation {
+            term,
+            columns,
+            lines,
+            golem_agent_id,
+        } = EnvOverlayProbeClient::new()
+            .observe()
+            .await
+            .expect("env overlay probe tool invocation succeeds");
+        EnvOverlayObservation {
+            term,
+            columns,
+            lines,
+            golem_agent_id,
         }
     }
 }

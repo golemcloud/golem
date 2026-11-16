@@ -5677,7 +5677,7 @@
     },
     "PublicEntityInvocation": {
       "type": "object",
-      "required": ["entity", "startIndex", "callMode", "operation"],
+      "required": ["entity", "startIndex", "callMode", "operation", "envOverlay"],
       "properties": {
         "entity": { "$ref": "#/definitions/PublicAgentEntity" },
         "startIndex": { "type": "integer", "minimum": 1 },
@@ -5685,6 +5685,13 @@
         "operation": {
           "oneOf": [
             { "$ref": "#/definitions/PublicEntityInvocationOperation" },
+            { "type": "null" }
+          ]
+        },
+        "envOverlay": {
+          "description": "Environment variables the starter of the invocation supplied; null when it supplied none.",
+          "oneOf": [
+            { "type": "object", "additionalProperties": { "type": "string" } },
             { "type": "null" }
           ]
         }

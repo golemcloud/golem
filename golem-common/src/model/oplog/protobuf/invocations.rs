@@ -827,6 +827,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicEntityInvocation>
             start_index: OplogIndex::from_u64(start_index),
             call_mode,
             operation: value.operation.map(TryInto::try_into).transpose()?,
+            env_overlay: (!value.env_overlay.is_empty())
+                .then(|| value.env_overlay.into_iter().collect()),
         })
     }
 }
@@ -845,6 +847,7 @@ impl From<PublicEntityInvocation> for golem_api_grpc::proto::golem::worker::Publ
             start_index: Some(value.start_index.into()),
             call_mode: call_mode as i32,
             operation: value.operation.map(Into::into),
+            env_overlay: value.env_overlay.unwrap_or_default().into_iter().collect(),
         }
     }
 }

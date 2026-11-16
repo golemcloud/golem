@@ -18,6 +18,7 @@ use super::{InvocationStatus, Principal};
 use crate::model::account::AccountId;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
+use crate::model::entity::EnvOverlay;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::payload::types::{
     SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
@@ -72,6 +73,7 @@ pub enum AgentInvocation {
         invocation_context: InvocationContextStack,
         principal: Principal,
         scope_card: Option<ScopeCard>,
+        env_overlay: EnvOverlay,
     },
     LoadSnapshot {
         idempotency_key: InvocationId,
@@ -117,6 +119,7 @@ pub enum AgentInvocationPayload {
         activation: Box<ToolActivationSnapshot>,
         principal: Principal,
         scope_card: Option<ScopeCard>,
+        env_overlay: EnvOverlay,
     },
     LoadSnapshot {
         snapshot: RawSnapshotData,
@@ -172,6 +175,7 @@ impl AgentInvocationPayload {
                     stderr,
                     principal,
                     scope_card,
+                    env_overlay,
                     ..
                 },
                 Self::ExternalTool {
@@ -183,10 +187,12 @@ impl AgentInvocationPayload {
                     stderr: other_stderr,
                     principal: other_principal,
                     scope_card: other_card,
+                    env_overlay: other_env_overlay,
                     ..
                 },
             ) => {
                 tool_name == other_tool
+                    && env_overlay == other_env_overlay
                     && command_path == other_path
                     && input.graph() == other_input.graph()
                     && schema_value_same_request(input.value(), other_input.value())
@@ -504,6 +510,7 @@ impl AgentInvocation {
                 activation,
                 principal,
                 scope_card,
+                env_overlay,
             } => Self::ExternalTool {
                 idempotency_key,
                 tool_name,
@@ -516,6 +523,7 @@ impl AgentInvocation {
                 invocation_context,
                 principal,
                 scope_card,
+                env_overlay,
             },
             AgentInvocationPayload::LoadSnapshot { snapshot } => Self::LoadSnapshot {
                 idempotency_key,
@@ -585,7 +593,7 @@ impl AgentInvocation {
                 invocation_context,
                 principal,
                 scope_card,
-                ..
+                env_overlay,
             } => (
                 idempotency_key,
                 AgentInvocationPayload::ExternalTool {
@@ -598,6 +606,7 @@ impl AgentInvocation {
                     activation,
                     principal,
                     scope_card,
+                    env_overlay,
                 },
                 invocation_context,
             ),
@@ -839,6 +848,7 @@ mod request_equality_tests {
             }),
             principal: Principal::anonymous(),
             scope_card: None,
+            env_overlay: Default::default(),
         }
     }
 
@@ -990,6 +1000,34 @@ mod request_equality_tests {
                     assert!(!original.same_caller_request(&changed));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn same_caller_request_tool_env_overlay_is_part_of_identity() {
+        let request = |overlay: &[(&str, &str)]| {
+            let mut request = tool_request(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::u8()),
+                SchemaValue::U8(1),
+            ));
+            let AgentInvocationPayload::ExternalTool { env_overlay, .. } = &mut request else {
+                unreachable!()
+            };
+            *env_overlay = overlay
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect();
+            request
+        };
+        let original = request(&[("COLUMNS", "80"), ("TERM", "xterm")]);
+        assert!(original.same_caller_request(&request(&[("TERM", "xterm"), ("COLUMNS", "80")])));
+        for changed in [
+            request(&[("COLUMNS", "132"), ("TERM", "xterm")]),
+            request(&[("TERM", "xterm")]),
+            request(&[]),
+        ] {
+            assert!(!original.same_caller_request(&changed), "{changed:?}");
+            assert!(!changed.same_caller_request(&original), "{changed:?}");
         }
     }
 

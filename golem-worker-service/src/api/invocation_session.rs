@@ -1382,6 +1382,7 @@ where
                         stdin,
                         stdout,
                         stderr,
+                        env_overlay,
                         ..
                     } => Ok(Some(InitialMessage::ToolStart {
                         start: PublicToolSessionStart {
@@ -1397,6 +1398,7 @@ where
                             idempotency_key,
                             attempt_id,
                             expected_deployment_revision: None,
+                            env_overlay,
                         },
                         attempt_id,
                         _admission: admission,

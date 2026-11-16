@@ -38,7 +38,7 @@ use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
     EntityInvocationPlan, EntityInvocationPlanReference, EntityInvocationRequest,
-    EntityInvocationScope, InvocationExecutionMode, OwnedAgentEntityId,
+    EntityInvocationScope, EnvOverlay, InvocationExecutionMode, OwnedAgentEntityId,
 };
 use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{GolemEntityInvoke, GolemToolInvocationRejected};
@@ -314,6 +314,7 @@ impl EntityInvocationDurability {
         operation: EntityInvocationDescriptor,
         plan: EntityInvocationPlanReference,
         input: TypedSchemaValue,
+        env_overlay: EnvOverlay,
         invocation_id: InvocationIdSource,
     ) -> anyhow::Result<Self>
     where
@@ -336,6 +337,7 @@ impl EntityInvocationDurability {
             plan,
             authority_wallet: store
                 .with(|mut access| get_ctx(access.data_mut()).agent_wallet_cards_snapshot()),
+            env_overlay,
         };
         let encoded_metadata = desert_rust::serialize_to_byte_vec(&metadata).map_err(|error| {
             WorkerExecutorError::runtime(format!(
@@ -623,6 +625,7 @@ impl EntityInvocationDurability {
         )
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(metadata.authority_wallet)
+        .with_env_overlay(metadata.env_overlay)
         .with_invocation_scope_card(invocation_scope_card)
         .with_enclosing_invocation_id(enclosing_invocation_id)
         .with_span_started(span_started);
@@ -740,6 +743,7 @@ impl EntityInvocationDurability {
         )
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(scope.authority_wallet().to_vec())
+        .with_env_overlay(scope.env_overlay().clone())
         .with_invocation_scope_card(scope.invocation_scope_card().cloned())
         .with_enclosing_invocation_id(scope.enclosing_invocation_id().cloned())
         .with_span_started(
@@ -1915,6 +1919,7 @@ mod tests {
             }),
             plan,
             authority_wallet: Vec::new(),
+            env_overlay: Default::default(),
         })
         .unwrap()
     }

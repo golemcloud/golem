@@ -231,6 +231,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context: InvocationContextStack,
         principal: Principal,
         scope_card: Option<golem_common::model::card::ScopeCard>,
+        env_overlay: golem_common::model::entity::EnvOverlay,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         if self.initial_worker_metadata.owner_kind == OwnerKind::OplogProcessor {
             return Err(WorkerExecutorError::invalid_request(
@@ -256,6 +257,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context,
                 principal,
                 scope_card,
+                env_overlay,
             )
             .await?;
         self.invoke_and_await(invocation).await
@@ -273,6 +275,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context: InvocationContextStack,
         principal: Principal,
         scope_card: Option<golem_common::model::card::ScopeCard>,
+        env_overlay: golem_common::model::entity::EnvOverlay,
     ) -> Result<AgentInvocation, WorkerExecutorError> {
         let accepted_index = self
             .durable_stream_session_status(&idempotency_key)
@@ -385,6 +388,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_context,
             principal,
             scope_card,
+            env_overlay,
         };
         if already_accepted {
             self.ensure_matching_invocation_payload(

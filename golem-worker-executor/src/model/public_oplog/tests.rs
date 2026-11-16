@@ -1102,6 +1102,7 @@ fn test_entity_request(
     call_mode: EntityCallMode,
     operation: Option<EntityInvocationDescriptor>,
     input: TypedSchemaValue,
+    env_overlay: golem_common::model::entity::EnvOverlay,
 ) -> HostRequest {
     let activation = test_entity_activation(&entity);
     let plan = match &entity {
@@ -1154,6 +1155,7 @@ fn test_entity_request(
         }),
         plan: EntityInvocationPlanReference::Root { plan },
         authority_wallet: Vec::new(),
+        env_overlay,
     };
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
@@ -1305,6 +1307,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         EntityCallMode::Synchronous,
         None,
         middleware_input.clone(),
+        Default::default(),
     );
     let middleware_start = oplog
         .add(OplogEntry::Start {
@@ -1384,6 +1387,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             },
         })),
         tool_input.clone(),
+        [("COLUMNS".to_string(), "132".to_string())].into(),
     );
     let tool_start = oplog
         .add(OplogEntry::Start {
@@ -1719,9 +1723,14 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         };
         assert_eq!(context.invocation.entity.name, "lookup");
         assert_eq!(context.invocation.start_index, tool_start);
+        assert_eq!(
+            context.invocation.env_overlay,
+            Some([("COLUMNS".to_string(), "132".to_string())].into())
+        );
         assert_eq!(context.ancestors.len(), 1);
         assert_eq!(context.ancestors[0].entity.name, "audit");
         assert_eq!(context.ancestors[0].start_index, middleware_start);
+        assert_eq!(context.ancestors[0].env_overlay, None);
     }
     for index in [child_start, child_end, middleware_end] {
         let entry = &chunk.entries[index.as_u64() as usize - 1];
@@ -1924,6 +1933,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         EntityCallMode::Synchronous,
         None,
         "input".to_string().into_typed_schema_value().unwrap(),
+        Default::default(),
     );
     let entity_start = oplog
         .add(OplogEntry::Start {

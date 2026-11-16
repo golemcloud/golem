@@ -264,5 +264,6 @@ fn public_entity_invocation(
         start_index,
         call_mode,
         operation,
+        env_overlay: (!request.env_overlay.is_empty()).then_some(request.env_overlay),
     }
 }

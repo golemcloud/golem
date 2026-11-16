@@ -79,6 +79,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(env)
     }
 
+    /// The guest-visible environment: the owner's environment and the Golem variables, filtered
+    /// by the `env:read` authority, and then the env overlay of the entity invocation that runs
+    /// in this Store. The overlay comes from the invocation's starter, not from the owner, so it
+    /// is not filtered; it never replaces a Golem variable. The primary Store has no overlay.
     fn build_filtered_environment(&self) -> wasmtime::Result<FilteredEnvironment> {
         let owner = agent_owner(self);
         let environment = self
@@ -101,11 +105,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 (target.clone(), allowed)
             })
             .collect::<Vec<_>>();
-        let filtered = environment
+        let mut filtered = environment
             .into_iter()
             .zip(&decisions)
             .filter_map(|((name, value, _), (_, allowed))| allowed.then_some((name, value)))
             .collect();
+        if let Some(scope) = self.entity_invocation_scope() {
+            AgentConfig::apply_env_overlay(&mut filtered, scope.env_overlay());
+        }
         Ok((filtered, decisions))
     }
 

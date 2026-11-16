@@ -30,6 +30,7 @@ use crate::schema::tool::compatibility::CompiledToolCompatibility;
 use desert_rust::BinaryCodec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -860,6 +861,31 @@ pub struct EntityInvocationRequest {
     pub principal: Principal,
     pub plan: EntityInvocationPlanReference,
     pub authority_wallet: Vec<StoredCard>,
+    pub env_overlay: EnvOverlay,
+}
+
+/// Environment variables that an invocation's starter supplies at start. The entity invocation
+/// `Start` records them, every tool call made from the entity Store copies them to its callee,
+/// and the env merge applies them over the owner's `env`, below Golem's own variables.
+pub type EnvOverlay = BTreeMap<String, String>;
+
+/// Checks that every overlay name can be an environment variable name.
+pub fn validate_env_overlay(overlay: &EnvOverlay) -> Result<(), String> {
+    for name in overlay.keys() {
+        if name.is_empty() || name.contains('=') || name.contains('\0') {
+            return Err(format!(
+                "invalid environment variable name in env overlay: {name:?}"
+            ));
+        }
+    }
+    for (name, value) in overlay {
+        if value.contains('\0') {
+            return Err(format!(
+                "env overlay value of {name:?} must not contain a NUL character"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub type CallingAgentPrincipal = Principal;
@@ -889,6 +915,9 @@ pub struct EntityInvocationScope {
     /// Wallet snapshot pinned in the immutable entity invocation `Start`.
     #[serde(skip)]
     authority_wallet: Vec<StoredCard>,
+    /// Env overlay pinned in the immutable entity invocation `Start`.
+    #[serde(skip)]
+    env_overlay: EnvOverlay,
     /// Invocation scope card active in the calling Store when this invocation was started or
     /// reconstructed. The calling Store reinstalls its scope from recorded data during replay,
     /// so the scope is resident state and is not part of the entity invocation `Start`.
@@ -953,6 +982,7 @@ impl EntityInvocationScope {
             logical_key_positions,
             stream_session_idempotency_key,
             authority_wallet: Vec::new(),
+            env_overlay: EnvOverlay::new(),
             invocation_scope_card: None,
             enclosing_invocation_id: None,
             span_started: None,
@@ -966,6 +996,15 @@ impl EntityInvocationScope {
 
     pub fn authority_wallet(&self) -> &[StoredCard] {
         &self.authority_wallet
+    }
+
+    pub fn with_env_overlay(mut self, env_overlay: EnvOverlay) -> Self {
+        self.env_overlay = env_overlay;
+        self
+    }
+
+    pub fn env_overlay(&self) -> &EnvOverlay {
+        &self.env_overlay
     }
 
     pub fn with_invocation_scope_card(mut self, invocation_scope_card: Option<ScopeCard>) -> Self {

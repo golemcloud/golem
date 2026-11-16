@@ -254,6 +254,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7454e41ff9012c00d53cf7f475c5e3afa3b91b7c90568495495e8d9bf47a1055"
 
 [[package]]
+name = "env-overlay-probe-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "environment-probe-tool-guest-client"
 version = "0.0.1"
 dependencies = [
@@ -521,6 +532,7 @@ dependencies = [
  "capable-streaming-tool-guest-client",
  "clock-race-tool-guest-client",
  "ctor",
+ "env-overlay-probe-tool-guest-client",
  "environment-probe-tool-guest-client",
  "futures-concurrency",
  "golem-rust",

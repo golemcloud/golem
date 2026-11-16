@@ -1106,6 +1106,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             stdout,
             stderr,
             principal,
+            env_overlay,
         } => {
             let _usage = store.data().durable_ctx().begin_guest_resource_usage();
             store.data().durable_ctx().activate_live_resource_usage();
@@ -1120,6 +1121,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 stdout,
                 stderr,
                 principal,
+                env_overlay,
             )
             .await;
             let consumed_fuel =
@@ -1652,6 +1654,7 @@ enum LoweredCall {
         stdout: bool,
         stderr: bool,
         principal: golem_common::model::agent::Principal,
+        env_overlay: golem_common::model::entity::EnvOverlay,
     },
 }
 
@@ -1694,6 +1697,7 @@ enum PreparedCall {
         stdout: bool,
         stderr: bool,
         principal: golem_common::model::agent::Principal,
+        env_overlay: golem_common::model::entity::EnvOverlay,
     },
 }
 
@@ -1796,6 +1800,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             stdout,
             stderr,
             principal,
+            env_overlay,
         } => PreparedCall::ExternalTool {
             activation: std::sync::Arc::from(activation),
             tool_name,
@@ -1805,6 +1810,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             stdout,
             stderr,
             principal,
+            env_overlay,
         },
     })
 }
@@ -1893,6 +1899,7 @@ pub fn lower_invocation(
             stderr,
             activation,
             principal,
+            env_overlay,
             ..
         } => Ok(LoweredInvocation {
             display_name: format!("{tool_name}:{}", command_path.join("/")),
@@ -1906,6 +1913,7 @@ pub fn lower_invocation(
                 stdout,
                 stderr,
                 principal,
+                env_overlay,
             },
         }),
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(

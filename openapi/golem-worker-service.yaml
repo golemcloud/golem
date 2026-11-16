@@ -5541,6 +5541,14 @@ components:
           format: date-time
         idempotencyKey:
           type: string
+        envOverlay:
+          type: object
+          description: |-
+            Environment variables for the invocation and every tool call it makes. They apply over
+            the owner's `env` and never replace Golem's own variables. Forbidden for lookup.
+          default: {}
+          additionalProperties:
+            type: string
     NativeToolInvocationResponse:
       type: object
       title: NativeToolInvocationResponse
@@ -6323,6 +6331,11 @@ components:
           $ref: '#/components/schemas/PublicEntityCallMode'
         operation:
           $ref: '#/components/schemas/PublicEntityInvocationOperation'
+        envOverlay:
+          type: object
+          description: The env overlay its starter supplied; absent when the overlay is empty.
+          additionalProperties:
+            type: string
     PublicEntityInvocationContext:
       type: object
       title: PublicEntityInvocationContext

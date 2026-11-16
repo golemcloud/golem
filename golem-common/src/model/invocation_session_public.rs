@@ -15,7 +15,7 @@
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Number, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
@@ -362,6 +362,14 @@ pub enum PublicClientMessage {
         stdin: bool,
         stdout: bool,
         stderr: bool,
+        /// Environment variables for the invocation and the tool calls it makes. Only a start
+        /// carries them; a resume never changes them.
+        #[serde(
+            rename = "envOverlay",
+            default,
+            skip_serializing_if = "BTreeMap::is_empty"
+        )]
+        env_overlay: BTreeMap<String, String>,
         version: u8,
     },
     #[serde(rename = "resumeAttach")]
@@ -1126,9 +1134,13 @@ fn validate_client_message(message: &PublicClientMessage) -> Result<(), PublicPr
             tool_name,
             command_path,
             target,
+            env_overlay,
             ..
         } => {
             validate_uuid_v4(*attempt_id, "attempt ID")?;
+            crate::model::entity::validate_env_overlay(env_overlay).map_err(|message| {
+                PublicProtocolError::new(PublicErrorCode::ValidationError, message)
+            })?;
             if application.is_empty()
                 || environment.is_empty()
                 || tool_name.is_empty()
@@ -1902,6 +1914,7 @@ mod tests {
             stdin: true,
             stdout: true,
             stderr: true,
+            env_overlay: std::collections::BTreeMap::new(),
             version: 1,
         };
         let encoded = encode_text(&message).unwrap();
@@ -1909,10 +1922,36 @@ mod tests {
         assert!(encoded.contains("\"componentId\""));
         assert!(encoded.contains("\"graph\""));
         assert!(!encoded.contains("\"schema\""));
+        assert!(!encoded.contains("\"envOverlay\""));
         assert!(matches!(
             decode_client_text(encoded.as_bytes()).unwrap(),
             PublicClientMessage::ToolStart { command_path, .. } if command_path.is_empty()
         ));
+
+        let with_overlay = |name: &str| {
+            let mut message = message.clone();
+            let PublicClientMessage::ToolStart { env_overlay, .. } = &mut message else {
+                unreachable!()
+            };
+            env_overlay.insert(name.to_string(), "132".to_string());
+            encode_text(&message).unwrap()
+        };
+        let encoded = with_overlay("COLUMNS");
+        assert!(encoded.contains("\"envOverlay\":{\"COLUMNS\":\"132\"}"));
+        assert!(matches!(
+            decode_client_text(encoded.as_bytes()).unwrap(),
+            PublicClientMessage::ToolStart { env_overlay, .. }
+                if env_overlay == std::collections::BTreeMap::from([("COLUMNS".to_string(), "132".to_string())])
+        ));
+        for invalid in ["", "A=B"] {
+            assert_eq!(
+                decode_client_text(with_overlay(invalid).as_bytes())
+                    .unwrap_err()
+                    .code,
+                PublicErrorCode::ValidationError,
+                "{invalid:?}"
+            );
+        }
     }
 
     #[test]

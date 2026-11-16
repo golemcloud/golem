@@ -458,6 +458,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             EntityCallMode::Asynchronous,
             None,
             None,
+            None,
             ToolAttachmentCounterparty::Guest,
         )
         .await;

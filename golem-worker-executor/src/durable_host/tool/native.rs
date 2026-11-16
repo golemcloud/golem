@@ -538,6 +538,7 @@ impl NativeToolTask {
             stdout: has_stdout,
             stderr: has_stderr,
             principal,
+            env_overlay,
             result,
         } = self;
         let (worker, key) = accessor.with(|mut access| {
@@ -674,6 +675,7 @@ impl NativeToolTask {
                 EntityCallMode::Synchronous,
                 Some(activation),
                 Some(principal),
+                Some(env_overlay),
                 ToolAttachmentCounterparty::SessionJournal,
             )
             .await

@@ -822,6 +822,7 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
             invocation_context,
             principal,
             scope_card,
+            env_overlay,
         } => {
             let (graph, value) = input.into_parts();
             AgentInvocation::ExternalTool {
@@ -839,6 +840,7 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
                 invocation_context,
                 principal,
                 scope_card,
+                env_overlay,
             }
         }
         other => other,
