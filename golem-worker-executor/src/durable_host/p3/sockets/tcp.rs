@@ -1532,72 +1532,87 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         let (acquired, delivery) =
             tcp_acquire_stream::<Ctx, U>(accessor, socket.rep(), TcpSocketStreamDirection::Send)
                 .await?;
-        if let Err(error) = acquired {
-            let future = accessor.with(|mut store| {
-                data.close(&mut store)?;
-                FutureReader::new(&mut store, async move { wasmtime::error::Ok(Err(error)) })
-            })?;
-            delivery.deliver_at_accessor_terminal(accessor).await?;
-            return Ok(future);
-        }
+        let (future, delivery) = delivery
+            .continue_with(async {
+                if let Err(error) = acquired {
+                    let future = accessor.with(|mut store| {
+                        data.close(&mut store)?;
+                        FutureReader::new(
+                            &mut store,
+                            async move { wasmtime::error::Ok(Err(error)) },
+                        )
+                    })?;
+                    return Ok(future);
+                }
 
-        let call = DurableCallSession::<P3SocketsTypesTcpSocketSend, Cancellable>::start_access_with_options(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            DurableFunctionType::WriteRemote,
-            AccessClaimOptions {
-                incomplete_repair_authorized_by_scope: true,
-                ..Default::default()
-            },
-            HostRequestNoInput {},
-        )
-        .await?;
-        let (result_tx, result_rx) = oneshot::channel();
+                let call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable> =
+                    DurableCallSession::start_access_with_options(
+                        accessor,
+                        durable_worker_ctx::<Ctx, U>,
+                        DurableFunctionType::WriteRemote,
+                        AccessClaimOptions {
+                            incomplete_repair_authorized_by_scope: true,
+                            ..Default::default()
+                        },
+                        HostRequestNoInput {},
+                    )
+                    .await?;
+                let (result_tx, result_rx) = oneshot::channel();
 
-        let future = if call.is_live() {
-            if call.is_persisted() {
-                // Fence the original send Start before any bytes can reach the socket.
-                let public_state = accessor.with(|mut store| {
-                    durable_worker_ctx::<Ctx, U>(store.data_mut())
-                        .public_state
-                        .clone()
-                });
-                public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await?;
-            }
-            // Forward the guest's outgoing bytes straight to the socket; only the
-            // transmission result is persisted (no bytes in the oplog).
-            let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-            let socket_result_future =
-                <WasiSockets as types::HostTcpSocketWithStore<U>>::send(&sockets, socket, data)
-                    .await?;
-            let (socket_result_tx, socket_result_rx) = oneshot::channel();
-            accessor.with(|mut store| {
-                socket_result_future
-                    .pipe(&mut store, TcpSocketResultConsumer::new(socket_result_tx))?;
-                let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                    .tail_work_tracker()
-                    .activity();
-                let task =
-                    TcpSocketSendTask::<Ctx>::live(call, socket_result_rx, result_tx, activity);
-                store.spawn(async move |store| task.run(store).await)?;
-                FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                let future = if call.is_live() {
+                    if call.is_persisted() {
+                        // Fence the original send Start before any bytes can reach the socket.
+                        let public_state = accessor.with(|mut store| {
+                            durable_worker_ctx::<Ctx, U>(store.data_mut())
+                                .public_state
+                                .clone()
+                        });
+                        public_state
+                            .worker()
+                            .commit_oplog_and_update_state(CommitLevel::Always)
+                            .await?;
+                    }
+                    // Forward the guest's outgoing bytes straight to the socket; only the
+                    // transmission result is persisted (no bytes in the oplog).
+                    let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+                    let socket_result_future =
+                        <WasiSockets as types::HostTcpSocketWithStore<U>>::send(
+                            &sockets, socket, data,
+                        )
+                        .await?;
+                    let (socket_result_tx, socket_result_rx) = oneshot::channel();
+                    accessor.with(|mut store| {
+                        socket_result_future
+                            .pipe(&mut store, TcpSocketResultConsumer::new(socket_result_tx))?;
+                        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .tail_work_tracker()
+                            .activity();
+                        let task = TcpSocketSendTask::<Ctx>::live(
+                            call,
+                            socket_result_rx,
+                            result_tx,
+                            activity,
+                        );
+                        store.spawn(async move |store| task.run(store).await)?;
+                        FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                    })
+                } else {
+                    // Drain the replayed bytes without repeating a possibly completed send.
+                    let (input_tx, input_rx) = oneshot::channel();
+                    accessor.with(|mut store| {
+                        data.pipe(&mut store, TcpSendDrainConsumer::new(input_tx))?;
+                        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .tail_work_tracker()
+                            .activity();
+                        let task =
+                            TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
+                        store.spawn(async move |store| task.run(store).await)?;
+                        FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                    })
+                }?;
+                wasmtime::error::Ok(future)
             })
-        } else {
-            // Drain the replayed bytes without repeating a possibly completed send.
-            let (input_tx, input_rx) = oneshot::channel();
-            accessor.with(|mut store| {
-                data.pipe(&mut store, TcpSendDrainConsumer::new(input_tx))?;
-                let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                    .tail_work_tracker()
-                    .activity();
-                let task = TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
-                store.spawn(async move |store| task.run(store).await)?;
-                FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
-            })
-        }?;
+            .await?;
         delivery.deliver_at_accessor_terminal(accessor).await?;
         Ok(future)
     }
@@ -1621,50 +1636,57 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         let (acquired, delivery) =
             tcp_acquire_stream::<Ctx, U>(accessor, socket.rep(), TcpSocketStreamDirection::Receive)
                 .await?;
-        if let Err(error) = acquired {
-            let handles = accessor.with(|mut store| {
-                wasmtime::error::Ok((
-                    StreamReader::new(&mut store, std::iter::empty::<u8>())?,
-                    FutureReader::new(&mut store, async move { wasmtime::error::Ok(Err(error)) })?,
-                ))
-            })?;
-            delivery.deliver_at_accessor_terminal(accessor).await?;
-            return Ok(handles);
-        }
-
-        // Capacity 1 suffices (and bounds memory as defense in depth): the
-        // producer keeps at most one demand in flight at a time.
-        let (demand_tx, demand_rx) = demand_channel();
-        let (result_tx, result_rx) = oneshot::channel();
-
-        // Build both guest-facing handles before spawning the durable task. The
-        // task appends the `receive` `Start`; the guest cannot poll either handle
-        // until this host call returns, so spawning first would risk committing a
-        // `Start` with no terminal if a later handle construction fails.
-        let handles = accessor.with(|mut store| {
-            let mut stream =
-                StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
-            let future = match FutureReader::new(&mut store, wait_tcp_receive_result(result_rx)) {
-                Ok(future) => future,
-                Err(error) => {
-                    let _ = stream.close(store.as_context_mut());
-                    return Err(error);
+        let (handles, delivery) = delivery
+            .continue_with(async {
+                if let Err(error) = acquired {
+                    let handles = accessor.with(|mut store| {
+                        wasmtime::error::Ok((
+                            StreamReader::new(&mut store, std::iter::empty::<u8>())?,
+                            FutureReader::new(&mut store, async move {
+                                wasmtime::error::Ok(Err(error))
+                            })?,
+                        ))
+                    })?;
+                    return Ok(handles);
                 }
-            };
-            let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                .tail_work_tracker()
-                .activity();
-            let task = TcpSocketReceiveTask::<Ctx>::new(
-                socket,
-                demand_rx,
-                result_tx,
-                observational_owner,
-                invocation_id,
-                activity,
-            );
-            store.spawn(async move |store| task.run(store).await)?;
-            Ok((stream, future))
-        })?;
+
+                // Capacity 1 suffices (and bounds memory as defense in depth): the
+                // producer keeps at most one demand in flight at a time.
+                let (demand_tx, demand_rx) = demand_channel();
+                let (result_tx, result_rx) = oneshot::channel();
+
+                // Build both guest-facing handles before spawning the durable task. The
+                // task appends the `receive` `Start`; the guest cannot poll either handle
+                // until this host call returns, so spawning first would risk committing a
+                // `Start` with no terminal if a later handle construction fails.
+                let handles = accessor.with(|mut store| {
+                    let mut stream =
+                        StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
+                    let future =
+                        match FutureReader::new(&mut store, wait_tcp_receive_result(result_rx)) {
+                            Ok(future) => future,
+                            Err(error) => {
+                                let _ = stream.close(store.as_context_mut());
+                                return Err(error);
+                            }
+                        };
+                    let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                        .tail_work_tracker()
+                        .activity();
+                    let task = TcpSocketReceiveTask::<Ctx>::new(
+                        socket,
+                        demand_rx,
+                        result_tx,
+                        observational_owner,
+                        invocation_id,
+                        activity,
+                    );
+                    store.spawn(async move |store| task.run(store).await)?;
+                    Ok((stream, future))
+                })?;
+                wasmtime::error::Ok(handles)
+            })
+            .await?;
         delivery.deliver_at_accessor_terminal(accessor).await?;
         Ok(handles)
     }
