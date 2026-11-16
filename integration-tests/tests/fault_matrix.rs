@@ -36,8 +36,10 @@ mod rows {
     use golem_common::base_model::agent::AgentTypeName;
     use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
     use golem_common::model::agent::ParsedAgentKey;
+    use golem_common::model::durable_stream::StreamSessionRecord;
+    use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
     use golem_common::model::{AgentId, PromiseId, RoutingTable};
-    use golem_common::schema::SchemaValue;
+    use golem_common::schema::{FromSchema, SchemaValue};
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
     use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
@@ -61,6 +63,7 @@ mod rows {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
     use test_r::{test, test_dep, timeout};
+    use tokio::task::JoinHandle;
 
     const PHASE: Duration = Duration::from_secs(120);
     const COUNT: u32 = 12;
@@ -660,6 +663,58 @@ mod rows {
             .context("the agent's executor is not in the cluster")
     }
 
+    /// Waits until the caller's oplog records that it consumed the first `PAUSE_AFTER` records
+    /// of the remote stream, while the stream has no terminal and the call is still running.
+    async fn wait_for_consumed_prefix<T>(
+        user: &TestUserContext<EnvBasedTestDependencies>,
+        caller: &AgentId,
+        call: &JoinHandle<T>,
+    ) -> anyhow::Result<()> {
+        tokio::time::timeout(PHASE, async {
+            loop {
+                ensure!(!call.is_finished(), "read_remote finished before the fault");
+                // A read never creates an agent, so the caller has no oplog until the spawned
+                // call reaches it.
+                let history = match user.get_oplog(caller, OplogIndex::INITIAL).await {
+                    Ok(history) => history,
+                    Err(error) if format!("{error:#}").contains("does not exist") => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                let mut consumed = 0;
+                for entry in history {
+                    let PublicOplogEntry::StreamSession(params) = &entry.entry else {
+                        continue;
+                    };
+                    match StreamSessionRecord::from_value(params.record.value())
+                        .map_err(|error| anyhow::anyhow!("{error:?}"))?
+                    {
+                        StreamSessionRecord::ConsumerItemValue(item)
+                            if item.reobserves.is_none() =>
+                        {
+                            consumed += item.logical_item_count();
+                        }
+                        StreamSessionRecord::ConsumerTerminal(_) => {
+                            anyhow::bail!("the caller read the stream terminal before the fault")
+                        }
+                        _ => {}
+                    }
+                }
+                ensure!(
+                    consumed <= PAUSE_AFTER as usize,
+                    "the caller read {consumed} records past a closed gate"
+                );
+                if consumed == PAUSE_AFTER as usize {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await?
+    }
+
     #[test]
     #[timeout("8 minutes")]
     async fn streaming_rpc_output_survives_callee_executor_kill(
@@ -699,9 +754,13 @@ mod rows {
                         .await
                 })
             };
-            // The callee's producer cannot finish before the gate opens, so the stream is open
-            // when its executor dies. The pause lets the caller read the first records.
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            // The callee's producer cannot finish before the gate opens, so the stream is still
+            // open when its executor dies, and the caller has already read the prefix.
+            let caller_id =
+                AgentId::from_agent_id(row.component.id, &caller).map_err(anyhow::Error::msg)?;
+            wait_for_consumed_prefix(&row.user, &caller_id, &call)
+                .await
+                .with_context(|| format!("{}: RPC prefix before the kill", fixture.sdk))?;
             let pids = executor_pids(deps);
             let cluster = deps.worker_executor_cluster();
             cluster.stop(callee_index).await;
@@ -765,35 +824,61 @@ mod rows {
         })
     }
 
+    /// A complete read response: the transport delivered its status, headers and body.
+    struct DurablePage {
+        status: StatusCode,
+        headers: reqwest::header::HeaderMap,
+        body: bytes::Bytes,
+    }
+
+    impl DurablePage {
+        async fn receive(response: reqwest::Response) -> reqwest::Result<Self> {
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response.bytes().await?;
+            Ok(Self {
+                status,
+                headers,
+                body,
+            })
+        }
+    }
+
     impl DurableRead {
-        /// One read from the current offset. `long_poll` waits for data at the tail.
-        async fn read(&mut self, context: &HttpTestContext, long_poll: bool) -> anyhow::Result<()> {
+        /// The URL of one read from the current offset. `long_poll` waits for data at the tail.
+        fn url(&self, context: &HttpTestContext, long_poll: bool) -> anyhow::Result<reqwest::Url> {
             let live = if long_poll { "&live=long-poll" } else { "" };
+            Ok(context
+                .base_url
+                .join(&format!("{}&offset={}{live}", self.path, self.offset))?)
+        }
+
+        async fn read(&mut self, context: &HttpTestContext, long_poll: bool) -> anyhow::Result<()> {
             let response = context
                 .client
-                .get(
-                    context
-                        .base_url
-                        .join(&format!("{}&offset={}{live}", self.path, self.offset))?,
-                )
+                .get(self.url(context, long_poll)?)
                 .send()
                 .await?;
-            let status = response.status();
+            self.apply(DurablePage::receive(response).await?)
+        }
+
+        /// Appends the records of a page and moves to its next offset.
+        fn apply(&mut self, page: DurablePage) -> anyhow::Result<()> {
             ensure!(
-                status == StatusCode::OK || status == StatusCode::NO_CONTENT,
-                "read returned {status}"
+                page.status == StatusCode::OK || page.status == StatusCode::NO_CONTENT,
+                "read returned {}",
+                page.status
             );
             let header = |name: &str| {
-                response
-                    .headers()
+                page.headers
                     .get(name)
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_string)
             };
             let next = header("stream-next-offset").context("read omitted its next offset")?;
             let closed = header("stream-closed").as_deref() == Some("true");
-            if status == StatusCode::OK {
-                let items: Vec<u32> = response.json().await?;
+            if page.status == StatusCode::OK {
+                let items: Vec<u32> = serde_json::from_slice(&page.body)?;
                 self.records.extend(items);
             }
             self.offset = next;
@@ -915,21 +1000,35 @@ mod rows {
             read.read_until(&context, |read| read.records.len() >= PAUSE_AFTER as usize)
                 .await?;
             ensure!(!read.closed, "the stream closed before the fault");
-            // A long-poll is open at the tail when the relay drops every connection.
-            let url = context.base_url.join(&format!(
-                "{}&offset={}&live=long-poll",
-                read.path, read.offset
-            ))?;
-            let pending = tokio::spawn(context.client.get(url).send());
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            let resets = relayed.drop_connections().await;
-            let dropped = pending.await?;
+            // The relay drops a long-poll that waits at the tail, and that long-poll fails.
+            // A long-poll that a new record answers first is a lost race: its records are kept
+            // and the drop is tried again at the new tail.
+            let resets = loop {
+                ensure!(
+                    !read.closed,
+                    "every long-poll was answered before the relay could drop it"
+                );
+                let url = read.url(&context, true)?;
+                let pending = tokio::spawn(context.client.get(url).send());
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                if pending.is_finished() {
+                    read.apply(DurablePage::receive(pending.await??).await?)?;
+                    continue;
+                }
+                let resets = relayed.drop_connections().await;
+                let received = match pending.await? {
+                    Ok(response) => DurablePage::receive(response).await,
+                    Err(error) => Err(error),
+                };
+                match received {
+                    Ok(page) => read.apply(page)?,
+                    Err(error) => {
+                        tracing::info!("the dropped long-poll failed: {error}");
+                        break resets;
+                    }
+                }
+            };
             InjectorEffect::ClientDropped { resets }.ensure_happened()?;
-            if let Ok(response) = dropped {
-                // The long-poll answered before the drop reached it; its data is not consumed,
-                // so the reconnect below reads it again from the same offset.
-                drop(response);
-            }
             // Reconnect with the saved offset and long-poll to the end.
             tokio::time::timeout(PHASE, async {
                 while !read.closed {

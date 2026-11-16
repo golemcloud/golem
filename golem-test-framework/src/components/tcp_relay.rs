@@ -91,22 +91,26 @@ impl TcpRelay {
         self.state.resets.load(Ordering::Acquire)
     }
 
-    /// Resets every connection that is open through the relay and returns how many it reset.
-    /// Returns after both sockets of each reset connection are closed. New connections are
-    /// accepted and forwarded as before.
+    /// Resets every connection that is open through the relay, including one whose upstream
+    /// connect is still pending, and returns how many it reset. Returns after the sockets of
+    /// each reset connection are closed. New connections are accepted and forwarded as before.
     pub async fn drop_connections(&self) -> u64 {
-        let connections: Vec<Connection> = self
+        let (signals, tasks): (Vec<_>, Vec<_>) = self
             .state
             .connections
             .lock()
             .unwrap()
             .drain()
-            .map(|(_, connection)| connection)
-            .collect();
+            .map(|(_, connection)| (connection.reset, connection.task))
+            .unzip();
+        // Every connection gets its signal before the relay waits for any of them, so one slow
+        // connection does not delay the reset of the others.
+        for signal in signals {
+            let _ = signal.send(());
+        }
         let mut reset = 0;
-        for connection in connections {
-            let _ = connection.reset.send(());
-            if connection.task.await.unwrap_or(false) {
+        for task in tasks {
+            if task.await.unwrap_or(false) {
                 reset += 1;
             }
         }
@@ -134,14 +138,15 @@ async fn accept_loop(listener: TcpListener, target: String, state: Arc<RelayStat
                 continue;
             }
         };
-        state.accepted.fetch_add(1, Ordering::AcqRel);
         let id = state.next_id.fetch_add(1, Ordering::AcqRel);
         let (reset, reset_rx) = oneshot::channel();
         // The registry lock is held across the spawn, so the task cannot remove its own entry
-        // before the entry exists.
+        // before the entry exists. The connection is counted once it is registered, so a
+        // connection that `accepted_count` reports is one that `drop_connections` resets.
         let mut connections = state.connections.lock().unwrap();
         let task = tokio::spawn(forward(id, client, target.clone(), reset_rx, state.clone()));
         connections.insert(id, Connection { reset, task });
+        state.accepted.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -150,10 +155,17 @@ async fn forward(
     id: u64,
     mut client: TcpStream,
     target: String,
-    reset: oneshot::Receiver<()>,
+    mut reset: oneshot::Receiver<()>,
     state: Arc<RelayState>,
 ) -> bool {
-    let mut upstream = match TcpStream::connect(&target).await {
+    let connected = tokio::select! {
+        connected = TcpStream::connect(&target) => connected,
+        _ = &mut reset => {
+            let _ = client.set_zero_linger();
+            return true;
+        }
+    };
+    let mut upstream = match connected {
         Ok(upstream) => upstream,
         Err(error) => {
             debug!("TCP relay could not reach {target}: {error}");
@@ -181,7 +193,7 @@ mod tests {
     use std::time::Duration;
     use test_r::test;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
+    use tokio::net::{TcpListener, TcpSocket, TcpStream};
 
     async fn echo_server() -> TcpListener {
         TcpListener::bind("127.0.0.1:0").await.unwrap()
@@ -270,6 +282,50 @@ mod tests {
 
         assert_eq!(relay.drop_connections().await, 0);
         assert_eq!(relay.reset_count(), 0);
+    }
+
+    #[test]
+    async fn drop_resets_a_connection_whose_upstream_connect_is_pending() {
+        // A listener that never accepts, with a full accept queue: Linux completes
+        // backlog + 1 handshakes, and a later connect waits for SYN retransmits.
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listener = socket.listen(1).unwrap();
+        let address = listener.local_addr().unwrap();
+        let _queued = [
+            TcpStream::connect(address).await.unwrap(),
+            TcpStream::connect(address).await.unwrap(),
+        ];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), TcpStream::connect(address))
+                .await
+                .is_err(),
+            "the target accept queue is not full, so an upstream connect would not be pending"
+        );
+        let relay = TcpRelay::start(address.to_string()).await.unwrap();
+        let mut client = TcpStream::connect(relay.local_addr()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while relay.accepted_count() == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the relay did not accept the client");
+
+        let reset = tokio::time::timeout(Duration::from_secs(5), relay.drop_connections())
+            .await
+            .expect("the drop waited for the pending upstream connect");
+        assert_eq!(reset, 1);
+
+        let mut buffer = [0u8; 8];
+        let read = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buffer))
+            .await
+            .expect("client hung after the relay dropped its connection");
+        assert!(
+            matches!(read, Ok(0) | Err(_)),
+            "dropped connection still delivered data: {read:?}"
+        );
+        drop(listener);
     }
 
     #[test]
