@@ -63,7 +63,8 @@ private[golem] final class DurableScope private (
 
   private[concurrent] def taskSubmitted(): Unit = readyTasks += 1
 
-  private[concurrent] def taskStarted(): Unit = {
+  // A submitted task started, or its executor rejected it.
+  private[concurrent] def taskReleased(): Unit = {
     readyTasks -= 1
     if (readyTasks == 0) scheduleCheck()
   }

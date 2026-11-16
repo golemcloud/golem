@@ -51,10 +51,23 @@ final class GolemExecutionContext private (
   override def execute(runnable: Runnable): Unit = {
     val token = if (captured == null) CustomInvocationContext.capture() else captured
     val scope = DurableScope.waitingFor(token)
+    // The scope waits for the task until it starts, or until the executor rejects it.
+    var pending         = scope != null
+    def release(): Unit =
+      if (pending) {
+        pending = false
+        scope.nn.taskReleased()
+      }
     if (scope != null) scope.taskSubmitted()
-    underlying.execute { () =>
-      if (scope != null) scope.taskStarted()
-      CustomInvocationContext.run[Unit](token, () => runnable.run())
+    try
+      underlying.execute { () =>
+        release()
+        CustomInvocationContext.run[Unit](token, () => runnable.run())
+      }
+    catch {
+      case error: Throwable =>
+        release()
+        throw error
     }
   }
 

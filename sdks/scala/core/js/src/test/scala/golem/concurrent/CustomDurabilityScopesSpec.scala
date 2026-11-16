@@ -21,9 +21,10 @@ import golem.host.DurabilityApi.DurableFunctionType
 import zio.ZIO
 import zio.test._
 
+import java.util.concurrent.RejectedExecutionException
 import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.scalajs.js
-import scala.util.Try
+import scala.util.{Success, Try}
 
 object CustomDurabilityScopesSpec extends ZIOSpecDefault {
 
@@ -244,6 +245,38 @@ object CustomDurabilityScopesSpec extends ZIOSpecDefault {
         source.success(())
         direct.zip(wrapped)
       }.map { case (direct, wrapped) => assertTrue(direct == "registration", wrapped == "registration") }
+    },
+    test("a task that the executor rejects or that throws inline does not keep an operation open") {
+      val rejecting = new ExecutionContext {
+        def execute(r: Runnable): Unit        = throw new RejectedExecutionException("queue closed")
+        def reportFailure(t: Throwable): Unit = throw t
+      }
+      val inlineThrowing = new ExecutionContext {
+        def execute(r: Runnable): Unit        = r.run()
+        def reportFailure(t: Throwable): Unit = throw t
+      }
+      def submitting(name: String, executor: ExecutionContext): Future[String] =
+        operation(name) {
+          try GolemExecutionContext.wrap(executor).execute(() => throw new RuntimeException("task failed"))
+          catch { case _: RuntimeException => () }
+          Future.successful(name)
+        }
+      scenario {
+        val rejected = submitting("rejected", rejecting)
+        val inline   = submitting("inline", inlineThrowing)
+        for {
+          _ <- admit("it::rejected")
+          _ <- admit("it::inline")
+          _ <- nextJobs()
+        } yield (rejected.value, inline.value, events())
+      }.map { case (rejected, inline, log) =>
+        assertTrue(
+          rejected.contains(Success("rejected")),
+          inline.contains(Success("inline")),
+          log.contains("finish it::rejected in it::rejected"),
+          log.contains("finish it::inline in it::inline")
+        )
+      }
     },
     test("a failed body drops the operation in its own scope and does not finish it") {
       scenario {
