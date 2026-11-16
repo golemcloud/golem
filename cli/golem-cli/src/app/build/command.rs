@@ -469,65 +469,73 @@ fn external_command_display_name(command: &str) -> &str {
         .unwrap_or(command)
 }
 
+pub(super) enum CommonDependencies {
+    Npm(std::path::PathBuf),
+    Moon(std::path::PathBuf),
+    Go(std::path::PathBuf),
+}
+
+pub(super) fn common_dependencies_for_tool(
+    ctx: &BuildContext<'_>,
+    tool: &str,
+    build_dir: &Path,
+    go_component: bool,
+) -> anyhow::Result<Option<CommonDependencies>> {
+    let normalized = normalized_program_name(tool);
+    Ok(match normalized.as_str() {
+        "node" | "npx" => {
+            let root = ctx.application().app_root_dir();
+            root.join("package.json")
+                .exists()
+                .then(|| CommonDependencies::Npm(root.to_path_buf()))
+        }
+        "moon" | "moonx" => {
+            let app_root_dir = fs::absolute_lexical_path(ctx.application().app_root_dir())?;
+            let build_dir = fs::absolute_lexical_path(build_dir)?;
+            build_dir
+                .ancestors()
+                .take_while(|dir| dir.starts_with(&app_root_dir))
+                .find(|dir| dir.join("moon.mod").exists())
+                .map(|root| CommonDependencies::Moon(root.to_path_buf()))
+        }
+        "go" => (go_component && build_dir.join("go.mod").exists())
+            .then(|| CommonDependencies::Go(build_dir.to_path_buf())),
+        _ => None,
+    })
+}
+
 pub async fn ensure_common_deps_for_tool(
     ctx: &BuildContext<'_>,
     tool: &str,
     build_dir: &Path,
     go_component: bool,
 ) -> anyhow::Result<()> {
-    let normalized = normalized_program_name(tool);
-    match normalized.as_str() {
-        "node" | "npx" => {
-            let package_json_path = ctx.application().app_root_dir().join("package.json");
-            if !package_json_path.exists() {
-                return Ok(());
-            }
-
-            let app_root_dir = ctx.application().app_root_dir().to_path_buf();
+    match common_dependencies_for_tool(ctx, tool, build_dir, go_component)? {
+        Some(CommonDependencies::Npm(root)) => {
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once("node", || async {
-                    ensure_npm_dependencies(ctx, &app_root_dir).await
+                    ensure_npm_dependencies(ctx, &root).await
                 })
                 .await
         }
-        "moon" | "moonx" => {
-            let app_root_dir = fs::absolute_lexical_path(ctx.application().app_root_dir())?;
-            let build_dir = fs::absolute_lexical_path(build_dir)?;
-            let Some(moon_module_root) = build_dir
-                .ancestors()
-                .take_while(|dir| dir.starts_with(&app_root_dir))
-                .find(|dir| dir.join("moon.mod").exists())
-            else {
-                return Ok(());
-            };
-
-            let moon_module_root = moon_module_root.to_path_buf();
-            let ensure_key = format!("moon:{}", moon_module_root.display());
+        Some(CommonDependencies::Moon(root)) => {
+            let ensure_key = format!("moon:{}", root.display());
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once(&ensure_key, || async {
-                    ensure_moon_dependencies(ctx, &moon_module_root).await
+                    ensure_moon_dependencies(ctx, &root).await
                 })
                 .await
         }
-        "go" => {
-            // Each Go component is its own module, rooted exactly at build_dir
-            // (the componentDir), so there is no ancestor walk like moon needs.
-            let go_mod_path = build_dir.join("go.mod");
-            if !go_component || !go_mod_path.exists() {
-                return Ok(());
-            }
-
+        Some(CommonDependencies::Go(root)) => {
             let toolchain = ensure_go_toolchain(ctx.application_config()).await?;
-
-            let module_root = build_dir.to_path_buf();
-            let ensure_key = format!("go:{}", module_root.display());
+            let ensure_key = format!("go:{}", root.display());
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once(&ensure_key, || async {
-                    ensure_go_dependencies(ctx, &module_root, &toolchain).await
+                    ensure_go_dependencies(ctx, &root, &toolchain).await
                 })
                 .await
         }
-        _ => Ok(()),
+        None => Ok(()),
     }
 }
 

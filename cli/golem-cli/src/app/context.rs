@@ -16,7 +16,7 @@ use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{AppValidationError, CustomCommandError, format_warns};
-use crate::app::manifest_upgrade::plan_manifest_upgrade_steps;
+use crate::app::manifest_upgrade::{ManifestUpgradeStep, plan_manifest_upgrade_steps};
 use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
 use crate::command_handler::ResolvedToolMiddlewareGrants;
@@ -319,6 +319,28 @@ pub struct ApplicationPreloadResult {
     pub loaded_with_warnings: bool,
     pub application_preload: Option<ApplicationPreload>,
     pub resolved_local_server: Option<ResolvedLocalServer>,
+    pub load_plan: ApplicationLoadPlan,
+}
+
+#[derive(Default)]
+pub struct ApplicationLoadPlan {
+    upgrades: Vec<ManifestUpgradeStep>,
+    commons: Vec<(
+        crate::app::template::AppTemplateCommonOnDemand,
+        ApplicationName,
+        PathBuf,
+        PathBuf,
+    )>,
+}
+
+impl ApplicationLoadPlan {
+    pub fn apply(&self, yes: bool) -> anyhow::Result<()> {
+        ApplicationContext::apply_manifest_upgrades(&self.upgrades, yes)?;
+        for (template, name, app_dir, target_dir) in &self.commons {
+            template.generate(name, app_dir, target_dir)?;
+        }
+        Ok(())
+    }
 }
 
 pub struct ApplicationContext {
@@ -396,6 +418,10 @@ impl ApplicationContext {
             None,
         )?;
         let steps = plan_manifest_upgrade_steps(&collected_sources.sources)?;
+        Self::apply_manifest_upgrades(&steps, yes)
+    }
+
+    fn apply_manifest_upgrades(steps: &[ManifestUpgradeStep], yes: bool) -> anyhow::Result<()> {
         if steps.is_empty() {
             return Ok(());
         }
@@ -404,7 +430,7 @@ impl ApplicationContext {
         logln("");
         log_action("Planned", "automatic application manifest upgrade changes");
         let _indent = DecoratedIndent::new_primary(Format::Text);
-        for step in &steps {
+        for step in steps {
             logln(format!(
                 "- {} {}",
                 "update".green(),
@@ -421,10 +447,18 @@ impl ApplicationContext {
             bail!(NonSuccessfulExit);
         }
 
+        // Check all originals after confirmation, before the first write.
+        for step in steps {
+            anyhow::ensure!(
+                fs::read_to_string(&step.path)? == step.current,
+                "Manifest {} changed after inspection; run the build again",
+                step.path.display()
+            );
+        }
         logln("");
         log_action("Applying", "application manifest upgrades");
         let _indent = LogIndent::new();
-        for step in &steps {
+        for step in steps {
             log_action(
                 "Updating",
                 format!("{}", step.path.display().to_string().log_color_highlight()),
@@ -440,10 +474,17 @@ impl ApplicationContext {
         source_mode: ApplicationSourceMode,
         calling_working_dir: &Path,
         dev_mode: bool,
+        defer_writes: bool,
     ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
-        match preload_app(source_mode, calling_working_dir, dev_mode) {
+        let mut load_plan = ApplicationLoadPlan::default();
+        let source_mode = if defer_writes {
+            prospective_application_source(source_mode, calling_working_dir, &mut load_plan)?
+        } else {
+            source_mode
+        };
+        match preload_app(source_mode, calling_working_dir, dev_mode, defer_writes, load_plan) {
             Some(environments) => validated_to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,
@@ -457,6 +498,7 @@ impl ApplicationContext {
                 loaded_with_warnings: false,
                 application_preload: None,
                 resolved_local_server: None,
+                load_plan: ApplicationLoadPlan::default(),
             }),
         }
     }
@@ -720,15 +762,16 @@ impl ApplicationContext {
         resolved_tool_grants: &ResolvedToolGrants,
         resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
         environment_tools: Option<&ResolvedEnvironmentTools>,
+        plan: crate::app::build::plan::BuildPlan,
     ) -> anyhow::Result<()> {
         let ctx =
             BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants)
                 .with_tool_middleware_grants(resolved_tool_middleware_grants);
         match environment_tools {
             Some(environment_tools) => {
-                build_app(&ctx.with_environment_tools(environment_tools)).await
+                build_app(&ctx.with_environment_tools(environment_tools), plan).await
             }
-            None => build_app(&ctx).await,
+            None => build_app(&ctx, plan).await,
         }
     }
 
@@ -973,6 +1016,8 @@ fn preload_app(
     source_mode: ApplicationSourceMode,
     calling_working_dir: &Path,
     dev_mode: bool,
+    defer_writes: bool,
+    mut load_plan: ApplicationLoadPlan,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode, calling_working_dir).map(|loaded_raw_apps| {
         loaded_raw_apps.and_then(|loaded_raw_apps| {
@@ -986,6 +1031,8 @@ fn preload_app(
                             &application_preload.application_name.value,
                             &referenced_template_names,
                             dev_mode,
+                            defer_writes,
+                            &mut load_plan,
                         ))
                         .map(|on_demand_common_raw_apps| {
                             (on_demand_common_raw_apps, application_preload)
@@ -1018,6 +1065,7 @@ fn preload_app(
                             loaded_with_warnings: false,
                             application_preload: Some(application_preload),
                             resolved_local_server,
+                            load_plan,
                         }
                     })
             })
@@ -1071,6 +1119,8 @@ fn ensure_on_demand_commons(
     application_name: &ApplicationName,
     referenced_template_names: &BTreeSet<String>,
     dev_mode: bool,
+    defer_writes: bool,
+    load_plan: &mut ApplicationLoadPlan,
 ) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
     let app_template_repo = AppTemplateRepo::get(dev_mode)?;
 
@@ -1080,8 +1130,32 @@ fn ensure_on_demand_commons(
         if let Some(template) = app_template_repo.common_on_demand_template(language)? {
             let app_dir = std::env::current_dir()?;
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
-            template.generate(application_name, &app_dir, &target_dir)?;
             let golem_yaml_path = target_dir.join("golem.yaml");
+            if defer_writes {
+                if template.is_up_to_date(application_name, &target_dir)? {
+                    if golem_yaml_path.exists() {
+                        on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(
+                            &golem_yaml_path,
+                        )?);
+                    }
+                    continue;
+                }
+                let rendered = template.render(application_name, &app_dir, &target_dir)?;
+                if let Some(yaml) = rendered.get(&golem_yaml_path) {
+                    on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_string(
+                        golem_yaml_path,
+                        yaml,
+                    )?);
+                }
+                load_plan.commons.push((
+                    template.clone(),
+                    application_name.clone(),
+                    app_dir,
+                    target_dir,
+                ));
+                continue;
+            }
+            template.generate(application_name, &app_dir, &target_dir)?;
             if golem_yaml_path.exists() {
                 on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(
                     &golem_yaml_path,
@@ -1091,6 +1165,50 @@ fn ensure_on_demand_commons(
     }
 
     Ok(on_demand_raw_apps)
+}
+
+fn prospective_application_source(
+    source_mode: ApplicationSourceMode,
+    calling_working_dir: &Path,
+    load_plan: &mut ApplicationLoadPlan,
+) -> anyhow::Result<ApplicationSourceMode> {
+    let root = match &source_mode {
+        ApplicationSourceMode::Automatic => None,
+        ApplicationSourceMode::ByRootManifest(root) => Some(root.as_path()),
+        ApplicationSourceMode::Preloaded(_) | ApplicationSourceMode::None => {
+            return Ok(source_mode);
+        }
+    };
+    let Some(collected) = collect_sources_and_switch_to_app_root(calling_working_dir, root) else {
+        return Ok(ApplicationSourceMode::None);
+    };
+    let collected =
+        validated_to_anyhow("Failed to collect application manifests", collected, None)?;
+    load_plan.upgrades = plan_manifest_upgrade_steps(&collected.sources)?;
+    if load_plan.upgrades.is_empty() {
+        validated_to_anyhow(
+            "Invalid manifest versions",
+            validate_manifest_versions(&collected.sources),
+            None,
+        )?;
+    }
+    let raw_apps = collected
+        .sources
+        .iter()
+        .map(
+            |source| match load_plan.upgrades.iter().find(|step| &step.path == source) {
+                Some(step) => {
+                    app_raw::ApplicationWithSource::from_yaml_string(source.clone(), &step.new)
+                }
+                None => app_raw::ApplicationWithSource::from_yaml_file(source),
+            },
+        )
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(ApplicationSourceMode::Preloaded(LoadedRawApps {
+        app_root_dir: collected.app_root_dir,
+        calling_working_dir: collected.calling_working_dir,
+        raw_apps,
+    }))
 }
 
 fn load_raw_apps(

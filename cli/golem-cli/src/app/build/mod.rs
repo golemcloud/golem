@@ -49,44 +49,53 @@ pub mod extract_component_metadata;
 pub mod gen_bridge;
 pub mod go_inputs;
 pub mod go_toolchain;
+mod inspect;
+pub mod plan;
 pub mod task_result_marker;
 pub mod up_to_date_check;
 
-pub async fn build_app(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    if ctx.should_run_step(AppBuildStep::Check) {
-        check_build_tool_requirements(ctx).await?;
-    }
-
-    build_app_with_build_plan(ctx).await?;
+pub async fn build_app(ctx: &BuildContext<'_>, plan: plan::BuildPlan) -> anyhow::Result<()> {
+    build_app_with_build_plan(ctx, plan).await?;
 
     Ok(())
 }
 
-async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+pub async fn preflight_build(ctx: &BuildContext<'_>) -> anyhow::Result<plan::BuildPlan> {
+    let plan = inspect::inspect_build(
+        ctx,
+        ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Check),
+    )?;
+    inspect::check_host_requirements(&plan)?;
+    if ctx.should_run_step(AppBuildStep::Check) {
+        check_build_tool_requirements(
+            ctx,
+            plan.stages()
+                .filter(|stage| {
+                    stage
+                        .actions
+                        .iter()
+                        .any(|action| matches!(action.operation, plan::BuildOperation::Command(_)))
+                })
+                .map(|stage| &stage.component),
+        )
+        .await?;
+    }
+    inspect::log_build_plan(&plan);
+    Ok(plan)
+}
+
+async fn build_app_with_build_plan(
+    ctx: &BuildContext<'_>,
+    mut checked_plan: plan::BuildPlan,
+) -> anyhow::Result<()> {
     let explicit_bridge_component_names = ctx
         .application_context()
         .selected_component_names()
         .iter()
         .cloned()
         .collect::<Vec<_>>();
-    let has_dependency_guest_request =
-        ctx.should_run_step(AppBuildStep::GenBridge)
-            && (selected_component_names_have_guest_bridge_dependencies(
-                ctx,
-                &explicit_bridge_component_names,
-            ) || ctx.custom_bridge_sdk_target().is_none()
-                && ctx.application().bridge_sdks().for_all_used_modes().any(
-                    |(_, mode, targets)| {
-                        mode == BridgeMode::Guest
-                            && targets.tools.as_ref().is_some_and(|tools| {
-                                manifest_tool_bridge_request_may_match_selected_components(
-                                    ctx,
-                                    tools,
-                                    &explicit_bridge_component_names,
-                                )
-                            })
-                    },
-                ));
+    let has_dependency_guest_request = ctx.should_run_step(AppBuildStep::GenBridge)
+        && needs_dependency_guest_bridges(ctx, &explicit_bridge_component_names);
     let effective_component_names = if has_dependency_guest_request {
         selected_component_names_with_dependencies_for_build(ctx).await?
     } else {
@@ -109,6 +118,7 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
 
     build_components_with_dependency_ordering(
         ctx,
+        &mut checked_plan,
         has_dependency_guest_request,
         &claims,
         &mut validated_targets,
@@ -235,6 +245,7 @@ fn target_dependency(target: &BridgeSdkTarget) -> ComponentDependency {
 #[allow(clippy::too_many_arguments)]
 async fn build_components_with_dependency_ordering(
     ctx: &BuildContext<'_>,
+    checked_plan: &mut plan::BuildPlan,
     has_dependency_guest_request: bool,
     claims: &[OutputDirClaim],
     validated_targets: &mut Vec<(BridgeRequestId, BridgeSdkTarget)>,
@@ -261,6 +272,11 @@ async fn build_components_with_dependency_ordering(
                 &extracted,
             )?;
         }
+        checked_plan.discover(inspect::inspect_stages(
+            ctx,
+            pending_components.iter(),
+            has_dependency_guest_request,
+        )?)?;
         if has_dependency_guest_request && !ctx.should_run_step(AppBuildStep::Build) {
             for component_name in pending_components
                 .iter()
@@ -338,6 +354,16 @@ async fn build_components_with_dependency_ordering(
         }
 
         for component_name in buildable_components {
+            // Metadata from an earlier component can change the pending graph.
+            // Revalidate before executing the next component, even in this batch.
+            checked_plan.discover(inspect::inspect_stages(
+                ctx,
+                pending_components.iter(),
+                has_dependency_guest_request,
+            )?)?;
+            if !checked_plan.ready().contains(&component_name) {
+                continue;
+            }
             if ctx.should_run_step(AppBuildStep::Build) {
                 ctx.extracted_metadata
                     .lock()
@@ -345,6 +371,7 @@ async fn build_components_with_dependency_ordering(
                     .remove(&component_name);
                 build_components(ctx, &component_name).await?;
             }
+            checked_plan.complete(&component_name)?;
 
             pending_components.remove(&component_name);
             built_components.insert(component_name.clone());
@@ -704,6 +731,28 @@ fn selected_component_names_have_guest_bridge_dependencies(
         .any(|component_name| !component_guest_bridge_requirements(ctx, component_name).is_empty())
 }
 
+fn needs_dependency_guest_bridges(
+    ctx: &BuildContext<'_>,
+    selected_component_names: &[ComponentName],
+) -> bool {
+    selected_component_names_have_guest_bridge_dependencies(ctx, selected_component_names)
+        || ctx.custom_bridge_sdk_target().is_none()
+            && ctx
+                .application()
+                .bridge_sdks()
+                .for_all_used_modes()
+                .any(|(_, mode, targets)| {
+                    mode == BridgeMode::Guest
+                        && targets.tools.as_ref().is_some_and(|tools| {
+                            manifest_tool_bridge_request_may_match_selected_components(
+                                ctx,
+                                tools,
+                                selected_component_names,
+                            )
+                        })
+                })
+}
+
 async fn selected_component_names_with_dependencies_for_build(
     ctx: &BuildContext<'_>,
 ) -> anyhow::Result<Vec<ComponentName>> {
@@ -759,6 +808,18 @@ fn expand_build_component_dependencies(
         }
     }
     loop {
+        anyhow::ensure!(
+            selected.len() <= plan::BuildPlanLimits::default().components,
+            "Build plan component limit exceeded"
+        );
+        for name in selected.iter() {
+            anyhow::ensure!(
+                ctx.application()
+                    .component_names()
+                    .any(|candidate| candidate == name),
+                "Unknown build component '{name}'"
+            );
+        }
         let selected_count_before = selected.len();
         for dependency in selected
             .iter()
@@ -772,6 +833,12 @@ fn expand_build_component_dependencies(
             }
         }
         for component in selected.clone() {
+            anyhow::ensure!(
+                ctx.application()
+                    .component_names()
+                    .any(|candidate| candidate == &component),
+                "Unknown build component '{component}'"
+            );
             selected.extend(
                 component_environment_tool_middleware_requirements(ctx, &component, extracted)?
                     .difference(built)

@@ -60,6 +60,19 @@ impl GoToolchain {
     }
 }
 
+/// Locates an installed toolchain without downloading or writing files.
+pub fn installed_go_toolchain() -> anyhow::Result<GoToolchain> {
+    if let Some(root) = go_toolchain_override(std::env::var_os(GO_TOOLCHAIN_ENV_VAR))? {
+        return Ok(GoToolchain::at(root));
+    }
+    let toolchain = GoToolchain::at(install_dir()?);
+    anyhow::ensure!(
+        is_installed(&toolchain),
+        "The Golem Go toolchain is not installed; set {GO_TOOLCHAIN_ENV_VAR} to an installed toolchain before building"
+    );
+    Ok(toolchain)
+}
+
 /// Makes the pinned Go toolchain available, downloading it if needed, and
 /// returns where it lives.
 pub async fn ensure_go_toolchain(config: &ApplicationConfig) -> anyhow::Result<GoToolchain> {

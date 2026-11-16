@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::ApplicationContext;
+use crate::app::context::{ApplicationContext, ApplicationLoadPlan};
 use crate::app::template::AppTemplateRepo;
 use crate::client::{GolemClients, new_raw_reqwest_client, wait_for_server_startup};
 use crate::command::GolemCliGlobalFlags;
@@ -109,6 +109,7 @@ pub struct Context {
     // Lazy initialized
     golem_clients: tokio::sync::OnceCell<GolemClients>,
     selected_context_logging: std::sync::OnceLock<()>,
+    application_load_plan: tokio::sync::Mutex<Option<ApplicationLoadPlan>>,
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
@@ -216,6 +217,7 @@ impl Context {
             app_source_mode,
             &crate::fs::current_dir_lexical()?,
             global_flags.dev_mode,
+            !allow_manifest_upgrades && log_output_for_help.is_none(),
         )?;
 
         if preloaded_app.loaded_with_warnings
@@ -438,6 +440,7 @@ impl Context {
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
             selected_context_logging: std::sync::OnceLock::new(),
+            application_load_plan: tokio::sync::Mutex::new(Some(preloaded_app.load_plan)),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 SHOULD_COLORIZE.should_colorize(),
@@ -481,6 +484,7 @@ impl Context {
                     self.manifest_discovery.clone(),
                     search_dir,
                     self.dev_mode,
+                    false,
                 )?
                 .source_mode
             }
@@ -530,6 +534,15 @@ impl Context {
 
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
+    }
+
+    pub async fn apply_application_load_plan(&self) -> anyhow::Result<()> {
+        let mut pending = self.application_load_plan.lock().await;
+        if let Some(plan) = pending.as_ref() {
+            plan.apply(self.yes)?;
+            *pending = None;
+        }
+        Ok(())
     }
 
     pub async fn repl_history_file(&self, language: ReplLanguage) -> anyhow::Result<PathBuf> {

@@ -327,11 +327,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     build: build_args,
                 } => {
-                    ctx.allow_manifest_upgrades = build_args.step.is_empty()
-                        || build_args
-                            .step
-                            .iter()
-                            .any(|step| *step != crate::model::app::AppBuildStep::Check);
+                    ctx.allow_manifest_upgrades = false;
                     ctx.get_or_init()
                         .await?
                         .app_handler()

@@ -3792,6 +3792,24 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
+        let checked_plan = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            crate::app::build::preflight_build(&BuildContext::new(app_ctx, build_config)).await?
+        };
+        if !build_config.should_run_step(AppBuildStep::Build)
+            && !build_config.should_run_step(AppBuildStep::GenBridge)
+        {
+            if build_config.should_run_step(AppBuildStep::Check) {
+                let app_ctx = self.ctx.app_context_lock().await;
+                self.plan_and_apply_dependency_fixes(
+                    &BuildContext::new(app_ctx.some_or_err()?, build_config),
+                    false,
+                )?;
+            }
+            return Ok(());
+        }
+        self.ctx.apply_application_load_plan().await?;
         let mut demanded_tools = BTreeSet::new();
         let mut demanded_middlewares = BTreeSet::new();
         let mut environment_tool_names = BTreeSet::new();
@@ -3869,6 +3887,7 @@ impl AppCommandHandler {
                     &resolved_tool_grants,
                     &resolved_middleware_grants,
                     Some(&environment_tool_names),
+                    checked_plan.clone(),
                 )
                 .await;
             match result {
@@ -3906,11 +3925,18 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
+        let checked_plan = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            crate::app::build::preflight_build(&BuildContext::new(app_ctx, build_config)).await?
+        };
+        self.ctx.apply_application_load_plan().await?;
         self.build_selected(
             build_config,
             resolved_tool_grants,
             resolved_tool_middleware_grants,
             None,
+            checked_plan,
         )
         .await
     }
@@ -3921,6 +3947,7 @@ impl AppCommandHandler {
         resolved_tool_grants: &ResolvedToolGrants,
         resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
         environment_tool_names: Option<&BTreeSet<String>>,
+        checked_plan: crate::app::build::plan::BuildPlan,
     ) -> anyhow::Result<()> {
         let environment_tools = self
             .resolve_build_environment_tools(build_config, environment_tool_names)
@@ -3928,10 +3955,9 @@ impl AppCommandHandler {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
-        // NOTE: dependency checks are done here, as they are interactive, and they modify
-        //       the projects, tool checks are done as part of app_ctx.build
+        // Apply confirmed repairs only after declared requirements pass preflight.
         if build_config.should_run_step(AppBuildStep::Check) {
-            self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config))?;
+            self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config), true)?;
         }
 
         app_ctx
@@ -3940,6 +3966,7 @@ impl AppCommandHandler {
                 resolved_tool_grants,
                 resolved_tool_middleware_grants,
                 environment_tools.as_ref(),
+                checked_plan,
             )
             .await
     }
@@ -4050,7 +4077,11 @@ impl AppCommandHandler {
         }))
     }
 
-    fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+    fn plan_and_apply_dependency_fixes(
+        &self,
+        build_ctx: &BuildContext<'_>,
+        apply: bool,
+    ) -> anyhow::Result<()> {
         let claude_skills_ctx =
             resolve_claude_skills_context(build_ctx.application().app_root_dir())?;
         let plan = plan_dependency_fixes(build_ctx, &claude_skills_ctx)?;
@@ -4062,10 +4093,12 @@ impl AppCommandHandler {
         }
 
         if plan.is_empty() {
-            create_claude_symlink_if_needed(
-                build_ctx.application().app_root_dir(),
-                &claude_skills_ctx,
-            )?;
+            if apply {
+                create_claude_symlink_if_needed(
+                    build_ctx.application().app_root_dir(),
+                    &claude_skills_ctx,
+                )?;
+            }
             return Ok(());
         }
 
@@ -4095,6 +4128,11 @@ impl AppCommandHandler {
                     &diff::unified_diff(step.current.as_str(), step.new.as_str()),
                 );
             }
+        }
+
+        if !apply {
+            logln("Dependency and configuration changes were not applied by check.");
+            return Ok(());
         }
 
         if !self
