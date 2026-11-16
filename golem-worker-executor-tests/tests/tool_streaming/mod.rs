@@ -22904,6 +22904,218 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.retry.max_attempts = 0;
+            config.oplog.max_operations_before_commit = u64::MAX;
+            config.suspend.wait_suspend_grace = Duration::from_secs(600);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let agent = agent_id!("ToolStreamingCaller", "accepted-uncommitted");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([(
+                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let mut write_start = executor.gate_next_replay_access_admission(
+        &worker,
+        "tool-output-writer::write",
+        ReplayAdmissionStage::BeforeLiveStart,
+    );
+    let mut accepted = executor.gate_next_replay_access_admission(
+        &worker,
+        "tool-output-writer::write",
+        ReplayAdmissionStage::AfterToolOutputAccepted,
+    );
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &caller_component,
+            &agent,
+            &key,
+            "recover_accepted_unread_output",
+            data_value!(false),
+        )
+        .await?;
+    let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
+    let before_promise = executor.promise_id(&worker, before.oplog_idx).await?;
+    tokio::time::timeout(Duration::from_secs(30), write_start.entered()).await?;
+    let committed = executor.stored_oplog(&worker).await;
+    write_start.release();
+    tokio::time::timeout(Duration::from_secs(30), accepted.entered()).await?;
+    assert_eq!(
+        executor.stored_oplog(&worker).await,
+        committed,
+        "acceptance must leave the output write buffered, not persisted"
+    );
+    assert!(!committed.iter().any(|entry| matches!(entry,
+        golem_common::model::oplog::OplogEntry::Start { function_name, .. }
+            if *function_name == golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite
+    )), "the checkpoint helper must not commit the output write");
+
+    // Restart interrupts can commit the buffered suffix; executor loss must discard it instead.
+    drop(executor);
+    context.wait_for_shut_down_executors().await?;
+    let owned_worker = OwnedAgentId::new(context.default_environment_id, &worker);
+    assert_eq!(
+        golem_worker_executor_test_utils::agent_oplog_length(deps, &context, &owned_worker).await?,
+        committed.len() as u64,
+        "teardown must not persist the buffered output write"
+    );
+
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    executor.resume(&worker, true).await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if executor.worker_is_loaded(&owned_worker).await {
+                executor.commit_oplog(&worker).await?;
+                let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                if entries.iter().any(|entry| {
+                    matches!(&entry.entry,
+                        PublicOplogEntry::Log(log) if log.message.contains("accepted-unread-marker")
+                    )
+                }) {
+                    return Ok::<(), anyhow::Error>(());
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    executor
+        .complete_promise(&before_promise, Vec::new())
+        .await?;
+    let after = next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker, &after).await?;
+    executor
+        .complete_promise(
+            &executor.promise_id(&worker, after.oplog_idx).await?,
+            Vec::new(),
+        )
+        .await?;
+    let output = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent,
+            &key,
+            "recover_accepted_unread_output",
+            data_value!(false),
+        )
+        .await?
+        .into_typed::<Vec<u8>>()?;
+    assert_eq!(output, b"marker:");
+    assert!(
+        checkpoints.try_recv().is_err(),
+        "reconstruction must not repeat checkpoint HTTP effects"
+    );
+    let settled = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let writes = settled
+        .iter()
+        .filter_map(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::tool::streams::tool-output-writer::write"
+            )
+            .then_some(entry.oplog_index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1, "only the regenerated write must survive");
+    let write = writes[0];
+    assert_eq!(
+        settled
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == write
+            ))
+            .count(),
+        1,
+        "the regenerated write must finish once"
+    );
+    assert_eq!(
+        settled
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write
+            ))
+            .count(),
+        1,
+        "the regenerated write acknowledgment must be delivered once"
+    );
+    assert!(
+        !settled.iter().any(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancel) => cancel.start_index == write,
+            PublicOplogEntry::CompletionDiscarded(marker) => marker.start_index == write,
+            _ => false,
+        }),
+        "cancellation must not replace the acknowledged write"
+    );
+    assert_eq!(
+        settled
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::Log(log) if log.message.contains("accepted-unread-marker")
+            ))
+            .count(),
+        1,
+        "the provider must observe the write acknowledgment once"
+    );
+    executor.delete_worker(&worker).await?;
+    server.abort();
+    Ok(())
+}
+
 /// How the client closes the stdin of an external tool call.
 #[derive(Clone)]
 enum StdinClose {

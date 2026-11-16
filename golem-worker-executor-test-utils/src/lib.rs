@@ -2614,7 +2614,7 @@ impl TestContext {
 
     /// Waits until the workers of every shut-down executor previously started on this context
     /// stopped executing. Executors that are still running are left alone.
-    async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
+    pub async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
         let previous = self.executor_invocation_loops.lock().unwrap().clone();
         let mut drained = Vec::new();
         for loops in &previous {
