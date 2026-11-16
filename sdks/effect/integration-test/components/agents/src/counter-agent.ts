@@ -226,7 +226,8 @@ export const Counter = CounterSpec.implement<CounterState>({
     }),
   methods: counterMethods,
   snapshot: {
-    save: (state) => Ref.get(state.count).pipe(Effect.map((s) => ({ ...s, ownerTag: state.ownerTag }))),
+    save: (state) =>
+      Ref.get(state.count).pipe(Effect.map((s) => ({ ...s, ownerTag: state.ownerTag }))),
     restore: (saved) =>
       Ref.make({ count: saved.count }).pipe(
         Effect.map((count) => ({ count, ownerTag: saved.ownerTag })),
