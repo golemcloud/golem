@@ -30,8 +30,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeLogin};
 use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
-    CompiledRoutes, CorsOptions, OriginPattern, PathSegment, RouteMatch, RouteSecurity,
-    SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
+    CompiledRoutes, CorsOptions, MountFileSource, OriginPattern, PathSegment, RouteMatch,
+    RouteSecurity, SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -635,7 +635,7 @@ impl DomainHttpApi {
             .or_else(|| self.typed[index].route(method, path))
             .or_else(|| {
                 self.mounts.iter().find_map(|mount| {
-                    if matches!(mount.behavior, RichRouteBehaviour::AgentFilesystem(_))
+                    if matches!(&mount.behavior, RichRouteBehaviour::Mount(mount) if matches!(mount.files, MountFileSource::Live { .. }))
                         && method != http::Method::GET
                         && method != http::Method::HEAD
                     {
@@ -681,8 +681,8 @@ pub(super) mod tests {
         use golem_common::model::component::ComponentRevision;
         use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
         use golem_service_base::custom_api::{
-            AgentFilesystemBehaviour, CallAgentBehaviour, CompiledInputSchema,
-            CompiledOutputSchema, HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
+            CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, MountAgent,
+            MountBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
         };
         let input = || CompiledInputSchema {
             graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
@@ -692,24 +692,27 @@ pub(super) mod tests {
         let component_revision = ComponentRevision::INITIAL;
         let agent_type = AgentTypeName(format!("agent{id}"));
         let behavior = match kind {
-            "router" => RouteBehaviour::HttpRouter(HttpRouterBehaviour {
-                component_id,
-                component_revision,
-                agent_type,
-                constructor_input: input(),
+            "router" | "filesystem" => RouteBehaviour::Mount(MountBehaviour {
                 handler: None,
-                openapi_provider_method: None,
-                static_bindings: vec![],
-                file_index: vec![],
-                file_response_headers: vec![],
-            }),
-            "filesystem" => RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
-                component_id,
-                component_revision,
-                agent_type,
-                constructor_input: input(),
-                constructor_parameters: vec![],
-                filesystem_bindings: vec![],
+                openapi_provider: None,
+                files: {
+                    let agent = MountAgent {
+                        component_id,
+                        component_revision,
+                        agent_type,
+                        constructor_input: input(),
+                        constructor_parameters: vec![],
+                    };
+                    if kind == "router" {
+                        MountFileSource::Router {
+                            agent,
+                            file_index: vec![],
+                        }
+                    } else {
+                        MountFileSource::Live { agent }
+                    }
+                },
+                file_bindings: vec![],
                 file_response_headers: vec![],
             }),
             "reserved" => RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
@@ -871,14 +874,12 @@ pub(super) mod tests {
         assert_ne!(baseline, key(changed_deployment, "example.com").await);
 
         let mut changed_provider = routes();
-        let RouteBehaviour::HttpRouter(provider) = &mut changed_provider.routes[1].behavior else {
+        let RouteBehaviour::Mount(provider) = &mut changed_provider.routes[1].behavior else {
             unreachable!()
         };
-        provider
-            .openapi_provider_method
-            .as_mut()
-            .unwrap()
-            .method_name = "describe-v2".into();
+        let golem_service_base::custom_api::MountTarget::AgentMethod(target) =
+            provider.openapi_provider.as_mut().unwrap();
+        target.method.method_name = "describe-v2".into();
         assert_ne!(baseline, key(changed_provider, "example.com").await);
 
         let mut changed_call = routes();
