@@ -311,8 +311,7 @@ impl CursorTx<'_> {
                 }
             }
             OplogEntry::AgentInvocationFinished { .. }
-            | OplogEntry::Error {
-                kind: golem_common::model::oplog::OplogErrorKind::InvocationLocal,
+            | OplogEntry::AgentInvocationFailed {
                 entity_parent_start_index: None,
                 ..
             } => {

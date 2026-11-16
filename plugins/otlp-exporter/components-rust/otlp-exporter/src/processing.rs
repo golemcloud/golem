@@ -61,64 +61,27 @@ pub(crate) fn process_entries_from(
             OplogEntry::AgentInvocationFinished(params) => {
                 handle_invocation_finished(state, params, &mut completed_spans, &mut metrics);
             }
-            OplogEntry::Error(params) => {
-                let error_msg = worker_error_to_string(&params.error);
+            OplogEntry::AgentInvocationFailed(params) => {
                 let time_ns = datetime_to_nanos(&params.timestamp);
-                state.terminal_error = Some((error_msg.clone(), time_ns));
-                let error_kind = oplog_error_kind_name(&params.kind);
-                if matches!(
-                    params.kind,
-                    golem_rust::bindings::golem::api::oplog::OplogErrorKind::InvocationLocal
-                ) {
-                    finish_invocation(state, time_ns, true, &mut completed_spans, &mut metrics);
-                }
-
-                metrics.push(counter_metric(
-                    "golem.error.count",
-                    "1",
-                    "Agent errors",
-                    &time_ns.to_string(),
-                    vec![
-                        KeyValue {
-                            key: "error.type".to_string(),
-                            value: OtlpValue {
-                                string_value: worker_error_variant_name(&params.error),
-                            },
-                        },
-                        KeyValue {
-                            key: "error.kind".to_string(),
-                            value: OtlpValue {
-                                string_value: error_kind.to_string(),
-                            },
-                        },
-                    ],
-                ));
-
-                log_records.push(OtlpLogRecord {
-                    time_unix_nano: time_ns.to_string(),
-                    observed_time_unix_nano: time_ns.to_string(),
-                    severity_number: 17,
-                    severity_text: "ERROR".to_string(),
-                    body: Some(OtlpValue {
-                        string_value: error_msg,
-                    }),
-                    attributes: vec![
-                        KeyValue {
-                            key: "error.type".to_string(),
-                            value: OtlpValue {
-                                string_value: worker_error_variant_name(&params.error),
-                            },
-                        },
-                        KeyValue {
-                            key: "error.kind".to_string(),
-                            value: OtlpValue {
-                                string_value: error_kind.to_string(),
-                            },
-                        },
-                    ],
-                    trace_id: non_empty_trace_id(&state.trace_id),
-                    span_id: None,
-                });
+                handle_error(
+                    state,
+                    &params.error,
+                    time_ns,
+                    "invocation-local",
+                    &mut log_records,
+                    &mut metrics,
+                );
+                finish_invocation(state, time_ns, true, &mut completed_spans, &mut metrics);
+            }
+            OplogEntry::Error(params) => {
+                handle_error(
+                    state,
+                    &params.error,
+                    datetime_to_nanos(&params.timestamp),
+                    oplog_error_kind_name(&params.kind),
+                    &mut log_records,
+                    &mut metrics,
+                );
             }
             OplogEntry::Interrupted(ts) => {
                 let time_ns = timestamp_to_nanos(&ts);
@@ -370,6 +333,51 @@ fn discard_openings_in_region(
         .retain(|span| !span.opening_index.is_some_and(is_inside));
 }
 
+fn handle_error(
+    state: &mut WorkerState,
+    error: &golem_rust::bindings::golem::api::oplog::WorkerError,
+    time_ns: u128,
+    error_kind: &str,
+    log_records: &mut Vec<OtlpLogRecord>,
+    metrics: &mut Vec<OtlpMetric>,
+) {
+    let error_msg = worker_error_to_string(error);
+    state.terminal_error = Some((error_msg.clone(), time_ns));
+    let attributes = vec![
+        KeyValue {
+            key: "error.type".to_string(),
+            value: OtlpValue {
+                string_value: worker_error_variant_name(error),
+            },
+        },
+        KeyValue {
+            key: "error.kind".to_string(),
+            value: OtlpValue {
+                string_value: error_kind.to_string(),
+            },
+        },
+    ];
+    metrics.push(counter_metric(
+        "golem.error.count",
+        "1",
+        "Agent errors",
+        &time_ns.to_string(),
+        attributes.clone(),
+    ));
+    log_records.push(OtlpLogRecord {
+        time_unix_nano: time_ns.to_string(),
+        observed_time_unix_nano: time_ns.to_string(),
+        severity_number: 17,
+        severity_text: "ERROR".to_string(),
+        body: Some(OtlpValue {
+            string_value: error_msg,
+        }),
+        attributes,
+        trace_id: non_empty_trace_id(&state.trace_id),
+        span_id: None,
+    });
+}
+
 fn oplog_error_kind_name(
     kind: &golem_rust::bindings::golem::api::oplog::OplogErrorKind,
 ) -> &'static str {
@@ -377,7 +385,6 @@ fn oplog_error_kind_name(
     match kind {
         OplogErrorKind::Invocation => "invocation",
         OplogErrorKind::Recovery => "recovery",
-        OplogErrorKind::InvocationLocal => "invocation-local",
     }
 }
 
@@ -1865,17 +1872,17 @@ mod tests {
                     "trace-failed",
                     vec![local_span("failed-invocation", None, false)],
                 ),
-                OplogEntry::Error(RawErrorParameters {
-                    timestamp: instant(18, 0),
-                    kind: OplogErrorKind::InvocationLocal,
-                    invocation_id: Some(Uuid {
-                        high_bits: 0,
-                        low_bits: 1,
-                    }),
-                    error: WorkerError::Unknown("boom".to_string()),
-                    retry_from: 0,
-                    retry_policy_state: None,
-                }),
+                OplogEntry::AgentInvocationFailed(
+                    golem_rust::bindings::golem::api::oplog::RawAgentInvocationFailedParameters {
+                        timestamp: instant(18, 0),
+                        invocation_id: Uuid {
+                            high_bits: 0,
+                            low_bits: 1,
+                        },
+                        error: WorkerError::Unknown("boom".to_string()),
+                        start_index: 0,
+                    },
+                ),
             ],
         );
 

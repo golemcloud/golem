@@ -309,7 +309,13 @@ declare module 'golem:api/oplog@1.5.0' {
     pinnedCardIds: CardId[];
     scopeCardId?: CardId;
   };
-  export type OplogErrorKind = "invocation" | "recovery" | "invocation-local";
+  export type AgentInvocationFailedParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    error: string;
+    startIndex: OplogIndex;
+  };
+  export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;
@@ -961,6 +967,12 @@ declare module 'golem:api/oplog@1.5.0' {
     consumedFuel: bigint;
     componentRevision: bigint;
   };
+  export type RawAgentInvocationFailedParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    error: WorkerError;
+    startIndex: OplogIndex;
+  };
   export type RawErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;
@@ -1110,6 +1122,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-finished'
     val: RawAgentInvocationFinishedParameters
+  } |
+  {
+    tag: 'agent-invocation-failed'
+    val: RawAgentInvocationFailedParameters
   } |
   /** Agent suspended */
   {
@@ -1385,6 +1401,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-finished'
     val: AgentInvocationFinishedParameters
+  } |
+  {
+    tag: 'agent-invocation-failed'
+    val: AgentInvocationFailedParameters
   } |
   /** Agent suspended */
   {

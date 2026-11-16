@@ -280,26 +280,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 continue;
                             }
                             Ok(InvokeResult::MethodFailed { error, .. }) => {
-                                if let Err(error) = store.as_context_mut().data_mut()
-                                    .on_agent_method_failure(&full_function_name, error.clone()).await
-                                {
+                                if let Err(
+                                    crate::worker::MethodFailureSettlementError::Invocation(error)
+                                    | crate::worker::MethodFailureSettlementError::Recovery(error)
+                                ) = Self::on_agent_method_failure(store, &full_function_name, error, uses_streams).await {
                                     break Err(error);
-                                }
-                                if uses_streams && store.as_context().data().durable_ctx().is_live() {
-                                    let worker = worker.clone();
-                                    let key = idempotency_key;
-                                    let result = store.run_concurrent(async move |_accessor| {
-                                        worker.fail_durable_streaming_session(&key, error.message().to_owned()).await
-                                    }).await;
-                                    if let Err(error) = result
-                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
-                                        .and_then(|result| result)
-                                    {
-                                        break Err(error);
-                                    }
-                                }
-                                if store.as_context().data().durable_ctx().is_live() {
-                                    worker.reset_infrastructure_recovery_backoff();
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;

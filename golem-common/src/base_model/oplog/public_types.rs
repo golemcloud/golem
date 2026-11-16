@@ -951,7 +951,6 @@ pub enum LogLevel {
 pub enum OplogErrorKind {
     Invocation,
     Recovery,
-    InvocationLocal,
 }
 
 /// Identifies which host-owned stream a `HostStreamFrame` oplog entry belongs

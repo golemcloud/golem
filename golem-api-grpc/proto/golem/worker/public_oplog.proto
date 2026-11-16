@@ -28,6 +28,7 @@ message OplogEntry {
     CreateParameters Create = 1;
     AgentInvocationStartedParameters AgentInvocationStarted = 3;
     AgentInvocationFinishedParameters AgentInvocationFinished = 4;
+    AgentInvocationFailedParameters AgentInvocationFailed = 71;
     TimestampParameter Suspend = 5;
     ErrorParameters Error = 6;
     JumpParameters Jump = 8;
@@ -249,6 +250,13 @@ message AgentInvocationFinishedParameters {
   golem.common.UUID invocation_id = 6;
 }
 
+message AgentInvocationFailedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID invocation_id = 2;
+  string error = 3;
+  uint64 start_index = 4;
+}
+
 message PublicAgentInvocation {
   oneof invocation {
     PublicAgentInitializationInvocation agent_initialization = 1;
@@ -410,7 +418,6 @@ message RetryPolicyStatePair {
 enum OplogErrorKind {
   INVOCATION = 0;
   RECOVERY = 1;
-  INVOCATION_LOCAL = 2;
 }
 
 message ErrorParameters {

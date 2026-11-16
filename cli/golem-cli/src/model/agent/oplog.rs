@@ -384,6 +384,22 @@ impl TextOutput for PublicOplogEntry {
                     }
                 }
             }
+            PublicOplogEntry::AgentInvocationFailed(params) => {
+                logln(format_message_highlight("INVOKE FAILED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id)
+                ));
+                logln(format!("{pad}start index:       {}", params.start_index));
+                logln(format!(
+                    "{pad}error:             {}",
+                    format_error(&params.error)
+                ));
+            }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
                 logln(format!(

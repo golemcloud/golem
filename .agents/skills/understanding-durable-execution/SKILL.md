@@ -144,6 +144,8 @@ completion activates only the incarnation that created the promise, through
 `enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
 missing or re-created agent is left alone.
 
+Keyed invocation admission checks fatal agent health inside the status actor's append job, after result-generation validation and before appending the pending entry. Acquiring a worker earlier does not authorize work after its constructor fails. A failed or exited agent refuses new immediate and scheduled methods without writing to its oplog. Generation changes return the caller to same-key result lookup first; recorded outcomes keep precedence. Keyless manual updates use their separate admission path so failed agents can still be repaired.
+
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
 admission contract, pinned to the activated incarnation. Same-key repair preserves the original
@@ -2301,7 +2303,7 @@ reads queued on the same state actor wait behind it. Actual traps and constructo
 
 A valid outer guest `agent-error` from an agent method becomes `InvokeResult::MethodFailed`, not
 a trap. `on_agent_method_failure` (`durable_host/invocation.rs`) finishes required cleanup and
-appends `Error { kind: InvocationLocal, retry_from: invocation_start, retry_policy_state: None }`.
+appends `AgentInvocationFailed { invocation_id, error, start_index, entity_parent_start_index }`.
 It uses the same durable `Always` / ephemeral `Deferred` completion barrier before publishing
 the existing `InvocationFailed` response for that key. A failed cleanup or commit retains its
 infrastructure failure path and does not publish the method outcome.
@@ -2313,9 +2315,7 @@ work; it neither retries the method nor fails other keys. Ephemeral owners still
 their one accepted method. A persisted local outcome is observable after archival, but a lost
 incomplete ephemeral method is never replayed to manufacture a result.
 
-Replay reserves `InvocationLocal` errors against generic hint skipping, including the commit of
-the last host call. Re-execution reconstructs partial state and validates the error payload,
-invocation anchor, entity parent and absent retry state before consuming the terminal. A success
+`AgentInvocationFailed` is a positional terminal, not an error hint. Re-execution reconstructs partial state and validates the invocation ID, error payload, invocation anchor and entity parent before consuming the terminal. A success
 or actual trap instead of that terminal is divergence. Completed replay neither appends nor
 publishes another terminal; cold same-key lookup reads the stored failure without guest execution.
 Only an incomplete durable invocation at the natural history tail may settle live.

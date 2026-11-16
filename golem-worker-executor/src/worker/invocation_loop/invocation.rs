@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::DurabilityHost;
 use golem_common::model::InvocationId;
 
@@ -261,40 +262,29 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         )
                         .await;
                 }
-                if let Err(error) = self
-                    .store
-                    .data_mut()
-                    .on_agent_method_failure(&display_name, error.clone())
-                    .await
+                match DurableWorkerCtx::<Ctx>::on_agent_method_failure(
+                    &mut self.store,
+                    &display_name,
+                    error,
+                    self.uses_streams,
+                )
+                .await
                 {
-                    return self
-                        .agent_invocation_failed(
-                            &display_name,
-                            &invocation_idempotency_key,
-                            Err(error),
-                        )
-                        .await;
-                }
-                if self.uses_streams {
-                    let parent = self.parent.clone();
-                    let key = invocation_idempotency_key;
-                    let result = self
-                        .store
-                        .run_concurrent(async move |_accessor| {
-                            parent
-                                .fail_durable_streaming_session(&key, error.message().to_owned())
-                                .await
-                        })
-                        .await;
-                    if let Err(error) = result
-                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
-                        .and_then(|result| result)
-                    {
+                    Ok(()) => {}
+                    Err(crate::worker::MethodFailureSettlementError::Invocation(error)) => {
+                        return self
+                            .agent_invocation_failed(
+                                &display_name,
+                                &invocation_idempotency_key,
+                                Err(error),
+                            )
+                            .await;
+                    }
+                    Err(crate::worker::MethodFailureSettlementError::Recovery(error)) => {
                         self.parent.record_recovery_failure(&error).await;
                         return self.invocation_failure_recovery(&error);
                     }
                 }
-                self.parent.reset_infrastructure_recovery_backoff();
                 match self.parent.agent_mode() {
                     AgentMode::Durable => CommandOutcome::Continue,
                     AgentMode::Ephemeral => CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(

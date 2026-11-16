@@ -54,23 +54,24 @@ use golem_common::model::card::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
-    CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams, CardInstalledParams,
-    CardRevokedParams, CommittedRemoteTransactionParams, CompletionDeliveredParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult,
-    PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
-    PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
-    ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams,
-    StreamRegisteredParams, StreamSessionParams, StreamTerminalParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
+    ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
+    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
+    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, ManualUpdateParameters, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicExternalToolResult, PublicSpanAttributes, PublicSpanData, PublicSpanFinished,
+    PublicSpanKind, PublicSpanOutcome, PublicSpanStarted, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StreamTerminalParams, StringAttributeValue, SuccessfulUpdateParams,
+    SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
 };
 
 use golem_common::model::oplog::{
@@ -214,7 +215,6 @@ impl From<golem_common::model::oplog::OplogErrorKind> for oplog::OplogErrorKind 
         match value {
             golem_common::model::oplog::OplogErrorKind::Invocation => Self::Invocation,
             golem_common::model::oplog::OplogErrorKind::Recovery => Self::Recovery,
-            golem_common::model::oplog::OplogErrorKind::InvocationLocal => Self::InvocationLocal,
         }
     }
 }
@@ -224,7 +224,6 @@ impl From<oplog::OplogErrorKind> for golem_common::model::oplog::OplogErrorKind 
         match value {
             oplog::OplogErrorKind::Invocation => Self::Invocation,
             oplog::OplogErrorKind::Recovery => Self::Recovery,
-            oplog::OplogErrorKind::InvocationLocal => Self::InvocationLocal,
         }
     }
 }

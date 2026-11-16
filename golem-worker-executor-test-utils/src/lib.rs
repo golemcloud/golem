@@ -3706,13 +3706,13 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
-    async fn on_agent_method_failure(
+    async fn record_agent_method_failure(
         &mut self,
         full_function_name: &str,
         error: AgentError,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_method_failure(full_function_name, error)
+            .record_agent_method_failure(full_function_name, error)
             .await
     }
 

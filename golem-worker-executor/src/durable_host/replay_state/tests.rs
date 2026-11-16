@@ -3505,14 +3505,7 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
         unpinned_invocation_started(),
         start_now(),
         end_for(3, 42),
-        OplogEntry::error(
-            None,
-            OplogErrorKind::InvocationLocal,
-            Some(replayed_invocation_id()),
-            error.clone(),
-            anchor,
-            None,
-        ),
+        OplogEntry::agent_invocation_failed(None, replayed_invocation_id(), error.clone(), anchor),
         unpinned_invocation_started(),
         invocation_finished(),
     ])
@@ -3559,59 +3552,34 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
 }
 
 #[test]
-async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_payload_parent_or_retry_state()
- {
+async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_payload_or_parent() {
     let anchor = OplogIndex::from_u64(2);
     let error = AgentError::InternalError("method gave up".into());
     for entry in [
         invocation_finished(),
-        OplogEntry::error(
+        OplogEntry::agent_invocation_failed(
             None,
-            OplogErrorKind::InvocationLocal,
-            None,
+            golem_common::model::InvocationId(uuid::Uuid::from_u128(99)),
             error.clone(),
             anchor,
-            None,
         ),
-        OplogEntry::error(
-            None,
-            OplogErrorKind::InvocationLocal,
-            Some(golem_common::model::InvocationId(uuid::Uuid::from_u128(99))),
-            error.clone(),
-            anchor,
-            None,
-        ),
-        OplogEntry::error(
+        OplogEntry::agent_invocation_failed(
             Some(OplogIndex::INITIAL),
-            OplogErrorKind::InvocationLocal,
-            Some(replayed_invocation_id()),
+            replayed_invocation_id(),
             error.clone(),
             anchor,
-            None,
         ),
-        OplogEntry::error(
+        OplogEntry::agent_invocation_failed(
             None,
-            OplogErrorKind::InvocationLocal,
-            Some(replayed_invocation_id()),
+            replayed_invocation_id(),
             error.clone(),
             anchor.next(),
-            None,
         ),
-        OplogEntry::error(
+        OplogEntry::agent_invocation_failed(
             None,
-            OplogErrorKind::InvocationLocal,
-            Some(replayed_invocation_id()),
+            replayed_invocation_id(),
             AgentError::InternalError("other".into()),
             anchor,
-            None,
-        ),
-        OplogEntry::error(
-            None,
-            OplogErrorKind::InvocationLocal,
-            Some(replayed_invocation_id()),
-            error.clone(),
-            anchor,
-            Some(golem_common::model::RetryPolicyState::Counter(1)),
         ),
     ] {
         let rs = replay_state_over(vec![
@@ -3639,13 +3607,11 @@ async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_p
         let rs = replay_state_over(vec![
             OplogEntry::recovery_succeeded(),
             unpinned_invocation_started(),
-            OplogEntry::error(
+            OplogEntry::agent_invocation_failed(
                 None,
-                OplogErrorKind::InvocationLocal,
-                Some(replayed_invocation_id()),
+                replayed_invocation_id(),
                 error.clone(),
                 anchor,
-                None,
             ),
         ])
         .await;

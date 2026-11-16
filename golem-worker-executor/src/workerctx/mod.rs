@@ -510,8 +510,8 @@ pub trait InvocationHooks {
         trap_type: &TrapType,
     ) -> InvocationFailureDecision;
 
-    /// Commits a live method's decoded guest error without failing the agent.
-    async fn on_agent_method_failure(
+    /// Validates a replayed method failure or commits its live terminal without failing the agent.
+    async fn record_agent_method_failure(
         &mut self,
         full_function_name: &str,
         error: AgentError,

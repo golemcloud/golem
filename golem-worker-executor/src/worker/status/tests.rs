@@ -1614,13 +1614,11 @@ async fn invocation_local_failure_finishes_only_its_key_and_keeps_the_agent_idle
     let test_case = TestCase::builder(0)
         .agent_invocation_started("fail", vec![], failed)
         .add(
-            OplogEntry::error(
+            OplogEntry::agent_invocation_failed(
                 None,
-                OplogErrorKind::InvocationLocal,
-                Some(failed),
+                failed,
                 AgentError::InternalError("method gave up".into()),
                 OplogIndex::INITIAL,
-                None,
             ),
             move |mut status| {
                 status.invocation_results.insert(
@@ -1650,13 +1648,11 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
     let anchor = OplogIndex::from_u64(13);
     let entries = BTreeMap::from([(
         OplogIndex::from_u64(29),
-        OplogEntry::error(
+        OplogEntry::agent_invocation_failed(
             None,
-            OplogErrorKind::InvocationLocal,
-            Some(InvocationId(Uuid::new_v4())),
+            InvocationId(Uuid::new_v4()),
             AgentError::InternalError("method gave up".into()),
             anchor,
-            None,
         ),
     )]);
     for recovery in [false, true] {

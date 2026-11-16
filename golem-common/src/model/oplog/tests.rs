@@ -26,14 +26,14 @@ use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
 use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
 use crate::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
-    CardDerivedParams, CardExpiredParams, CardInstalledParams, CardRevokedCascadeParams,
-    CardRevokedParams, CardTransferConfirmedParams, CardTransferStartedParams,
-    CardTransferredParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
+    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardDerivedParams, CardExpiredParams, CardInstalledParams,
+    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
+    ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, InterruptedParams, JumpParams,
+    LogParams, PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, ResumedParams,
     RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
     SnapshotParams, SpanClosedParams, StartParams, SuccessfulUpdateParams, SuspendParams,
@@ -1594,11 +1594,7 @@ fn error_serialization_poem_serde_equivalence() {
             },
         ))
     })) {
-        for kind in [
-            OplogErrorKind::Invocation,
-            OplogErrorKind::Recovery,
-            OplogErrorKind::InvocationLocal,
-        ] {
+        for kind in [OplogErrorKind::Invocation, OplogErrorKind::Recovery] {
             let entry = PublicOplogEntry::Error(ErrorParams {
                 timestamp: Timestamp::now_utc().rounded(),
                 kind,
@@ -1619,36 +1615,59 @@ fn error_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn invocation_local_error_contract_roundtrips() {
+fn agent_invocation_failed_contract_roundtrips() {
     use crate::model::oplog::AgentError;
     use golem_api_grpc::proto::golem::worker::{RawOplogEntry, raw_oplog_entry::Entry};
 
-    let entry = OplogEntry::error(
+    let invocation_id = Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into();
+    let entry = OplogEntry::agent_invocation_failed(
         Some(OplogIndex::from_u64(3)),
-        OplogErrorKind::InvocationLocal,
-        Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into()),
+        invocation_id,
         AgentError::InternalError("method gave up".to_string()),
         OplogIndex::from_u64(17),
-        None,
     )
     .rounded();
+    assert!(!entry.is_hint());
+    assert!(
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(invocation_id),
+            AgentError::InternalError("fatal".into()),
+            OplogIndex::INITIAL,
+            None
+        )
+        .is_hint()
+    );
     let proto: RawOplogEntry = entry.clone().try_into().unwrap();
-    let Some(Entry::Error(parameters)) = &proto.entry else {
-        panic!("expected an error entry");
+    let Some(Entry::AgentInvocationFailed(parameters)) = &proto.entry else {
+        panic!("expected an invocation-failed entry");
     };
-    assert_eq!(parameters.kind, 2);
-    assert_eq!(parameters.retry_from, 17);
-    assert!(parameters.retry_policy_state.is_none());
+    assert_eq!(parameters.start_index, 17);
     assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
     let bytes = crate::serialization::serialize(&entry).unwrap();
     assert_eq!(
         crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
         entry
     );
+
+    let public = PublicOplogEntry::AgentInvocationFailed(AgentInvocationFailedParams {
+        timestamp: entry.timestamp(),
+        invocation_id,
+        error: "method gave up".into(),
+        start_index: OplogIndex::from_u64(17),
+    });
     assert_eq!(
-        serde_json::to_value(OplogErrorKind::InvocationLocal).unwrap(),
-        "invocationLocal"
+        serde_json::from_str::<PublicOplogEntry>(&public.to_json_string()).unwrap(),
+        public
     );
+    assert_eq!(
+        public.to_json(),
+        Some(serde_json::to_value(&public).unwrap())
+    );
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        public.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
 }
 
 #[test]

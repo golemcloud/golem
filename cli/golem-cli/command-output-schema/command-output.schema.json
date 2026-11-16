@@ -5740,6 +5740,7 @@
         { "$ref": "#/definitions/PublicOplogEntryToolAttachmentControl" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationStarted" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
+        { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFailed" },
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
         { "$ref": "#/definitions/PublicOplogEntryError" },
         { "$ref": "#/definitions/PublicOplogEntryRecoverySucceeded" },
@@ -5913,6 +5914,18 @@
       },
       "additionalProperties": false
     },
+    "PublicOplogEntryAgentInvocationFailed": {
+      "type": "object",
+      "required": ["type", "timestamp", "invocationId", "error", "startIndex"],
+      "properties": {
+        "type": { "const": "AgentInvocationFailed" },
+        "timestamp": { "type": "string" },
+        "invocationId": { "type": "string" },
+        "error": { "type": "string" },
+        "startIndex": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
     "PublicOplogTimestampOnlyEntry": {
       "type": "object",
       "required": ["type", "timestamp"],
@@ -5934,7 +5947,7 @@
       "properties": {
         "type": { "const": "Error" },
         "timestamp": { "type": "string" },
-        "kind": { "type": "string", "enum": ["invocation", "recovery", "invocationLocal"] },
+        "kind": { "type": "string", "enum": ["invocation", "recovery"] },
         "invocationId": { "type": ["string", "null"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },

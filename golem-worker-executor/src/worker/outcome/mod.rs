@@ -1159,25 +1159,23 @@ impl InvocationResult {
                         agent_fingerprint: Some(agent_fingerprint),
                     })
                 }
+                OplogEntry::AgentInvocationFailed { error, .. } => {
+                    let stderr =
+                        recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
+                    Err(FailedInvocationResult::Method { error, stderr })
+                }
                 OplogEntry::Error {
-                    kind,
-                    error,
-                    retry_from,
-                    ..
+                    error, retry_from, ..
                 } => {
                     let stderr =
                         recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
-                    Err(if kind == OplogErrorKind::InvocationLocal {
-                        FailedInvocationResult::Method { error, stderr }
-                    } else {
-                        FailedInvocationResult::Trap {
-                            trap_type: TrapType::Error {
-                                error,
-                                retry_from,
-                                semantic_trap_retry_override: None,
-                            },
-                            stderr,
-                        }
+                    Err(FailedInvocationResult::Trap {
+                        trap_type: TrapType::Error {
+                            error,
+                            retry_from,
+                            semantic_trap_retry_override: None,
+                        },
+                        stderr,
                     })
                 }
                 OplogEntry::Interrupted { .. } => Err(FailedInvocationResult::Trap {

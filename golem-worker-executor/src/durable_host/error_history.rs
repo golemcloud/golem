@@ -100,10 +100,7 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
                     Some(OplogEntry::RecoverySucceeded { .. }) => {
                         break 'scan;
                     }
-                    Some(OplogEntry::Error {
-                        kind: OplogErrorKind::InvocationLocal,
-                        ..
-                    }) => {
+                    Some(OplogEntry::AgentInvocationFailed { .. }) => {
                         break 'scan;
                     }
                     Some(OplogEntry::Error {

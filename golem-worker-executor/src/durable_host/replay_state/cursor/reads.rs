@@ -1209,15 +1209,13 @@ impl ReplayState {
         {
             Some((
                 index,
-                OplogEntry::Error {
-                    kind: golem_common::model::oplog::OplogErrorKind::InvocationLocal,
+                OplogEntry::AgentInvocationFailed {
                     error: recorded,
-                    retry_from,
-                    retry_policy_state: None,
+                    start_index,
                     entity_parent_start_index,
                     ..
                 },
-            )) if retry_from == anchor
+            )) if start_index == anchor
                 && &recorded == error
                 && entity_parent_start_index == parent =>
             {
@@ -1251,17 +1249,11 @@ impl ReplayState {
                 };
                 match oplog_entry {
                     entry @ (OplogEntry::AgentInvocationFinished { .. }
-                    | OplogEntry::Error {
-                        kind: golem_common::model::oplog::OplogErrorKind::InvocationLocal,
-                        ..
-                    }) => {
+                    | OplogEntry::AgentInvocationFailed { .. }) => {
                         let matches_invocation = matches!(
                             &entry,
                             OplogEntry::AgentInvocationFinished { invocation_id: recorded, .. }
-                                if recorded == invocation_id
-                        ) || matches!(
-                            &entry,
-                            OplogEntry::Error { invocation_id: Some(recorded), .. }
+                                | OplogEntry::AgentInvocationFailed { invocation_id: recorded, .. }
                                 if recorded == invocation_id
                         );
                         if !matches_invocation {

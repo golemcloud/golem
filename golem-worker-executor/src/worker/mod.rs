@@ -1213,6 +1213,12 @@ struct HydratedInvocationResultCacheEntry {
 #[cfg(test)]
 mod tests;
 
+/// Whether method-failure settlement failed before or after its invocation outcome was recorded.
+pub(crate) enum MethodFailureSettlementError {
+    Invocation(WorkerExecutorError),
+    Recovery(WorkerExecutorError),
+}
+
 /// What follows a failed invocation.
 #[derive(Clone, Debug)]
 pub enum InvocationFailureDecision {

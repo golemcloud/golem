@@ -43,7 +43,6 @@ pub(super) fn calculate_latest_worker_status(
                 retry_policy_state,
                 ..
             } = entry
-            && *kind != OplogErrorKind::InvocationLocal
         {
             last_error_kind = Some(*kind);
             if *kind == OplogErrorKind::Invocation
@@ -99,10 +98,7 @@ pub(super) fn calculate_latest_worker_status(
                 }
             }
             OplogEntry::AgentInvocationFinished { .. }
-            | OplogEntry::Error {
-                kind: OplogErrorKind::InvocationLocal,
-                ..
-            } => {
+            | OplogEntry::AgentInvocationFailed { .. } => {
                 current_status = AgentStatus::Idle;
                 if !unresolved_recovery {
                     last_error_kind = None;

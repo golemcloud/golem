@@ -237,9 +237,8 @@ async fn method_failure_tail_survives_cold_lookup_and_state_reconstruction(
         oplog
             .iter()
             .filter(|entry| matches!(
-                &entry.entry, PublicOplogEntry::Error(error)
-                    if error.kind == golem_common::model::oplog::OplogErrorKind::InvocationLocal
-                        && error.retry_from == starts[0].oplog_index
+                &entry.entry, PublicOplogEntry::AgentInvocationFailed(failure)
+                    if failure.start_index == starts[0].oplog_index
             ))
             .count(),
         1
@@ -255,8 +254,8 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::host_functions::HostFunctionName;
-    use golem_common::model::oplog::{OplogEntry, OplogErrorKind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -366,9 +365,11 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         }),
         "the host must be waiting for real response-body I/O"
     );
-    assert!(!held.iter().any(|entry| matches!(
-        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
-    )));
+    assert!(
+        !held
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFailed(_)))
+    );
     assert!(!held.iter().any(|entry| matches!(
         &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
@@ -393,9 +394,11 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
                 if method.invocation_id == invocation_id)
     )).count(), 1);
-    let terminal = entries.iter().find(|entry| matches!(
-        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
-    )).unwrap().oplog_index;
+    let terminal = entries
+        .iter()
+        .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFailed(_)))
+        .unwrap()
+        .oplog_index;
     let body = entries
         .iter()
         .find(|entry| {
@@ -433,9 +436,13 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         "reconstruction must reuse the completed HTTP effect"
     );
     let reconstructed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-    assert_eq!(reconstructed.iter().filter(|entry| matches!(
-        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
-    )).count(), 1);
+    assert_eq!(
+        reconstructed
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFailed(_)))
+            .count(),
+        1
+    );
     Ok(())
 }
 
@@ -447,8 +454,8 @@ async fn method_failure_repairs_an_incomplete_tail_without_repeating_completed_e
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::host_functions::HostFunctionName;
-    use golem_common::model::oplog::{OplogEntry, OplogErrorKind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -509,9 +516,13 @@ async fn method_failure_repairs_an_incomplete_tail_without_repeating_completed_e
     executor
         .invoke_agent_with_key(&component, &agent, &queued, "value", data_value!())
         .await?;
-    assert!(!executor.get_oplog(&worker, OplogIndex::INITIAL).await?.iter().any(|entry| matches!(
-        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
-    )));
+    assert!(
+        !executor
+            .get_oplog(&worker, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFailed(_)))
+    );
     gate.abort();
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(gate);
@@ -556,10 +567,16 @@ async fn method_failure_repairs_an_incomplete_tail_without_repeating_completed_e
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
     )).collect();
     assert_eq!(starts.len(), 1);
-    assert_eq!(entries.iter().filter(|entry| matches!(
-        &entry.entry, PublicOplogEntry::Error(error)
-            if error.kind == OplogErrorKind::InvocationLocal && error.retry_from == starts[0].oplog_index
-    )).count(), 1);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry, PublicOplogEntry::AgentInvocationFailed(failure)
+                    if failure.start_index == starts[0].oplog_index
+            ))
+            .count(),
+        1
+    );
     Ok(())
 }
 
@@ -571,9 +588,7 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::oplog::{
-        OplogEntry, OplogErrorKind, host_functions::HostFunctionName,
-    };
+    use golem_common::model::oplog::{OplogEntry, host_functions::HostFunctionName};
     use golem_worker_executor_test_utils::{TestExecutorOverrides, start_with_overrides};
     use std::sync::{
         Arc,
@@ -654,9 +669,16 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
                 .await?;
             gate.entered().await;
             assert_eq!(requests.load(Ordering::SeqCst), index + 1);
-            assert!(!executor.get_oplog(&worker, OplogIndex::INITIAL).await?.iter().any(|entry| matches!(
-                &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
-            )));
+            assert!(
+                !executor
+                    .get_oplog(&worker, OplogIndex::INITIAL)
+                    .await?
+                    .iter()
+                    .any(|entry| matches!(
+                        &entry.entry,
+                        PublicOplogEntry::AgentInvocationFailed(_)
+                    ))
+            );
             gate.abort();
             executor.shutdown_and_wait_for_invocation_loops().await?;
             drop(gate);
@@ -702,10 +724,16 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
                 if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
         )).collect();
         assert_eq!(starts.len(), 1);
-        assert_eq!(entries.iter().filter(|entry| matches!(
-            &entry.entry, PublicOplogEntry::Error(error)
-                if error.kind == OplogErrorKind::InvocationLocal && error.retry_from == starts[0].oplog_index
-        )).count(), usize::from(!incomplete));
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry, PublicOplogEntry::AgentInvocationFailed(failure)
+                        if failure.start_index == starts[0].oplog_index
+                ))
+                .count(),
+            usize::from(!incomplete)
+        );
         let before = executor.get_oplog_last_index(&worker).await?;
         executor.release().await?;
         executor = start_with_overrides(deps, &context, overrides.clone()).await?;
@@ -736,6 +764,109 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
 }
 
 #[test]
+#[timeout("1m")]
+async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent::Principal;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocation, AgentStatus};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_worker_executor::services::UsesAllDeps;
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("RustMethodFailure", "fail-constructor");
+    let worker_id = AgentId {
+        component_id: component.id,
+        agent_id: agent.to_string(),
+    };
+    let creation_error = executor
+        .start_agent(&component.id, agent)
+        .await
+        .expect_err("create must report the constructor failure");
+    assert!(format!("{creation_error:#}").contains("constructor gave up"));
+    let owned = OwnedAgentId::new(component.environment_id, &worker_id);
+    // Use the acquired shell directly, as ingress does if construction fails after acquisition.
+    let mut worker = executor.active_agent(&owned).await.unwrap().primary();
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(10))
+        .await?;
+
+    for cold in [false, true] {
+        if cold {
+            drop(worker);
+            executor.release().await?;
+            executor = start(deps, &context).await?;
+            let healthy = agent_id!("RustMethodFailure", "healthy-after-restart");
+            let healthy_id = executor.start_agent(&component.id, healthy.clone()).await?;
+            assert_eq!(
+                executor
+                    .invoke_and_await_agent(&component, &healthy, "increment", data_value!())
+                    .await?
+                    .into_typed::<i64>()?,
+                1
+            );
+            let healthy_worker = executor
+                .active_agent(&OwnedAgentId::new(component.environment_id, &healthy_id))
+                .await
+                .unwrap()
+                .primary();
+            worker = golem_worker_executor::worker::Worker::get_exact_existing_suspended(
+                healthy_worker.all(),
+                &owned,
+                Principal::anonymous(),
+            )
+            .await?;
+        }
+        let before = executor.stored_oplog(&worker_id).await;
+        for scheduled in [false, true] {
+            let invocation = AgentInvocation::AgentMethod {
+                idempotency_key: InvocationId(uuid::Uuid::new_v4()),
+                method_name: "value".to_string(),
+                input: data_value!().into_parts().1,
+                invocation_context: InvocationContextStack::fresh(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            };
+            let error = if scheduled {
+                worker
+                    .schedule_invocation(
+                        invocation,
+                        chrono::Utc::now() + chrono::Duration::hours(1),
+                    )
+                    .await
+                    .expect_err("a failed constructor must refuse a new schedule")
+            } else {
+                match worker.clone().invoke(invocation).await {
+                    Err(error) => error,
+                    Ok(_) => panic!("a failed constructor accepted work that can never run"),
+                }
+            };
+            assert!(
+                matches!(&error, WorkerExecutorError::PreviousInvocationFailed { .. }),
+                "unexpected admission error: {error:#}"
+            );
+            assert!(format!("{error:#}").contains("constructor gave up"));
+        }
+        assert_eq!(executor.stored_oplog(&worker_id).await, before);
+        assert_eq!(
+            executor.get_worker_metadata(&worker_id).await?.status,
+            AgentStatus::Failed
+        );
+    }
+    Ok(())
+}
+
+#[test]
 #[timeout("2m")]
 async fn method_failure_classification_keeps_constructors_and_rust_panics_fatal(
     last_unique_id: &LastUniqueId,
@@ -748,7 +879,7 @@ async fn method_failure_classification_keeps_constructors_and_rust_panics_fatal(
     #[tagged_as("agent_sdk_ts")] ts_fixture: &PrecompiledComponent,
     #[tagged_as("tool_streaming_moonbit")] moonbit_fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::{AgentStatus, oplog::OplogErrorKind};
+    use golem_common::model::AgentStatus;
     use std::time::Duration;
 
     let context = TestContext::new(last_unique_id);
@@ -809,12 +940,22 @@ async fn method_failure_classification_keeps_constructors_and_rust_panics_fatal(
             .store()
             .await?;
         let agent = agent_id!(agent_type, name);
-        let worker = executor.start_agent(&component.id, agent.clone()).await?;
-        if name == "fail-constructor" {
+        let worker = if name == "fail-constructor" {
+            executor
+                .start_agent(&component.id, agent.clone())
+                .await
+                .expect_err("create must report the constructor failure");
+            let worker = AgentId {
+                component_id: component.id,
+                agent_id: agent.to_string(),
+            };
             executor
                 .wait_for_status(&worker, AgentStatus::Failed, Duration::from_secs(10))
                 .await?;
-        }
+            worker
+        } else {
+            executor.start_agent(&component.id, agent.clone()).await?
+        };
         let key = IdempotencyKey::fresh();
         let failure = executor
             .invoke_and_await_agent_with_key(&component, &agent, &key, method, data_value!())
@@ -848,9 +989,16 @@ async fn method_failure_classification_keeps_constructors_and_rust_panics_fatal(
                 executor.get_worker_metadata(&worker).await?.status,
                 AgentStatus::Failed
             );
-            assert!(!executor.get_oplog(&worker, OplogIndex::INITIAL).await?.iter().any(|entry| matches!(
-                &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
-            )));
+            assert!(
+                !executor
+                    .get_oplog(&worker, OplogIndex::INITIAL)
+                    .await?
+                    .iter()
+                    .any(|entry| matches!(
+                        &entry.entry,
+                        PublicOplogEntry::AgentInvocationFailed(_)
+                    ))
+            );
         }
     }
     Ok(())
@@ -864,7 +1012,7 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind};
+    use golem_common::model::oplog::{AgentError, OplogEntry};
 
     let context = TestContext::new(last_unique_id);
     let mut executor = start(deps, &context).await?;
@@ -896,13 +1044,11 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
         )).expect("the gated invocation start must be committed").oplog_index;
         // Deliberately forge an incompatible completed outcome. Reconstruction must not
         // accept a successful body or an actual Wasm trap as the recorded method error.
-        let terminal = OplogEntry::error(
+        let terminal = OplogEntry::agent_invocation_failed(
             None,
-            OplogErrorKind::InvocationLocal,
-            Some(invocation_id),
+            invocation_id,
             AgentError::InternalError("recorded method failure".into()),
             anchor,
-            None,
         );
         let terminal_index = executor
             .commit_oplog_entry_bypassing_worker_status(&worker, terminal.clone())
@@ -929,7 +1075,7 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             &persisted_terminal
         );
         assert_eq!(entries.iter().filter(|entry| matches!(
-            entry, OplogEntry::Error { kind: OplogErrorKind::InvocationLocal, retry_from, .. } if *retry_from == anchor
+            entry, OplogEntry::AgentInvocationFailed { start_index, .. } if *start_index == anchor
         )).count(), 1, "recovery must not replace or duplicate the recorded method failure");
         let lookup = executor
             .invoke_agent_session(InvocationStart {

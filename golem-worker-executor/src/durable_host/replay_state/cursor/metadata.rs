@@ -447,13 +447,12 @@ impl ReplayState {
                         invocation_finishes.insert(marker_idx, None);
                         None
                     }
-                    OplogEntry::Error {
-                        kind: golem_common::model::oplog::OplogErrorKind::InvocationLocal,
-                        retry_from,
+                    OplogEntry::AgentInvocationFailed {
+                        start_index,
                         entity_parent_start_index: None,
                         ..
                     } => {
-                        invocation_finishes.insert(marker_idx, Some(retry_from));
+                        invocation_finishes.insert(marker_idx, Some(start_index));
                         None
                     }
                     OplogEntry::CompletionDelivered { start_index, .. } => {

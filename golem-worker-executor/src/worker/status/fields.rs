@@ -735,9 +735,8 @@ pub(crate) fn fold_invocation_result_entries(
                 requests.current_started_at = Some(*oplog_idx);
             }
             OplogEntry::AgentInvocationFinished { invocation_id, .. }
-            | OplogEntry::Error {
-                kind: OplogErrorKind::InvocationLocal,
-                invocation_id: Some(invocation_id),
+            | OplogEntry::AgentInvocationFailed {
+                invocation_id,
                 entity_parent_start_index: None,
                 ..
             } => {
