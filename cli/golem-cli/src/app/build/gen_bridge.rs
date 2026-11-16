@@ -573,6 +573,11 @@ async fn collect_agent_manifest_targets_for_entry(
     }
 
     let is_matching_all = matchers.remove("*");
+    // An agent type matcher reads the metadata of every source component, also after a match,
+    // so that the metadata index rejects an agent type that two components define.
+    let has_agent_type_matchers = matchers
+        .iter()
+        .any(|matcher| !application_component_names.contains(matcher.as_str()));
 
     for component_name in source_component_names {
         if skip_missing_sources
@@ -587,12 +592,7 @@ async fn collect_agent_manifest_targets_for_entry(
 
         let is_matching_component = matchers.remove(component_name.as_str());
 
-        if !is_matching_all
-            && !is_matching_component
-            && matchers
-                .iter()
-                .all(|matcher| application_component_names.contains(matcher.as_str()))
-        {
+        if !is_matching_all && !is_matching_component && !has_agent_type_matchers {
             continue;
         }
 

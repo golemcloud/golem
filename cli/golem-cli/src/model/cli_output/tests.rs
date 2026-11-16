@@ -7023,7 +7023,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
         proptest::option::of(arb_url_string()),
         any::<bool>(),
         proptest::option::of(any::<bool>()),
-        arb_format_string(),
+        arb_format(),
     )
         .prop_map(
             |(is_active, name, url, worker_url, allow_insecure, authenticated, default_format)| {
@@ -7035,11 +7035,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
                         .map(|url| url.parse().expect("generated URL should parse")),
                     allow_insecure,
                     authenticated,
-                    config: crate::config::ProfileConfig {
-                        default_format: default_format
-                            .parse()
-                            .expect("generated format should parse"),
-                    },
+                    config: crate::config::ProfileConfig { default_format },
                 }
             },
         )

@@ -1045,8 +1045,7 @@ impl
 /// future at the same point it did live. This future never completes; the return type exists
 /// only so a `match` arm can produce whatever type its siblings do.
 async fn park_undelivered_forever<T>() -> T {
-    let never: std::convert::Infallible = std::future::pending().await;
-    match never {}
+    std::future::pending().await
 }
 
 impl UndeliveredTerminal {

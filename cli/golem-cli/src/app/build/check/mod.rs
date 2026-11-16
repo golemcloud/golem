@@ -741,8 +741,9 @@ mod test {
         evaluate_dependency_spec_compliance, extract_version_or_quoted_major,
         verify_semantic_version_compatibility, verify_version_range,
     };
-    use crate::app::build::check::requirements::VersionRange;
+    use crate::app::build::check::requirements::{VersionRange, tool_requirements_for_language};
     use crate::fs;
+    use crate::model::language::GuestLanguage;
     use pretty_assertions::assert_eq;
     use test_r::test;
 
@@ -769,6 +770,25 @@ mod test {
         assert_eq!(extract_version_or_quoted_major("no version here"), None);
         verify_version_range("Java", "27", VersionRange::at_least("17")).unwrap();
         assert!(verify_version_range("Java", "11", VersionRange::at_least("17")).is_err());
+    }
+
+    #[test]
+    fn rustc_check_accepts_rust_1_94_to_1_99_and_rejects_rust_1_100() {
+        let range = tool_requirements_for_language(GuestLanguage::Rust)
+            .iter()
+            .find(|requirement| requirement.key == "rustc")
+            .and_then(|requirement| requirement.version_range)
+            .unwrap();
+        verify_version_range("rustc", "1.94.0", range).unwrap();
+        verify_version_range("rustc", "1.99.1", range).unwrap();
+        assert!(verify_version_range("rustc", "1.93.1", range).is_err());
+        let too_new = verify_version_range("rustc", "1.100.0", range)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            too_new,
+            "is too new: detected 1.100.0, expected >= 1.94.0, < 1.100.0"
+        );
     }
 
     #[test]
