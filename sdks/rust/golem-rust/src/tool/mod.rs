@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(not(feature = "export_golem_agentic"))]
+pub use crate::bindings::golem::tool::streams::ToolOutputWriter;
 pub use crate::caller::{
     Caller, InvocationContext, Principal, PrincipalKind, PrincipalRef, TokenProvenance,
 };
-#[cfg(not(feature = "export_golem_agentic"))]
-pub use crate::bindings::golem::tool::streams::ToolOutputWriter;
 #[cfg(feature = "export_golem_agentic")]
 pub use crate::golem_agentic::golem::tool::streams::ToolOutputWriter;
 pub use crate::schema::tool::Tool;

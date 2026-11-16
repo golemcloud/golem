@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::caller::{InvocationContext, LiveValue, Rule8};
 use super::identity::parse_agent_id;
+use crate::caller::{InvocationContext, LiveValue, Rule8};
 use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType};
 use crate::schema::wit::{direct, wire};
 
