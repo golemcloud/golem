@@ -145,6 +145,11 @@ Module._load = function (request) {
       DurableStreamWriter: durableStreamResource("writers", "append", ["close", "payload", "sequence"]),
     };
   }
+  if (request === "golem:websocket/client@1.5.0") {
+    return {
+      WebsocketConnection: { connect: missingHostImport("websocketConnect") },
+    };
+  }
   if (request === "golem:api/host@1.5.0") {
     return {
       getSelfMetadata: missingHostImport("getSelfMetadata"),
