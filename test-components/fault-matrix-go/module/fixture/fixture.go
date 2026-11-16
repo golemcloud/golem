@@ -5,6 +5,7 @@ package fixture
 
 import (
 	"errors"
+	"io"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 )
@@ -95,11 +96,11 @@ func take(input golem.AgentStream[uint32], keep uint32) []uint32 {
 	defer input.Close()
 	records := []uint32{}
 	for uint32(len(records)) < keep {
-		next, ok := input.Next()
-		if !ok {
+		next, err := input.Next()
+		if errors.Is(err, io.EOF) {
 			break
 		}
-		records = append(records, next)
+		records = append(records, golem.Must(next, err))
 	}
 	return records
 }
@@ -135,7 +136,7 @@ func init() {
 		})
 	})
 	fixture.Handle(consume, func(_ *golem.Context[state], in ConsumeIn) []uint32 {
-		return in.Input.Collect()
+		return golem.Must(in.Input.Collect())
 	})
 	fixture.Handle(consumeThenDrop, func(_ *golem.Context[state], in DropIn) []uint32 {
 		return take(in.Input, in.Keep)
@@ -155,6 +156,6 @@ func init() {
 		output := produce.MustCall(Fixture.Get(ID{Name: in.Target}), ProduceIn{
 			Run: in.Run, Count: in.Count, PauseAfter: in.PauseAfter, Gate: in.Gate,
 		})
-		return output.Collect()
+		return golem.Must(output.Collect())
 	})
 }

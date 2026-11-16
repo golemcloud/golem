@@ -3,11 +3,8 @@
 //! It implements the fixture contract documented in `integration-tests/src/fault_matrix.rs`.
 //! Record `seq` of run `run` is the number `run * 100_000 + seq`, for `seq` in 1..=count.
 
-use golem_rust::agentic::{AgentStream, spawn_local};
-use golem_rust::schema::wit::wire::SchemaValueTree;
-use golem_rust::{
-    PromiseId, SchemaValue, agent_definition, agent_implementation, encode_schema_value, endpoint,
-};
+use golem_rust::agentic::{AgentStream, StreamError, spawn_local};
+use golem_rust::{PromiseId, agent_definition, agent_implementation, endpoint};
 
 fn record(run: u32, seq: u32) -> u32 {
     run * 100_000 + seq
@@ -65,6 +62,7 @@ impl FaultMatrixFixture for FaultMatrixFixtureImpl {
                     return;
                 }
             }
+            let _ = writer.close().await;
         });
         output
     }
@@ -81,29 +79,24 @@ impl FaultMatrixFixture for FaultMatrixFixtureImpl {
                     return;
                 }
             }
+            let _ = writer.close().await;
         });
         output
     }
 
     fn produce_then_fail(&self, run: u32, fail_after: u32) -> AgentStream<u32> {
-        let (mut writer, output) = golem_rust::schema::wit::new_schema_value_stream();
+        let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
             for seq in 1..=fail_after {
-                let tree =
-                    encode_schema_value(&SchemaValue::U32(record(run, seq))).expect("u32 encodes");
-                if writer.write_one(tree).await.is_some() {
+                if writer.write_one(record(run, seq)).await.is_err() {
                     return;
                 }
             }
-            // A tree without nodes is not a value, so the stream fails after the prefix.
-            let _ = writer
-                .write_one(SchemaValueTree {
-                    value_nodes: Vec::new(),
-                    root: 0,
-                })
-                .await;
+            let error = golem_rust::schema::try_into_typed_schema_value(&"the producer failed".to_string())
+                .expect("a string has a schema");
+            let _ = writer.finish(Err(StreamError::Failed(Box::new(error)))).await;
         });
-        AgentStream::from_raw(output)
+        output
     }
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32> {
@@ -113,8 +106,8 @@ impl FaultMatrixFixture for FaultMatrixFixtureImpl {
     async fn consume_then_drop(&self, mut input: AgentStream<u32>, keep: u32) -> Vec<u32> {
         let mut records = Vec::new();
         while records.len() < keep as usize {
-            match input.next().await.expect("the input stream failed") {
-                Some(record) => records.push(record),
+            match input.next().await {
+                Some(record) => records.push(record.expect("the input stream failed")),
                 None => break,
             }
         }
@@ -130,6 +123,7 @@ impl FaultMatrixFixture for FaultMatrixFixtureImpl {
                     return;
                 }
             }
+            let _ = writer.close().await;
         });
         let target = FaultMatrixFixtureClient::get(target);
         if keep >= count {

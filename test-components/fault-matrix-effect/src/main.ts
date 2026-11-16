@@ -7,6 +7,7 @@ import {
   defineAgent,
   Ids,
   method,
+  Schema as GolemSchema,
   WitTypes,
 } from "@golemcloud/effect-golem";
 
@@ -86,7 +87,13 @@ FaultMatrixFixture.implement({
         Stream.fromIterable(
           seqs(fail_after).map((seq) => record(run, seq)),
         ).pipe(
-          Stream.concat(Stream.fail(new Error("the fixture producer failed"))),
+          Stream.concat(
+            Stream.fail(
+              GolemSchema.StreamError.from(
+                new Error("the fixture producer failed"),
+              ),
+            ),
+          ),
         ),
       ),
     consume: ({ input }) => collect(input),

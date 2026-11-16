@@ -85,7 +85,8 @@ async fn collect(
   let values : Array[UInt32] = []
   while values.length().reinterpret_as_uint() < keep {
     match input.read() {
-      Some(value) => values.push(value)
+      Some(Ok(value)) => values.push(value)
+      Some(Err(error)) => raise error
       None => break
     }
   }
