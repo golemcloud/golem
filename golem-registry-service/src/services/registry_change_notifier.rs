@@ -296,7 +296,11 @@ enum ReplayError {
     RepoError(String),
 }
 
-fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvalidationEvent {
+/// Maps a journal event to its invalidation stream event. Account tree events stay inside the
+/// registry, so they map to `None`.
+fn to_registry_invalidation_event(
+    event: &RegistryChangeEvent,
+) -> Option<RegistryInvalidationEvent> {
     let (event_id, payload) = match event {
         RegistryChangeEvent::DeploymentChanged {
             event_id,
@@ -419,11 +423,12 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
                 card_ids: card_ids.iter().copied().map(Into::into).collect(),
             }),
         ),
+        RegistryChangeEvent::AccountChanged { .. } => return None,
     };
-    RegistryInvalidationEvent {
+    Some(RegistryInvalidationEvent {
         event_id: event_id.0 as u64,
         payload: Some(payload),
-    }
+    })
 }
 
 async fn replay_from_cursor(
@@ -466,10 +471,8 @@ async fn replay_from_cursor(
             }
             for event in &events {
                 cursor = event.event_id();
-                if tx
-                    .send(Ok(to_registry_invalidation_event(event)))
-                    .await
-                    .is_err()
+                if let Some(event) = to_registry_invalidation_event(event)
+                    && tx.send(Ok(event)).await.is_err()
                 {
                     return Err(ReplayError::Disconnected);
                 }
@@ -532,10 +535,8 @@ pub fn subscribe_registry_invalidations(
                 Ok(event) => {
                     if event.event_id() > cursor {
                         cursor = event.event_id();
-                        if tx
-                            .send(Ok(to_registry_invalidation_event(&event)))
-                            .await
-                            .is_err()
+                        if let Some(event) = to_registry_invalidation_event(&event)
+                            && tx.send(Ok(event)).await.is_err()
                         {
                             break;
                         }

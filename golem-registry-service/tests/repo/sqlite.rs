@@ -17,6 +17,7 @@ use crate::repo::{Deps, TestDb};
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
+use golem_registry_service::repo::account_tree::{DbAccountTreeRepo, preview_schema};
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -78,6 +79,14 @@ impl SqliteDb {
         )
         .await
         .unwrap();
+        {
+            use sqlx::{ConnectOptions, Connection};
+            let mut conn = db_config.connect_options().connect().await.unwrap();
+            for script in preview_schema::SQLITE {
+                sqlx::raw_sql(script).execute(&mut conn).await.unwrap();
+            }
+            conn.close().await.unwrap();
+        }
 
         let pool = SqlitePool::configured(&db_config).await.unwrap();
 
@@ -111,6 +120,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
             db.pool.clone(),
         )),
+        account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::new(db.pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(db.pool.clone())),
@@ -627,4 +637,49 @@ async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Deps) {
 #[test]
 async fn test_environment_type_ids_rollback_and_environment_isolation(deps: &Deps) {
     crate::repo::common::test_environment_type_ids_rollback_and_environment_isolation(deps).await;
+}
+
+#[test]
+async fn test_account_tree_has_one_root(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_has_one_root(deps).await;
+}
+
+#[test]
+async fn test_account_tree_sibling_keys(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_sibling_keys(deps).await;
+}
+
+#[test]
+async fn test_account_tree_failed_writes_leave_no_partial_state(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_failed_writes_leave_no_partial_state(deps).await;
+}
+
+#[test]
+async fn test_account_tree_parent_is_immutable(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_parent_is_immutable(deps).await;
+}
+
+#[test]
+async fn test_account_tree_maximum_bounds_and_rename(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_maximum_bounds_and_rename(deps).await;
+}
+
+#[test]
+async fn test_account_tree_grace_reserves_name_until_purge(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_grace_reserves_name_until_purge(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_follows_ancestor_changes(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_follows_ancestor_changes(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_rejects_delayed_load(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_rejects_delayed_load(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_eviction_and_lag(deps).await;
 }

@@ -29,6 +29,7 @@ use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{Doc, ToolMiddleware, ToolMiddlewareScope};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
+use golem_registry_service::repo::account_tree::{DbAccountTreeRepo, preview_schema};
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -234,8 +235,24 @@ async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
     )
     .await
     .unwrap();
+    apply_preview_schema(config).await;
 
     PostgresPool::configured(config).await.unwrap()
+}
+
+async fn apply_preview_schema(config: &DbPostgresConfig) {
+    use sqlx::{Connection, Executor};
+    let mut conn = sqlx::PgConnection::connect_with(&config.connect_options())
+        .await
+        .unwrap();
+    let schema = config.schema.clone().unwrap_or("public".to_string());
+    conn.execute(sqlx::query(&format!("SET SCHEMA '{schema}';")))
+        .await
+        .unwrap();
+    for script in preview_schema::POSTGRES {
+        sqlx::raw_sql(script).execute(&mut conn).await.unwrap();
+    }
+    conn.close().await.unwrap();
 }
 
 async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps {
@@ -245,6 +262,7 @@ async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps 
         account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
             pool.clone(),
         )),
+        account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::new(pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(pool.clone())),
@@ -1230,4 +1248,55 @@ async fn test_environment_type_ids_concurrent_deployments(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_environment_type_ids_concurrent_deployments(deps).await;
+}
+
+#[test]
+async fn test_account_tree_has_one_root(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_has_one_root(deps).await;
+}
+
+#[test]
+async fn test_account_tree_sibling_keys(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_sibling_keys(deps).await;
+}
+
+#[test]
+async fn test_account_tree_failed_writes_leave_no_partial_state(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_tree::test_account_tree_failed_writes_leave_no_partial_state(deps).await;
+}
+
+#[test]
+async fn test_account_tree_parent_is_immutable(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_parent_is_immutable(deps).await;
+}
+
+#[test]
+async fn test_account_tree_maximum_bounds_and_rename(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_maximum_bounds_and_rename(deps).await;
+}
+
+#[test]
+async fn test_account_tree_grace_reserves_name_until_purge(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_tree::test_account_tree_grace_reserves_name_until_purge(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_follows_ancestor_changes(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_tree::test_account_tree_cache_follows_ancestor_changes(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_rejects_delayed_load(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_rejects_delayed_load(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_eviction_and_lag(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_eviction_and_lag(deps).await;
 }

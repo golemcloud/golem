@@ -1,0 +1,256 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! A bounded, revision-aware cache of account tree nodes.
+//!
+//! The cache holds individual nodes by account ID and a sibling index from
+//! `(parent, segment)` to the child's ID. A path or an ancestry is composed from cached nodes,
+//! so a warm read makes no database call, and a node changes in the cache only through its own
+//! entry. A derived path or effective lifecycle state therefore follows a change to any
+//! ancestor, not only to the leaf.
+//!
+//! Dependencies and freshness:
+//!
+//! - Every committed tree change appends an `AccountChanged` journal event, and the registry
+//!   change notifier delivers it after the commit. [`AccountTreeCache::handle_event`] evicts the
+//!   node and its sibling-index entry.
+//! - A miss loads the whole chain in one database statement. The load notes the invalidation
+//!   epoch before it reads; if any invalidation happened before the result returns, the result
+//!   is returned to the caller but not installed. A delayed load therefore cannot reinstall a
+//!   value that an event has already replaced.
+//! - A lagged subscription or a closed notifier channel clears the cache, because events may
+//!   have been missed. The notifier replays the journal from its cursor after a database
+//!   reconnect, so a reconnect loses no event.
+//! - Capacity eviction removes the least recently used nodes; a later read reloads them.
+//!
+//! On a database error the cache returns the error and installs nothing. It has no time-based
+//! expiry: freshness depends on the journal, not on a TTL.
+
+use crate::repo::account_tree::AccountTreeRepo;
+use crate::repo::model::account_tree::AccountNode;
+use crate::repo::registry_change::RegistryChangeEvent;
+use golem_common::model::account_path::AccountPath;
+use golem_service_base::repo::RepoError;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
+use uuid::Uuid;
+
+type SiblingKey = (Option<Uuid>, String);
+
+struct Entry {
+    node: AccountNode,
+    last_used: u64,
+}
+
+#[derive(Default)]
+struct State {
+    nodes: HashMap<Uuid, Entry>,
+    children: HashMap<SiblingKey, Uuid>,
+    epoch: u64,
+    clock: u64,
+}
+
+impl State {
+    fn sibling_key(node: &AccountNode) -> SiblingKey {
+        (
+            node.parent_id,
+            node.segment
+                .as_ref()
+                .map(|segment| segment.as_str().to_string())
+                .unwrap_or_default(),
+        )
+    }
+
+    fn touch(&mut self, account_id: Uuid) -> Option<AccountNode> {
+        self.clock += 1;
+        let clock = self.clock;
+        self.nodes.get_mut(&account_id).map(|entry| {
+            entry.last_used = clock;
+            entry.node.clone()
+        })
+    }
+
+    fn remove(&mut self, account_id: Uuid) {
+        if let Some(entry) = self.nodes.remove(&account_id) {
+            let key = Self::sibling_key(&entry.node);
+            if self.children.get(&key) == Some(&account_id) {
+                self.children.remove(&key);
+            }
+        }
+    }
+
+    fn install(&mut self, chain: &[AccountNode], capacity: usize) {
+        for node in chain {
+            self.remove(node.account_id);
+            self.clock += 1;
+            self.children
+                .insert(Self::sibling_key(node), node.account_id);
+            self.nodes.insert(
+                node.account_id,
+                Entry {
+                    node: node.clone(),
+                    last_used: self.clock,
+                },
+            );
+        }
+        if self.nodes.len() > capacity {
+            let mut by_age: Vec<(u64, Uuid)> = self
+                .nodes
+                .iter()
+                .map(|(id, entry)| (entry.last_used, *id))
+                .collect();
+            by_age.sort_unstable();
+            let excess = self.nodes.len() - capacity;
+            for (_, id) in by_age.into_iter().take(excess) {
+                self.remove(id);
+            }
+        }
+    }
+
+    fn ancestry(&mut self, account_id: Uuid) -> Option<Vec<AccountNode>> {
+        let mut chain = Vec::new();
+        let mut next = Some(account_id);
+        while let Some(id) = next {
+            let node = self.touch(id)?;
+            next = node.parent_id;
+            chain.push(node);
+            if chain.len() > AccountPath::MAX_DEPTH + 1 {
+                return None;
+            }
+        }
+        chain.reverse();
+        Some(chain)
+    }
+
+    fn resolve(&mut self, path: &AccountPath) -> Option<Vec<AccountNode>> {
+        let mut parent = None;
+        let mut chain = Vec::with_capacity(path.depth() + 1);
+        let segments = std::iter::once(String::new()).chain(
+            path.segments()
+                .iter()
+                .map(|segment| segment.as_str().to_string()),
+        );
+        for segment in segments {
+            let id = *self.children.get(&(parent, segment))?;
+            let node = self.touch(id)?;
+            parent = Some(node.account_id);
+            chain.push(node);
+        }
+        Some(chain)
+    }
+}
+
+pub struct AccountTreeCache {
+    repo: Arc<dyn AccountTreeRepo>,
+    capacity: usize,
+    state: Mutex<State>,
+}
+
+impl AccountTreeCache {
+    pub fn new(repo: Arc<dyn AccountTreeRepo>, capacity: usize) -> Self {
+        Self {
+            repo,
+            capacity: capacity.max(AccountPath::MAX_DEPTH + 1),
+            state: Mutex::new(State::default()),
+        }
+    }
+
+    /// The node and its ancestors, root first, or `None` when the account does not exist.
+    pub async fn ancestry(&self, account_id: Uuid) -> Result<Option<Vec<AccountNode>>, RepoError> {
+        let epoch = {
+            let mut state = self.state.lock().unwrap();
+            if let Some(chain) = state.ancestry(account_id) {
+                return Ok(Some(chain));
+            }
+            state.epoch
+        };
+        let records = self.repo.get_ancestry(account_id).await?;
+        self.finish_load(epoch, records)
+    }
+
+    /// The nodes along a path, root first, or `None` when no current account has the path.
+    pub async fn resolve(&self, path: &AccountPath) -> Result<Option<Vec<AccountNode>>, RepoError> {
+        let epoch = {
+            let mut state = self.state.lock().unwrap();
+            if let Some(chain) = state.resolve(path) {
+                return Ok(Some(chain));
+            }
+            state.epoch
+        };
+        let records = self.repo.resolve_path(path).await?;
+        self.finish_load(epoch, records)
+    }
+
+    fn finish_load(
+        &self,
+        epoch: u64,
+        records: Vec<crate::repo::model::account_tree::AccountNodeRecord>,
+    ) -> Result<Option<Vec<AccountNode>>, RepoError> {
+        if records.is_empty() {
+            return Ok(None);
+        }
+        let chain = records
+            .into_iter()
+            .map(AccountNode::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut state = self.state.lock().unwrap();
+        if state.epoch == epoch {
+            state.install(&chain, self.capacity);
+        }
+        Ok(Some(chain))
+    }
+
+    pub fn invalidate(&self, account_id: Uuid) {
+        let mut state = self.state.lock().unwrap();
+        state.epoch += 1;
+        state.remove(account_id);
+    }
+
+    pub fn clear(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.epoch += 1;
+        state.nodes.clear();
+        state.children.clear();
+    }
+
+    pub fn handle_event(&self, event: &RegistryChangeEvent) {
+        if let RegistryChangeEvent::AccountChanged { account_id, .. } = event {
+            self.invalidate(*account_id);
+        }
+    }
+
+    /// Applies journal events until the channel closes. Clears the cache whenever events may
+    /// have been missed.
+    pub async fn run_invalidation(&self, mut events: broadcast::Receiver<RegistryChangeEvent>) {
+        loop {
+            match events.recv().await {
+                Ok(event) => self.handle_event(&event),
+                Err(broadcast::error::RecvError::Lagged(_)) => self.clear(),
+                Err(broadcast::error::RecvError::Closed) => {
+                    self.clear();
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.lock().unwrap().nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
