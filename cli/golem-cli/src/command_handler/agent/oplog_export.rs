@@ -96,10 +96,15 @@ impl OplogReads for RestOplogReads {
 }
 
 /// The error of a failed read of the export: a fixed text with the HTTP status, if any. The raw
-/// error is dropped, because its text can quote the agent ID, the component and environment IDs
-/// or other upstream text.
+/// error stays out of the report and the command output, because its text can quote the agent
+/// ID, the component and environment IDs or other upstream text. A debug log shows it on the
+/// user's own terminal, for example to tell an auth, TLS or DNS failure apart.
 pub fn read_failed(error: impl Into<anyhow::Error>) -> anyhow::Error {
     let error = error.into();
+    tracing::debug!(
+        error = format!("{error:#}"),
+        "Failed to read the oplog for the export"
+    );
     let status = error
         .downcast_ref::<ServiceError>()
         .and_then(|error| match &error.kind {
