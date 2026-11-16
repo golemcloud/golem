@@ -457,9 +457,10 @@ mod successful_update_proto_tests {
     use test_r::test;
 
     use crate::model::component::ComponentRevision;
+    use crate::model::oplog::protobuf::tests::replay_divergence_tests;
     use crate::model::oplog::{
         FailedSnapshotAssistedUpdateDetails, FilesystemSnapshotName, OplogEntry,
-        SnapshotAssistedUpdateDetails, SnapshotFault, UpdateDescription,
+        SnapshotAssistedUpdateDetails, SnapshotFault, UpdateDescription, UpdateFailureClass,
     };
     use crate::model::regions::OplogRegion;
     use crate::model::{OplogIndex, Timestamp};
@@ -504,6 +505,11 @@ mod successful_update_proto_tests {
             }),
             update_attempt_index: Some(OplogIndex::from_u64(5)),
             snapshot_fault: Some(SnapshotFault::Incompatible),
+            failure_class: UpdateFailureClass::Divergence,
+            divergence: replay_divergence_tests::divergences()
+                .into_iter()
+                .next()
+                .map(Box::new),
         };
 
         let proto: RawOplogEntry = original.clone().try_into().unwrap();
@@ -513,28 +519,51 @@ mod successful_update_proto_tests {
     }
 
     #[test]
-    fn raw_failed_update_preserves_every_snapshot_fault() {
-        [
+    fn raw_failed_update_preserves_every_snapshot_fault_class_and_divergence() {
+        let faults = [
             None,
             Some(SnapshotFault::Unavailable),
             Some(SnapshotFault::Incompatible),
-        ]
-        .into_iter()
-        .for_each(|snapshot_fault| {
-            let original = OplogEntry::FailedUpdate {
-                timestamp: Timestamp::now_utc(),
-                target_revision: ComponentRevision::new(2).unwrap(),
-                details: None,
-                snapshot_assisted_details: None,
-                update_attempt_index: None,
-                snapshot_fault,
-            };
+        ];
+        let classes = [
+            UpdateFailureClass::Divergence,
+            UpdateFailureClass::TargetTrap,
+            UpdateFailureClass::NotReplayable,
+            UpdateFailureClass::TargetRejected,
+            UpdateFailureClass::Interrupted,
+            UpdateFailureClass::Operational,
+            UpdateFailureClass::Other,
+        ];
+        let divergences = std::iter::once(None)
+            .chain(replay_divergence_tests::divergences().into_iter().map(Some))
+            .collect::<Vec<_>>();
+        let mut cases = Vec::new();
+        for snapshot_fault in faults {
+            for failure_class in classes {
+                for divergence in &divergences {
+                    cases.push((snapshot_fault, failure_class, divergence.clone()));
+                }
+            }
+        }
+        cases
+            .into_iter()
+            .for_each(|(snapshot_fault, failure_class, divergence)| {
+                let original = OplogEntry::FailedUpdate {
+                    timestamp: Timestamp::now_utc(),
+                    target_revision: ComponentRevision::new(2).unwrap(),
+                    details: None,
+                    snapshot_assisted_details: None,
+                    update_attempt_index: None,
+                    snapshot_fault,
+                    failure_class,
+                    divergence: divergence.map(Box::new),
+                };
 
-            let proto: RawOplogEntry = original.clone().try_into().unwrap();
-            let roundtrip: OplogEntry = proto.try_into().unwrap();
+                let proto: RawOplogEntry = original.clone().try_into().unwrap();
+                let roundtrip: OplogEntry = proto.try_into().unwrap();
 
-            assert_eq!(roundtrip, original);
-        });
+                assert_eq!(roundtrip, original);
+            });
     }
 
     #[test]
@@ -867,7 +896,7 @@ mod queued_card_event_proto_tests {
 }
 
 #[cfg(test)]
-mod replay_divergence_tests {
+pub(crate) mod replay_divergence_tests {
     use test_r::test;
 
     use crate::base_model::OplogIndex;
@@ -895,7 +924,7 @@ mod replay_divergence_tests {
         }
     }
 
-    fn divergences() -> Vec<ReplayDivergence> {
+    pub(crate) fn divergences() -> Vec<ReplayDivergence> {
         vec![
             ReplayDivergence {
                 oplog_index: OplogIndex::from_u64(7),

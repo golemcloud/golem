@@ -395,12 +395,19 @@ oplog_entry! {
             snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
             update_attempt_index: Option<OplogIndex>,
             snapshot_fault: Option<SnapshotFault>,
+            /// Why the update failed.
+            failure_class: UpdateFailureClass,
+            /// The first divergence from the recorded history, when the replay of the target
+            /// diverged at a recorded entry.
+            divergence: Option<Box<ReplayDivergence>>,
         }
         public {
             target_revision: ComponentRevision,
             details: Option<String>,
             snapshot_assisted_details: Option<PublicFailedSnapshotAssistedUpdateDetails>,
             update_attempt_index: Option<OplogIndex>,
+            failure_class: UpdateFailureClass,
+            divergence: Option<Box<ReplayDivergence>>,
         }
     },
     /// Increased allocated linear memory and GC heap capacity

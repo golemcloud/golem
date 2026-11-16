@@ -138,3 +138,132 @@ pub(super) fn oplog_payload_to_wit<
         })),
     }
 }
+
+pub(super) fn replay_divergence_to_wit(
+    divergence: ReplayDivergence,
+) -> Result<oplog::ReplayDivergence, String> {
+    Ok(oplog::ReplayDivergence {
+        oplog_index: divergence.oplog_index.into(),
+        expected: replay_step_to_wit(divergence.expected)?,
+        actual: replay_step_to_wit(divergence.actual)?,
+        mismatched: divergence
+            .mismatched
+            .into_iter()
+            .map(start_identity_field_to_wit)
+            .collect(),
+    })
+}
+
+pub(super) fn replay_divergence_from_wit(
+    divergence: oplog::ReplayDivergence,
+) -> Result<ReplayDivergence, String> {
+    Ok(ReplayDivergence {
+        oplog_index: golem_common::model::OplogIndex::from_u64(divergence.oplog_index),
+        expected: replay_step_from_wit(divergence.expected)?,
+        actual: replay_step_from_wit(divergence.actual)?,
+        mismatched: divergence
+            .mismatched
+            .into_iter()
+            .map(start_identity_field_from_wit)
+            .collect(),
+    })
+}
+
+fn replay_step_to_wit(step: ReplayStep) -> Result<oplog::ReplayStep, String> {
+    Ok(match step {
+        ReplayStep::HostCall(call) => oplog::ReplayStep::HostCall(oplog::ReplayHostCall {
+            function_name: call.function_name,
+            durable_function_type: call.durable_function_type.into(),
+            parent_start_index: call.parent_start_index.map(Into::into),
+            invocation_id: call.invocation_id.map(durable_invocation_id_to_wit),
+            observational_owner: call.observational_owner.map(Into::into),
+            carries_request: call.carries_request,
+            request: call
+                .request
+                .map(|request| encode_public_typed_schema_value(*request))
+                .transpose()?,
+        }),
+        ReplayStep::InvocationEnd(_) => oplog::ReplayStep::InvocationEnd,
+        ReplayStep::EndOfHistory(_) => oplog::ReplayStep::EndOfHistory,
+        ReplayStep::Other(description) => oplog::ReplayStep::Other(description.description),
+    })
+}
+
+fn replay_step_from_wit(step: oplog::ReplayStep) -> Result<ReplayStep, String> {
+    Ok(match step {
+        oplog::ReplayStep::HostCall(call) => ReplayStep::HostCall(ReplayHostCall {
+            function_name: call.function_name,
+            durable_function_type: golem_common::model::oplog::DurableFunctionType::from(
+                call.durable_function_type,
+            )
+            .into(),
+            parent_start_index: call
+                .parent_start_index
+                .map(golem_common::model::OplogIndex::from_u64),
+            invocation_id: call.invocation_id.map(durable_invocation_id_from_wit),
+            observational_owner: call
+                .observational_owner
+                .map(golem_common::model::OplogIndex::from_u64),
+            carries_request: call.carries_request,
+            request: call
+                .request
+                .map(|request| {
+                    golem_schema::schema::wit::decode_typed(&request)
+                        .map(Box::new)
+                        .map_err(|error| error.to_string())
+                })
+                .transpose()?,
+        }),
+        oplog::ReplayStep::InvocationEnd => ReplayStep::invocation_end(),
+        oplog::ReplayStep::EndOfHistory => ReplayStep::end_of_history(),
+        oplog::ReplayStep::Other(description) => ReplayStep::described(description),
+    })
+}
+
+fn start_identity_field_to_wit(field: StartIdentityField) -> oplog::StartIdentityField {
+    match field {
+        StartIdentityField::FunctionName => oplog::StartIdentityField::FunctionName,
+        StartIdentityField::FunctionType => oplog::StartIdentityField::FunctionType,
+        StartIdentityField::InvocationId => oplog::StartIdentityField::InvocationId,
+        StartIdentityField::ObservationalOwner => oplog::StartIdentityField::ObservationalOwner,
+        StartIdentityField::RequestPresence => oplog::StartIdentityField::RequestPresence,
+        StartIdentityField::Parent => oplog::StartIdentityField::Parent,
+    }
+}
+
+fn start_identity_field_from_wit(field: oplog::StartIdentityField) -> StartIdentityField {
+    match field {
+        oplog::StartIdentityField::FunctionName => StartIdentityField::FunctionName,
+        oplog::StartIdentityField::FunctionType => StartIdentityField::FunctionType,
+        oplog::StartIdentityField::InvocationId => StartIdentityField::InvocationId,
+        oplog::StartIdentityField::ObservationalOwner => StartIdentityField::ObservationalOwner,
+        oplog::StartIdentityField::RequestPresence => StartIdentityField::RequestPresence,
+        oplog::StartIdentityField::Parent => StartIdentityField::Parent,
+    }
+}
+
+pub(super) fn update_failure_class_to_wit(class: UpdateFailureClass) -> oplog::UpdateFailureClass {
+    match class {
+        UpdateFailureClass::Divergence => oplog::UpdateFailureClass::Divergence,
+        UpdateFailureClass::TargetTrap => oplog::UpdateFailureClass::TargetTrap,
+        UpdateFailureClass::NotReplayable => oplog::UpdateFailureClass::NotReplayable,
+        UpdateFailureClass::TargetRejected => oplog::UpdateFailureClass::TargetRejected,
+        UpdateFailureClass::Interrupted => oplog::UpdateFailureClass::Interrupted,
+        UpdateFailureClass::Operational => oplog::UpdateFailureClass::Operational,
+        UpdateFailureClass::Other => oplog::UpdateFailureClass::Other,
+    }
+}
+
+pub(super) fn update_failure_class_from_wit(
+    class: oplog::UpdateFailureClass,
+) -> UpdateFailureClass {
+    match class {
+        oplog::UpdateFailureClass::Divergence => UpdateFailureClass::Divergence,
+        oplog::UpdateFailureClass::TargetTrap => UpdateFailureClass::TargetTrap,
+        oplog::UpdateFailureClass::NotReplayable => UpdateFailureClass::NotReplayable,
+        oplog::UpdateFailureClass::TargetRejected => UpdateFailureClass::TargetRejected,
+        oplog::UpdateFailureClass::Interrupted => UpdateFailureClass::Interrupted,
+        oplog::UpdateFailureClass::Operational => UpdateFailureClass::Operational,
+        oplog::UpdateFailureClass::Other => UpdateFailureClass::Other,
+    }
+}

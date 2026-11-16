@@ -238,7 +238,7 @@ fn oplog_error_kind_from_proto(kind: i32) -> Result<OplogErrorKind, String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 mod cards;
 

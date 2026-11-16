@@ -226,6 +226,11 @@ impl PublicOplogEntry {
             Self::StreamItems(params) => redact_typed_value(&mut params.record),
             Self::StreamTerminal(params) => redact_typed_value(&mut params.record),
             Self::StreamSession(params) => redact_typed_value(&mut params.record),
+            Self::FailedUpdate(params) => {
+                if let Some(divergence) = &mut params.divergence {
+                    divergence.redact_host_managed_values_for_external();
+                }
+            }
             _ => {}
         }
     }

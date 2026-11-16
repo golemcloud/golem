@@ -28,8 +28,8 @@ use crate::worker::RetryDecision;
 use crate::worker::snapshot_selection::SourceFound;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
-    AgentError, FailedSnapshotAssistedUpdateDetails, OplogEntry, OplogIndex,
-    SnapshotAssistedUpdateDetails, SnapshotFault,
+    AgentError, FailedSnapshotAssistedUpdateDetails, OplogEntry, OplogIndex, ReplayDivergence,
+    SnapshotAssistedUpdateDetails, SnapshotFault, UpdateFailureClass,
 };
 use golem_common::model::{AgentId, PendingUpdateKind, PendingUpdateRef, Timestamp};
 use golem_service_base::error::worker_executor::{
@@ -213,6 +213,8 @@ pub(crate) fn decide(
                     head,
                     details(failure.code, &cause(column, head, &error)),
                     failure.fault,
+                    failure_class(problem),
+                    error.divergence(),
                 ),
                 reject: failure
                     .reject_selected
@@ -240,7 +242,7 @@ pub(crate) fn decide(
 }
 
 /// The failed update of the manual update invocation at `admission_index`, which no
-/// `PendingUpdate` entry paired.
+/// `PendingUpdate` entry paired. Its class is `Other`: the update failed before any replay.
 pub(crate) fn failed_admission_of(
     target_revision: ComponentRevision,
     admission_index: OplogIndex,
@@ -252,13 +254,16 @@ pub(crate) fn failed_admission_of(
         None,
         Some(admission_index),
         None,
+        UpdateFailureClass::Other,
+        None,
     )
 }
 
 /// The failed update that ends `head` without an error, such as a cancellation: it carries the
-/// attempt index and the snapshot-assisted details of `head`, and no snapshot fault.
+/// attempt index and the snapshot-assisted details of `head`, no snapshot fault, and the class
+/// `Other`.
 pub(crate) fn cancelled_update_of(head: &PendingUpdateRef, details: String) -> OplogEntry {
-    failed_update_of(head, details, None)
+    failed_update_of(head, details, None, UpdateFailureClass::Other, None)
 }
 
 /// The details of a successful update of `head`: its snapshot-assisted details, or `None` for
@@ -833,6 +838,8 @@ fn failed_update_of(
     head: &PendingUpdateRef,
     details: String,
     snapshot_fault: Option<SnapshotFault>,
+    failure_class: UpdateFailureClass,
+    divergence: Option<ReplayDivergence>,
 ) -> OplogEntry {
     OplogEntry::failed_update(
         head.target_revision,
@@ -840,7 +847,49 @@ fn failed_update_of(
         failed_details_of(head),
         Some(head.admission_index),
         snapshot_fault,
+        failure_class,
+        divergence.map(Box::new),
     )
+}
+
+/// The class of a failed update for `problem`.
+fn failure_class(problem: StartProblem) -> UpdateFailureClass {
+    use StartProblem as Problem;
+    use UpdateFailureClass as Class;
+    match problem {
+        Problem::Divergence => Class::Divergence,
+        Problem::AgentFailed => Class::TargetTrap,
+        Problem::Target(FetchProblem::NotFound | FetchProblem::Refused(_))
+        | Problem::UpdateState(FetchProblem::NotFound | FetchProblem::Refused(_))
+        | Problem::TargetUnsupported
+        | Problem::ModeChange
+        | Problem::BlobStorageRefused(_)
+        | Problem::InitialFileRefused(_) => Class::TargetRejected,
+        Problem::Interrupted
+        | Problem::ManualLoadInterrupted
+        | Problem::Instantiation { interrupted: true } => Class::Interrupted,
+        Problem::Target(FetchProblem::Unavailable | FetchProblem::Other)
+        | Problem::UpdateState(FetchProblem::Unavailable)
+        | Problem::TargetExecutor
+        | Problem::Quota
+        | Problem::Reconstruction
+        | Problem::Instantiation { interrupted: false }
+        | Problem::LoadRetry
+        | Problem::LoadUnavailable
+        | Problem::LoadFailed
+        | Problem::RecoveryRequired
+        | Problem::ReplayError
+        | Problem::AfterReplay
+        | Problem::OplogFailed => Class::Operational,
+        Problem::StaleSource
+        | Problem::Disabled
+        | Problem::Restore(_)
+        | Problem::RestoreConflict
+        | Problem::LoadLost
+        | Problem::ManualLoadFailed
+        | Problem::ManualLoadExited
+        | Problem::UpdateState(FetchProblem::Other) => Class::Other,
+    }
 }
 
 /// The snapshot-assisted details of a failed update of `head`.
@@ -967,6 +1016,18 @@ impl RawStartError<'_> {
                 | SnapshotRecoveryResult::Unavailable(error)
                 | SnapshotRecoveryResult::Lost(error),
             ) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// The divergence of a replay that failed at a recorded entry, without the request of the
+    /// expected call: the public oplog reads it from the `Start` at the index.
+    fn divergence(&self) -> Option<ReplayDivergence> {
+        match self {
+            RawStartError::Replay {
+                error: WorkerExecutorError::UnexpectedOplogEntry { divergence },
+                ..
+            } => Some(divergence.as_ref().clone().without_expected_request()),
             _ => None,
         }
     }

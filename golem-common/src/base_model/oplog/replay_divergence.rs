@@ -61,6 +61,29 @@ impl ReplayDivergence {
     }
 }
 
+impl ReplayDivergence {
+    /// The divergence without the request of its expected host call, which the recorded `Start`
+    /// at the index holds.
+    pub fn without_expected_request(mut self) -> Self {
+        if let ReplayStep::HostCall(call) = &mut self.expected {
+            call.request = None;
+        }
+        self
+    }
+
+    /// Replaces the host-managed values in the requests of both host calls with placeholders,
+    /// as a response to an external caller does for the request of the recorded `Start`.
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        for step in [&mut self.expected, &mut self.actual] {
+            if let ReplayStep::HostCall(call) = step
+                && let Some(request) = &mut call.request
+            {
+                **request = crate::schema::redact_host_managed_typed_value((**request).clone());
+            }
+        }
+    }
+}
+
 impl Display for ReplayDivergence {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -291,5 +314,148 @@ declare_enums! {
         Operational,
         /// Snapshot, restore and other failures.
         Other,
+    }
+}
+
+#[cfg(all(test, feature = "full"))]
+pub(crate) mod replay_divergence_test_values {
+    use super::*;
+    use crate::schema::{
+        MetadataEnvelope, NamedFieldType, PermissionCardSpec, PermissionCardValuePayload,
+        QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
+        SecretValuePayload, find_host_managed_type, find_host_managed_value,
+    };
+    use test_r::test;
+
+    fn record_of(field: SchemaType, value: SchemaValue) -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(vec![
+                NamedFieldType {
+                    name: "name".to_string(),
+                    body: SchemaType::string(),
+                    metadata: MetadataEnvelope::default(),
+                },
+                NamedFieldType {
+                    name: "nested".to_string(),
+                    body: field,
+                    metadata: MetadataEnvelope::default(),
+                },
+            ])),
+            SchemaValue::Record {
+                fields: vec![SchemaValue::String("call".to_string()), value],
+            },
+        )
+    }
+
+    fn with_request(function_name: &str, request: TypedSchemaValue) -> ReplayHostCall {
+        ReplayHostCall {
+            function_name: function_name.to_string(),
+            durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+            parent_start_index: None,
+            invocation_id: None,
+            observational_owner: None,
+            carries_request: true,
+            request: Some(Box::new(request)),
+        }
+    }
+
+    /// A divergence whose recorded request holds a secret and a quota token inside a list, and
+    /// whose replayed request holds a permission card inside a list.
+    pub(crate) fn divergence_with_nested_capabilities() -> ReplayDivergence {
+        let secret = SchemaValue::Secret(SecretValuePayload {
+            secret_id: uuid::Uuid::nil(),
+            config_key: Some(vec!["credential".to_string()]),
+            version: 3,
+            resolved_at: chrono::DateTime::UNIX_EPOCH,
+            category: None,
+        });
+        let quota_token = SchemaValue::QuotaToken(QuotaTokenValuePayload {
+            environment_id: golem_schema::model::EnvironmentId::new(uuid::Uuid::nil()),
+            resource_name: "gpu-quota".to_string(),
+            expected_use: 1,
+            last_credit: 0,
+            last_credit_at: chrono::DateTime::UNIX_EPOCH,
+        });
+        let permission_card = SchemaValue::PermissionCard(PermissionCardValuePayload {
+            card_id: uuid::Uuid::nil(),
+            parent_ids: Vec::new(),
+            expires_at: None,
+            polymorphic: false,
+        });
+        ReplayDivergence {
+            oplog_index: OplogIndex::from_u64(7),
+            expected: ReplayStep::HostCall(with_request(
+                "entity::invoke",
+                record_of(
+                    SchemaType::tuple(vec![
+                        SchemaType::list(SchemaType::secret(SecretSpec::default())),
+                        SchemaType::quota_token(QuotaTokenSpec::default()),
+                    ]),
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::List {
+                                elements: vec![secret],
+                            },
+                            quota_token,
+                        ],
+                    },
+                ),
+            )),
+            actual: ReplayStep::HostCall(with_request(
+                "rpc::invoke",
+                record_of(
+                    SchemaType::list(SchemaType::permission_card(PermissionCardSpec::default())),
+                    SchemaValue::List {
+                        elements: vec![permission_card],
+                    },
+                ),
+            )),
+            mismatched: vec![StartIdentityField::FunctionName],
+        }
+    }
+
+    /// Asserts that both host calls of `divergence` keep a request, and that no request holds a
+    /// host-managed value or type.
+    pub(crate) fn assert_requests_redacted(divergence: &ReplayDivergence) {
+        for step in [&divergence.expected, &divergence.actual] {
+            let ReplayStep::HostCall(call) = step else {
+                panic!("expected a host call, got {step}");
+            };
+            let request = call.request.as_ref().expect("the request is kept");
+            assert!(find_host_managed_value(request.value()).is_none());
+            assert!(
+                find_host_managed_type(request.graph(), &request.graph().root)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn redaction_replaces_the_capabilities_in_both_requests() {
+        let mut divergence = divergence_with_nested_capabilities();
+        divergence.redact_host_managed_values_for_external();
+        assert_requests_redacted(&divergence);
+        let ReplayStep::HostCall(expected) = &divergence.expected else {
+            unreachable!()
+        };
+        assert_eq!(
+            expected.request.as_ref().unwrap().value(),
+            &SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("call".to_string()),
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::List {
+                                elements: vec![SchemaValue::String(
+                                    "<redacted: secret>".to_string()
+                                )],
+                            },
+                            SchemaValue::String("<redacted: quota-token>".to_string()),
+                        ],
+                    },
+                ],
+            }
+        );
     }
 }

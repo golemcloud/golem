@@ -2792,6 +2792,8 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             details: None,
             update_attempt_index: Some(OplogIndex::from_u64(20)),
             snapshot_assisted_details: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::TargetRejected,
+            divergence: None,
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
@@ -2806,6 +2808,62 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                     snapshot_index: OplogIndex::from_u64(19),
                 },
             ),
+            failure_class: golem_common::model::oplog::UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(22),
+                expected: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: "golem::api::generate_idempotency_key".to_string(),
+                        durable_function_type:
+                            golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+                                golem_schema::Empty {},
+                            ),
+                        parent_start_index: None,
+                        invocation_id: None,
+                        observational_owner: None,
+                        carries_request: false,
+                        request: None,
+                    },
+                ),
+                actual: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: "golem::api::get_oplog_index".to_string(),
+                        durable_function_type:
+                            golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+                                golem_schema::Empty {},
+                            ),
+                        parent_start_index: Some(OplogIndex::from_u64(20)),
+                        invocation_id: Some(golem_common::model::oplog::DurableInvocationId {
+                            anchor: OplogIndex::from_u64(20),
+                            ordinal: 1,
+                        }),
+                        observational_owner: Some(OplogIndex::from_u64(20)),
+                        carries_request: true,
+                        request: None,
+                    },
+                ),
+                mismatched: vec![
+                    golem_common::model::oplog::StartIdentityField::FunctionName,
+                    golem_common::model::oplog::StartIdentityField::InvocationId,
+                    golem_common::model::oplog::StartIdentityField::ObservationalOwner,
+                    golem_common::model::oplog::StartIdentityField::RequestPresence,
+                    golem_common::model::oplog::StartIdentityField::Parent,
+                ],
+            })),
+        }),
+        PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(4).unwrap(),
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::TargetTrap,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(23),
+                expected: golem_common::model::oplog::ReplayStep::invocation_end(),
+                actual: golem_common::model::oplog::ReplayStep::described("a pending invocation"),
+                mismatched: vec![],
+            })),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
             timestamp: timestamp(),
@@ -4556,6 +4614,8 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::agent::UpdateRecord
                         pending_update_index: None,
                         mode: golem_common::model::agent::AgentUpdateMode::Automatic,
                         snapshot_assisted_details: None,
+                        failure_class: golem_common::model::oplog::UpdateFailureClass::Operational,
+                        divergence: None,
                     },
                 )
             }),

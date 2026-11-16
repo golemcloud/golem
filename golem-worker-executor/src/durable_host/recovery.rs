@@ -322,6 +322,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     Err(WorkerExecutorError::UnexpectedOplogEntry { .. }) => true,
                                     Err(_) => false,
                                 };
+                                // A divergence at a recorded entry keeps its structure, so that the
+                                // start records its index and steps on the failed update.
+                                let divergence_error = match &invoke_result {
+                                    Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) => {
+                                        Some(error.clone())
+                                    }
+                                    _ => None,
+                                };
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
@@ -372,10 +380,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             // out-of-memory under the memory admission, keeps its
                                             // retry: it says nothing about the replay.
                                             TrapType::Error { .. } if let Some(retry) = Self::speculative_retry(&trap_type) => Some(retry),
-                                            TrapType::Error { error, .. } => break Err(WorkerExecutorError::InvocationFailed {
+                                            TrapType::Error { error, .. } => break Err(divergence_error.unwrap_or_else(|| WorkerExecutorError::InvocationFailed {
                                                 error,
                                                 stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
-                                            }),
+                                            })),
                                             TrapType::Interrupt(kind) => {
                                                 // `on_invocation_failure` is skipped on this path,
                                                 // so a lost shard is recorded here: its `None`

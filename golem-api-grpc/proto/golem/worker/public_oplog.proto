@@ -708,6 +708,8 @@ message FailedUpdateParameters {
   optional string details = 3;
   optional FailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 4;
   optional uint64 update_attempt_index = 5;
+  UpdateFailureClass failure_class = 6;
+  optional ReplayDivergence divergence = 7;
 }
 
 message FailedSnapshotAssistedUpdateDetails {
