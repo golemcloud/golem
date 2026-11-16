@@ -41,9 +41,9 @@ pub struct WorkerServiceConfig {
     pub environment: String,
     /// The installation's Golem issuer: the issuer of the identities of its agents, tools and
     /// accounts. An https URL on its own host, or a `urn:golem:issuer:<uuid>` value that Golem
-    /// generated. Without it, the service generates a value at start and logs a warning. Every
-    /// worker service and executor of one installation must use the same value. It is not the
-    /// issuer of invocation session tokens (`invocation_session_tokens.issuer`).
+    /// generated. Required: without it, the service refuses to start. Every worker service and
+    /// executor of one installation must use the same value. It is not the issuer of invocation
+    /// session tokens (`invocation_session_tokens.issuer`).
     #[serde(
         default,
         deserialize_with = "golem_common::model::golem_issuer::deserialize_setting"
@@ -119,13 +119,13 @@ impl WorkerServiceConfig {
 }
 
 impl WorkerServiceConfig {
-    /// Settles the installation's Golem issuer once: keeps the configured value, or generates one
-    /// and logs a warning when none is configured. The field holds the result afterwards, so a
-    /// second call returns the same value and does not warn again.
-    pub fn resolve_golem_issuer(&mut self) -> GolemIssuer {
-        let resolved = GolemIssuer::configured_or_generated(self.golem_issuer.take());
+    /// Settles the installation's Golem issuer: the configured value, or an error when none is
+    /// configured. Every process of one installation needs the same issuer, so a standalone
+    /// worker service never invents one. The field holds the result afterwards.
+    pub fn resolve_golem_issuer(&mut self) -> anyhow::Result<GolemIssuer> {
+        let resolved = GolemIssuer::required(self.golem_issuer.take())?;
         self.golem_issuer = Some(resolved.clone());
-        resolved
+        Ok(resolved)
     }
 }
 
@@ -135,7 +135,7 @@ impl SafeDisplay for WorkerServiceConfig {
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = match &self.golem_issuer {
             Some(golem_issuer) => writeln!(&mut result, "golem issuer: {golem_issuer}"),
-            None => writeln!(&mut result, "golem issuer: generated at start"),
+            None => writeln!(&mut result, "golem issuer: not configured"),
         };
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
@@ -1434,41 +1434,6 @@ mod tests {
         );
     }
 
-    /// Runs `f` with a subscriber that records every log line, and returns the result and the lines.
-    fn with_captured_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
-        use std::io::Write;
-        use std::sync::{Arc, Mutex};
-
-        #[derive(Clone)]
-        struct Sink(Arc<Mutex<Vec<u8>>>);
-        impl Write for Sink {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let sink = Sink(Arc::new(Mutex::new(Vec::new())));
-        let writer = sink.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-        let result = tracing::subscriber::with_default(subscriber, f);
-        let logs = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-        (result, logs)
-    }
-
-    fn warning_count(logs: &str) -> usize {
-        logs.lines()
-            .filter(|line| line.contains("WARN") && line.contains("No Golem issuer is configured"))
-            .count()
-    }
-
     /// Writes the worker-service configuration file into the jail's working directory, where
     /// the loader expects it, as in the service image.
     fn with_worker_service_config_file(jail: &mut Jail) -> figment::Result<()> {
@@ -1559,31 +1524,24 @@ mod tests {
     }
 
     #[test]
-    fn resolve_golem_issuer_generates_once_and_warns_once() {
+    fn resolve_golem_issuer_refuses_to_start_without_an_issuer() {
         let mut config = WorkerServiceConfig::default();
-        let ((first, second), logs) = with_captured_logs(|| {
-            let first = config.resolve_golem_issuer();
-            let second = config.resolve_golem_issuer();
-            (first, second)
-        });
-        assert!(first.is_generated());
-        assert_eq!(first, second);
-        assert_eq!(config.golem_issuer, Some(first));
-        assert_eq!(warning_count(&logs), 1, "{logs}");
+        let error = config.resolve_golem_issuer().unwrap_err();
+        assert!(error.to_string().contains("golem_issuer"), "{error}");
+        assert_eq!(config.golem_issuer, None);
     }
 
     #[test]
-    fn resolve_golem_issuer_keeps_a_configured_value_without_a_warning() {
+    fn resolve_golem_issuer_keeps_a_configured_value() {
         let configured: golem_common::model::golem_issuer::GolemIssuer =
             "https://id.acme.example".parse().unwrap();
         let mut config = WorkerServiceConfig {
             golem_issuer: Some(configured.clone()),
             ..WorkerServiceConfig::default()
         };
-        let (resolved, logs) = with_captured_logs(|| config.resolve_golem_issuer());
+        let resolved = config.resolve_golem_issuer().unwrap();
         assert_eq!(resolved, configured);
         assert_eq!(config.golem_issuer, Some(configured));
-        assert_eq!(warning_count(&logs), 0, "{logs}");
     }
 
     #[test]

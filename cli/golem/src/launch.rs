@@ -20,7 +20,7 @@ use crate::well_known_secrets::{
     accounts_with_well_known_token, check_exposure, revoke_well_known_token,
 };
 use anyhow::Context;
-use golem_common::model::golem_issuer::GolemIssuer;
+use golem_common::model::golem_issuer::{GOLEM_ISSUER_FILE_NAME, GolemIssuer};
 use golem_component_compilation_service::config::ServerConfig as ComponentCompilationServiceConfig;
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{ComponentCompilationConfig, RegistryServiceConfig};
@@ -52,9 +52,6 @@ pub async fn launch_golem_services(
     config: &GolemServerConfig,
 ) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     check_exposure(config)?;
-    // The one place that resolves the installation's issuer: both services take it as an argument.
-    let golem_issuer = GolemIssuer::configured_or_generated(config.golem_issuer.clone());
-
     // Services build rustls configurations from the process-level provider. A host that embeds
     // this launcher may not install one, and the `golem` binary has already installed it.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -80,6 +77,9 @@ pub async fn launch_golem_services(
                 config.data_dir.display()
             )
         })?;
+
+    // The one place that resolves the installation's issuer: both services take it as an argument.
+    let golem_issuer = resolve_golem_issuer(config)?;
 
     let uses_local_registry_db = config.uses_local_registry_db();
     if uses_local_registry_db {
@@ -330,6 +330,13 @@ async fn run_worker_service(
         .await
 }
 
+/// The configured issuer, or the one kept in the data directory, which is generated and stored
+/// on the first start so that every later start of the same data directory has the same issuer.
+fn resolve_golem_issuer(config: &GolemServerConfig) -> anyhow::Result<GolemIssuer> {
+    let file = config.data_dir.join(GOLEM_ISSUER_FILE_NAME);
+    GolemIssuer::persisted(config.golem_issuer.clone(), &file).map_err(anyhow::Error::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +385,33 @@ mod tests {
         );
         assert_eq!(service_config.golem_issuer, Some(issuer.clone()));
         assert_eq!(executor_config.golem_issuer, Some(issuer));
+    }
+
+    #[test]
+    fn two_starts_with_the_same_data_directory_have_the_same_issuer() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = GolemServerConfig::for_data_dir(dir.path()).unwrap();
+        let first = resolve_golem_issuer(&config).unwrap();
+        let second = resolve_golem_issuer(&config).unwrap();
+        assert!(first.is_generated());
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn a_configured_issuer_is_used_and_not_written_to_the_data_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = GolemServerConfig::for_data_dir(dir.path()).unwrap();
+        let configured: GolemIssuer = "https://id.acme.example".parse().unwrap();
+        config.golem_issuer = Some(configured.clone());
+        assert_eq!(resolve_golem_issuer(&config).unwrap(), configured);
+        assert!(!dir.path().join(GOLEM_ISSUER_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn an_invalid_issuer_file_stops_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = GolemServerConfig::for_data_dir(dir.path()).unwrap();
+        std::fs::write(dir.path().join(GOLEM_ISSUER_FILE_NAME), "garbage").unwrap();
+        assert!(resolve_golem_issuer(&config).is_err());
     }
 }

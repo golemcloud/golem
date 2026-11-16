@@ -821,66 +821,25 @@ fn the_golem_issuer_is_read_from_toml_and_a_plain_http_issuer_is_refused() {
     assert!(error.contains("http://id.acme.example"), "{error}");
 }
 
-fn with_captured_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Clone)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-    impl Write for Sink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let sink = Sink(Arc::new(Mutex::new(Vec::new())));
-    let writer = sink.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
-    let result = tracing::subscriber::with_default(subscriber, f);
-    let logs = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-    (result, logs)
-}
-
-fn warning_count(logs: &str) -> usize {
-    logs.lines()
-        .filter(|line| line.contains("WARN") && line.contains("No Golem issuer is configured"))
-        .count()
-}
-
 #[test]
-fn resolve_golem_issuer_generates_once_and_warns_once() {
+fn resolve_golem_issuer_refuses_to_start_without_an_issuer() {
     let mut config = GolemConfig::default();
-    let ((first, second), logs) = with_captured_logs(|| {
-        let first = config.resolve_golem_issuer();
-        let second = config.resolve_golem_issuer();
-        (first, second)
-    });
-    assert!(first.is_generated());
-    assert_eq!(first, second);
-    assert_eq!(config.golem_issuer, Some(first));
-    assert_eq!(warning_count(&logs), 1, "{logs}");
+    let error = config.resolve_golem_issuer().unwrap_err();
+    assert!(error.to_string().contains("golem_issuer"), "{error}");
+    assert_eq!(config.golem_issuer, None);
 }
 
 #[test]
-fn resolve_golem_issuer_keeps_a_configured_value_without_a_warning() {
+fn resolve_golem_issuer_keeps_a_configured_value() {
     let configured: golem_common::model::golem_issuer::GolemIssuer =
         "https://id.acme.example".parse().unwrap();
     let mut config = GolemConfig {
         golem_issuer: Some(configured.clone()),
         ..GolemConfig::default()
     };
-    let (resolved, logs) = with_captured_logs(|| config.resolve_golem_issuer());
+    let resolved = config.resolve_golem_issuer().unwrap();
     assert_eq!(resolved, configured);
     assert_eq!(config.golem_issuer, Some(configured));
-    assert_eq!(warning_count(&logs), 0, "{logs}");
 }
 
 #[test]

@@ -79,7 +79,7 @@ pub struct Services {
     pub invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
     pub invocation_session_config: crate::config::InvocationSessionConfig,
     pub mcp_config: crate::config::McpConfig,
-    /// The installation's Golem issuer: the configured one, or the one generated at start.
+    /// The installation's Golem issuer: the configured one.
     pub golem_issuer: GolemIssuer,
 }
 
@@ -93,7 +93,7 @@ impl Services {
             .validate()
             .map_err(anyhow::Error::msg)?;
         config.blob_storage.validate()?;
-        let golem_issuer = GolemIssuer::configured_or_generated(config.golem_issuer.clone());
+        let golem_issuer = GolemIssuer::required(config.golem_issuer.clone())?;
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
             BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
             BlobStorageConfig::LocalFileSystem(config) => {

@@ -148,8 +148,9 @@ pub struct GolemServerConfig {
     /// File to write the bound ports to as JSON once the server has started.
     pub ports_file: Option<PathBuf>,
     /// The installation's Golem issuer, for the worker service and the executor: an https URL on
-    /// its own host, or a `urn:golem:issuer:<uuid>` value that Golem generated. Without it, each
-    /// start generates a new value and logs a warning. An empty value counts as not set.
+    /// its own host, or a `urn:golem:issuer:<uuid>` value that Golem generated. Without it, the
+    /// first start generates a value and keeps it in the data directory (`golem-issuer`), and
+    /// every later start with that data directory reuses it. An empty value counts as not set.
     #[serde(
         default,
         deserialize_with = "golem_common::model::golem_issuer::deserialize_setting"
@@ -2259,7 +2260,6 @@ mod tests {
                 jail.set_env("GOLEM__GOLEM_ISSUER", value);
                 let config = load(None, &run_args_with_data_dir("/data")).unwrap();
                 assert_eq!(config.golem_issuer, None);
-                assert!(GolemIssuer::configured_or_generated(config.golem_issuer).is_generated());
                 Ok(())
             });
         }

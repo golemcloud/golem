@@ -51,6 +51,10 @@ export GOLEM__TRACING__FILE__ENABLED="${GOLEM__TRACING__FILE__ENABLED:=true}"
 export GOLEM__TRACING__FILE__JSON="${GOLEM__TRACING__FILE__JSON:=false}"
 export GOLEM__TRACING__STDOUT__ENABLED="${GOLEM__TRACING__STDOUT__ENABLED:=false}"
 
+# One issuer shared by every process of this local installation. The worker service and the
+# worker executor refuse to start without one.
+export GOLEM__GOLEM_ISSUER="${GOLEM__GOLEM_ISSUER:=urn:golem:issuer:2f0d5c3e-6a41-4f6b-9d7e-8c1a3b5e7f90}"
+
 ADMIN_TOKEN="lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28"
 
 FS_BLOB_STORAGE_DIR="${LOCAL_RUN_DIR}/data/blob_storage"

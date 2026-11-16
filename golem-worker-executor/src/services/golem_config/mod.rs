@@ -86,9 +86,8 @@ mod tests;
 pub struct GolemConfig {
     /// The installation's Golem issuer: the issuer of the identities of its agents, tools and
     /// accounts. An https URL on its own host, or a `urn:golem:issuer:<uuid>` value that Golem
-    /// generated. Without it, the executor generates a value at start and logs a warning, and from
-    /// then on this field holds the generated value. Every worker service and executor of one
-    /// installation must use the same value.
+    /// generated. Required: without it, the executor refuses to start. Every worker service and
+    /// executor of one installation must use the same value.
     #[serde(
         default,
         deserialize_with = "golem_common::model::golem_issuer::deserialize_setting"
@@ -171,13 +170,13 @@ pub struct GolemConfig {
 }
 
 impl GolemConfig {
-    /// Settles the installation's Golem issuer once: keeps the configured value, or generates one
-    /// and logs a warning when none is configured. The field holds the result afterwards, so a
-    /// second call returns the same value and does not warn again.
-    pub fn resolve_golem_issuer(&mut self) -> GolemIssuer {
-        let resolved = GolemIssuer::configured_or_generated(self.golem_issuer.take());
+    /// Settles the installation's Golem issuer: the configured value, or an error when none is
+    /// configured. Every process of one installation needs the same issuer, so a worker executor
+    /// never invents one. The field holds the result afterwards.
+    pub fn resolve_golem_issuer(&mut self) -> anyhow::Result<GolemIssuer> {
+        let resolved = GolemIssuer::required(self.golem_issuer.take())?;
         self.golem_issuer = Some(resolved.clone());
-        resolved
+        Ok(resolved)
     }
 
     /// The issuer that `resolve_golem_issuer` stored at start.
@@ -196,7 +195,7 @@ impl SafeDisplay for GolemConfig {
 
         let _ = match &self.golem_issuer {
             Some(golem_issuer) => writeln!(&mut result, "golem issuer: {golem_issuer}"),
-            None => writeln!(&mut result, "golem issuer: generated at start"),
+            None => writeln!(&mut result, "golem issuer: not configured"),
         };
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
