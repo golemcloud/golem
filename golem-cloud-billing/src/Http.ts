@@ -127,14 +127,19 @@ export const routes = HttpRouter.use((router) =>
     const handleWebhook = yield* Webhooks.makeHandler
     const cliCommand = cliBootstrapCommand(config.publicApiUrl)
     const home = new URL("/", config.baseUrl).href
+    // The query parameter of the page after a settlement: the IDs of the orders that it pays.
+    const settlementOrdersParam = "settlement_orders"
 
     // The settlement that the account can pay, from the subscriptions and unpaid orders in the
-    // database, never from the request.
+    // database, never from the request, and the IDs of the unpaid orders.
     const settlementOf = (accountId: string) =>
       Effect.gen(function* () {
         const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
         const unpaidOrders = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
-        return settlementFor(accountSubscriptions, unpaidOrders)
+        return {
+          offer: settlementFor(accountSubscriptions, unpaidOrders),
+          unpaidOrderIds: unpaidOrders.map((order) => order.orderId)
+        }
       })
 
     const planOf = (account: Account | undefined): PlanState => {
@@ -217,8 +222,7 @@ export const routes = HttpRouter.use((router) =>
         // Polar redirects here with the checkout ID after a payment; the webhook that changes the
         // plan can arrive a few seconds later.
         const checkoutPending = params.has("checkout_id") && (plan === "free" || plan === "suspended")
-        const settlementPending = params.has("settlement_id") && plan === "suspended"
-        const settlement: SettlementOffer | undefined =
+        const debt =
           plan === "suspended"
             ? yield* settlementOf(user.golemAccountId).pipe(
                 Effect.catch((error) =>
@@ -229,6 +233,12 @@ export const routes = HttpRouter.use((router) =>
                 )
               )
             : undefined
+        const settlement: SettlementOffer | undefined = debt?.offer
+        // After the payment of a settlement, Polar redirects here with the orders that it pays. The
+        // webhook that records the settlement can arrive a few seconds later, so the page waits
+        // only while one of those orders is unpaid. Then it shows the plan and any remaining debt.
+        const paidOrderIds = (params.get(settlementOrdersParam) ?? "").split(",").filter((id) => id !== "")
+        const settlementPending = debt !== undefined && paidOrderIds.some((id) => debt.unpaidOrderIds.includes(id))
         const limits: AccountLimits | undefined =
           plan === "paid"
             ? yield* registry.getLimits(user.golemToken, user.golemAccountId).pipe(
@@ -401,7 +411,7 @@ export const routes = HttpRouter.use((router) =>
             const user = signedIn.value
             const offered = yield* Effect.gen(function* () {
               const plan = planOf(yield* registry.getAccount(user.golemToken, user.golemAccountId))
-              const settlement = plan === "suspended" ? yield* settlementOf(user.golemAccountId) : undefined
+              const settlement = plan === "suspended" ? (yield* settlementOf(user.golemAccountId)).offer : undefined
               if (settlement === undefined || !canSettle(plan, settlement)) {
                 yield* Effect.logWarning("Refused a settlement that the page does not offer").pipe(
                   Effect.annotateLogs({ golemAccountId: user.golemAccountId, plan })
@@ -420,6 +430,8 @@ export const routes = HttpRouter.use((router) =>
             if (offered === undefined) {
               return HttpServerResponse.redirect("/", { status: 303 })
             }
+            const successUrl = new URL(home)
+            successUrl.searchParams.set(settlementOrdersParam, offered.orders.map((order) => order.orderId).join(","))
             const url = yield* polar.createSettlementCheckout({
               productId: config.polar.settlementProductId,
               externalCustomerId: user.golemAccountId,
@@ -428,7 +440,7 @@ export const routes = HttpRouter.use((router) =>
               customerIpAddress: clientAddress(request),
               amount: offered.amount,
               orderIds: offered.orders.map((order) => order.orderId),
-              successUrl: `${home}?settlement_id={CHECKOUT_ID}`,
+              successUrl: successUrl.href,
               returnUrl: home
             })
             yield* Effect.logInfo("Started a settlement of paid overage").pipe(

@@ -221,11 +221,17 @@ describe("settlementFor", () => {
     expect(settlementFor([ended], [pending(belowMinimum), pending({ ...belowMinimum, orderId: "order_2" })])).toBeUndefined()
   })
 
-  it("leaves out an order below the settlement minimum, also next to an order that it settles", () => {
-    expect(settlementFor([ended], [pending(belowMinimum), pending({ orderId: "order_2", meteredAmount: 100 })])).toEqual({
-      orders: [{ orderId: "order_2", amount: 100 }],
-      amount: 100
+  it("leaves out the orders below the settlement minimum, also when they would fill a batch before a payable order", () => {
+    const small = Array.from({ length: SETTLEMENT_MAX_ORDERS }, (_, index) =>
+      pending({ orderId: `order_small_${index}`, meteredAmount: 1 })
+    )
+    const payable = pending({ orderId: "order_payable", meteredAmount: SETTLEMENT_MINIMUM_CENTS })
+
+    expect(settlementFor([ended], [...small, payable])).toEqual({
+      orders: [{ orderId: "order_payable", amount: SETTLEMENT_MINIMUM_CENTS }],
+      amount: SETTLEMENT_MINIMUM_CENTS
     })
+    expect(planFor([ended], [...small, { ...payable, createdAt: overdue.createdAt }], now, PAST_DUE_GRACE_MS)).toBe("suspended")
   })
 
   it("settles only the orders that Polar no longer collects", () => {

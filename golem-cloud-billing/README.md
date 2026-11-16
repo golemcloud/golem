@@ -144,8 +144,10 @@ plan.
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Settlement.** `POST /billing/settle` creates a checkout session of the settlement product for
   the paid overage of the orders that Polar no longer collects, and redirects to it (see
-  [Unpaid orders](#unpaid-orders)). After the payment Polar redirects to `/?settlement_id=...`, and
-  the page shows that the plan changes to free until the webhook changes it.
+  [Unpaid orders](#unpaid-orders)). After the payment Polar redirects to
+  `/?settlement_orders=...`, with the IDs of the orders that the settlement pays. While one of them
+  is unpaid, the page says that Golem records the payment. After the webhook, the page shows the
+  plan and any remaining debt.
 - **Webhooks.** Polar delivers `subscription.*`, `order.created`, `order.updated` and `order.paid`
   events to `POST /api/auth/polar/webhooks`. A request without the Standard Webhooks headers gets
   403 before the app reads its body, and a body above 1 MiB gets 413. The handler verifies the

@@ -197,7 +197,10 @@ export interface SignedInPageOptions {
   readonly checkoutPending: boolean
   /** The settlement that the account can pay; `undefined` when there is none or the call failed. */
   readonly settlement: SettlementOffer | undefined
-  /** Polar has redirected back after the payment of a settlement, and the plan has not changed yet. */
+  /**
+   * Polar has redirected back after the payment of a settlement, and the app has not recorded the
+   * settlement of its orders yet.
+   */
   readonly settlementPending: boolean
   readonly cliCommand: string
   /** The monthly usage mode of a paid account; `undefined` on another plan or when the call failed. */
@@ -251,7 +254,7 @@ const planHero = (options: SignedInPageOptions) => {
       if (options.settlementPending) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Polar has your payment</h1>
-        <p class="lead">Your plan changes to Free within one minute, and the agents of this account can run again. Reload the page to see the change.</p>`
+        <p class="lead">Golem records the payment within one minute. Reload the page to see your plan.</p>`
       }
       if (options.settlement !== undefined && canSettle(options.plan, options.settlement)) {
         return html`<span class="eyebrow">Your plan</span>

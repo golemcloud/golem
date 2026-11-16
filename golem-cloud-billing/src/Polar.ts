@@ -52,7 +52,7 @@ const toPolarError =
       : new PolarError({ operation, reason: reason._tag, status: undefined })
   }
 
-/** A checkout of the paid plan for a Golem account. */
+/** A checkout of a product for a Golem account: the paid plan, or a settlement. */
 export interface CheckoutRequest {
   readonly productId: string
   /** The Golem account ID. Polar creates the customer with this external ID, or reuses it. */
@@ -77,20 +77,22 @@ export const SETTLED_ORDERS_METADATA_KEY = "golem_settled_order_ids"
  * A checkout of the settlement product for a Golem account: an ad-hoc fixed price that the
  * customer cannot change, with no discount codes. Polar adds the tax.
  */
-export interface SettlementCheckoutRequest {
-  readonly productId: string
-  /** The Golem account ID: the external ID of the existing Polar customer. */
-  readonly externalCustomerId: string
-  readonly customerEmail: string
-  readonly customerName: string | undefined
-  readonly customerIpAddress: string | undefined
+export interface SettlementCheckoutRequest extends CheckoutRequest {
   /** The price in USD cents. */
   readonly amount: number
   /** The orders that the settlement pays. */
   readonly orderIds: ReadonlyArray<string>
-  readonly successUrl: string
-  readonly returnUrl: string
 }
+
+/** The fields of a checkout session for the customer and the redirects, the same for each product. */
+const customerFields = (request: CheckoutRequest) => ({
+  external_customer_id: request.externalCustomerId,
+  customer_email: request.customerEmail,
+  customer_name: request.customerName ?? null,
+  customer_ip_address: request.customerIpAddress ?? null,
+  success_url: request.successUrl,
+  return_url: request.returnUrl
+})
 
 /** The SDK errors with an HTTP status: `PolarClientError` and `PolarServerError`. */
 const statusOf = (error: unknown): number | undefined =>
@@ -168,12 +170,7 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
       sdkCall("create_checkout", () =>
         checkouts({
           products: [request.productId],
-          external_customer_id: request.externalCustomerId,
-          customer_email: request.customerEmail,
-          customer_name: request.customerName ?? null,
-          customer_ip_address: request.customerIpAddress ?? null,
-          success_url: request.successUrl,
-          return_url: request.returnUrl,
+          ...customerFields(request),
           allow_discount_codes: true
         })
       ).pipe(Effect.map((checkout) => checkout.url))
@@ -185,12 +182,7 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
           prices: {
             [request.productId]: [{ amount_type: "fixed", price_amount: request.amount, price_currency: "usd" }]
           },
-          external_customer_id: request.externalCustomerId,
-          customer_email: request.customerEmail,
-          customer_name: request.customerName ?? null,
-          customer_ip_address: request.customerIpAddress ?? null,
-          success_url: request.successUrl,
-          return_url: request.returnUrl,
+          ...customerFields(request),
           allow_discount_codes: false,
           metadata: { [SETTLED_ORDERS_METADATA_KEY]: request.orderIds.join(",") }
         })

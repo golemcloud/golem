@@ -1302,17 +1302,22 @@ describe("Polar billing", () => {
         customer_email: "octocat@example.com",
         customer_name: "Octo Cat",
         customer_ip_address: "198.51.100.7",
-        success_url: `${baseUrl}/?settlement_id={CHECKOUT_ID}`,
+        success_url: `${baseUrl}/?settlement_orders=order_1`,
         return_url: `${baseUrl}/`,
         allow_discount_codes: false,
         metadata: { golem_settled_order_ids: "order_1" }
       })
-      expect(await page(jar, "/?settlement_id=polar_c_test")).toContain("Your plan changes to Free within one minute")
+      const returned = await page(jar, "/?settlement_orders=order_1")
+      expect(returned).toContain("Golem records the payment within one minute")
+      expect(returned).not.toContain("Settle $")
 
       await deliver("order.created", settlementOrder(accountId))
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       expect(upstreams.deletionHolds.has(accountId)).toBe(false)
       expect(await settledOrders()).toEqual([{ order_id: "order_1", settlement_order_id: "order_settlement_1", amount: 345 }])
+      const reloaded = await page(jar, "/?settlement_orders=order_1")
+      expect(reloaded).not.toContain("Polar has your payment")
+      expect(reloaded).toContain("<h1>Free</h1>")
 
       // Polar delivers the paid order again in `order.updated` and `order.paid`.
       await deliver("order.updated", settlementOrder(accountId))
@@ -1320,6 +1325,38 @@ describe("Polar billing", () => {
       expect(await settledOrders()).toHaveLength(1)
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       expect(await page(jar)).not.toContain("Settle $")
+    })
+
+    it("settles the oldest orders first, and after their webhook the returned page offers the rest", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      const orderIds = Array.from({ length: 14 }, (_, index) => `order_${String(index + 1).padStart(2, "0")}`)
+      for (const [index, id] of orderIds.entries()) {
+        await deliver("order.created", order(accountId, { id, created_at: new Date(Date.now() - (200 - index) * MINUTE).toISOString() }))
+      }
+      expect(await page(jar)).toContain("Settle $44.85")
+
+      const batch = orderIds.slice(0, 13)
+      await postSettle(jar)
+      const [checkout] = upstreams.polarRequests("/v1/checkouts/")
+      expect(checkout!.body).toMatchObject({
+        prices: { [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 4485, price_currency: "usd" }] },
+        success_url: `${baseUrl}/?settlement_orders=${batch.join("%2C")}`,
+        metadata: { golem_settled_order_ids: batch.join(",") }
+      })
+      const returnedPath = `/?settlement_orders=${batch.join("%2C")}`
+      expect(await page(jar, returnedPath)).toContain("Polar has your payment")
+
+      await deliver(
+        "order.paid",
+        settlementOrder(accountId, { net_amount: 4485, metadata: { golem_settled_order_ids: batch.join(",") } })
+      )
+
+      const returned = await page(jar, returnedPath)
+      expect(returned).not.toContain("Polar has your payment")
+      expect(returned).toContain("Settle $3.45")
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
     })
 
     it("keeps the debt when Polar voids the unpaid order of a revoked subscription", async () => {
