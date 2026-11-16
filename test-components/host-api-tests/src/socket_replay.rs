@@ -508,7 +508,8 @@ impl SocketSession for SocketSessionImpl {
         port: Option<u16>,
         data: Vec<u8>,
     ) -> Result<(), String> {
-        let socket = match self.slots.borrow_mut().remove(&slot) {
+        let removed = self.slots.borrow_mut().remove(&slot);
+        let socket = match removed {
             Some(Slot::P3Udp { socket }) => socket,
             Some(other) => {
                 self.slots.borrow_mut().insert(slot.clone(), other);
@@ -525,7 +526,8 @@ impl SocketSession for SocketSessionImpl {
     }
 
     async fn p3_udp_receive(&self, slot: String) -> Result<(Vec<u8>, String), String> {
-        let socket = match self.slots.borrow_mut().remove(&slot) {
+        let removed = self.slots.borrow_mut().remove(&slot);
+        let socket = match removed {
             Some(Slot::P3Udp { socket }) => socket,
             Some(other) => {
                 self.slots.borrow_mut().insert(slot.clone(), other);
@@ -666,14 +668,18 @@ impl SocketSession for SocketSessionImpl {
         self.slots.borrow_mut().remove(&slot).is_some()
     }
 
+    /// Keeps the receive history. The native sockets cannot be saved, so a restored agent has
+    /// empty slots.
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-        Ok(Vec::new())
+        serde_json::to_vec(&*self.received.borrow()).map_err(error)
     }
 
     async fn load_snapshot(
-        _bytes: Vec<u8>,
+        bytes: Vec<u8>,
         _context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
-        Ok(Self::new(String::new()))
+        let restored = Self::new(String::new());
+        *restored.received.borrow_mut() = serde_json::from_slice(&bytes).map_err(error)?;
+        Ok(restored)
     }
 }
