@@ -2709,6 +2709,210 @@ async fn host_observation_includes_native_append_before_its_mutation() {
 
 #[test]
 #[timeout("30s")]
+async fn outcome_observation_preserves_terminal_progress_across_reconstruction() {
+    use golem_common::model::durable_stream::{
+        STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerObservation,
+        StreamConsumerTerminalRecord,
+    };
+
+    let fixture = Fixture::new().await;
+    let mut consumer = fixture.producer().await;
+    let session = fixture.identity.invocation.clone();
+    let reader = local_reader(2, 0);
+    let terminal = StreamConsumerTerminalRecord {
+        format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+        observation: StreamConsumerObservation::Guest {
+            parent_start_index: None,
+        },
+        reobserves: None,
+        session_key: StreamRegistrationInvocation::Local(session.idempotency_key),
+        reader_id: reader,
+        source_offset: StreamOffset::new(OplogIndex::from_u64(79), 0),
+        consumer_read_ordinal: 0,
+        authored_by: StreamTerminalAuthor::Host,
+        terminal: StreamTerminal::Failed(StreamError::Trapped("producer stopped".into())),
+    };
+    let outcome = StreamSessionRecord::ConsumerOutcome(terminal.clone());
+    assert_eq!(
+        consumer.append_session_record(None, outcome.clone()).await,
+        Err(StreamStoreError::ConsumerJournalAdvanced),
+        "the completion future cannot be observed before EOF"
+    );
+    consumer
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerTerminal(terminal.clone()),
+        )
+        .await
+        .unwrap();
+    for cold in [false, true] {
+        if cold {
+            fixture.persist().await;
+            consumer = fixture.producer().await;
+        }
+        for mismatch in 0..5 {
+            let mut wrong = terminal.clone();
+            match mismatch {
+                0 => wrong.source_offset = StreamOffset::new(OplogIndex::from_u64(80), 0),
+                1 => wrong.consumer_read_ordinal = 1,
+                2 => wrong.authored_by = StreamTerminalAuthor::Guest,
+                3 => wrong.terminal = StreamTerminal::Finished,
+                4 => wrong.terminal = StreamTerminal::Failed(StreamError::Trapped("other".into())),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                consumer
+                    .append_session_record(None, StreamSessionRecord::ConsumerOutcome(wrong))
+                    .await,
+                Err(StreamStoreError::ConsumerJournalAdvanced),
+                "mismatch {mismatch}, cold={cold}"
+            );
+        }
+    }
+    consumer
+        .append_session_record(None, outcome.clone())
+        .await
+        .unwrap();
+    fixture.persist().await;
+    drop(consumer);
+    let cold = fixture.producer().await;
+    assert_eq!(
+        cold.append_session_record(None, outcome).await,
+        Err(StreamStoreError::ConsumerJournalAdvanced),
+        "reconstruction must retain that the completion was already observed"
+    );
+    let (_, rows) = fixture
+        .service
+        .lookup_durable_stream_producer_metadata(
+            &OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id),
+            AgentMode::Durable,
+            fixture.identity.fingerprint,
+            vec![ProducerMetadataKey::ConsumerHead(session, reader)],
+        )
+        .await
+        .unwrap();
+    let Some(Some(ProducerMetadataRow::ConsumerHead(head))) = rows.into_iter().next() else {
+        panic!("persisted consumer head is missing");
+    };
+    assert_eq!(head.next_read_ordinal, 1);
+    assert_eq!(
+        head.last_source_offset,
+        Some(StreamOffset::new(OplogIndex::from_u64(79), 0))
+    );
+    assert!(head.terminal);
+    assert!(head.outcome_observed);
+}
+
+#[test]
+#[timeout("30s")]
+async fn source_unavailable_outcome_preserves_overlay_progress_across_reconstruction() {
+    use golem_common::model::durable_stream::{
+        STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerObservation,
+        StreamConsumerTerminalRecord,
+    };
+
+    for observed_eof in [false, true] {
+        let fixture = Fixture::new().await;
+        let mut consumer = fixture.producer().await;
+        let session = fixture.identity.invocation.clone();
+        let reader = local_reader(2, 0);
+        let offset = StreamOffset::new(OplogIndex::from_u64(79), 0);
+        let outcome = StreamConsumerTerminalRecord {
+            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+            observation: StreamConsumerObservation::Guest {
+                parent_start_index: None,
+            },
+            reobserves: None,
+            session_key: StreamRegistrationInvocation::Local(session.idempotency_key),
+            reader_id: reader,
+            source_offset: offset,
+            consumer_read_ordinal: 0,
+            authored_by: StreamTerminalAuthor::Protocol,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                "durable stream source unavailable".into(),
+            )),
+        };
+        consumer
+            .append_session_record(
+                None,
+                StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: outcome.session_key.clone(),
+                    reader_id: reader,
+                    source_offset: offset,
+                    consumer_read_ordinal: 0,
+                }),
+            )
+            .await
+            .unwrap();
+        if observed_eof {
+            consumer
+                .append_session_record(None, StreamSessionRecord::ConsumerTerminal(outcome.clone()))
+                .await
+                .unwrap();
+        }
+        for cold in [false, true] {
+            if cold {
+                fixture.persist().await;
+                consumer = fixture.producer().await;
+            }
+            for mismatch in 0..5 {
+                let mut wrong = outcome.clone();
+                match mismatch {
+                    0 => wrong.source_offset = StreamOffset::new(OplogIndex::from_u64(80), 0),
+                    1 => wrong.consumer_read_ordinal = 1,
+                    2 => wrong.authored_by = StreamTerminalAuthor::Host,
+                    3 => wrong.terminal = StreamTerminal::Finished,
+                    4 => {
+                        wrong.terminal =
+                            StreamTerminal::Failed(StreamError::Interrupted("other".into()))
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    consumer
+                        .append_session_record(None, StreamSessionRecord::ConsumerOutcome(wrong))
+                        .await,
+                    Err(StreamStoreError::ConsumerJournalAdvanced),
+                    "mismatch {mismatch}, cold={cold}"
+                );
+            }
+        }
+        consumer
+            .append_session_record(None, StreamSessionRecord::ConsumerOutcome(outcome.clone()))
+            .await
+            .unwrap();
+        fixture.persist().await;
+        drop(consumer);
+        let cold = fixture.producer().await;
+        assert_eq!(
+            cold.append_session_record(None, StreamSessionRecord::ConsumerOutcome(outcome))
+                .await,
+            Err(StreamStoreError::ConsumerJournalAdvanced)
+        );
+        let (_, rows) = fixture
+            .service
+            .lookup_durable_stream_producer_metadata(
+                &OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id),
+                AgentMode::Durable,
+                fixture.identity.fingerprint,
+                vec![ProducerMetadataKey::ConsumerHead(session, reader)],
+            )
+            .await
+            .unwrap();
+        let Some(Some(ProducerMetadataRow::ConsumerHead(head))) = rows.into_iter().next() else {
+            panic!("persisted consumer head is missing");
+        };
+        assert_eq!(head.next_read_ordinal, u64::from(observed_eof));
+        assert_eq!(head.last_source_offset, observed_eof.then_some(offset));
+        assert_eq!(head.source_unavailable, Some(offset));
+        assert_eq!(head.terminal, observed_eof);
+        assert!(head.outcome_observed);
+    }
+}
+
+#[test]
+#[timeout("30s")]
 async fn cancelled_control_query_drains_detached_index_catch_up() {
     let fixture = Fixture::new().await;
     let producer = fixture.producer().await;

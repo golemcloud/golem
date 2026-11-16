@@ -398,14 +398,9 @@ impl RouteMatch {
     }
 
     pub fn validate(&self, path: &[PathSegment], behavior: &RouteBehaviour) -> Result<(), String> {
-        let mount_behavior = matches!(
-            behavior,
-            RouteBehaviour::HttpRouter(_) | RouteBehaviour::AgentFilesystem(_)
-        );
+        let mount_behavior = matches!(behavior, RouteBehaviour::Mount(_));
         if matches!(self, Self::MountPrefix) != mount_behavior {
-            return Err(
-                "MountPrefix must be paired with HttpRouter or AgentFilesystem behavior".into(),
-            );
+            return Err("MountPrefix must be paired with Mount behavior".into());
         }
         if let Self::Method {
             method,
@@ -422,88 +417,82 @@ impl RouteMatch {
         {
             return Err("MountPrefix cannot contain a catch-all".into());
         }
-        match behavior {
-            RouteBehaviour::HttpRouter(router) => {
-                router.constructor_input.validate()?;
-                for method in router
-                    .handler
-                    .iter()
-                    .chain(router.openapi_provider_method.iter())
-                {
-                    method.input.validate()?;
-                    method.output.validate()?;
+        if let RouteBehaviour::Mount(mount) = behavior {
+            mount.files.agent().constructor_input.validate()?;
+            for target in mount.handler.iter().chain(mount.openapi_provider.iter()) {
+                let MountTarget::AgentMethod(target) = target;
+                target.agent.constructor_input.validate()?;
+                target.method.input.validate()?;
+                target.method.output.validate()?;
+                if target.method.method_name.is_empty() {
+                    return Err("Mount method name must not be empty".into());
                 }
-                if path
-                    .iter()
-                    .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
+            }
+            if let (Some(handler), Some(provider)) = (&mount.handler, &mount.openapi_provider) {
+                let (MountTarget::AgentMethod(handler), MountTarget::AgentMethod(provider)) =
+                    (handler, provider);
+                if handler.agent.component_id == provider.agent.component_id
+                    && handler.agent.agent_type == provider.agent.agent_type
+                    && handler.method.method_name == provider.method.method_name
                 {
-                    return Err("HttpRouter mount must be literal".into());
+                    return Err("Mount handler and provider must be distinct methods".into());
                 }
-                if router
-                    .handler
-                    .iter()
-                    .chain(router.openapi_provider_method.iter())
-                    .any(|method| method.method_name.is_empty())
-                {
-                    return Err("Router method name must not be empty".into());
-                }
-                if let (Some(handler), Some(provider)) =
-                    (&router.handler, &router.openapi_provider_method)
-                    && handler.method_name == provider.method_name
-                {
-                    return Err("Router handler and provider must be distinct methods".into());
-                }
-                FileMapping::validate_list(&router.static_bindings)?;
-                golem_common::schema::agent::http::validate_file_response_headers(
-                    &router.file_response_headers,
-                    !router.static_bindings.is_empty(),
-                )
-                .map_err(|error| error.to_string())?;
-                let mut paths = BTreeSet::new();
-                for entry in &router.file_index {
-                    let path = entry
-                        .path
-                        .strip_prefix('/')
-                        .ok_or("Router file path must be absolute")?;
-                    if path.chars().any(char::is_control)
-                        || path.split('/').any(|part| {
-                            part.is_empty() || part == "." || part == ".." || part.contains('\\')
-                        })
+            }
+            FileMapping::validate_list(&mount.file_bindings)?;
+            golem_common::schema::agent::http::validate_file_response_headers(
+                &mount.file_response_headers,
+                !mount.file_bindings.is_empty(),
+            )
+            .map_err(|error| error.to_string())?;
+            match &mount.files {
+                MountFileSource::Router { file_index, .. } => {
+                    if path
+                        .iter()
+                        .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
                     {
-                        return Err("Router file path must be canonical and name a file".into());
+                        return Err("HttpRouter mount must be literal".into());
                     }
-                    if !paths.insert(&entry.path) {
-                        return Err("Duplicate router file index path".into());
+                    let mut paths = BTreeSet::new();
+                    for entry in file_index {
+                        let path = entry
+                            .path
+                            .strip_prefix('/')
+                            .ok_or("Router file path must be absolute")?;
+                        if path.chars().any(char::is_control)
+                            || path.split('/').any(|part| {
+                                part.is_empty()
+                                    || part == "."
+                                    || part == ".."
+                                    || part.contains('\\')
+                            })
+                        {
+                            return Err("Router file path must be canonical and name a file".into());
+                        }
+                        if !paths.insert(&entry.path) {
+                            return Err("Duplicate router file index path".into());
+                        }
+                    }
+                }
+                MountFileSource::Live { agent } => {
+                    let captures = path
+                        .iter()
+                        .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
+                        .count();
+                    let mut bound = BTreeSet::new();
+                    for ConstructorParameter::Path {
+                        path_segment_index, ..
+                    } in &agent.constructor_parameters
+                    {
+                        let index: usize = (*path_segment_index).into();
+                        if index >= captures || !bound.insert(index) {
+                            return Err(
+                        "Filesystem constructor parameters must bind distinct mount captures"
+                            .into(),
+                    );
+                        }
                     }
                 }
             }
-            RouteBehaviour::AgentFilesystem(filesystem) => {
-                filesystem.constructor_input.validate()?;
-                FileMapping::validate_list(&filesystem.filesystem_bindings)?;
-                golem_common::schema::agent::http::validate_file_response_headers(
-                    &filesystem.file_response_headers,
-                    !filesystem.filesystem_bindings.is_empty(),
-                )
-                .map_err(|error| error.to_string())?;
-                let captures = path
-                    .iter()
-                    .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
-                    .count();
-                let mut bound = BTreeSet::new();
-                for ConstructorParameter::Path {
-                    path_segment_index, ..
-                } in &filesystem.constructor_parameters
-                {
-                    let index: usize = (*path_segment_index).into();
-                    if index >= captures || !bound.insert(index) {
-                        return Err(
-                            "Filesystem constructor parameters must bind distinct mount captures"
-                                .into(),
-                        );
-                    }
-                }
-            }
-            _ => {}
         }
         Ok(())
     }
@@ -517,22 +506,61 @@ pub enum RouteBehaviour {
     CorsPreflight(CorsPreflightBehaviour),
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
-    HttpRouter(HttpRouterBehaviour),
-    AgentFilesystem(AgentFilesystemBehaviour),
+    Mount(MountBehaviour),
 }
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
-pub struct HttpRouterBehaviour {
+pub struct MountBehaviour {
+    pub handler: Option<MountTarget>,
+    pub openapi_provider: Option<MountTarget>,
+    pub files: MountFileSource,
+    pub file_bindings: Vec<FileMapping>,
+    pub file_response_headers: Vec<FileResponseHeader>,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub enum MountTarget {
+    AgentMethod(MountAgentMethod),
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct MountAgentMethod {
+    pub agent: MountAgent,
+    pub method: RouterMethod,
+}
+
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct MountAgent {
     pub component_id: ComponentId,
+    /// Revision at which the mount policy was selected, not a required executor version.
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
     pub constructor_input: CompiledInputSchema,
-    pub handler: Option<RouterMethod>,
-    pub openapi_provider_method: Option<RouterMethod>,
-    pub static_bindings: Vec<FileMapping>,
-    pub file_index: Vec<RouterFileIndexEntry>,
-    pub file_response_headers: Vec<FileResponseHeader>,
+    pub constructor_parameters: Vec<ConstructorParameter>,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub enum MountFileSource {
+    Router {
+        agent: MountAgent,
+        file_index: Vec<RouterFileIndexEntry>,
+    },
+    Live {
+        agent: MountAgent,
+    },
+}
+
+impl MountFileSource {
+    pub fn agent(&self) -> &MountAgent {
+        match self {
+            Self::Router { agent, .. } | Self::Live { agent } => agent,
+        }
+    }
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -550,19 +578,6 @@ pub struct RouterFileIndexEntry {
     /// BLAKE3 digest computed during upload, used for blob lookup and the immutable HTTP ETag.
     pub blob_key: AgentFileContentHash,
     pub size: u64,
-}
-
-#[derive(Debug, BinaryCodec)]
-#[desert(evolution())]
-pub struct AgentFilesystemBehaviour {
-    pub component_id: ComponentId,
-    /// Revision at which the exposure policy was selected, not a required executor version.
-    pub component_revision: ComponentRevision,
-    pub agent_type: AgentTypeName,
-    pub constructor_input: CompiledInputSchema,
-    pub constructor_parameters: Vec<ConstructorParameter>,
-    pub filesystem_bindings: Vec<FileMapping>,
-    pub file_response_headers: Vec<FileResponseHeader>,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]

@@ -34,6 +34,8 @@ object AgentIdentitySpec extends ZIOSpecDefault {
     var registered: js.Any                 = js.Dynamic.literal(agentType = js.Dynamic.literal(typeName = "DisplayName"))
     var makeError: Option[String]          = None
     var parseError: Option[String]         = None
+    var bindingError: Option[Throwable]    = None
+    var drops                              = 0
     var connectionError: Option[Throwable] = None
     var calls                              = List.empty[String]
     var madePayload: js.Any                = js.undefined
@@ -46,6 +48,17 @@ object AgentIdentitySpec extends ZIOSpecDefault {
     def install(): Unit =
       js.Dynamic.global.globalThis.updateDynamic("__golemScalaTestHost")(
         js.Dynamic.literal(
+          bindSelf = (() => {
+            calls :+= "bind-self"
+            bindingError.foreach(error => throw error)
+            val rpc = js.Dynamic.literal()
+            js.Dynamic.global.Reflect.set(
+              rpc,
+              js.Dynamic.global.Symbol.dispose,
+              (() => { drops += 1 }): js.Function0[Unit]
+            )
+            js.Array[js.Any]("recorded-phantom-id", rpc)
+          }): js.Function0[js.Array[js.Any]],
           getAgentType = ((name: String) => {
             calls :+= s"lookup:$name"
             registered
@@ -78,6 +91,42 @@ object AgentIdentitySpec extends ZIOSpecDefault {
   }
 
   override def spec = suite("AgentIdentitySpec")(
+    test("self binding preserves recorded identity without resolving or creating a connection") {
+      val host = new Host
+      host.install()
+      val result = AgentIdentity.bindSelf("DisplayName")
+      assertTrue(
+        result.exists(client => client.agentId == "recorded-phantom-id" && client.agentTypeName == "DisplayName"),
+        host.calls == List("bind-self", "parse:recorded-phantom-id"),
+        host.drops == 0
+      )
+    },
+    test("self binding refuses another client type and releases the resource") {
+      val host = new Host
+      host.install()
+      val result = AgentIdentity.bindSelf("Other")
+      assertTrue(
+        result == Left("invalid-type: self binding expects Other, identity is DisplayName"),
+        host.calls == List("bind-self", "parse:recorded-phantom-id"),
+        host.drops == 1
+      )
+    },
+    test("self binding preserves host refusal and releases only an acquired resource") {
+      val host = new Host
+      host.bindingError = Some(js.JavaScriptException(js.Dynamic.literal(tag = "denied", `val` = "ephemeral owner")))
+      host.install()
+      val refused      = AgentIdentity.bindSelf("DisplayName")
+      val refusedCalls = host.calls
+      host.bindingError = None
+      host.parseError = Some("invalid id")
+      val malformed = AgentIdentity.bindSelf("DisplayName")
+      assertTrue(
+        refused.isLeft,
+        refusedCalls == List("bind-self"),
+        malformed == Left("invalid id"),
+        host.drops == 1
+      )
+    },
     test("resolution uses the registered display name and preserves payload, phantom and config") {
       val host = new Host
       host.install()
@@ -86,7 +135,6 @@ object AgentIdentitySpec extends ZIOSpecDefault {
         RemoteAgentClient.resolve("lookup-name", input, Some(phantom), List(ConfigOverride(List("limit"), 7)))
       assertTrue(
         result.exists(client => client.agentTypeName == "DisplayName" && client.agentId == "server-id"),
-        result.exists(_.metadata.asInstanceOf[js.Any] == host.registered),
         host.calls == List("lookup:lookup-name", "make:DisplayName", "rpc:DisplayName"),
         host.madePayload == input,
         host.rpcPayload == input,

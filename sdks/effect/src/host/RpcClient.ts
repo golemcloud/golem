@@ -55,6 +55,7 @@ export interface RpcConnection {
 }
 
 export interface RpcClientShape {
+  readonly bindSelf: () => Effect.Effect<readonly [string, RpcConnection], RpcHostError>
   readonly connect: (
     agentTypeName: string,
     constructorValue: CoreTypes.SchemaValueTree,
@@ -106,6 +107,14 @@ const wrapWasmRpc = (rpc: WasmRpc): RpcConnection => ({
 export const RpcLive: Layer.Layer<RpcClient> = Layer.succeed(
   RpcClient,
   RpcClient.of({
+    bindSelf: () =>
+      Effect.try({
+        try: () => {
+          const [id, rpc] = WasmRpc.bindSelf()
+          return [id, wrapWasmRpc(rpc)] as const
+        },
+        catch: (cause) => new RpcHostError(cause, "WasmRpc.bindSelf"),
+      }),
     connect: (agentTypeName, constructorValue, phantomId, agentConfig) =>
       Effect.try({
         try: () =>

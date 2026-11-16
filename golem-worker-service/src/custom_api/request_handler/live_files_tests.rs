@@ -17,7 +17,10 @@ use test_r::test;
 fn route(mappings: &[(&str, &str)]) -> CompiledRoute {
     let mut route = test_route(1, "/sites/{id}", None, "filesystem");
     route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
-    let RouteBehaviour::AgentFilesystem(filesystem) = &mut route.behavior else {
+    let RouteBehaviour::Mount(mount) = &mut route.behavior else {
+        unreachable!()
+    };
+    let MountFileSource::Live { agent: filesystem } = &mut mount.files else {
         unreachable!()
     };
     filesystem.constructor_input = CompiledInputSchema {
@@ -36,8 +39,8 @@ fn route(mappings: &[(&str, &str)]) -> CompiledRoute {
         path_segment_index: golem_service_base::model::SafeIndex::new(0),
         parameter_type: PathSegmentType::U64,
     }];
-    filesystem.filesystem_bindings = FileMapping::compile_list(mappings.iter().copied()).unwrap();
-    filesystem.file_response_headers = vec![
+    mount.file_bindings = FileMapping::compile_list(mappings.iter().copied()).unwrap();
+    mount.file_response_headers = vec![
         FileResponseHeader {
             name: "content-security-policy".into(),
             value: "default-src 'none'".into(),

@@ -243,6 +243,10 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             return Err(error);
         }
     };
+    let defers_producer_settlement = matches!(
+        &call,
+        PreparedCall::Invoke { expected_output, .. } if expected_output.uses_streams()
+    );
 
     let primary_body = match store
         .data()
@@ -327,6 +331,59 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         crate::durable_host::tool::fence_tool_operations_for_jump(&mut store).await?;
     }
 
+    if !defers_producer_settlement
+        && matches!(&call_result, Ok(InvokeResult::Succeeded { .. }))
+        && store.data().check_interrupt().is_none()
+    {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .settle_schema_producers(Ok(()));
+    }
+
+    let mut settled_schema_trap = false;
+    if let Ok(InvokeResult::Failed {
+        error: error @ (OplogAgentError::DeterministicTrap(_) | OplogAgentError::StackOverflow),
+        timed_out: false,
+        semantic_trap_retry_override: None,
+        ..
+    }) = &call_result
+        && store
+            .data()
+            .durable_ctx()
+            .selected_tool_owner_failure()
+            .is_none()
+        && store.data().check_interrupt().is_none()
+    {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .settle_schema_producers(Err(error.to_string("")));
+        settled_schema_trap = true;
+    }
+
+    let output_watch = tokio_util::sync::CancellationToken::new();
+    let output_watch_guard = output_watch.clone().drop_guard();
+    let watch_schema_outputs = defers_producer_settlement
+        && !matches!(
+            &call_result,
+            Ok(InvokeResult::Interrupted {
+                interrupt_kind: InterruptKind::Jump,
+                ..
+            })
+        );
+    if watch_schema_outputs {
+        let outputs = store.data().durable_ctx().schema_output_drain_monitor()?;
+        let runtime = store.data().durable_ctx().runtime_suspension.clone();
+        crate::durable_host::stream_outcome::supervise_schema_outputs(
+            &mut store,
+            outputs,
+            runtime,
+            output_watch,
+        )
+        .map_err(anyhow::Error::from)?;
+    }
+
     if let Some(parent) = primary_body
         .as_ref()
         .and_then(|primary_body| primary_body.invocation().cloned())
@@ -364,6 +421,71 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         }
         if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
             apply_selected_owner_failure(&mut call_result, owner_failure);
+        }
+    }
+
+    drop(output_watch_guard);
+    if watch_schema_outputs
+        && let Some(error) = store
+            .data()
+            .durable_ctx()
+            .schema_output_drain_monitor()?
+            .wait_for_failure()
+            .now_or_never()
+    {
+        apply_selected_owner_failure(&mut call_result, OwnerFailureWinner::Infrastructure(error));
+    }
+
+    if defers_producer_settlement
+        && let Ok(InvokeResult::Succeeded { consumed_fuel, .. }) = &call_result
+    {
+        let consumed_fuel = *consumed_fuel;
+        match run_guest_call_settled(&mut store, async |accessor| {
+            crate::durable_host::stream_outcome::drain_schema_outputs(accessor).await
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error @ WorkerExecutorError::Interrupted { .. })) => {
+                call_result =
+                    invoke_result_from_trap(&mut store, consumed_fuel, wasmtime::Error::new(error))
+                        .await;
+            }
+            Ok(Err(error)) | Err(GuestCallSettlementError::Infrastructure(error)) => {
+                call_result = Err(error);
+            }
+            Err(
+                GuestCallSettlementError::Trap(error)
+                | GuestCallSettlementError::Interrupted(error),
+            ) => {
+                call_result = invoke_result_from_trap(&mut store, consumed_fuel, error).await;
+            }
+        }
+    }
+
+    if settled_schema_trap
+        && matches!(
+            &call_result,
+            Ok(InvokeResult::Failed {
+                error: OplogAgentError::DeterministicTrap(_) | OplogAgentError::StackOverflow,
+                timed_out: false,
+                semantic_trap_retry_override: None,
+                ..
+            })
+        )
+        && store.data().check_interrupt().is_none()
+        && store
+            .data()
+            .durable_ctx()
+            .selected_tool_owner_failure()
+            .is_none()
+    {
+        // Settled schema lanes and trapped projections no longer require Store progress.
+        // Join before replay failure bookkeeping can finish their durable session.
+        let outputs = store.data().durable_ctx().schema_output_drain_monitor()?;
+        let interrupt = store.data().durable_ctx().create_interrupt_signal();
+        if let Err(error) = outputs.drain_interruptibly(interrupt).await {
+            call_result = Err(error);
         }
     }
 
@@ -502,6 +624,10 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
     let policy = store.data().durable_ctx().suspension_policy();
     let runtime_for_call = runtime.clone();
     let preparation = runtime.as_ref().map(|runtime| runtime.external_activity());
+    let output_tasks = store.data().durable_ctx().schema_output_spawner()?;
+    let output_monitor = store.data().durable_ctx().schema_output_drain_monitor()?;
+    let output_watch = tokio_util::sync::CancellationToken::new();
+    let output_watch_guard = output_watch.clone().drop_guard();
     let future = store
         .as_context_mut()
         .run_concurrent(async move |accessor| {
@@ -509,6 +635,16 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
                 (&runtime_for_call, accessor.runtime_activity())
             {
                 runtime.certify_root(activity);
+            }
+            if let Err(error) = accessor.with(|mut access| {
+                crate::durable_host::stream_outcome::supervise_schema_outputs(
+                    &mut access,
+                    output_monitor,
+                    runtime_for_call.clone(),
+                    output_watch,
+                )
+            }) {
+                return Ok(Err(WorkerExecutorError::runtime(error.to_string())));
             }
             tokio::select! {
                 biased;
@@ -520,6 +656,7 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
                     component_revision,
                     runtime_for_call.as_ref().map(|runtime| runtime.source()),
                     preparation,
+                    &output_tasks,
                 ) => Ok(result),
                 interrupt_kind = interrupt => Err(interrupt_kind),
             }
@@ -532,6 +669,16 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
         }
         None => future.await,
     };
+    drop(output_watch_guard);
+    if let Some(error) = store
+        .data()
+        .durable_ctx()
+        .schema_output_drain_monitor()?
+        .wait_for_failure()
+        .now_or_never()
+    {
+        return Err(error);
+    }
     let interrupted = store.data().durable_ctx().is_interrupting();
     let output = match classify_guest_call_settlement(
         store.data().agent_id(),
@@ -553,15 +700,44 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
             return invoke_result_from_trap(&mut store, consumed_fuel, error).await;
         }
     };
-    if let Err(error) = run_guest_call_settled(&mut store, async |_accessor| ()).await {
-        return match error {
-            GuestCallSettlementError::Infrastructure(error) => Err(error),
-            GuestCallSettlementError::Trap(error)
-            | GuestCallSettlementError::Interrupted(error) => {
-                invoke_result_from_trap(&mut store, consumed_fuel, error).await
-            }
-        };
+    let output_monitor = store.data().durable_ctx().schema_output_drain_monitor()?;
+    let output_runtime = store.data().durable_ctx().runtime_suspension.clone();
+    let output_watch = tokio_util::sync::CancellationToken::new();
+    let output_watch_guard = output_watch.clone().drop_guard();
+    let settled = run_stream_producers_settled(&mut store, async move |accessor| {
+        accessor.with(|mut access| {
+            crate::durable_host::stream_outcome::supervise_schema_outputs(
+                &mut access,
+                output_monitor,
+                output_runtime,
+                output_watch,
+            )
+        })
+    })
+    .await;
+    drop(output_watch_guard);
+    if let Some(error) = store
+        .data()
+        .durable_ctx()
+        .schema_output_drain_monitor()?
+        .wait_for_failure()
+        .now_or_never()
+    {
+        return Err(error);
     }
+    match settled {
+        Ok(Ok(())) => {}
+        Ok(Err(error))
+        | Err(GuestCallSettlementError::Trap(error))
+        | Err(GuestCallSettlementError::Interrupted(error)) => {
+            return invoke_result_from_trap(&mut store, consumed_fuel, error).await;
+        }
+        Err(GuestCallSettlementError::Infrastructure(error)) => return Err(error),
+    }
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .settle_schema_producers(Ok(()));
     Ok(InvokeResult::Succeeded {
         result: Box::new(AgentInvocationResult::AgentMethod { output }),
         consumed_fuel,
@@ -844,6 +1020,29 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     store: &mut StoreContextMut<'_, Ctx>,
     fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
 ) -> Result<R, GuestCallSettlementError> {
+    run_guest_call_settled_at(store, fun, SettlementDeadline::RootReturned).await
+}
+
+/// Streaming producers may continue in guest tasks after the method returns its mappings.
+/// Their lifetime is invocation work, not the bounded cleanup of a completed producer.
+pub(crate) async fn run_stream_producers_settled<Ctx: WorkerCtx, R>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
+) -> Result<R, GuestCallSettlementError> {
+    run_guest_call_settled_at(store, fun, SettlementDeadline::GuestTasksExited).await
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum SettlementDeadline {
+    RootReturned,
+    GuestTasksExited,
+}
+
+pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
+    deadline: SettlementDeadline,
+) -> Result<R, GuestCallSettlementError> {
     let runtime = store.data().durable_ctx().runtime_suspension.clone();
     let entity_invocation = store
         .data()
@@ -864,15 +1063,20 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
             }
             let result = fun(accessor).await;
             finalization.begin();
-            // The root future has completed: everything from here on is the (bounded) drain
-            // phase. Arm the timeout here rather than in the settlement predicate — the
-            // predicate is only consulted at idle observation points, which are never reached
-            // if e.g. a guest task lingers, and the drain must stay bounded even then.
-            drain_started.notify_one();
+            if matches!(deadline, SettlementDeadline::RootReturned) {
+                drain_started.notify_one();
+            }
             result
         }
     };
+    let mut guest_tasks_exited = false;
+    let cleanup_started = drain_started.clone();
+    // Wasmtime consults this predicate only after all guest tasks have exited.
     let mut settled = move |_store: StoreContextMut<'_, Ctx>| {
+        if !guest_tasks_exited && matches!(deadline, SettlementDeadline::GuestTasksExited) {
+            guest_tasks_exited = true;
+            cleanup_started.notify_one();
+        }
         let active = tracker.active_count();
         tracing::debug!("invocation tail-work settlement check: {active} spawned task(s) active");
         tail_work_settled(active)
@@ -986,6 +1190,15 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     guest.call_invoke(accessor, method_name, input).await
                 })
                 .await
+            };
+            let result = if expected_output.uses_streams() && matches!(&result, Ok(Ok(Err(_)))) {
+                match run_stream_producers_settled(store, async |_accessor| Ok(())).await {
+                    Ok(Ok(())) => result,
+                    Ok(Err(error)) => Ok(Err(error)),
+                    Err(error) => Err(error),
+                }
+            } else {
+                result
             };
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
@@ -1265,6 +1478,18 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
                     "Failed to decode agent-error from guest: {e}"
                 ))
             })?;
+    if store.data().check_interrupt().is_none()
+        && store
+            .data()
+            .durable_ctx()
+            .selected_tool_owner_failure()
+            .is_none()
+    {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .settle_schema_producers(Ok(()));
+    }
     Ok(InvokeResult::Failed {
         consumed_fuel,
         timed_out: false,

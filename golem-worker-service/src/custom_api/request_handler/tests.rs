@@ -24,8 +24,9 @@ use golem_schema::Empty;
 use golem_service_base::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledRoute,
     CompiledRoutes, CompiledSchema, CorsOptions, DurableStreamRepresentation,
-    DurableStreamRoutePolicy, DurableStreamSlot, DurableStreamSlotDirection, OriginPattern,
-    PathSegment, RequestBodySchema, RouteBehaviour, RouteSecurity, SessionFromHeaderRouteSecurity,
+    DurableStreamRoutePolicy, DurableStreamSlot, DurableStreamSlotDirection, MountAgentMethod,
+    MountTarget, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteSecurity,
+    SessionFromHeaderRouteSecurity,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -1532,15 +1533,18 @@ async fn immutable_file_corpus_through_request_handler() {
         )));
         let mut route = test_route(1, "/", None, "router");
         route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
-        let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+        let RouteBehaviour::Mount(router) = &mut route.behavior else {
             unreachable!()
         };
-        router.static_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
+        router.file_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
+        let MountFileSource::Router { agent, file_index } = &mut router.files else {
+            unreachable!()
+        };
         let mut provisions = vec![];
         if input["body_hex"].is_string() {
             provisions.push((decode(&input["body_hex"]), true));
         } else if let Some(revisions) = input["revisions"].as_object() {
-            router.component_revision =
+            agent.component_revision =
                 ComponentRevision::try_from(input["selected_revision"].as_u64().unwrap()).unwrap();
             for (revision, file) in revisions {
                 provisions.push((
@@ -1572,7 +1576,7 @@ async fn immutable_file_corpus_through_request_handler() {
                 .await
                 .unwrap();
             if indexed {
-                router.file_index.push(RouterFileIndexEntry {
+                file_index.push(RouterFileIndexEntry {
                     path: input["path"].as_str().unwrap().into(),
                     blob_key: key,
                     size,
@@ -1659,11 +1663,14 @@ async fn immutable_files_over_http1_and_http2_do_not_cache_contents() {
             .unwrap();
         let mut route = test_route(1, "/", None, "router");
         route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
-        let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+        let RouteBehaviour::Mount(router) = &mut route.behavior else {
             unreachable!()
         };
-        router.static_bindings = FileMapping::compile_list([("/asset", "/private/a.txt")]).unwrap();
-        router.file_index.push(RouterFileIndexEntry {
+        router.file_bindings = FileMapping::compile_list([("/asset", "/private/a.txt")]).unwrap();
+        let MountFileSource::Router { file_index, .. } = &mut router.files else {
+            unreachable!()
+        };
+        file_index.push(RouterFileIndexEntry {
             path: "/private/a.txt".into(),
             blob_key: key,
             size: 7,
@@ -1767,20 +1774,23 @@ impl HttpApiDefinitionsLookup for MovingOpenApiLookup {
         use crate::custom_api::route_resolver::tests::test_route;
         let moved = self.0.load(std::sync::atomic::Ordering::SeqCst);
         let mut router = test_route(1, "/router", None, "router");
-        let RouteBehaviour::HttpRouter(behavior) = &mut router.behavior else {
+        let RouteBehaviour::Mount(behavior) = &mut router.behavior else {
             unreachable!()
         };
-        behavior.openapi_provider_method = Some(golem_service_base::custom_api::RouterMethod {
-            method_name: "describe".into(),
-            input: CompiledInputSchema {
-                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
-                input_schema: InputSchema::Parameters(vec![]),
+        behavior.openapi_provider = Some(MountTarget::AgentMethod(MountAgentMethod {
+            agent: behavior.files.agent().clone(),
+            method: golem_service_base::custom_api::RouterMethod {
+                method_name: "describe".into(),
+                input: CompiledInputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                output: CompiledOutputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::string()),
+                    output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                },
             },
-            output: CompiledOutputSchema {
-                graph: SchemaGraph::anonymous(SchemaType::string()),
-                output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
-            },
-        });
+        }));
         Ok(CompiledRoutes {
             account_id: AccountId(uuid::Uuid::nil()),
             account_email: AccountEmail::new("test@golem"),
@@ -1951,20 +1961,23 @@ async fn ordinary_traffic_lazy_openapi_corpus() {
         .await
         .unwrap();
     let mut routes = provider_routes(1);
-    let RouteBehaviour::HttpRouter(router) = &mut routes[1].behavior else {
+    let RouteBehaviour::Mount(router) = &mut routes[1].behavior else {
         unreachable!()
     };
-    router.static_bindings = FileMapping::compile_list([("/static", "/asset")]).unwrap();
-    router.file_index.push(RouterFileIndexEntry {
+    router.file_bindings = FileMapping::compile_list([("/static", "/asset")]).unwrap();
+    let MountFileSource::Router { file_index, .. } = &mut router.files else {
+        unreachable!()
+    };
+    file_index.push(RouterFileIndexEntry {
         path: "/asset".into(),
         blob_key: key,
         size: 11,
     });
     let mut live = test_route(2, "/live", None, "filesystem");
-    let RouteBehaviour::AgentFilesystem(filesystem) = &mut live.behavior else {
+    let RouteBehaviour::Mount(filesystem) = &mut live.behavior else {
         unreachable!()
     };
-    filesystem.filesystem_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
+    filesystem.file_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
     routes.push(live);
     let harness = invocation_harness();
     harness.file_reads.responses.lock().unwrap().push_back(

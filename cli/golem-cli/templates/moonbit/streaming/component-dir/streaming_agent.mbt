@@ -45,7 +45,8 @@ pub async fn StreamingAgent::sum(
   let mut total : UInt = 0
   for ;; {
     match input.read() {
-      Some(value) => total += value
+      Some(Ok(value)) => total += value
+      Some(Err(error)) => raise error
       None => return total
     }
   }
@@ -69,7 +70,8 @@ pub fn StreamingAgent::transform(
       defer input.drop()
       for ;; {
         match input.read() {
-          Some(value) =>
+          Some(Err(error)) => raise error
+          Some(Ok(value)) =>
             if writer.write_one("\{prefix}:\{value}") is @schema.PeerDropped {
               self.cancelled_producers += 1
               return
@@ -132,7 +134,8 @@ pub fn StreamingAgent::durable_echo(
       defer input.drop()
       for ;; {
         match input.read() {
-          Some(value) =>
+          Some(Err(error)) => raise error
+          Some(Ok(value)) =>
             if writer.write_one("echo:\{value}") is @schema.PeerDropped {
               return
             }

@@ -31,7 +31,7 @@ use golem_common::schema::{
 use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_schema::schema::protobuf::schema_value_to_proto_with_streams;
 use golem_schema::schema::validation::validate_value;
-use golem_service_base::custom_api::HttpRouterBehaviour;
+use golem_service_base::custom_api::MountAgentMethod;
 use golem_service_base::model::auth::AuthCtx;
 use http::StatusCode;
 use std::io;
@@ -59,7 +59,7 @@ impl RawHandler {
         &self,
         request: &mut RichRequest,
         selected: &ResolvedRouteEntry,
-        router: &HttpRouterBehaviour,
+        target: &MountAgentMethod,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let version = if request.underlying.version() == http::Version::HTTP_2 {
             HttpVersion::Http2
@@ -67,7 +67,7 @@ impl RawHandler {
             HttpVersion::Http1
         };
         let method = request.underlying.method().as_str().to_owned();
-        let target = request
+        let request_target = request
             .underlying
             .uri()
             .path_and_query()
@@ -77,7 +77,7 @@ impl RawHandler {
         let raw_headers = raw_headers(request.underlying.headers());
         let head = process_request_head(
             &method,
-            &target,
+            &request_target,
             &raw_headers,
             version,
             request.underlying.uri().authority().map(|a| a.as_str()),
@@ -85,7 +85,7 @@ impl RawHandler {
         .map_err(|error| RequestHandlerError::RawRequest(error.request_status()))?;
 
         let has_request_body = head.chunked || head.content_length.is_some_and(|length| length > 0);
-        let mut session = self.start_session(request, selected, router, &head)?;
+        let mut session = self.start_session(request, selected, target, &head)?;
         let mut guard = session.drop_guard();
         let upload_done = Arc::new(AtomicBool::new(false));
         let mut upload = None;
@@ -146,19 +146,16 @@ impl RawHandler {
         &self,
         request: &RichRequest,
         selected: &ResolvedRouteEntry,
-        router: &HttpRouterBehaviour,
+        target: &MountAgentMethod,
         head: &super::http_envelope::RequestHead,
     ) -> Result<HttpSession, RequestHandlerError> {
-        let handler = router
-            .handler
-            .as_ref()
-            .ok_or(RequestHandlerError::RawBadGateway)?;
+        let handler = &target.method;
         let request_key = golem_common::model::InvocationRequestKey::external(None, None);
         let key = request_key.owner_key(&handler.method_name);
         let logical = ParsedAgentKey::try_new(
-            router.agent_type.clone(),
+            target.agent.agent_type.clone(),
             TypedSchemaValue::new(
-                router.constructor_input.graph.clone(),
+                target.agent.constructor_input.graph.clone(),
                 SchemaValue::Record { fields: vec![] },
             ),
             None,
@@ -168,7 +165,7 @@ impl RawHandler {
             .with_ephemeral_invocation_phantom(&key)
             .map_err(|_| RequestHandlerError::RawInternal)?;
         let agent_id = AgentId {
-            component_id: router.component_id,
+            component_id: target.agent.component_id,
             agent_id: final_id.to_string(),
         };
         let principal: Principal = principal_from_request(request)?;

@@ -246,12 +246,12 @@ test "erased schemas keep their occurrence codecs" {
     let narrow = produce_shapes_input_0_stream(async fn(writer) {
       assert_true(writer.write_one(12) is @schema.Accepted)
     })
-    assert_eq(narrow.read(), Some(12))
+    assert_eq(narrow.read(), Some(Ok(12)))
     assert_true(narrow.read() is None)
     let single = produce_shapes_input_5_stream(async fn(writer) {
       assert_true(writer.write_one("tuple") is @schema.Accepted)
     })
-    assert_eq(single.read(), Some("tuple"))
+    assert_eq(single.read(), Some(Ok("tuple")))
     assert_true(single.read() is None)
   })
 }
@@ -274,7 +274,10 @@ test "native custom streams are lazy recursive and directly forwardable" {
       assert_true(writer.write_one({ label: "root", children: [{ label: "child", children: [] }] }) is @schema.Accepted)
     })
     let inner = stream_decode_nested_input_0(stream_encode_nested_input_0(inner))
-    let item = inner.read().unwrap()
+    let item = match inner.read().unwrap() {
+      Ok(item) => item
+      Err(error) => raise error
+    }
     assert_eq(item.label, "root")
     assert_eq(item.children[0].label, "child")
     assert_true(inner.read() is None)

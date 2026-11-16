@@ -1008,7 +1008,9 @@ impl DeploymentContext {
             );
 
             deployment_routes.sort_by_cached_key(|route| match &route.behaviour {
-                golem_service_base::custom_api::RouteBehaviour::HttpRouter(router) => (
+                golem_service_base::custom_api::RouteBehaviour::Mount(golem_service_base::custom_api::MountBehaviour {
+                    files: golem_service_base::custom_api::MountFileSource::Router { agent, .. }, ..
+                }) => (
                     false,
                     route
                         .path
@@ -1016,8 +1018,8 @@ impl DeploymentContext {
                         .filter_map(|segment| segment.literal_value().map(str::to_owned))
                         .collect::<Vec<_>>()
                         .join("/"),
-                    router.agent_type.0.clone(),
-                    router.component_id,
+                    agent.agent_type.0.clone(),
+                    agent.component_id,
                 ),
                 _ => (
                     true,
@@ -1941,7 +1943,7 @@ pub(crate) fn validate_final_http_api_router_for_origin(
             }
         }
     }
-    let providers = compiled_routes.iter().filter(|route| matches!(&route.behaviour, RouteBehaviour::HttpRouter(router) if router.openapi_provider_method.is_some())).count();
+    let providers = compiled_routes.iter().filter(|route| matches!(&route.behaviour, RouteBehaviour::Mount(mount) if mount.openapi_provider.is_some())).count();
     if providers > 64 {
         errors.push(invalid(
             &[],
