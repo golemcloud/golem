@@ -44,14 +44,23 @@ export interface Order {
   readonly status: string
   readonly createdAt: Date
   readonly modifiedAt: Date
-  readonly items: ReadonlyArray<{ readonly productPriceId: string | null; readonly amount: number }>
+  /**
+   * `amount` is before tax. `total` is what the invoice charges for the item: with its tax when
+   * Polar adds the tax on top, else the amount, which already holds the tax.
+   */
+  readonly items: ReadonlyArray<{
+    readonly productPriceId: string | null
+    readonly amount: number
+    readonly total: number
+  }>
 }
 
 /**
- * An order that is not paid, with the amount of its items of metered prices, in cents: `pending`,
- * or `void` and not settled. Polar voids the pending orders of a subscription that it revokes, also
- * after the failed retries of a payment. A void collects nothing, so the account still owes the
- * paid overage of the order until a settlement pays it (see `Settlement.ts`).
+ * An order that is not paid, with what its invoice charges for the items of metered prices, tax
+ * included, in cents (`meteredTotal`): `pending`, or `void` and not settled. Polar voids the
+ * pending orders of a subscription that it revokes, also after the failed retries of a payment. A
+ * void collects nothing, so the account still owes the paid overage of the order until a
+ * settlement pays it (see `Settlement.ts`).
  */
 export interface UnpaidOrder {
   readonly orderId: string
@@ -59,7 +68,7 @@ export interface UnpaidOrder {
   /** `pending` or `void`. */
   readonly status: string
   readonly createdAt: Date
-  readonly meteredAmount: number
+  readonly meteredTotal: number
 }
 
 /**
@@ -435,11 +444,11 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
     // An order of a subscription that no webhook has reported yet has no metered prices to match;
     // the webhook of that subscription reconciles the plan again.
     const unpaidOrders = (accountId: string, productId: string | undefined) =>
-      query<{ order_id: string; subscription_id: string; status: string; created_at: Date; metered_amount: string }>(
+      query<{ order_id: string; subscription_id: string; status: string; created_at: Date; metered_total: string }>(
         `SELECT o.order_id, o.subscription_id, o.status, o.created_at,
-                coalesce((SELECT sum(i.amount)
-                            FROM jsonb_to_recordset(o.items) AS i("productPriceId" text, amount bigint)
-                           WHERE i."productPriceId" = ANY(s.metered_price_ids)), 0)::text AS metered_amount
+                coalesce((SELECT sum(coalesce(i.total, i.amount))
+                            FROM jsonb_to_recordset(o.items) AS i("productPriceId" text, amount bigint, total bigint)
+                           WHERE i."productPriceId" = ANY(s.metered_price_ids)), 0)::text AS metered_total
            FROM polar_orders o
            JOIN polar_subscriptions s ON s.subscription_id = o.subscription_id
           WHERE o.account_id = $1 AND ($2::text IS NULL OR s.product_id = $2) AND o.status IN ('pending', 'void')
@@ -453,7 +462,7 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
             subscriptionId: row.subscription_id,
             status: row.status,
             createdAt: row.created_at,
-            meteredAmount: Number(row.metered_amount)
+            meteredTotal: Number(row.metered_total)
           }))
         )
       )

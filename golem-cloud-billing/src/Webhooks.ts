@@ -57,15 +57,30 @@ const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): S
   pastDueAt: data.past_due_at ? new Date(data.past_due_at) : undefined
 })
 
-const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["data"]): Order => ({
-  orderId: data.id,
-  accountId,
-  subscriptionId,
-  status: data.status,
-  createdAt: new Date(data.created_at),
-  modifiedAt: new Date(data.modified_at ?? data.created_at),
-  items: (data.items ?? []).map((item) => ({ productPriceId: item.product_price_id, amount: item.amount }))
-})
+/**
+ * Whether Polar added the tax on top of the order: then its net amount is the subtotal after the
+ * discount. With inclusive tax, Polar takes the tax out of the subtotal. The order tells this
+ * itself, so the app does not depend on the tax behavior of the organization or of a price.
+ */
+const taxOnTop = (data: OrderPayload["data"]): boolean =>
+  data.net_amount === data.subtotal_amount - (data.discount_amount ?? 0)
+
+const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["data"]): Order => {
+  const addsTax = taxOnTop(data)
+  return {
+    orderId: data.id,
+    accountId,
+    subscriptionId,
+    status: data.status,
+    createdAt: new Date(data.created_at),
+    modifiedAt: new Date(data.modified_at ?? data.created_at),
+    items: (data.items ?? []).map((item) => ({
+      productPriceId: item.product_price_id,
+      amount: item.amount,
+      total: item.amount + (addsTax ? (item.tax_amount ?? 0) : 0)
+    }))
+  }
+}
 
 /**
  * The handler of `POST /api/auth/polar/webhooks`.
@@ -132,11 +147,12 @@ export const makeHandler = Effect.gen(function* () {
 
   /**
    * A paid order of the settlement product settles each order in its metadata that the account
-   * owes, and reconciles the account. It settles nothing when its net amount is smaller than the
-   * paid overage of those orders. Polar delivers a paid order in several events (five in the
-   * sandbox), so an order that this settlement already settled is skipped. An order that the
-   * account does not owe logs a warning, for example an order that Polar charged after the
-   * checkout began: an operator refunds that part of the settlement.
+   * owes, and reconciles the account. It settles nothing when its price, the subtotal after the
+   * discount, is smaller than what the invoices of those orders charge for paid overage. The price
+   * includes the tax, so the net amount is smaller than the price. Polar delivers a paid order in
+   * several events (five in the sandbox), so an order that this settlement already settled is
+   * skipped. An order that the account does not owe logs a warning, for example an order that
+   * Polar charged after the checkout began: an operator refunds that part of the settlement.
    */
   const handleSettlementOrder = (
     accountId: string,
@@ -154,7 +170,7 @@ export const makeHandler = Effect.gen(function* () {
       accountId,
       Effect.gen(function* () {
         const unpaid = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
-        const owed = unpaid.filter((order) => order.meteredAmount > 0 && listed.includes(order.orderId))
+        const owed = unpaid.filter((order) => order.meteredTotal > 0 && listed.includes(order.orderId))
         const notOwed: Array<string> = []
         for (const orderId of listed.filter((orderId) => !owed.some((order) => order.orderId === orderId))) {
           if ((yield* subscriptions.settlementOrderOf(orderId)) !== data.id) {
@@ -166,11 +182,12 @@ export const makeHandler = Effect.gen(function* () {
             Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, orderIds: notOwed.join(",") })
           )
         }
-        const amount = owed.reduce((sum, order) => sum + order.meteredAmount, 0)
-        const netAmount = typeof data.net_amount === "number" ? data.net_amount : 0
-        if (netAmount < amount) {
+        const amount = owed.reduce((sum, order) => sum + order.meteredTotal, 0)
+        const paid =
+          typeof data.subtotal_amount === "number" ? data.subtotal_amount - (data.discount_amount ?? 0) : 0
+        if (paid < amount) {
           yield* Effect.logError("A settlement paid less than the paid overage of its orders").pipe(
-            Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, netAmount, amount })
+            Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, paid, amount })
           )
           return
         }
@@ -178,7 +195,7 @@ export const makeHandler = Effect.gen(function* () {
           yield* subscriptions.recordSettlement({
             accountId,
             settlementOrderId: data.id,
-            orders: owed.map((order) => ({ orderId: order.orderId, amount: order.meteredAmount }))
+            orders: owed.map((order) => ({ orderId: order.orderId, amount: order.meteredTotal }))
           })
           yield* Effect.logInfo("Recorded a settlement of paid overage").pipe(
             Effect.annotateLogs({

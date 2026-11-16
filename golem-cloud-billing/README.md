@@ -260,14 +260,18 @@ the page offers "Settle $X" in place of the customer portal, and `POST /billing/
 only then (`canSettle` in `src/Page.ts`, `settlementFor` in `src/Settlement.ts`). The route reads
 the orders and the amount from the database, and opens a checkout of the private one-time product
 `POLAR_SETTLEMENT_PRODUCT_ID` with an ad-hoc fixed price of that amount, discount codes off, and
-the order IDs in the metadata `golem_settled_order_ids`. The price excludes tax (`tax_behavior`
-`exclusive`), whatever the default of the organization: Polar adds the tax, and the net amount of
-the order is the price. One settlement pays the oldest orders that fit: at most 13, the most IDs
+the order IDs in the metadata `golem_settled_order_ids`. The amount is what the invoices charged
+for the paid overage, tax included, and the price includes tax (`tax_behavior` `inclusive`), so the
+person pays what the invoices asked. Each order tells how Polar taxed it: with tax on top, its net
+amount is the subtotal after the discount, and the app adds the tax of each metered item. With
+inclusive tax, the amount of an item already holds its tax. No tax setting of the organization or
+of a price changes this. One settlement pays the oldest orders that fit: at most 13, the most IDs
 that fit in a metadata value, and at most $999,999.99, the largest price of Polar.
 
 A paid order of the settlement product records a settlement for each order in its metadata that
-the account still owes, and the account moves to the free plan. It settles nothing when its net
-amount is less than the paid overage of those orders, and logs an error. An order that the account
+the account still owes, and the account moves to the free plan. It settles nothing when its
+price, the subtotal after the discount, is less than the amount of those orders, and logs an
+error. An order that the account
 does not owe logs a warning; an operator refunds that part in the Polar dashboard. Polar sends a
 paid order in several events, and the later ones change nothing. If Polar charges an original
 order after its settlement, the app logs `An order was paid after its settlement`, and an operator

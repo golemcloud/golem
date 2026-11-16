@@ -1255,8 +1255,11 @@ describe("Polar billing", () => {
       customer: { id: "cus_1", external_id: accountId },
       product_id: polarSettlementProductId,
       subscription_id: null,
+      subtotal_amount: 345,
+      discount_amount: 0,
       net_amount: 345,
-      items: [{ product_price_id: "price_ad_hoc", amount: 345 }],
+      tax_amount: 0,
+      items: [{ product_price_id: "price_ad_hoc", amount: 345, tax_amount: 0 }],
       metadata: { golem_settled_order_ids: "order_1" },
       ...overrides
     })
@@ -1299,7 +1302,7 @@ describe("Polar billing", () => {
       expect(checkout!.body).toEqual({
         products: [polarSettlementProductId],
         prices: {
-          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 345, price_currency: "usd", tax_behavior: "exclusive" }]
+          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 345, price_currency: "usd", tax_behavior: "inclusive" }]
         },
         external_customer_id: accountId,
         customer_email: "octocat@example.com",
@@ -1345,7 +1348,7 @@ describe("Polar billing", () => {
       const [checkout] = upstreams.polarRequests("/v1/checkouts/")
       expect(checkout!.body).toMatchObject({
         prices: {
-          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 4485, price_currency: "usd", tax_behavior: "exclusive" }]
+          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 4485, price_currency: "usd", tax_behavior: "inclusive" }]
         },
         success_url: `${baseUrl}/?settlement_orders=${batch.join("%2C")}`,
         metadata: { golem_settled_order_ids: batch.join(",") }
@@ -1355,13 +1358,59 @@ describe("Polar billing", () => {
 
       await deliver(
         "order.paid",
-        settlementOrder(accountId, { net_amount: 4485, metadata: { golem_settled_order_ids: batch.join(",") } })
+        settlementOrder(accountId, { subtotal_amount: 4485, net_amount: 4485, metadata: { golem_settled_order_ids: batch.join(",") } })
       )
 
       const returned = await page(jar, returnedPath)
       expect(returned).not.toContain("Polar has your payment")
       expect(returned).toContain("Settle $3.45")
       expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+    })
+
+    /** The last order of `sub_1` with tax: $20.00 for the price and $3.45 of paid overage. */
+    const taxedLastOrder = (taxOnTop: boolean) => ({
+      ...lastOrder,
+      subtotal_amount: 2345,
+      discount_amount: 0,
+      // Polar adds the tax on top, or takes it out of the subtotal.
+      net_amount: taxOnTop ? 2345 : 2094,
+      tax_amount: taxOnTop ? 281 : 251,
+      total_amount: taxOnTop ? 2626 : 2345,
+      items: [
+        { product_price_id: fixedPriceId, amount: 2000, tax_amount: taxOnTop ? 240 : 214 },
+        { product_price_id: meteredPriceId, amount: 345, tax_amount: taxOnTop ? 41 : 37 }
+      ]
+    })
+
+    it("charges the paid overage with the tax that the invoice added on top, and records a payment that includes the tax", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      await deliver("order.created", order(accountId, taxedLastOrder(true)))
+      expect(await page(jar)).toContain("Settle $3.86")
+
+      await postSettle(jar)
+      const [checkout] = upstreams.polarRequests("/v1/checkouts/")
+      expect(checkout!.body).toMatchObject({
+        prices: {
+          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 386, price_currency: "usd", tax_behavior: "inclusive" }]
+        }
+      })
+
+      // Polar takes the tax out of the inclusive price, so the net amount is below the price.
+      await deliver("order.paid", settlementOrder(accountId, { subtotal_amount: 386, net_amount: 345, tax_amount: 41, total_amount: 386 }))
+
+      expect(await settledOrders()).toEqual([{ order_id: "order_1", settlement_order_id: "order_settlement_1", amount: 386 }])
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+    })
+
+    it("charges the paid overage of an invoice with inclusive tax as the invoice did", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      await deliver("order.created", order(accountId, taxedLastOrder(false)))
+
+      expect(await page(jar)).toContain("Settle $3.45")
     })
 
     it("keeps the debt when Polar voids the unpaid order of a revoked subscription", async () => {
@@ -1417,7 +1466,7 @@ describe("Polar billing", () => {
       const accountId = randomUUID()
       await unpaidAfterEnd(accountId)
 
-      await deliver("order.paid", settlementOrder(accountId, { net_amount: 344 }))
+      await deliver("order.paid", settlementOrder(accountId, { subtotal_amount: 344, net_amount: 344 }))
       await deliver("order.paid", settlementOrder(accountId, { id: "order_settlement_2", metadata: { golem_settled_order_ids: "order_9" } }))
       await deliver("order.paid", settlementOrder(randomUUID(), { id: "order_settlement_3" }))
       await deliver("order.created", settlementOrder(accountId, { id: "order_settlement_4", status: "pending", paid: false }))

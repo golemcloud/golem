@@ -145,7 +145,7 @@ const settleableOrders = (
   unpaidOrders: ReadonlyArray<UnpaidOrder>
 ): ReadonlyArray<UnpaidOrder> =>
   unpaidOrders.filter(
-    (order) => order.meteredAmount >= SETTLEMENT_MINIMUM_CENTS && !polarCollects(order, subscriptions)
+    (order) => order.meteredTotal >= SETTLEMENT_MINIMUM_CENTS && !polarCollects(order, subscriptions)
   )
 
 /**
@@ -160,8 +160,8 @@ export const owedOrders = (
 ): ReadonlyArray<UnpaidOrder> =>
   unpaidOrders.filter(
     (order) =>
-      order.meteredAmount > 0 &&
-      (polarCollects(order, subscriptions) || order.meteredAmount >= SETTLEMENT_MINIMUM_CENTS)
+      order.meteredTotal > 0 &&
+      (polarCollects(order, subscriptions) || order.meteredTotal >= SETTLEMENT_MINIMUM_CENTS)
   )
 
 /** What a settlement pays: the paid overage of each order, in cents, and the sum. */
@@ -183,9 +183,9 @@ export const settlementFor = (
   const orders: Array<{ readonly orderId: string; readonly amount: number }> = []
   let amount = 0
   for (const order of settleableOrders(subscriptions, unpaidOrders)) {
-    if (orders.length < SETTLEMENT_MAX_ORDERS && amount + order.meteredAmount <= SETTLEMENT_MAXIMUM_CENTS) {
-      orders.push({ orderId: order.orderId, amount: order.meteredAmount })
-      amount += order.meteredAmount
+    if (orders.length < SETTLEMENT_MAX_ORDERS && amount + order.meteredTotal <= SETTLEMENT_MAXIMUM_CENTS) {
+      orders.push({ orderId: order.orderId, amount: order.meteredTotal })
+      amount += order.meteredTotal
     }
   }
   return orders.length > 0 ? { orders, amount } : undefined
