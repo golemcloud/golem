@@ -66,7 +66,10 @@ impl WeatherAgent for MyDynamicWeatherToolImpl {
     }
 
     fn stream_weather_report_for_city(&self, _city: String) -> AgentStream<String> {
-        let (_writer, stream) = AgentStream::new();
+        let (writer, stream) = AgentStream::new();
+        golem_rust::agentic::spawn_local(async move {
+            writer.close().await.expect("close weather report stream");
+        });
         stream
     }
 }

@@ -19,6 +19,7 @@ use super::owner_lane::{
     EntityCallMode, OwnerInvocationId, OwnerInvocationPermit, OwnerInvocationTicket, OwnerLane,
     OwnerLaneError, OwnerLaneWait,
 };
+use crate::durable_host::durability::DurabilityHost;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::entity::{EntityInvocationScope, InvocationExecutionMode};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -397,6 +398,7 @@ where
                                 context: retained.into_cleanup_context(),
                                 execution,
                                 invocation,
+                                drain_schema_outputs: matches!(&result, Ok(EntityBodyOutcome::Completed(_))),
                                 prepared: false,
                             };
                             // Cleanup host calls belong to the reconstructed body too. Join them
@@ -478,6 +480,7 @@ struct RetainedDisposedContext<Ctx: WorkerCtx> {
     context: super::ObservedPrimaryStore<Ctx>,
     execution: Arc<super::instance::OwnerExecution>,
     invocation: OwnerInvocationId,
+    drain_schema_outputs: bool,
     prepared: bool,
 }
 
@@ -513,6 +516,9 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedDisposedContext<Ctx> {
             if self.prepared {
                 return Ok(());
             }
+            if !self.drain_schema_outputs {
+                self.context.durable_ctx().begin_stream_runtime_teardown();
+            }
             crate::durable_host::tool::prepare_tool_parent_end_owned(
                 &self.execution,
                 self.invocation.clone(),
@@ -543,6 +549,14 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedDisposedContext<Ctx> {
                 self.context.durable_ctx_mut(),
             )
             .await?;
+            if self.drain_schema_outputs {
+                let interrupt = self.context.durable_ctx().create_interrupt_signal();
+                self.context
+                    .durable_ctx()
+                    .schema_output_drain_monitor()?
+                    .drain_interruptibly(interrupt)
+                    .await?;
+            }
             self.context
                 .durable_ctx_mut()
                 .set_invocation_principal(None);

@@ -93,6 +93,7 @@ pub fn get_remote_client_for_type(
         agent_is_durable.then(|| method_names.fresh_ident("get_agent_id"));
     let agent_id_helper_ident = method_names.fresh_ident("agent_id");
     let bind_helper_ident = agent_is_durable.then(|| method_names.fresh_ident("bind"));
+    let bind_self_ident = agent_is_durable.then(|| method_names.fresh_ident("bind_self"));
     let with_scope_card_ident = method_names.fresh_ident("with_scope_card");
     let set_default_scope_card_ident = method_names.fresh_ident("set_default_scope_card");
     let clear_default_scope_card_ident = method_names.fresh_ident("clear_default_scope_card");
@@ -402,6 +403,27 @@ pub fn get_remote_client_for_type(
             }
         }
     });
+    let bind_self_impl = agent_is_durable.then(|| {
+        quote! {
+            /// Binds the current durable incarnation without creating it or waiting for initialization.
+            ///
+            /// Use this to schedule work on self from inside the constructor. Normal client
+            /// construction reuses an initialized agent without rerunning its constructor,
+            /// but waits for an unfinished constructor. Calling it on self from that
+            /// constructor would deadlock; the agent's identity exists before it finishes.
+            ///
+            /// Scheduled work runs after construction finishes. This does not make awaited
+            /// self-calls reentrant or bypass method permissions. A different client type
+            /// returns an error. Replay preserves the recorded incarnation.
+            pub fn #bind_self_ident() -> Result<Self, golem_rust::GolemReflectError> {
+                let (agent_id, phantom_id, wasm_rpc) = golem_rust::agentic::__bind_self(#type_name)?;
+                Ok(Self {
+                    agent_id, phantom_id, wasm_rpc,
+                    __golem_default_scope_card: ::core::default::Default::default(),
+                })
+            }
+        }
+    });
     let agent_id_helper_impl = construction_fallible.then(|| quote! {
         pub fn #agent_id_helper_ident(
             #(#constructor_data_value_param_defs,)*
@@ -424,6 +446,7 @@ pub fn get_remote_client_for_type(
             #agent_id_helper_impl
 
             #bind_impl
+            #bind_self_impl
 
             #get_impl
 

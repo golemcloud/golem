@@ -417,155 +417,45 @@ html:has(.g2-page) {
   opacity: 0.75;
 }
 
-.primitive-figure {
-  margin: 0;
-}
-.primitive-nodes {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-}
-.primitive-vm {
-  border: 1px solid #9ba98c;
-  border-radius: 5px 5px 0 0;
-  padding: 22px 26px;
-  min-width: 0;
-  background: #f0f2e7;
-}
-.vm-label {
+.primitive-access {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: #637155;
-}
-.identity {
-  display: flex;
-  align-items: center;
-  gap: 19px;
-  margin-top: 24px;
-}
-.node-symbol {
-  font-family: Georgia, serif;
-  font-size: 53px;
-  color: #5e7952;
-  line-height: 1;
-  width: 48px;
-  text-align: center;
-}
-.identity strong {
-  display: block;
-  font-size: 20px;
-  font-weight: 500;
-}
-.identity div > span {
-  display: block;
-  font-size: 12px;
-  color: #68735e;
-  margin-top: 2px;
-}
-.memory {
-  display: flex;
-  gap: 8px;
-  margin: 22px 0 19px 67px;
-}
-.memory span {
-  color: #526249;
-  padding: 5px 8px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  border: 1px solid #c9d1bc;
-  border-radius: 3px;
-}
-.call-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-top: 1px solid #d2d9c6;
-  padding-top: 13px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: #66735b;
-}
-.invocations {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 23px;
-}
-.invocations > div {
-  border: 1px solid #c4ccb6;
-  border-radius: 3px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.invocations span {
-  font-size: 12px;
-  color: #6b755f;
-}
-.invocations b {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 500;
-}
-.common-foundation {
-  display: flex;
-  gap: 13px;
-  align-items: center;
-  padding: 17px 25px;
-  background: #e1e8d3;
-  border: 1px solid #9ba98c;
-  border-radius: 0 0 5px 5px;
-  font-size: 13px;
-  font-weight: 500;
-}
-.foundation-symbol {
-  font-size: 24px;
-  color: #65794f;
-  line-height: 1;
-}
-.common-foundation > span:last-child {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: #657255;
-  font-weight: 400;
-}
-.primitive-copy {
-  padding-top: 30px;
-  gap: 72px;
-}
-.primitive-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  margin-bottom: 14px;
-}
-.primitive-heading > span {
-  font-size: 12px;
-  color: #7d866f;
-}
-.primitive-copy p,
-.below-model p {
-  font-size: 15px;
-  line-height: 1.75;
-}
-.below-model {
-  display: flex;
-  align-items: center;
-  gap: 50px;
+  gap: 32px;
+  margin-top: 32px;
+  padding-block: 24px;
   border-top: 1px solid var(--line);
-  margin-top: 34px;
-  padding-top: 24px;
 }
-.below-model p {
-  max-width: 750px;
+.primitive-interfaces {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  font-size: 12px;
 }
-.below-model a {
-  flex-shrink: 0;
+.primitive-interfaces > span {
+  color: #59664f;
+}
+.primitive-interfaces ul {
+  display: flex;
+  gap: 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+}
+.g2-page .primitive-access .g2-text-link {
+  width: 260px;
+  margin-inline-start: auto;
+}
+@media (max-width: 800px) {
+  .primitive-access {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .g2-page .primitive-access .g2-text-link {
+    width: 100%;
+  }
 }
 
 /* VM and permission borders describe real boundaries, rather than a decorative grid. */
@@ -1849,15 +1739,6 @@ html:has(.g2-page) {
   .two-cols {
     gap: 30px;
   }
-  .primitive-vm {
-    padding: 20px;
-  }
-  .memory {
-    margin-left: 0;
-  }
-  .below-model {
-    gap: 25px;
-  }
   .metrics strong {
     font-size: 24px;
   }
@@ -2029,39 +1910,6 @@ html:has(.g2-page) {
   }
   .section-heading {
     margin-bottom: 40px;
-  }
-  .primitive-heading {
-    flex-direction: column;
-    gap: 6px;
-  }
-  .vm-label {
-    font-size: 12px;
-    gap: 5px;
-  }
-  .identity {
-    gap: 12px;
-  }
-  .identity div > span {
-    font-size: 12px;
-  }
-  .memory {
-    gap: 5px;
-  }
-  .memory span {
-    font-size: 12px;
-  }
-  .common-foundation {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .common-foundation > span:last-child {
-    margin-left: auto;
-    font-size: 12px;
-  }
-  .below-model {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 15px;
   }
   .metrics {
     margin-bottom: 42px;
@@ -2446,71 +2294,9 @@ html:has(.g2-page) {
   .section-heading {
     margin-bottom: 33px;
   }
-  .two-cols,
-  .primitive-nodes {
+  .two-cols {
     grid-template-columns: 1fr;
     gap: 24px;
-  }
-  .primitive-vm {
-    padding: 20px;
-  }
-  .vm-label {
-    font-size: 12px;
-    gap: 7px;
-  }
-  .identity div > span {
-    font-size: 12px;
-  }
-  .identity {
-    margin-top: 20px;
-  }
-  .memory {
-    margin-left: 60px;
-    margin-block: 17px;
-  }
-  .memory span {
-    font-size: 12px;
-  }
-  .call-row {
-    font-size: 12px;
-  }
-  .primitive-vm {
-    border-radius: 4px;
-  }
-  .common-foundation {
-    margin-top: 14px;
-    padding: 15px 17px;
-    flex-wrap: wrap;
-    gap: 7px 12px;
-    border-radius: 4px;
-    font-size: 12px;
-  }
-  .common-foundation > span:last-child {
-    width: 100%;
-    margin-left: 33px;
-    font-size: 12px;
-  }
-  .primitive-copy {
-    padding-top: 25px;
-    gap: 23px;
-  }
-  .primitive-heading {
-    flex-direction: row;
-    gap: 13px;
-    margin-bottom: 10px;
-  }
-  .primitive-heading h3 {
-    font-size: 23px;
-  }
-  .primitive-heading > span {
-    font-size: 11px;
-  }
-  .primitive-copy p,
-  .below-model p {
-    font-size: 14px;
-  }
-  .below-model {
-    margin-top: 26px;
   }
   .g2-page .g2-text-link {
     font-size: 13px;
@@ -3081,8 +2867,6 @@ html:has(.g2-page) {
   .life-node,
   .policy-gate,
   .deploy-node,
-  .primitive-vm,
-  .common-foundation,
   .agent-prompt,
   .visual-panel,
   .spending-app {
@@ -3158,13 +2942,6 @@ html:has(.g2-page) {
 .g2-page .deploy-boundary .denied-text {
   color: #f0b299;
 }
-.g2-page .vm-label,
-.g2-page .memory span,
-.g2-page .call-row,
-.g2-page .identity div > span {
-  color: #526447;
-}
-.g2-page .common-foundation > span:last-child,
 .g2-page .app-foundation,
 .g2-page .app-foundation small {
   color: #526647;
@@ -3312,9 +3089,6 @@ html:has(.g2-page) {
   .g2-page .life-node > span:last-child {
     font-size: 12px;
   }
-  .g2-page .common-foundation > span:last-child {
-    margin-left: 0;
-  }
   .g2-page .app-foundation {
     flex-direction: column;
     font-size: 12px;
@@ -3400,7 +3174,6 @@ html:has(.g2-page) {
   display: flex;
 }
 .g2-page .use-case p,
-.g2-page .primitive-copy p,
 .g2-page .capability-item > span:nth-child(2) > span,
 .g2-page .agent-features p,
 .g2-page .language-copy p,
@@ -3671,14 +3444,6 @@ html:has(.g2-page) {
 .g2-page .g2-text-link .link-arrow {
   flex-shrink: 0;
 }
-.g2-page .below-model p {
-  flex: 1;
-}
-.g2-page .below-model .g2-text-link {
-  width: auto;
-  min-width: 218px;
-  margin-inline-start: auto;
-}
 .g2-page .stacked-links {
   align-items: stretch;
 }
@@ -3819,8 +3584,6 @@ html:has(.g2-page) {
 }
 
 /* Secondary text remains legible on the page's light surfaces. */
-.g2-page .invocations > div > span,
-.g2-page .primitive-heading > span,
 .g2-page .requests .micro,
 .g2-page .request-options button[aria-pressed="false"],
 .g2-page .request-options button > span,
@@ -3928,12 +3691,6 @@ html:has(.g2-page) {
   }
 }
 @media (max-width: 360px) {
-  .g2-page .memory {
-    margin-inline-start: 0;
-  }
-  .g2-page .memory > span {
-    white-space: nowrap;
-  }
   .g2-page .life-node,
   .g2-page .deploy-node {
     grid-template-columns: 30px minmax(0, 1fr);
@@ -4060,10 +3817,6 @@ html:has(.g2-page) {
   }
 }
 @media (max-width: 800px) {
-  .g2-page .below-model .g2-text-link {
-    width: 100%;
-    min-width: 0;
-  }
   .g2-page .hero-intro {
     font-size: 18px;
   }

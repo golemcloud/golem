@@ -297,6 +297,22 @@ object RpcCodegen {
     sb.append("        bindRemote(resolved.withoutScopeCard)\n")
     sb.append(s"    }\n\n")
 
+    if (agent.metadata.mode != "ephemeral") {
+      sb.append("  /**\n")
+      sb.append("   * Bind the current durable incarnation without creating it or waiting for initialization.\n")
+      sb.append("   *\n")
+      sb.append("   * Use this to schedule work on self from inside the constructor. Normal `get` reuses\n")
+      sb.append("   * an initialized agent without rerunning its constructor, but waits for an unfinished\n")
+      sb.append("   * constructor. Calling `get` on self from that constructor would therefore deadlock.\n")
+      sb.append("   *\n")
+      sb.append("   * Scheduled work runs after construction finishes. This does not make awaited\n")
+      sb.append("   * self-calls reentrant or bypass method permissions. A different client type returns\n")
+      sb.append("   * an error. Replay preserves the recorded incarnation.\n")
+      sb.append("   */\n")
+      sb.append(s"  def bindSelf(): _root_.scala.Either[_root_.scala.Predef.String, $remoteName] =\n")
+      sb.append(s"    _root_.golem.runtime.rpc.AgentClientRuntime.bindSelfWire(agentType).map(bindRemote)\n\n")
+    }
+
     // Mode-aware constructors
     generateModeAwareConstructors(sb, agent, remoteName)
   }

@@ -120,6 +120,7 @@ const makeRuntime = (
   const rpc = Layer.succeed(
     RpcClient,
     RpcClient.of({
+      bindSelf: () => Effect.die("unexpected self binding"),
       connect: (agentType, constructor, phantom, config) =>
         Effect.succeed(connect(agentType, constructor, phantom, config)),
     }),
@@ -174,6 +175,89 @@ const encode = <S extends Schema.Top>(schema: S, value: S["Type"]) =>
   })
 
 describe("Client 1.6 durable lifecycle", () => {
+  it.effect(
+    "binds the returned self identity, rejects another type, and releases the resource",
+    () =>
+      Effect.gen(function* () {
+        for (const typeName of ["Counter", "Other", "host-refusal"]) {
+          let drops = 0
+          let invoked = false
+          const layer = Layer.merge(
+            Layer.succeed(RpcClient, {
+              bindSelf: () =>
+                typeName === "host-refusal"
+                  ? Effect.fail(
+                      new RpcHostError(
+                        { tag: "denied", val: "ephemeral owner" },
+                        "WasmRpc.bindSelf",
+                      ),
+                    )
+                  : Effect.succeed([
+                      "recorded-phantom-id",
+                      {
+                        invokeAndAwait: () => {
+                          throw new Error("unexpected awaited invocation")
+                        },
+                        asyncInvokeAndAwait: () => {
+                          throw new Error("unexpected async invocation")
+                        },
+                        scheduleInvocation: () => {
+                          throw new Error("unexpected scheduled invocation")
+                        },
+                        scheduleCancelableInvocation: () => {
+                          throw new Error("unexpected cancelable invocation")
+                        },
+                        invoke: (name: string) => {
+                          expect(name).toBe("add")
+                          invoked = true
+                          return metadata("self")
+                        },
+                        drop: () => {
+                          drops++
+                        },
+                      } satisfies RpcConnection,
+                    ] as const),
+              connect: () => Effect.die("self binding must not create a connection"),
+            }),
+            Layer.succeed(AgentHostClient, {
+              parseAgentId: (id: string) => {
+                expect(id).toBe("recorded-phantom-id")
+                return [
+                  typeName,
+                  {
+                    value: { valueNodes: [], root: 0 },
+                    graph: { typeNodes: [], defs: [], root: 0 },
+                  },
+                  { highBits: 17n, lowBits: 29n },
+                ]
+              },
+            } as never),
+          )
+          const result = yield* Counter.client.bindSelf().pipe(
+            Effect.flatMap((client) => client.add.trigger({ by: 7 })),
+            Effect.scoped,
+            Effect.provide(layer),
+            Effect.result,
+          )
+          expect(invoked).toBe(typeName === "Counter")
+          if (typeName === "Counter") {
+            expect(result._tag).toBe("Success")
+            expect(drops).toBe(1)
+          } else {
+            expect(result).toMatchObject({
+              _tag: "Failure",
+              failure: {
+                _tag: "RpcCallError",
+                cause: { tag: typeName === "Other" ? "remote-agent-error" : "denied" },
+              },
+            })
+            if (typeName === "Other")
+              expect(result).toMatchObject({ failure: { cause: { val: { tag: "invalid-type" } } } })
+            expect(drops).toBe(typeName === "Other" ? 1 : 0)
+          }
+        }
+      }),
+  )
   it.effect("rejects nested input streams before invoking or consuming sibling streams", () =>
     Effect.gen(function* () {
       const StreamingInput = defineAgent({
@@ -892,6 +976,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const layer = Layer.succeed(
         RpcClient,
         RpcClient.of({
+          bindSelf: () => Effect.die("unexpected self binding"),
           connect: () =>
             Effect.fail(
               new RpcHostError({ tag: "not-found", val: "missing" }, "WasmRpc.constructor"),

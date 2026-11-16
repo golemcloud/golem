@@ -441,6 +441,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: AuthCtx,
         _: Option<InvocationContext>,
         _: golem_api_grpc::proto::golem::component::Caller,
+        _: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         unimplemented!()
     }

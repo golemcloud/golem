@@ -490,6 +490,7 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
     async fn connect(
@@ -1054,12 +1055,13 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let target = agent_id;
         let AgentTarget::Current(agent_id) = target;
         let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
         let fingerprint = self
             .call_worker_executor(
                 target.clone(),
@@ -4052,6 +4054,7 @@ mod rejection_mapping_tests {
                     AuthCtx::System,
                     None,
                     Caller::anonymous().into(),
+                    None,
                 )
             };
 

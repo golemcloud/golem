@@ -820,17 +820,27 @@ object SchemaWireInterop {
         val prepared = new PreparedStream(stream)
         transferred += prepared
         val lifecycle = new NativeSchemaValueIteratorLifecycle(stream)
+        val outcome   = Promise[js.UndefOr[JsStreamOutcome]]()
         val iterator  = new js.Object {
+          private var completed             = false
           private def doneResult: js.Object =
             js.Dynamic.literal("done" -> true).asInstanceOf[js.Object]
 
           def next(): js.Promise[js.Object] = {
+            if (completed) return FutureInterop.toPromise(Future.successful(doneResult))
             val ownership = stream.activeOwnership
             lifecycle.begin() match {
               case Left(error) => FutureInterop.toPromise(Future.failed(error))
               case Right(_)    =>
                 val pulling = AgentStreamOwnership.capture(ownership)(stream.pull()).flatMap {
-                  case None        => lifecycle.close().map(_ => doneResult)
+                  case None =>
+                    lifecycle.close().map { _ =>
+                      completed = true
+                      outcome.trySuccess(
+                        js.Dynamic.literal("tag" -> "ok", "val" -> js.undefined).asInstanceOf[JsStreamOutcome]
+                      )
+                      doneResult
+                    }
                   case Some(value) =>
                     AgentStreamOwnership
                       .capture(ownership) {
@@ -844,22 +854,46 @@ object SchemaWireInterop {
                   pulling.transformWith {
                     case success @ Success(_) => Future.fromTry(success)
                     case Failure(error)       =>
-                      AgentStreamOwnership.cleanup(lifecycle.close()).flatMap(_ => Future.failed(error))
+                      completed = true
+                      val failure = error match {
+                        case StreamError.Failed(value) => value
+                        case other                     =>
+                          TypedSchemaValue(
+                            SchemaGraph(scala.collection.immutable.ListMap.empty, t.string),
+                            SchemaValue.StringValue(Option(other.getMessage).getOrElse(other.toString))
+                          )
+                      }
+                      AgentStreamOwnership.cleanup(lifecycle.close()).flatMap { _ =>
+                        typedToJsAsync(SchemaWire.typedSchemaValueToWit(failure)).map { value =>
+                          outcome.trySuccess(
+                            js.Dynamic
+                              .literal("tag" -> "err", "val" -> js.Dynamic.literal("tag" -> "failed", "val" -> value))
+                              .asInstanceOf[JsStreamOutcome]
+                          )
+                          doneResult
+                        }
+                      }
                   }
                 )
             }
           }
 
           @scala.scalajs.js.annotation.JSName("return")
-          def close(): js.Promise[js.Object] =
+          def close(): js.Promise[js.Object] = {
+            completed = true
+            outcome.trySuccess(js.undefined)
             FutureInterop.toPromise(lifecycle.close().map(_ => doneResult))
+          }
         }
         val iterable = new js.Object {
           @scala.scalajs.js.annotation.JSName(js.Symbol.asyncIterator)
           def asyncIterator(): js.Object = iterator
         }
         FutureInterop
-          .fromPromise(JsSchemaValueStreamWrap.wrap(iterable.asInstanceOf[JsSchemaValueIterable]))
+          .fromPromise(
+            JsSchemaValueStreamWrap
+              .wrap(iterable.asInstanceOf[JsSchemaValueIterable], FutureInterop.toPromise(outcome.future))
+          )
           .map { raw =>
             prepared.setWrappedRaw(raw)
             JsSchemaValueNode.streamValue(raw)
@@ -950,11 +984,35 @@ object SchemaWireInterop {
     lazy val endpoint: GuestSchemaValueStream.Wrapped = GuestSchemaValueStream.Wrapped(
       raw,
       () =>
-        FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map { iterable =>
-          val lifecycle = new JsSchemaValueIteratorLifecycle(iterable.iterator())
+        FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map { pair =>
+          val lifecycle = new JsSchemaValueIteratorLifecycle(pair._1.iterator())
           val stream    = Stream
             .unfoldAsync(()) { _ =>
-              val next = FutureInterop.fromPromise(lifecycle.iterator.next())
+              val next = FutureInterop.fromPromise(lifecycle.iterator.next()).flatMap { result =>
+                if (!result.done) Future.successful(result)
+                else
+                  FutureInterop.fromPromise(pair._2).map { outcome =>
+                    if (outcome.tag == "err") {
+                      val failure = valOf(outcome)
+                      throw failure.selectDynamic("tag").asInstanceOf[String] match {
+                        case "failed" =>
+                          StreamError.Failed(
+                            SchemaWire.typedSchemaValueFromWit(
+                              typedFromJs(failure.selectDynamic("val").asInstanceOf[JsTypedSchemaValue])
+                            )
+                          )
+                        case "trapped"            => StreamError.Trapped(failure.selectDynamic("val").asInstanceOf[String])
+                        case "cancelled"          => StreamError.Cancelled
+                        case "abandoned"          => StreamError.Abandoned
+                        case "interrupted"        => StreamError.Interrupted(failure.selectDynamic("val").asInstanceOf[String])
+                        case "resource-exhausted" =>
+                          StreamError.ResourceExhausted(failure.selectDynamic("val").asInstanceOf[String])
+                        case other => SchemaDecodeError(s"invalid stream outcome: $other")
+                      }
+                    }
+                    result
+                  }
+              }
               next.foreach { result =>
                 if (!result.done && !lifecycle.acceptItem()) drainJsCapabilityHandles(result.value.valueNodes)
               }
