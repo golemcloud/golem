@@ -4677,6 +4677,7 @@ async fn test_previous_invocation_failed_revert_workflow() {
         indoc! { r#"
             import { z } from 'zod';
             import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+            import { trap } from 'golem:api/host@1.5.0';
 
             export const CounterAgent = defineAgent({
               name: 'CounterAgent',
@@ -4701,7 +4702,8 @@ async fn test_previous_invocation_failed_revert_workflow() {
                 },
                 fail() {
                   console.error('intentional failure stderr');
-                  throw new Error('intentional invocation failure');
+                  trap('intentional invocation failure');
+                  return this.count;
                 },
               },
             });
