@@ -1061,8 +1061,8 @@ fn decode_quota_state(bytes: &[u8]) -> FsQuotaStatV {
 }
 
 #[cfg(test)]
-// The PID namespace test clones the process and inherits its open file descriptions. It must not
-// overlap the socket replacement test, which checks that dropping the listener releases its lock.
+// The PID namespace child inherits every open file description until it exits, including locks
+// and socket ends that other tests close to signal a peer. Keep it from overlapping those tests.
 #[test_r::sequential]
 mod tests {
     use super::*;
