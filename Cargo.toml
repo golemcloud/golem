@@ -7,6 +7,7 @@ members = [
     "golem-common",
     "test-components/human-approval-service",
     "golem-mcp-import",
+    "golem-model-mock",
     "golem-native-tool",
     "golem-rust-macro",
     "golem-service-base",
@@ -49,6 +50,7 @@ golem-common = { version = "=0.0.0", path = "golem-common", default-features = f
 golem-human-approval = { version = "=0.0.0", path = "test-components/human-approval-service" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-mcp-import = { version = "=0.0.0", path = "golem-mcp-import" }
+golem-model-mock = { version = "=0.0.0", path = "golem-model-mock" }
 golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
@@ -75,6 +77,7 @@ async-broadcast = "0.7.2"
 async-fs = "2.1.2"
 async-hash = "0.5.4"
 async-lock = "3.4.0"
+async-openai = { version = "0.43.0", default-features = false, features = ["chat-completion"] }
 async-rwlock = "1.3.0"
 async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
