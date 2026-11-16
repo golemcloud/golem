@@ -56,13 +56,14 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentId, AgentInvocationPayload, ComponentId, Empty, IdempotencyKey, OplogIndex,
-    Timestamp, TransactionId,
+    AccountId, AgentId, AgentInvocationPayload, ComponentId, IdempotencyKey, OplogIndex, Timestamp,
+    TransactionId,
 };
 use crate::schema::IntoTypedSchemaValue;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
 use crate::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
+use golem_schema::Empty;
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet, HashMap};

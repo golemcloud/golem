@@ -1365,7 +1365,7 @@ mod tests {
             id: golem_common::model::security_scheme::SecuritySchemeId::new(),
             revision: SecuritySchemeRevision::new(7).unwrap(),
             name: SecuritySchemeName("frontend-login".into()),
-            provider_type: Provider::Google(golem_common::model::Empty {}),
+            provider_type: Provider::Google(golem_schema::Empty {}),
             client_id: ClientId::new("client".into()),
             client_secret: ClientSecret::new("secret".into()),
             redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
@@ -1698,7 +1698,7 @@ mod tests {
             assert!(CompiledRoute::try_from(invalid).is_err());
         }
         let any: proto::golem::customapi::RouteMatch =
-            RouteMatch::from(HttpMethod::Any(golem_common::model::Empty {})).into();
+            RouteMatch::from(HttpMethod::Any(golem_schema::Empty {})).into();
         assert!(RouteMatch::try_from(any).is_err());
 
         for segment in [

@@ -26,7 +26,6 @@
 //! principals, …) are converted between the `base_model` representation and
 //! the wire bindings by the `From` impls below.
 
-use crate::base_model::Empty;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::agent::{
     AgentConfigSource, AgentHttpAuthDetails, AgentMode, AgentPrincipal, CachePolicy,
@@ -41,6 +40,7 @@ use crate::schema::agent::{
     OutputSchema, RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
+use golem_schema::Empty;
 use golem_schema::schema::wit::{
     DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_metadata, decode_typed,
     encode_metadata, encode_typed,
@@ -973,10 +973,10 @@ impl From<AgentConfigSource> for wire::AgentConfigSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base_model::Empty;
     use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
     use crate::schema::metadata::{MetadataEnvelope, TypeId};
     use crate::schema::schema_type::{NamedFieldType, SchemaType};
+    use golem_schema::Empty;
     use golem_schema::http::{
         CustomHttpMethod, ExactFileMapping, FileMapping, FileResponseHeader, LiteralSegment,
         SubtreeFileMapping,

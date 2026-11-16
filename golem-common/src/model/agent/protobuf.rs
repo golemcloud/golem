@@ -14,10 +14,10 @@ use super::{
 use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use crate::base_model::AgentFingerprint;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::Empty;
 use crate::model::oplog::{AgentResourceId, OplogErrorKind};
 use crate::model::regions::OplogRegion;
 use crate::model::{AgentResourceDescription, OplogIndex};
+use golem_schema::Empty;
 use std::collections::HashSet;
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {

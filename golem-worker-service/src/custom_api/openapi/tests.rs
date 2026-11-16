@@ -1927,7 +1927,7 @@ fn generated_pkce_security_describes_golem_authorization_endpoints() {
             id,
             revision: SecuritySchemeRevision::INITIAL,
             name: name.clone(),
-            provider_type: Provider::Google(golem_common::model::Empty {}),
+            provider_type: Provider::Google(golem_schema::Empty {}),
             client_id: ClientId::new("upstream-client".into()),
             client_secret: ClientSecret::new("upstream-secret".into()),
             redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
@@ -1961,7 +1961,7 @@ fn generated_pkce_security_describes_golem_authorization_endpoints() {
         };
         std::sync::Arc::get_mut(&mut security.security_scheme)
             .unwrap()
-            .login = SecuritySchemeLogin::Cookie(golem_common::model::Empty {});
+            .login = SecuritySchemeLogin::Cookie(golem_schema::Empty {});
     }
     let cookie_key = super::OpenApiKey::from_inputs("https://example.com", &[route.clone()]);
     assert_ne!(updated_key, cookie_key);

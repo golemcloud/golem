@@ -19,7 +19,6 @@ use async_trait::async_trait;
 use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
-use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{
     AgentMode, AgentTypeName, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails,
     PathSegment, Snapshotting,
@@ -172,6 +171,7 @@ use golem_registry_service::services::{
     plan::PlanService,
     tool_release::{ToolReleaseError, ToolReleaseService},
 };
+use golem_schema::Empty;
 use golem_schema::http::{CustomHttpMethod, FileMapping, LiteralSegment};
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -15026,13 +15026,13 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
         let id = SecuritySchemeId::new();
         let mut revision = SecuritySchemeRevisionRecord::creation(
             id,
-            Provider::Google(golem_common::base_model::Empty {}),
+            Provider::Google(golem_schema::Empty {}),
             "test".into(),
             "test".into(),
             &openidconnect::RedirectUrl::new("https://example.com/callback".into()).unwrap(),
             &[],
             &golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
-                golem_common::model::Empty {},
+                golem_schema::Empty {},
             ),
             golem_common::model::account::AccountId(owner.revision.account_id),
         );
@@ -15103,7 +15103,6 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
 }
 
 pub async fn test_security_scheme_login_persistence(deps: &Deps) {
-    use golem_common::base_model::Empty;
     use golem_common::model::security_scheme::{
         AuthorizationCodePkceConfig, Provider, SecuritySchemeId, SecuritySchemeLogin,
     };
@@ -15111,6 +15110,7 @@ pub async fn test_security_scheme_login_persistence(deps: &Deps) {
     use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
     use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
     use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use golem_schema::Empty;
     use openidconnect::{RedirectUrl, Scope};
 
     let repo: Box<dyn SecuritySchemeRepo> = match &deps.test_db {
@@ -15169,11 +15169,11 @@ pub async fn test_security_scheme_login_persistence(deps: &Deps) {
 }
 
 pub async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(deps: &Deps) {
-    use golem_common::base_model::Empty;
     use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeLogin};
     use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
     use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
     use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_schema::Empty;
     use openidconnect::RedirectUrl;
 
     let (deployment_a, security_a): (Box<dyn DeploymentRepo>, Box<dyn SecuritySchemeRepo>) =

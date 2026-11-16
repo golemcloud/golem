@@ -917,7 +917,7 @@ impl InvocationHarness {
             dependencies: vec![],
             mode: agent_mode,
             http_mount: None,
-            snapshotting: Snapshotting::Disabled(golem_common::model::Empty {}),
+            snapshotting: Snapshotting::Disabled(golem_schema::Empty {}),
             config: vec![],
         };
         let component_id = ComponentId(Uuid::new_v4());

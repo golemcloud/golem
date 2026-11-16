@@ -665,11 +665,11 @@ impl DomainHttpApi {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::HttpMethod;
     use golem_common::model::component::ComponentId;
     use golem_common::model::deployment::DeploymentRevision;
+    use golem_schema::Empty;
     use golem_service_base::custom_api::{
         CompiledRoute, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
     };

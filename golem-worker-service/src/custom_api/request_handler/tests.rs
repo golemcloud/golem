@@ -11,7 +11,6 @@ use crate::custom_api::oidc::model::{
 use crate::custom_api::oidc::session_store::{SessionStore, SessionStoreError};
 use crate::mcp::InvocationHarness;
 use async_trait::async_trait;
-use golem_common::base_model::Empty;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName, HttpMethod};
@@ -21,6 +20,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::{
     AgentConstructorSchema, InputSchema, OutputSchema, SchemaGraph, SchemaType,
 };
+use golem_schema::Empty;
 use golem_service_base::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledRoute,
     CompiledRoutes, CompiledSchema, CorsOptions, DurableStreamRepresentation,

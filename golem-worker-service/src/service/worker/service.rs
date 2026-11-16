@@ -3898,7 +3898,6 @@ mod tests {
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::base_model::plugin_registration::PluginRegistrationId;
     use golem_common::model::AgentInvocationOutput;
-    use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
         AgentConfigEntryDto, AgentMetadataDto, AgentTarget, AgentUpdateMode, ResolvedRevert,
@@ -3942,6 +3941,7 @@ mod tests {
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, ExternalSchemaValue,
         InputSchema, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
     };
+    use golem_schema::Empty;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::auth::AuthCtx;

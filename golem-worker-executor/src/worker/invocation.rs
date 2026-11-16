@@ -2072,7 +2072,6 @@ fn resolve_agent_type<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::base_model::Empty;
     use golem_common::base_model::agent::Snapshotting;
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::agent::{AgentTypeName, Principal};
@@ -2084,6 +2083,7 @@ mod tests {
     };
     use golem_common::schema::graph::SchemaGraph;
     use golem_common::schema::schema_type::SchemaType;
+    use golem_schema::Empty;
     use std::collections::BTreeMap;
     use test_r::test;
     use uuid::Uuid;

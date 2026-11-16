@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::*;
-use crate::base_model::Empty;
 use crate::base_model::agent::{
     AgentHttpAuthDetails, AgentTypeName, CorsOptions, HttpEndpointDetails, SnapshottingConfig,
 };
@@ -22,6 +21,7 @@ use crate::schema::agent::{
     InputSchema, NamedField, OutputSchema,
 };
 use crate::schema::{NamedFieldType, SchemaTypeDef, TypeId};
+use golem_schema::Empty;
 use golem_schema::http::{FileResponseHeader, LiteralSegment, PathVariable};
 use serde_json::Value;
 use test_r::test;

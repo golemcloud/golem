@@ -19,8 +19,8 @@ use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use crate::base_model::diff::Hash as DiffHash;
 use crate::base_model::environment::EnvironmentId;
-use crate::model::Empty;
 use crate::schema::AgentTypeSchema;
+use golem_schema::Empty;
 pub use golem_schema::http::{
     DurableStreamInputSlotSource, DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions,
     DurableStreamRouteOptions, DurableStreamSlotOptions, DurableStreamSlotSource, HttpRouteMode,

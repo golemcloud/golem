@@ -1270,9 +1270,7 @@ fn sample_agent_type_schema(
         dependencies: vec![],
         mode: golem_common::model::agent::AgentMode::Durable,
         http_mount: None,
-        snapshotting: golem_common::model::agent::Snapshotting::Disabled(
-            golem_common::model::Empty {},
-        ),
+        snapshotting: golem_common::model::agent::Snapshotting::Disabled(golem_schema::Empty {}),
         config: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
             source: golem_common::model::agent::AgentConfigSource::Secret,
             path: vec!["db".to_string(), "password".to_string()],
@@ -1511,9 +1509,10 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
         PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
         PublicOplogEntry, PublicOplogEntryAttribution, PublicToolInvocationOperation,
     };
-    use golem_common::model::{Empty, OplogIndex, Timestamp};
+    use golem_common::model::{OplogIndex, Timestamp};
     use golem_common::schema::schema_type::SecretSpec;
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, SecretValuePayload};
+    use golem_schema::Empty;
 
     let secret_id = uuid::Uuid::from_u128(1);
     let request = golem_common::schema::TypedSchemaValue::new(
@@ -2263,10 +2262,11 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
     use golem_common::model::oplog::public_oplog_entry::*;
     use golem_common::model::oplog::*;
     use golem_common::model::regions::OplogRegion;
-    use golem_common::model::{AgentId, Empty, InvocationId, Timestamp};
+    use golem_common::model::{AgentId, InvocationId, Timestamp};
     use golem_common::schema::{
         IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
     };
+    use golem_schema::Empty;
     use std::iter::FromIterator;
     use uuid::Uuid;
 
@@ -3172,10 +3172,10 @@ fn arb_read_only_config() -> BoxedStrategy<golem_common::model::agent::ReadOnlyC
 fn arb_cache_policy() -> BoxedStrategy<golem_common::model::agent::CachePolicy> {
     prop_oneof![
         Just(golem_common::model::agent::CachePolicy::NoCache(
-            golem_common::model::Empty {}
+            golem_schema::Empty {}
         )),
         Just(golem_common::model::agent::CachePolicy::UntilWrite(
-            golem_common::model::Empty {}
+            golem_schema::Empty {}
         )),
         arb_small_u64().prop_map(|duration_nanos| {
             golem_common::model::agent::CachePolicy::Ttl(
@@ -3189,10 +3189,10 @@ fn arb_cache_policy() -> BoxedStrategy<golem_common::model::agent::CachePolicy> 
 fn arb_snapshotting() -> BoxedStrategy<golem_common::model::agent::Snapshotting> {
     prop_oneof![
         Just(golem_common::model::agent::Snapshotting::Disabled(
-            golem_common::model::Empty {}
+            golem_schema::Empty {}
         )),
         Just(golem_common::model::agent::Snapshotting::Enabled(
-            golem_common::model::agent::SnapshottingConfig::Default(golem_common::model::Empty {},)
+            golem_common::model::agent::SnapshottingConfig::Default(golem_schema::Empty {},)
         )),
         arb_small_u64().prop_map(|duration_nanos| {
             golem_common::model::agent::Snapshotting::Enabled(
@@ -3460,7 +3460,7 @@ fn arb_http_method() -> BoxedStrategy<golem_common::model::agent::HttpMethod> {
             ))
         }),
         Just(golem_common::model::agent::HttpMethod::Any(
-            golem_common::model::Empty {}
+            golem_schema::Empty {}
         )),
     ]
     .boxed()
@@ -5166,7 +5166,7 @@ fn arb_security_scheme_login()
     prop_oneof![
         Just(
             golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
-                golem_common::model::Empty {}
+                golem_schema::Empty {}
             )
         ),
         (
@@ -5191,16 +5191,16 @@ fn arb_security_scheme_login()
 fn arb_security_scheme_provider() -> BoxedStrategy<golem_common::model::security_scheme::Provider> {
     prop_oneof![
         Just(golem_common::model::security_scheme::Provider::Google(
-            golem_common::model::Empty {}
+            golem_schema::Empty {}
         )),
         Just(golem_common::model::security_scheme::Provider::Facebook(
-            golem_common::model::Empty {}
+            golem_schema::Empty {}
         )),
         Just(golem_common::model::security_scheme::Provider::Microsoft(
-            golem_common::model::Empty {}
+            golem_schema::Empty {}
         )),
         Just(golem_common::model::security_scheme::Provider::Gitlab(
-            golem_common::model::Empty {}
+            golem_schema::Empty {}
         )),
         (arb_small_string(), arb_url_string()).prop_map(|(name, issuer_url)| {
             golem_common::model::security_scheme::Provider::Custom(

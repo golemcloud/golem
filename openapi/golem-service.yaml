@@ -26289,27 +26289,27 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          Get: '#/components/schemas/HttpMethod_SchemaEmpty'
-          Head: '#/components/schemas/HttpMethod_SchemaEmpty'
-          Post: '#/components/schemas/HttpMethod_SchemaEmpty'
-          Put: '#/components/schemas/HttpMethod_SchemaEmpty'
-          Delete: '#/components/schemas/HttpMethod_SchemaEmpty'
-          Connect: '#/components/schemas/HttpMethod_SchemaEmpty'
-          Options: '#/components/schemas/HttpMethod_SchemaEmpty'
-          Trace: '#/components/schemas/HttpMethod_SchemaEmpty'
-          Patch: '#/components/schemas/HttpMethod_SchemaEmpty'
+          Get: '#/components/schemas/HttpMethod_Empty'
+          Head: '#/components/schemas/HttpMethod_Empty'
+          Post: '#/components/schemas/HttpMethod_Empty'
+          Put: '#/components/schemas/HttpMethod_Empty'
+          Delete: '#/components/schemas/HttpMethod_Empty'
+          Connect: '#/components/schemas/HttpMethod_Empty'
+          Options: '#/components/schemas/HttpMethod_Empty'
+          Trace: '#/components/schemas/HttpMethod_Empty'
+          Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
-      - $ref: '#/components/schemas/HttpMethod_SchemaEmpty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
     HttpMethod_CustomHttpMethod:
       allOf:
@@ -26323,7 +26323,7 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/CustomHttpMethod'
-    HttpMethod_SchemaEmpty:
+    HttpMethod_Empty:
       allOf:
       - type: object
         properties:
@@ -26334,7 +26334,7 @@ components:
             - Patch
         required:
         - type
-      - $ref: '#/components/schemas/SchemaEmpty'
+      - $ref: '#/components/schemas/Empty'
     HttpMountDetails:
       title: HttpMountDetails
       type: object
@@ -28441,9 +28441,6 @@ components:
             format: uuid
       required:
       - revokedCardIds
-    SchemaEmpty:
-      title: SchemaEmpty
-      type: object
     SecretKeyScope:
       type: object
       oneOf:
