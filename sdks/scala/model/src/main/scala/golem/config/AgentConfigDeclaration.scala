@@ -25,8 +25,14 @@ object AgentConfigSource {
   case object Secret extends AgentConfigSource
 }
 
+/**
+ * A config leaf in the owning agent's schema graph. `defaultValue` contains
+ * canonical schema JSON; `None` differs from the explicit default
+ * `Some("null")`.
+ */
 final case class AgentConfigDeclaration(
   source: AgentConfigSource,
   path: List[String],
-  valueType: SchemaGraph
+  valueType: SchemaGraph,
+  defaultValue: Option[String] = None
 )

@@ -634,6 +634,8 @@ type AgentConfigDeclaration struct {
 	Path   []string
 	// Index into the owning agent-type `schema` graph.
 	ValueType int32
+	// Canonical schema JSON. None differs from the explicit default "null".
+	DefaultValue witTypes.Option[string]
 }
 
 // Full agent type declaration.

@@ -68,7 +68,14 @@ fn sample_agent_type() -> @common.AgentType raise {
     mode: DURABLE,
     http_mount: None,
     snapshotting: Disabled,
-    config: [{ source: LOCAL, path: ["a", "b"], value_type: foo_graph(), }],
+    config: [
+      {
+        source: LOCAL,
+        path: ["a", "b"],
+        value_type: foo_graph(),
+        default_value: Some("{\"a\":42}"),
+      },
+    ],
   }
   def.to_agent_type()
 }
@@ -154,6 +161,7 @@ test "method output and config encode into the shared pool" {
       #|["a", "b"]
     ),
   )
+  assert_eq(at.config[0].default_value, Some("{\"a\":42}"))
 }
 
 ///|

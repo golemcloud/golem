@@ -475,6 +475,7 @@ fn encode_config_declaration(
         source: c.source.into(),
         path: c.path.clone(),
         value_type,
+        default_value: c.default_value.clone(),
     })
 }
 
@@ -488,6 +489,7 @@ fn decode_config_declaration(
         source: c.source.into(),
         path: c.path.clone(),
         value_type,
+        default_value: c.default_value.clone(),
     })
 }
 
@@ -1238,6 +1240,7 @@ mod tests {
             source: AgentConfigSource::Local,
             path: vec!["api".to_string(), "key".to_string()],
             value_type: SchemaType::string(),
+            default_value: Some("\"default-key\"".into()),
         }];
 
         AgentTypeSchema {

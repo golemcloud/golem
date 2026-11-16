@@ -84,6 +84,8 @@ export interface ConfigDeclaration {
   readonly codec: SchemaCodec;
   /** Declaration graph: inner for local, `secret<inner>` for secret. */
   readonly graph: SchemaGraph;
+  /** Canonical schema JSON; undefined means no default, distinct from "null". */
+  readonly defaultValue?: string;
   /**
    * Whether this leaf is REQUIRED within its immediate parent group — i.e. it is
    * NOT itself `.optional()`. A required leaf that is unset makes its enclosing

@@ -13,6 +13,7 @@ pub struct ReflectedConfigDeclaration {
   path : Array[String]
   source : @common.AgentConfigSource
   schema : SchemaRef
+  default_value : String?
 } derive(Debug, Eq)
 
 ///|
@@ -84,6 +85,14 @@ pub fn ReflectedConfigDeclaration::schema(
   self : ReflectedConfigDeclaration,
 ) -> SchemaRef {
   self.schema
+}
+
+///|
+/// The canonical schema JSON default, or `None` when no default is declared.
+pub fn ReflectedConfigDeclaration::default_value(
+  self : ReflectedConfigDeclaration,
+) -> String? {
+  self.default_value
 }
 
 ///|
@@ -218,6 +227,7 @@ fn decode_agent_type(
         defs: decoded.graph.defs,
         root: decode_root_type(decoded, declaration.value_type),
       }),
+      default_value: declaration.default_value,
     })
   }
   {

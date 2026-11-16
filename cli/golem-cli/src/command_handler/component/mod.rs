@@ -3704,6 +3704,7 @@ mod component_config_tests {
     fn declaration(source: AgentConfigSource, path: &[&str]) -> AgentConfigDeclarationSchema {
         AgentConfigDeclarationSchema {
             source,
+            default_value: None,
             path: path.iter().map(|segment| segment.to_string()).collect(),
             value_type: SchemaType::string(),
         }

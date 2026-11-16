@@ -51,6 +51,8 @@ pub struct ExtendedAgentConfigDeclaration {
     pub source: AgentConfigSource,
     pub path: Vec<String>,
     pub value_type: SchemaGraph,
+    /// Canonical schema JSON. `None` is no default; `Some("null")` is an explicit null default.
+    pub default_value: Option<String>,
 }
 
 impl ExtendedAgentType {
@@ -133,6 +135,7 @@ impl ExtendedAgentType {
                         source: config.source,
                         path: config.path,
                         value_type: graph(config.value_type)?,
+                        default_value: config.default_value,
                     })
                 })
                 .collect::<Result<_, crate::schema::wit::DecodeError>>()?,
@@ -186,6 +189,7 @@ impl ExtendedAgentType {
                     source: config.source,
                     path: config.path.clone(),
                     value_type,
+                    default_value: config.default_value.clone(),
                 })
                 .collect(),
         }

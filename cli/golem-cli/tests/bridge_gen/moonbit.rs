@@ -937,6 +937,7 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     );
     agent_type.config = vec![AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
+        default_value: None,
         path: vec!["limits".into(), "retries".into()],
         value_type: SchemaType::S64 {
             restrictions: Some(NumericRestrictions {
@@ -1585,6 +1586,7 @@ fn ephemeral_guest_methods_keep_names_of_absent_lifecycle_helpers() {
     );
     agent_type.config = vec![AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
+        default_value: None,
         path: vec!["region".into()],
         value_type: SchemaType::string(),
     }];
@@ -2594,17 +2596,20 @@ fn config_constructors_are_generated() {
     agent_type.config = vec![
         AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["api-key".to_string()],
             value_type: SchemaType::string(),
         },
         AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["max".to_string(), "retries".to_string()],
             value_type: SchemaType::u32(),
         },
         // A secret-sourced config must not be exposed as an override parameter.
         AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
+            default_value: None,
             path: vec!["secret".to_string()],
             value_type: SchemaType::string(),
         },
@@ -2777,6 +2782,7 @@ fn ephemeral_config_constructors_omit_get_with_config() {
     );
     agent_type.config = vec![AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
+        default_value: None,
         path: vec!["region".to_string()],
         value_type: SchemaType::string(),
     }];
@@ -2804,6 +2810,7 @@ fn config_param_names_are_deconflicted() {
     );
     agent_type.config = vec![AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
+        default_value: None,
         path: vec!["api-key".to_string()],
         value_type: SchemaType::string(),
     }];

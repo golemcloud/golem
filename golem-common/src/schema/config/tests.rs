@@ -140,6 +140,110 @@ fn catalog_static_defaults_and_explicit_values() {
 }
 
 #[test]
+fn metadata_defaults_preserve_recursive_values_and_explicit_absence() {
+    let node = TypeId::new("SettingsNode");
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: node.clone(),
+            name: Some("SettingsNode".into()),
+            body: record(vec![
+                ("label", SchemaType::string()),
+                ("next", SchemaType::option(SchemaType::ref_to(node.clone()))),
+            ]),
+        }],
+        root: SchemaType::record(vec![]),
+    };
+    let mut declaration = AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: vec!["settings".into()],
+        value_type: SchemaType::ref_to(node),
+        default_value: Some(r#"{"label":"outer","next":{"label":"inner","next":null}}"#.into()),
+    };
+    let schema =
+        ConfigSchema::from_declarations(&graph, &[declaration.clone()], &origin("code")).unwrap();
+    let plan = schema
+        .resolve(&catalog(json!({})), &[], &origin("code"))
+        .unwrap();
+    assert_eq!(
+        plan[0].source,
+        ConfigSourcePlan::Static(SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("outer".into()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String("inner".into()),
+                            SchemaValue::Option { inner: None },
+                        ],
+                    })),
+                },
+            ],
+        })
+    );
+    assert_eq!(
+        plan[0].origins[&vec!["settings".into(), "label".into()]].layer,
+        "code"
+    );
+
+    declaration.value_type = SchemaType::option(SchemaType::u32());
+    declaration.default_value = Some("null".into());
+    let schema =
+        ConfigSchema::from_declarations(&graph, &[declaration.clone()], &origin("code")).unwrap();
+    assert_eq!(
+        schema.fields[0].default,
+        Some(SchemaValue::Option { inner: None })
+    );
+    declaration.default_value = None;
+    let schema = ConfigSchema::from_declarations(&graph, &[declaration], &origin("code")).unwrap();
+    assert_eq!(schema.fields[0].default, None);
+}
+
+#[test]
+fn metadata_rejects_invalid_defaults_and_ambiguous_paths() {
+    let declaration = AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: vec!["requestLimit".into()],
+        value_type: SchemaType::u8(),
+        default_value: Some("23".into()),
+    };
+    for value in ["256", "-1", "null", "\"23\"", "not JSON"] {
+        let invalid = AgentConfigDeclarationSchema {
+            default_value: Some(value.into()),
+            ..declaration.clone()
+        };
+        assert!(
+            ConfigSchema::from_declarations(&SchemaGraph::empty(), &[invalid], &origin("code"))
+                .is_err()
+        );
+    }
+    for path in [vec![], vec![""], vec!["$config"], vec!["request.limit"]] {
+        let invalid = AgentConfigDeclarationSchema {
+            path: path.into_iter().map(String::from).collect(),
+            ..declaration.clone()
+        };
+        assert!(
+            ConfigSchema::from_declarations(&SchemaGraph::empty(), &[invalid], &origin("code"))
+                .is_err()
+        );
+    }
+    let secret = AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Secret,
+        ..declaration.clone()
+    };
+    assert!(
+        ConfigSchema::from_declarations(&SchemaGraph::empty(), &[secret], &origin("code")).is_err()
+    );
+    assert!(
+        ConfigSchema::from_declarations(
+            &SchemaGraph::empty(),
+            &[declaration.clone(), declaration],
+            &origin("code")
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn catalog_shared_omission_is_not_a_binding_or_fallback() {
     let alias = TypeId::new("MaybeSetting");
     let mut schema = schema(ConfigFieldKind::Shared, SchemaType::ref_to(alias.clone()));

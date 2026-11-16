@@ -219,6 +219,48 @@ describe("reflection", () => {
     }).pipe(Effect.provide(Layer.mergeAll(host, rpc, durability)))
   })
 
+  it.effect("preserves canonical defaults and their owning schemas in discovery", () => {
+    const raw = registration()
+    const valueType = raw.agentType.schema.root
+    const optionalType = raw.agentType.schema.typeNodes.length
+    raw.agentType.schema.typeNodes.push({
+      body: { tag: "option-type", val: valueType },
+      metadata,
+    })
+    const defaultValue = '{"label":"configured","next":{"label":"last","next":null}}'
+    raw.agentType.config = [
+      { path: ["service.config", "tree"], source: "local", valueType, defaultValue },
+      { path: ["absent"], source: "local", valueType: optionalType },
+      { path: ["explicitNull"], source: "local", valueType: optionalType, defaultValue: "null" },
+    ]
+    return Effect.gen(function* () {
+      const identity = yield* parse('Recursive("one")')
+      const discoveries = [
+        (yield* getAgentType("Recursive"))!,
+        (yield* getAgentTypeByAgentId(identity))!,
+        (yield* getAllAgentTypes)[0]!,
+      ]
+      for (const reflected of discoveries) {
+        expect(
+          reflected.config.map(({ path, source, defaultValue }) => ({
+            path,
+            source,
+            defaultValue,
+          })),
+        ).toEqual([
+          { path: ["service.config", "tree"], source: "local", defaultValue },
+          { path: ["absent"], source: "local", defaultValue: undefined },
+          { path: ["explicitNull"], source: "local", defaultValue: "null" },
+        ])
+        const declaration = reflected.config[0]!
+        expect(declaration.schema.graph.defs).toBe(reflected.constructorInput.graph.defs)
+        const json = JSON.parse(declaration.defaultValue!)
+        expect(declaration.schema.unpackJson(declaration.schema.packJson(json))).toEqual(json)
+        expect(Object.isFrozen(declaration)).toBe(true)
+      }
+    }).pipe(Effect.provide(hostLayer(raw)))
+  })
+
   it.effect("validates reflected config before opening a scoped RPC connection", () => {
     const raw = registration()
     const valueType = raw.agentType.schema.typeNodes.length - 1

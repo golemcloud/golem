@@ -240,6 +240,7 @@ fn agent(input: &Value) -> AgentTypeSchema {
                 source: crate::base_model::agent::AgentConfigSource::Local,
                 path: vec![name.as_str().unwrap().into()],
                 value_type: SchemaType::string(),
+                default_value: None,
             })
             .collect(),
         mode: match input["mode"].as_str().unwrap() {

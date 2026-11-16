@@ -12518,6 +12518,9 @@ components:
             type: string
         value_type:
           $ref: '#/components/schemas/SchemaType'
+        default_value:
+          type: string
+          nullable: true
     AgentConfigEntryDto:
       type: object
       title: AgentConfigEntryDto

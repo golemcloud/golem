@@ -56,7 +56,115 @@ inherit_test_dep!(
     #[tagged_as("agent_update_v1")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_rust")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .with_agent_config(
+            "StaticDefaultsAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["settings".into()],
+                value: serde_json::json!({"label":"deployment","count":43}).into(),
+            }],
+        )
+        .store()
+        .await?;
+    let declaration = &component
+        .metadata
+        .agent_types
+        .iter()
+        .find(|agent| agent.declaration.type_name.0 == "StaticDefaultsAgent")
+        .expect("real metadata extraction retains the declaring agent")
+        .declaration;
+    assert_eq!(declaration.source_language, "rust");
+    for (name, expected_default) in [
+        ("settings", Some(r#"{"label":"code-default","count":31}"#)),
+        ("choice", Some(r#""selected:value""#)),
+        ("slots", Some(r#"[null,7,"retained"]"#)),
+        ("omitted", None),
+    ] {
+        let field = declaration
+            .config
+            .iter()
+            .find(|field| field.path == [name])
+            .expect("extracted config retains exact field paths");
+        assert_eq!(field.default_value.as_deref(), expected_default);
+    }
+    let agent_id = agent_id!("StaticDefaultsAgent", "captured-defaults");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::new(),
+            vec![AgentConfigEntryDto {
+                path: vec!["settings".into()],
+                value: serde_json::json!({"label":"creation","count":59}).into(),
+            }],
+        )
+        .await?;
+    let expected = serde_json::json!({
+        "settings": {"label":"creation","count":59},
+        "choice": {"Text":"selected:value"},
+        "slots": [null,7,"retained"],
+        "omitted": null,
+    });
+    let actual = executor
+        .invoke_and_await_agent(&component, &agent_id, "read", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&actual)?,
+        expected
+    );
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let actual = executor
+        .invoke_and_await_agent(&component, &agent_id, "read", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&actual)?,
+        expected
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    for entry in &oplog {
+        if let PublicOplogEntry::Start(_) = &entry.entry {
+            assert!(
+                oplog.iter().any(|terminal| matches!(
+                    &terminal.entry,
+                    PublicOplogEntry::End(end) if end.start_index == entry.oplog_index
+                )),
+                "config call at {} must have its recorded result",
+                entry.oplog_index
+            );
+        }
+    }
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        3,
+    );
+    Ok(())
+}
 
 #[test]
 #[tracing::instrument]

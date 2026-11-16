@@ -1459,6 +1459,7 @@ fn agent_type_with_secret_config(
         snapshotting: Snapshotting::Disabled(Empty {}),
         config: vec![AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
+            default_value: None,
             path,
             value_type,
         }],

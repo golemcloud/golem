@@ -229,22 +229,39 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             OwnerRuntime::Entity(_) => None,
         };
         let agent_config = if matches!(runtime, OwnerRuntime::Agent) {
-            let provisioned_config = match &owner_context {
-                ResolvedOwnerContext::Agent(_) => agent_type_provision_configs
-                    .as_ref()
-                    .map(|c| c.config.clone())
-                    .unwrap_or_default(),
-                ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
-                    component_metadata
+            let (provisioned_config, graph, declarations) = match &owner_context {
+                ResolvedOwnerContext::Agent(agent_id) => {
+                    let agent_type = component_metadata
                         .metadata
-                        .component_provision_config()
-                        .config
-                        .clone()
+                        .find_agent_type_by_name_ref(&agent_id.agent_type)
+                        .expect("Active agent type was not declared in component metadata");
+                    (
+                        agent_type_provision_configs
+                            .as_ref()
+                            .map(|c| c.config.clone())
+                            .unwrap_or_default(),
+                        &agent_type.schema,
+                        &agent_type.config,
+                    )
+                }
+                ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
+                    let schema = component_metadata.metadata.config_schema();
+                    (
+                        component_metadata
+                            .metadata
+                            .component_provision_config()
+                            .config
+                            .clone(),
+                        &schema.schema,
+                        &schema.declarations,
+                    )
                 }
             };
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
                 provisioned_config,
+                graph,
+                declarations,
             )?
         } else {
             worker_config

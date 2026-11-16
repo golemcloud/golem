@@ -720,6 +720,7 @@ function assembleAgentType(
       source: d.source,
       path: d.path,
       valueType: encoder.encodeType(d.graph.root),
+      defaultValue: d.defaultValue,
     })),
   };
 }

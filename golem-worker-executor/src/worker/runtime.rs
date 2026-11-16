@@ -113,17 +113,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let initial_agent_config = match &self.owner_context {
             ResolvedOwnerContext::Agent(agent_id) => {
+                let agent_type = owner_component_metadata
+                    .metadata
+                    .find_agent_type_by_name_ref(&agent_id.agent_type)
+                    .expect("Active agent type was not declared in component metadata");
                 let component_config = owner_component_metadata
                     .metadata
                     .agent_type_config(&agent_id.agent_type)
                     .unwrap_or_default()
                     .to_vec();
-                effective_agent_config(worker_metadata.config, component_config)?
-                    .into_iter()
-                    .map(|(path, value)| TypedAgentConfigEntry { path, value })
-                    .collect()
+                effective_agent_config(
+                    worker_metadata.config,
+                    component_config,
+                    &agent_type.schema,
+                    &agent_type.config,
+                )?
+                .into_iter()
+                .map(|(path, value)| TypedAgentConfigEntry { path, value })
+                .collect()
             }
             ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
+                let schema = owner_component_metadata.metadata.config_schema();
                 effective_agent_config(
                     worker_metadata.config,
                     owner_component_metadata
@@ -131,6 +141,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .component_provision_config()
                         .config
                         .clone(),
+                    &schema.schema,
+                    &schema.declarations,
                 )?
                 .into_iter()
                 .map(|(path, value)| TypedAgentConfigEntry { path, value })

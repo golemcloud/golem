@@ -24,6 +24,7 @@ import (
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	secrets "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_types"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // Config/secret declaration and the pure read core are unit-tested here; the
@@ -91,6 +92,44 @@ func TestConfigDeclarationsInMetadata(t *testing.T) {
 			}
 			if key == "greeting" && body.Tag() != types.SchemaTypeBodyStringType {
 				t.Errorf("greeting: value type tag = %d, want string(%d)", body.Tag(), types.SchemaTypeBodyStringType)
+			}
+		}
+	})
+}
+
+func TestConfigDefaultsInMetadata(t *testing.T) {
+	type cfg struct {
+		Unset    *string
+		Null     *string
+		Greeting string
+		Password Secret[string]
+	}
+	withDefs(t, func(d *definitions) {
+		cfgConfiguredAgent[cfg](d)
+		want := map[string]witTypes.Option[string]{
+			"unset":    witTypes.None[string](),
+			"null":     witTypes.Some("null"),
+			"greeting": witTypes.Some(`"hello"`),
+			"password": witTypes.None[string](),
+		}
+		for i := range d.agents["Cfg"].configs {
+			cd := &d.agents["Cfg"].configs[i]
+			cd.defaultValue = want[strings.Join(cd.path, "/")]
+		}
+
+		out, errs := d.discover()
+		if len(errs) != 0 {
+			t.Fatalf("unexpected definition errors: %v", errs)
+		}
+		if len(out[0].Config) != len(want) {
+			t.Fatalf("want %d config declarations, got %d", len(want), len(out[0].Config))
+		}
+		for _, decl := range out[0].Config {
+			key := strings.Join(decl.Path, "/")
+			expected, ok := want[key]
+			if !ok || decl.DefaultValue.IsSome() != expected.IsSome() ||
+				(expected.IsSome() && decl.DefaultValue.Some() != expected.Some()) {
+				t.Errorf("%s: default = %v, want %v", key, decl.DefaultValue, expected)
 			}
 		}
 	})

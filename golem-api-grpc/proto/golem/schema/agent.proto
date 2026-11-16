@@ -93,6 +93,8 @@ message AgentConfigDeclarationSchema {
   golem.component.AgentConfigSource source = 1;
   repeated string path = 2;
   SchemaType value_type = 3;
+  // Canonical schema JSON. Absence differs from the explicit default "null".
+  optional string default_value = 4;
 }
 
 message ComponentConfigSchema {

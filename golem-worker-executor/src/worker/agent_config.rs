@@ -15,7 +15,10 @@
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{AgentConfigSource, ParsedAgentKey};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
-use golem_common::schema::agent::typed_schema_value_with_projected_defs;
+use golem_common::schema::agent::{
+    AgentConfigDeclarationSchema, typed_schema_value_with_projected_defs,
+};
+use golem_common::schema::config::{ConfigOrigin, ConfigSchema};
 use golem_common::schema::schema_type::SecretSpec;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{
@@ -225,7 +228,12 @@ pub fn parse_worker_creation_agent_config(
             .map(|s| s.to_vec())
             .unwrap_or_default();
 
-        let config = effective_agent_config(initial_agent_config.clone(), component_config)?;
+        let config = effective_agent_config(
+            initial_agent_config.clone(),
+            component_config,
+            &agent_type.schema,
+            &agent_type.config,
+        )?;
 
         validate_agent_config(&config, agent_type)?;
     }
@@ -233,8 +241,8 @@ pub fn parse_worker_creation_agent_config(
     Ok(initial_agent_config)
 }
 
-/// Merges the component-level typed config (stored in `AgentTypeProvisionConfig`) with
-/// the worker-creation config entries, with worker entries taking precedence.
+/// Captures code defaults below component-level and worker-creation config entries.
+/// The declarations and values belong to the selected component revision.
 ///
 /// The result is the schema-native [`TypedSchemaValue`] carried by
 /// [`TypedAgentConfigEntry`] keyed by config path; it is what the executor's
@@ -243,8 +251,31 @@ pub fn parse_worker_creation_agent_config(
 pub fn effective_agent_config(
     config: Vec<TypedAgentConfigEntry>,
     default_agent_config: Vec<TypedAgentConfigEntry>,
+    graph: &SchemaGraph,
+    declarations: &[AgentConfigDeclarationSchema],
 ) -> Result<HashMap<Vec<String>, TypedSchemaValue>, WorkerExecutorError> {
-    let mut result: HashMap<Vec<String>, TypedSchemaValue> = HashMap::new();
+    let schema = ConfigSchema::from_declarations(
+        graph,
+        declarations,
+        &ConfigOrigin {
+            file: "<component metadata>".into(),
+            path: vec!["config".into()],
+            layer: "code".into(),
+        },
+    )
+    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+    let mut result: HashMap<Vec<String>, TypedSchemaValue> = schema
+        .fields
+        .into_iter()
+        .filter_map(|field| {
+            field.default.map(|value| {
+                (
+                    field.path,
+                    typed_schema_value_with_projected_defs(&schema.graph, field.value_type, value),
+                )
+            })
+        })
+        .collect();
 
     for entry in default_agent_config {
         result.insert(entry.path, entry.value);
@@ -325,6 +356,69 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn static_defaults_are_captured_below_provisioned_and_creation_values() {
+        use golem_common::schema::{SchemaTypeDef, TypeId};
+
+        let id = TypeId::new("Label");
+        let graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: id.clone(),
+                name: Some("Label".into()),
+                body: SchemaType::string(),
+            }],
+            root: SchemaType::record(vec![]),
+        };
+        let declarations: Vec<_> = [
+            ("code", Some("\"code-only\"")),
+            ("deployment", Some("\"code-fallback\"")),
+            ("creation", Some("\"code-fallback\"")),
+            ("cleared", Some("null")),
+            ("omitted", None),
+        ]
+        .into_iter()
+        .map(|(name, default)| AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["settings".into(), name.into()],
+            value_type: SchemaType::option(SchemaType::ref_to(id.clone())),
+            default_value: default.map(str::to_string),
+        })
+        .collect();
+        let entry = |name: &str, label: &str| TypedAgentConfigEntry {
+            path: vec!["settings".into(), name.into()],
+            value: typed_schema_value_with_projected_defs(
+                &graph,
+                SchemaType::option(SchemaType::ref_to(id.clone())),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String(label.into()))),
+                },
+            ),
+        };
+        let creation = vec![entry("creation", "creation-wins")];
+        let provisioned = vec![
+            entry("deployment", "deployment-wins"),
+            entry("creation", "deployment-loses"),
+        ];
+        let captured =
+            effective_agent_config(creation.clone(), provisioned.clone(), &graph, &declarations)
+                .unwrap();
+        for (name, label) in [
+            ("code", "code-only"),
+            ("deployment", "deployment-wins"),
+            ("creation", "creation-wins"),
+        ] {
+            let expected = entry(name, label);
+            assert_eq!(captured[&expected.path], expected.value);
+        }
+        assert_eq!(
+            captured[&vec!["settings".into(), "cleared".into()]].value(),
+            &SchemaValue::Option { inner: None },
+        );
+        assert!(!captured.contains_key(&vec!["settings".into(), "omitted".into()]));
+        let rebuilt = effective_agent_config(creation, provisioned, &graph, &declarations).unwrap();
+        assert_eq!(rebuilt, captured);
+    }
+
+    #[test]
     fn secret_backed_config_accepts_plaintext_payload_type_for_secret_declaration() {
         let agent_type_name = AgentTypeName("vault".to_string());
         let config_path = vec!["apiKey".to_string()];
@@ -348,6 +442,7 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![AgentConfigDeclarationSchema {
                 source: AgentConfigSource::Secret,
+                default_value: None,
                 path: config_path.clone(),
                 value_type: SchemaType::secret(SecretSpec {
                     inner: Box::new(SchemaType::string()),
@@ -428,6 +523,7 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![AgentConfigDeclarationSchema {
                 source: AgentConfigSource::Secret,
+                default_value: None,
                 path: config_path.clone(),
                 value_type: SchemaType::secret(SecretSpec {
                     inner: Box::new(SchemaType::string()),
@@ -524,6 +620,7 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![AgentConfigDeclarationSchema {
                 source: AgentConfigSource::Secret,
+                default_value: None,
                 path: config_path.clone(),
                 value_type: SchemaType::secret(SecretSpec {
                     inner: Box::new(SchemaType::url(UrlRestrictions::default())),

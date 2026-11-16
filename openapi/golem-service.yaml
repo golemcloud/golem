@@ -23770,6 +23770,9 @@ components:
             type: string
         value_type:
           $ref: '#/components/schemas/SchemaType'
+        default_value:
+          nullable: true
+          type: string
       required:
       - source
       - path

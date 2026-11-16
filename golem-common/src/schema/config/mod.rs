@@ -57,6 +57,8 @@ mod descriptor;
 pub use catalog::{ConfigCatalog, ConfigCatalogKind};
 pub use descriptor::ConfigDescriptorKind;
 
+use crate::base_model::agent::AgentConfigSource;
+use crate::schema::agent::{AgentConfigDeclarationSchema, agent_secret_value_schema};
 use crate::schema::render::{from_json_value, to_json_value};
 use crate::schema::validation::{is_equivalent_cross_graph, validate_root_type, validate_value};
 use crate::schema::{NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypeId};
@@ -311,6 +313,70 @@ fn selector<'a>(
 }
 
 impl ConfigSchema {
+    /// Uses the owner's shared definitions and the canonical defaults emitted by its SDK.
+    pub fn from_declarations(
+        graph: &SchemaGraph,
+        declarations: &[AgentConfigDeclarationSchema],
+        origin: &ConfigOrigin,
+    ) -> Result<Self, ConfigError> {
+        let fields = declarations
+            .iter()
+            .map(|declaration| {
+                let field_origin = declaration
+                    .path
+                    .iter()
+                    .fold(origin.clone(), |origin, name| origin.child(name));
+                let (kind, value_type) = match declaration.source {
+                    AgentConfigSource::Local => {
+                        (ConfigFieldKind::Static, declaration.value_type.clone())
+                    }
+                    AgentConfigSource::Secret => {
+                        if declaration.default_value.is_some() {
+                            return Err(
+                                field_origin.error("Secret fields cannot declare code defaults")
+                            );
+                        }
+                        let payload = agent_secret_value_schema(graph, &declaration.value_type)
+                            .ok_or_else(|| {
+                                field_origin.error("Secret fields must declare a Secret type")
+                            })?;
+                        (ConfigFieldKind::Secret, payload.root)
+                    }
+                };
+                let default = declaration
+                    .default_value
+                    .as_ref()
+                    .map(|json| {
+                        let value = serde_json::from_str(json).map_err(|error| {
+                            field_origin.error(format!("invalid code default JSON: {error}"))
+                        })?;
+                        golem_schema::schema::render::from_untrusted_json_value(
+                            graph,
+                            &value_type,
+                            &value,
+                        )
+                        .map_err(|error| {
+                            field_origin.error(format!("invalid code default: {error}"))
+                        })
+                    })
+                    .transpose()?;
+                Ok(ConfigFieldSchema {
+                    path: declaration.path.clone(),
+                    kind,
+                    value_type,
+                    default,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let schema = Self {
+            graph: graph.clone(),
+            descriptors: BTreeMap::new(),
+            fields,
+        };
+        schema.validate(origin)?;
+        Ok(schema)
+    }
+
     pub fn validate(&self, origin: &ConfigOrigin) -> Result<(), ConfigError> {
         for id in self.descriptors.keys() {
             if !self.graph.lookup(id).is_some_and(|def| {
@@ -329,10 +395,10 @@ impl ConfigSchema {
                 || field
                     .path
                     .iter()
-                    .any(|name| name.is_empty() || name.starts_with('$'))
+                    .any(|name| name.is_empty() || name.starts_with('$') || name.contains('.'))
             {
                 return Err(origin
-                    .error("config fields must have nonempty names that do not start with '$'"));
+                    .error("config fields must have nonempty names without '.' or a leading '$'"));
             }
             if self.fields[..index].iter().any(|previous| {
                 previous.path.starts_with(&field.path) || field.path.starts_with(&previous.path)

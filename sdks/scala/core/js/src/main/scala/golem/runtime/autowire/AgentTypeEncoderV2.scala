@@ -77,7 +77,12 @@ object AgentTypeEncoderV2 {
     readOnly: js.UndefOr[JsReadOnlyConfig] = js.undefined
   )
 
-  final case class ConfigDecl(source: String, path: List[String], graph: SchemaGraph)
+  final case class ConfigDecl(
+    source: String,
+    path: List[String],
+    graph: SchemaGraph,
+    defaultValue: Option[String] = None
+  )
 
   final case class AgentRequest(
     typeName: String,
@@ -141,7 +146,7 @@ object AgentTypeEncoderV2 {
 
     val configJs: js.Array[JsAgentConfigDeclaration] =
       req.config.map { c =>
-        JsAgentConfigDeclaration(c.source, c.path.toJSArray, rootIndex(c.graph))
+        JsAgentConfigDeclaration(c.source, c.path.toJSArray, rootIndex(c.graph), c.defaultValue.orUndefined)
       }.toJSArray
 
     // 4. Finish the single graph (placeholder structural root) and convert to JS.

@@ -3771,11 +3771,13 @@ mod tests {
         let declarations = vec![
             AgentConfigDeclarationSchema {
                 source: AgentConfigSource::Local,
+                default_value: None,
                 path: vec!["optional".to_string()],
                 value_type: SchemaType::option(SchemaType::string()),
             },
             AgentConfigDeclarationSchema {
                 source: AgentConfigSource::Local,
+                default_value: None,
                 path: vec!["result".to_string()],
                 value_type: SchemaType::result(golem_common::schema::ResultSpec {
                     ok: Some(Box::new(SchemaType::string())),
@@ -3784,6 +3786,7 @@ mod tests {
             },
             AgentConfigDeclarationSchema {
                 source: AgentConfigSource::Local,
+                default_value: None,
                 path: vec!["variant".to_string()],
                 value_type: SchemaType::variant(vec![golem_common::schema::VariantCaseType {
                     name: "payload".to_string(),
@@ -3793,6 +3796,7 @@ mod tests {
             },
             AgentConfigDeclarationSchema {
                 source: AgentConfigSource::Local,
+                default_value: None,
                 path: vec!["union".to_string()],
                 value_type: SchemaType::union(golem_common::schema::UnionSpec {
                     branches: vec![golem_common::schema::UnionBranch {

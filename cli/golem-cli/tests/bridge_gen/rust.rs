@@ -2043,6 +2043,7 @@ fn guest_generation_compiles_when_constructor_parameter_matches_config_parameter
     )]);
     agent_type.config.push(AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
+        default_value: None,
         path: vec!["foo".to_string()],
         value_type: SchemaType::string(),
     });
@@ -2094,6 +2095,7 @@ fn guest_generation_emits_self_contained_typed_config_schema_values() {
     };
     agent_type.config.push(AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
+        default_value: None,
         path: vec!["shared".to_string()],
         value_type: SchemaType::ref_to(config_type_id),
     });
@@ -2150,6 +2152,7 @@ fn guest_generation_compiles_when_constructor_parameter_is_named_agent_config() 
     )]);
     agent_type.config.push(AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
+        default_value: None,
         path: vec!["foo".to_string()],
         value_type: SchemaType::string(),
     });

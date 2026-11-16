@@ -216,6 +216,8 @@ pub(crate) async fn prepare_revision_update(
                     .as_ref()
                     .map(|config| config.config.clone())
                     .unwrap_or_default(),
+                &agent_type.schema,
+                &agent_type.config,
             )
             .map_err(UpdateStateError::Config)?;
             validate_agent_config(&updated_agent_config, agent_type)

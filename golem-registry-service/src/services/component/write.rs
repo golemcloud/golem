@@ -65,6 +65,7 @@ use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::{
     AgentTypeSchema, ComponentConfigSchema, typed_schema_value_with_projected_defs,
 };
+use golem_common::schema::config::{ConfigOrigin, ConfigSchema};
 use golem_common::schema::tool::Tool;
 use golem_common::schema::tool::ToolMiddleware;
 use golem_common::schema::tool::validation::{validate_tool, validate_tool_middleware};
@@ -1816,35 +1817,17 @@ fn validate_component_config_schema(
             errors.into_iter().map(|error| error.to_string()).join("; "),
         )
     })?;
-    let mut declarations = BTreeMap::new();
+    ConfigSchema::from_declarations(
+        &schema.schema,
+        &schema.declarations,
+        &ConfigOrigin {
+            file: "<component metadata>".into(),
+            path: vec!["config".into()],
+            layer: "code".into(),
+        },
+    )
+    .map_err(|error| ComponentError::InvalidComponentConfig(error.to_string()))?;
     for declaration in &schema.declarations {
-        if declaration.path.is_empty()
-            || declaration
-                .path
-                .iter()
-                .any(|segment| segment.is_empty() || segment.contains('.'))
-        {
-            return Err(ComponentError::InvalidComponentConfig(format!(
-                "invalid declaration path '{}'",
-                declaration.path.join(".")
-            )));
-        }
-        let mut graph = schema.schema.clone();
-        graph.root = declaration.value_type.clone();
-        validate_graph(&graph).map_err(|errors| {
-            ComponentError::InvalidComponentConfig(
-                errors.into_iter().map(|error| error.to_string()).join("; "),
-            )
-        })?;
-        if declarations
-            .insert(&declaration.path, declaration)
-            .is_some()
-        {
-            return Err(ComponentError::InvalidComponentConfig(format!(
-                "duplicate declaration path '{}'",
-                declaration.path.join(".")
-            )));
-        }
         for agent in agent_types {
             if let Some(agent_declaration) = agent
                 .config
@@ -2468,6 +2451,7 @@ mod tests {
             schema: SchemaGraph::empty(),
             declarations: vec![AgentConfigDeclarationSchema {
                 source,
+                default_value: None,
                 path: vec!["feature".to_string(), "enabled".to_string()],
                 value_type: SchemaType::Bool {
                     metadata: MetadataEnvelope::default(),
@@ -2489,6 +2473,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(values.len(), 1);
+    }
+
+    #[test]
+    fn standalone_component_config_validates_code_defaults() {
+        let mut schema = bool_component_schema(AgentConfigSource::Local);
+        schema.declarations[0].default_value = Some("false".into());
+        validate_component_config_schema(&schema, &[]).unwrap();
+        schema.declarations[0].default_value = Some("\"false\"".into());
+        let error = validate_component_config_schema(&schema, &[]).unwrap_err();
+        assert!(matches!(error, ComponentError::InvalidComponentConfig(_)));
+
+        schema.declarations[0].source = AgentConfigSource::Secret;
+        schema.declarations[0].value_type = SchemaType::secret(Default::default());
+        schema.declarations[0].default_value = Some("null".into());
+        let error = validate_component_config_schema(&schema, &[]).unwrap_err();
+        assert!(error.to_string().contains("cannot declare code defaults"));
     }
 
     #[test]

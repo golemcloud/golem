@@ -60,6 +60,7 @@ pub(all) struct AgentConfigDef {
   source : @common.AgentConfigSource
   path : Array[String]
   value_type : @model.SchemaGraph
+  default_value : String?
 }
 
 ///|
@@ -189,6 +190,7 @@ pub fn AgentTypeDef::to_agent_type(
       source: decl.source,
       path: decl.path,
       value_type: encoder.encode_type(decl.value_type.root),
+      default_value: decl.default_value,
     })
   }
   let schema = encoder.finish()

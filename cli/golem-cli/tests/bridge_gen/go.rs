@@ -1457,6 +1457,7 @@ fn configured_counter_agent() -> AgentTypeSchema {
         local_config(vec!["db"], ref_to("cfg.Db")),
         AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
+            default_value: None,
             path: vec!["token".into()],
             value_type: SchemaType::string(),
         },

@@ -2980,6 +2980,7 @@ components:
         };
         config_agent.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["limits".to_string()],
             value_type: SchemaType::quota_token(Default::default()),
         });
@@ -3005,6 +3006,7 @@ components:
         };
         agent.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
+            default_value: None,
             path: vec!["credentials".to_string()],
             value_type: SchemaType::secret(Default::default()),
         });

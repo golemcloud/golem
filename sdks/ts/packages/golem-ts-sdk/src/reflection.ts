@@ -116,6 +116,8 @@ export class AgentType {
     readonly path: readonly string[];
     readonly source: 'local' | 'secret';
     readonly schema: SchemaRef;
+    /** Canonical schema JSON; undefined means no default, distinct from "null". */
+    readonly defaultValue?: string;
   }[];
   readonly client: ReflectedAgentClientFactory;
 
@@ -135,6 +137,7 @@ export class AgentType {
           path: Object.freeze([...decl.path]),
           source: decl.source,
           schema: SchemaRef.fromImmutableGraph(graph.graph, reflectedTypeAt(graph, decl.valueType)),
+          defaultValue: decl.defaultValue,
         }),
       ),
     );

@@ -281,6 +281,8 @@ declare module 'golem:agent/common@2.0.0' {
     path: string[];
     /** Index into the owning agent-type `schema` graph. */
     valueType: TypeNodeIndex;
+    /** Canonical schema JSON. None differs from the explicit default "null". */
+    defaultValue?: string;
   };
   /**
    * Full agent type declaration.

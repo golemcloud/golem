@@ -136,6 +136,8 @@ export interface ReflectedConfigDeclaration {
   readonly path: ReadonlyArray<string>
   readonly source: "local" | "secret"
   readonly schema: SchemaRef
+  /** Canonical schema JSON; `undefined` means no default, while `"null"` is an explicit default. */
+  readonly defaultValue?: string
 }
 
 /** Durable reflected client factory. @since 1.6.0 @category models */
@@ -364,6 +366,7 @@ const wrap = (registration: AgentHost.RegisteredAgentType): AgentType => {
         path: Object.freeze([...declaration.path]),
         source: declaration.source,
         schema: SchemaRef.fromImmutableGraph(sharedGraph, rootAt(declaration.valueType)),
+        defaultValue: declaration.defaultValue,
       }),
     ),
   )

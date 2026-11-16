@@ -266,6 +266,8 @@ interface common {
     path: list<string>,
     /// Index into the owning agent-type `schema` graph.
     value-type: type-node-index,
+    /// Canonical schema JSON. None differs from the explicit default "null".
+    default-value: option<string>,
   }
 
   record typed-agent-config-value {

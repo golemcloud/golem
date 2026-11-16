@@ -91,7 +91,8 @@ private[autowire] object AgentRequestBuilder {
             case AgentConfigSource.Secret => "secret"
           },
           c.path.toJSArray,
-          c.schema
+          c.schema,
+          c.defaultValue.orUndefined
         )
       }.toJSArray,
       metadata.httpMount.map(encodeHttpMount).orUndefined
@@ -160,7 +161,7 @@ private[autowire] object AgentRequestBuilder {
       case AgentConfigSource.Local  => "local"
       case AgentConfigSource.Secret => "secret"
     }
-    AgentTypeEncoderV2.ConfigDecl(source, decl.path, decl.valueType)
+    AgentTypeEncoderV2.ConfigDecl(source, decl.path, decl.valueType, decl.defaultValue)
   }
 
   private def encodeHttpMount(mount: HttpMountDetails): JsHttpMountDetails =

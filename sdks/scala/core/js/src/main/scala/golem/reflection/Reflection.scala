@@ -230,7 +230,12 @@ final class AgentType private[reflection] (
     }
 }
 
-final case class ReflectedConfigDeclaration(path: List[String], source: String, schema: SchemaRef)
+final case class ReflectedConfigDeclaration(
+  path: List[String],
+  source: String,
+  schema: SchemaRef,
+  defaultValue: Option[String] = None
+)
 final case class ReflectedConfigJson(path: List[String], value: Json)
 
 object Reflection {
@@ -298,7 +303,8 @@ object Reflection {
             ReflectedConfigDeclaration(
               declaration.path.toList,
               declaration.source,
-              SchemaRef(decoded.graph, decoded.at(declaration.valueType))
+              SchemaRef(decoded.graph, decoded.at(declaration.valueType)),
+              declaration.defaultValue.toOption
             )
           }
         )

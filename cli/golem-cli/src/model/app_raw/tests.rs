@@ -546,6 +546,7 @@ fn arb_component_config_schema_model() -> BoxedStrategy<ComponentConfigSchema> {
             ),
             declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
                 source: golem_common::model::agent::AgentConfigSource::Local,
+                default_value: None,
                 path: vec![name],
                 value_type: golem_common::schema::SchemaType::string(),
             }],

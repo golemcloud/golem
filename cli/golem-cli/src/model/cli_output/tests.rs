@@ -1275,6 +1275,7 @@ fn sample_agent_type_schema(
         ),
         config: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
             source: golem_common::model::agent::AgentConfigSource::Secret,
+            default_value: None,
             path: vec!["db".to_string(), "password".to_string()],
             value_type: golem_common::schema::SchemaType::string(),
         }],
@@ -3181,10 +3182,14 @@ fn arb_agent_config_declaration()
         ],
         proptest::collection::vec(arb_small_string(), 1..3),
         arb_schema_type(),
+        proptest::option::of(
+            arb_small_string().prop_map(|value| serde_json::to_string(&value).unwrap()),
+        ),
     )
-        .prop_map(|(source, path, value_type)| {
+        .prop_map(|(source, path, value_type, default_value)| {
             golem_common::schema::agent::AgentConfigDeclarationSchema {
                 source,
+                default_value,
                 path,
                 value_type,
             }
@@ -5386,6 +5391,7 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                     ),
                     declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
                         source: golem_common::model::agent::AgentConfigSource::Local,
+                        default_value: None,
                         path: vec!["generated".to_string()],
                         value_type: golem_common::schema::SchemaType::string(),
                     }],

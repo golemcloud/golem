@@ -3696,7 +3696,8 @@
       "properties": {
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
-        "value_type": { "$ref": "#/definitions/SchemaType" }
+        "value_type": { "$ref": "#/definitions/SchemaType" },
+        "default_value": { "type": "string", "description": "Canonical schema JSON for a static code default." }
       },
       "additionalProperties": false
     },
@@ -7123,7 +7124,8 @@
       "properties": {
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
-        "value_type": { "$ref": "#/definitions/SchemaType" }
+        "value_type": { "$ref": "#/definitions/SchemaType" },
+        "default_value": { "type": "string", "description": "Canonical schema JSON for a static code default." }
       },
       "additionalProperties": false
     },

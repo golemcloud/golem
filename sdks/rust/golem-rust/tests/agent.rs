@@ -2247,6 +2247,23 @@ mod tests {
         let agent =
             golem_rust::agentic::get_agent_type_by_name(&agent_name).expect("Agent type not found");
 
+        assert!(
+            agent
+                .config
+                .iter()
+                .all(|entry| entry.default_value.is_none())
+        );
+        let config = <ConfigAgentConfig as golem_rust::agentic::ConfigSchema>::describe_config(&[]);
+        assert!(config.iter().all(|entry| entry.default_value.is_none()));
+        assert_eq!(
+            config.iter().map(|entry| &entry.path).collect::<Vec<_>>(),
+            agent
+                .config
+                .iter()
+                .map(|entry| &entry.path)
+                .collect::<Vec<_>>()
+        );
+
         fn project_for_comparison(
             schema: &golem_rust::schema::wit::wire::SchemaGraph,
             value: AgentConfigDeclaration,
@@ -2301,6 +2318,71 @@ mod tests {
                 )
             ]
         );
+    }
+
+    #[test]
+    fn test_agent_config_defaults_survive_reflection() {
+        use golem_rust::agentic::{
+            ExtendedAgentType, get_agent_type_by_name, get_enriched_agent_type_by_name,
+            register_agent_type,
+        };
+        use golem_rust::schema::render::json_value::from_json_value;
+        use golem_rust::schema::wit::direct::WireSchemaBuilder;
+
+        #[derive(IntoSchema, WireSchema)]
+        struct Settings {
+            retry_limit: u32,
+        }
+
+        ConfigAgentImpl::__register_agent_type();
+        let mut wire = get_agent_type_by_name(&AgentTypeName("ConfigAgent".to_string())).unwrap();
+        let mut builder = WireSchemaBuilder::default();
+        let value_type = <Option<Settings> as WireSchema>::append_schema(&mut builder);
+        wire.schema = builder.finish(value_type);
+        let defaults = [None, Some("null"), Some(r#"{"retry_limit":7}"#)];
+        let paths: Vec<Vec<String>> = ["NoDefault", "explicit-null", "code_default"]
+            .into_iter()
+            .map(|name| vec!["Exact.Path".to_string(), name.to_string()])
+            .collect();
+        wire.config = paths
+            .iter()
+            .zip(defaults)
+            .map(|(path, default_value)| AgentConfigDeclaration {
+                source: AgentConfigSource::Local,
+                path: path.clone(),
+                value_type,
+                default_value: default_value.map(str::to_string),
+            })
+            .collect();
+
+        let extended = ExtendedAgentType::from_agent_type(wire).unwrap();
+        for ((entry, path), default) in extended.config.iter().zip(&paths).zip(defaults) {
+            assert_eq!(&entry.path, path);
+            assert_eq!(entry.default_value.as_deref(), default);
+            assert!(matches!(entry.source, AgentConfigSource::Local));
+            assert!(!entry.value_type.defs.is_empty());
+        }
+
+        let name = AgentTypeName("RawConfigDefaults".to_string());
+        register_agent_type(AgentTypeName(name.0.clone()), extended.clone());
+        let reflected_wire = get_agent_type_by_name(&name).unwrap();
+        for ((entry, path), default) in reflected_wire.config.iter().zip(&paths).zip(defaults) {
+            assert_eq!(&entry.path, path);
+            assert_eq!(entry.default_value.as_deref(), default);
+        }
+        let reflected = get_enriched_agent_type_by_name(&name).unwrap();
+        for (entry, original) in reflected.config.iter().zip(&extended.config) {
+            assert_eq!(entry.default_value, original.default_value);
+            assert_eq!(entry.value_type, original.value_type);
+        }
+        for (index, expected) in [None, Some(Settings { retry_limit: 7 })].iter().enumerate() {
+            let entry = &reflected.config[index + 1];
+            let json = serde_json::from_str(entry.default_value.as_deref().unwrap()).unwrap();
+            assert_eq!(
+                from_json_value(&entry.value_type, &entry.value_type.root, &json).unwrap(),
+                expected.to_value()
+            );
+        }
     }
 
     // --- Read-only marker tests ---

@@ -1062,6 +1062,7 @@ fn validate_rejects_future_in_config_value_type() {
             source: AgentConfigSource::Local,
             path: vec!["a".to_string(), "b".to_string()],
             value_type: SchemaType::future(Some(SchemaType::string())),
+            default_value: None,
         }],
         ..sample_agent_type()
     };

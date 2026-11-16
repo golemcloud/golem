@@ -22,6 +22,7 @@ import {
 } from 'golem:agent/host@2.0.0';
 import { SchemaRef } from '../src/schema/ref';
 import {
+  GraphEncoder,
   field,
   schemaGraphToWit,
   schemaValueToWit,
@@ -320,6 +321,37 @@ describe('agent reflection', () => {
     expect(client).not.toHaveProperty('agentId');
     expect(client.method('echo').definition.name).toBe('echo');
   });
+
+  it.each([undefined, 'null', '"null"', '"hello\\nworld"'])(
+    'preserves the raw config default %s through reflection',
+    (defaultValue) => {
+      const registered = registeredType();
+      const encoder = new GraphEncoder(new Map());
+      encoder.encodeType(t.string());
+      const localType = encoder.encodeType(t.option(t.string()));
+      const secretType = encoder.encodeType(t.secret(t.string()));
+      registered.agentType.schema = encoder.finish();
+      registered.agentType.config = [
+        { source: 'local', path: ['service', 'label'], valueType: localType, defaultValue },
+        { source: 'secret', path: ['service', 'token'], valueType: secretType },
+      ];
+      vi.mocked(hostGetAgentType).mockReturnValueOnce(registered);
+
+      const reflected = getAgentType('ReflectedEcho')!;
+
+      expect(reflected.config[0]).toMatchObject({
+        source: 'local',
+        path: ['service', 'label'],
+        defaultValue,
+      });
+      expect(reflected.config[0].schema.unpackJson(v.option(undefined))).toBeNull();
+      expect(reflected.config[1]).toMatchObject({
+        source: 'secret',
+        path: ['service', 'token'],
+        defaultValue: undefined,
+      });
+    },
+  );
 
   it('validates reflected config before creating clients in both JSON and value styles', () => {
     const registered = registeredType();

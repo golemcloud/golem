@@ -26,6 +26,7 @@ fn[T : @schema.WireSchema] wire_local_entry(
       source: @common.AgentConfigSource::LOCAL,
       path,
       value_type: @schema.append_wire_type_with(encoder, tag),
+      default_value: None,
     },
   ]
 }
@@ -143,5 +144,12 @@ pub impl[T : @schema.WireSchema] WireConfigField for Secret[T] with fn append_wi
     (@schema.type_tag() : @schema.TypeTag[T]),
   )
   let value_type = encoder.push(@types.SecretType({ inner, category: None, }))
-  [{ source: @common.AgentConfigSource::SECRET, path, value_type, }]
+  [
+    {
+      source: @common.AgentConfigSource::SECRET,
+      path,
+      value_type,
+      default_value: None,
+    },
+  ]
 }
