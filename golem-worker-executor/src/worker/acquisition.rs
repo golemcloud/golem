@@ -1025,7 +1025,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let current_status_snapshot = current_status.load_full();
-        let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
+        let metrics_status = Arc::new(WorkerStatusMetric::new(
+            current_status_snapshot.reported_status(),
+        ));
         let last_oplog_idx = current_status_snapshot.oplog_idx;
         drop(current_status_snapshot);
 

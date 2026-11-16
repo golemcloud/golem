@@ -127,7 +127,7 @@ impl AgentFilter {
                 comparator.matches(&metadata.created_at, &value)
             }
             AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
-                comparator.matches(&metadata.last_known_status.status, &value)
+                comparator.matches(&metadata.last_known_status.reported_status(), &value)
             }
             AgentFilter::Mode(AgentModeFilter { comparator, value }) => {
                 comparator.matches(&metadata.agent_mode, &value)
@@ -1317,6 +1317,22 @@ impl BinaryDeserializer for DurableStreamSessionIndex {
 }
 
 impl AgentStatusRecord {
+    /// The status that the agent reports outside: `Sandboxed` for a never-live agent, and the
+    /// folded `status` otherwise. The folded `status` never holds `Sandboxed`; control code
+    /// decides by it, by `never_live` and by `pending_updates`.
+    pub fn reported_status(&self) -> AgentStatus {
+        if self.never_live {
+            AgentStatus::Sandboxed
+        } else {
+            self.status
+        }
+    }
+
+    /// The folded status underneath a reported `Sandboxed` status, and `None` otherwise.
+    pub fn underlying_status(&self) -> Option<AgentStatus> {
+        self.never_live.then_some(self.status)
+    }
+
     pub fn has_pending_work(&self, now: Timestamp) -> bool {
         self.pending_invocations
             .iter()

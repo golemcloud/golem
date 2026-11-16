@@ -1453,6 +1453,17 @@ carries no caller or context. Tests:
 `durable_rpc_activation_repeats_its_key_after_restart` in
 `tests/rpc/held_response_restart.rs`.
 
+`CreateParameters.never_live` is the never-live mark of a sandbox agent. Agent creation writes
+`false`, and nothing sets it yet. The status fold copies it into `AgentStatusRecord.never_live`
+and never changes it. `AgentStatusRecord::reported_status()` gives `Sandboxed` for a marked agent
+and the folded `status` otherwise; the folded `status` never holds `Sandboxed`, and control code
+decides by it, never by the reported status. Every outward view reads the reported status: the
+filter's `status` leaf, gRPC and REST metadata (with the folded status in `underlying_status`), the
+guest's metadata and enumeration (`AgentMetadataForGuests`), the running-agent fast path and the
+status metrics. Tests: `the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_status`
+in `worker/status/tests.rs` and `ordinary_agent_is_not_never_live_after_restart` in
+`tests/observability.rs`.
+
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.

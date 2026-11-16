@@ -24,7 +24,8 @@ package object js {
 
   // golem:api/host@1.5.0
   type JsUpdateMode             = String // "automatic" | "snapshot-based"
-  type JsAgentStatus            = String // "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited"
+  type JsAgentStatus            =
+    String // "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited" | "sandboxed"
   type JsFilterComparator       = String // "equal" | "not-equal" | "greater-equal" | "greater" | "less-equal" | "less"
   type JsStringFilterComparator = String // "equal" | "not-equal" | "like" | "not-like" | "starts-with"
 

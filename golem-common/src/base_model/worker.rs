@@ -140,6 +140,8 @@ declare_structs! {
         pub env: HashMap<String, String>,
         pub config: Vec<TypedAgentConfigEntry>,
         pub status: AgentStatus,
+        /// The folded status underneath `status`. Present only when `status` is `Sandboxed`.
+        pub underlying_status: Option<AgentStatus>,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,
         pub pending_invocation_count: u64,

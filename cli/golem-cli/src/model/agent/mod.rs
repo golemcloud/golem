@@ -203,6 +203,8 @@ pub struct AgentMetadataView {
     pub config: Vec<AgentConfigEntryDto>,
     pub default_config: Vec<AgentConfigEntryDto>,
     pub status: AgentStatus,
+    /// The replayed state underneath a `Sandboxed` status.
+    pub underlying_status: Option<AgentStatus>,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
 
@@ -232,6 +234,7 @@ impl From<AgentMetadata> for AgentMetadataView {
             config: value.config,
             default_config: Vec::new(),
             status: value.status,
+            underlying_status: value.underlying_status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -288,6 +291,7 @@ pub struct AgentMetadata {
     pub env: HashMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
     pub status: AgentStatus,
+    pub underlying_status: Option<AgentStatus>,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
     pub pending_invocation_count: u64,
@@ -329,6 +333,7 @@ impl AgentMetadata {
             env: value.env,
             config: value.config.into_iter().map(Into::into).collect(),
             status: value.status,
+            underlying_status: value.underlying_status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -726,7 +731,14 @@ impl MessageWithFields for AgentGetView {
                 !self.metadata.config.is_empty(),
                 |config| format_untyped_config(config),
             )
-            .fmt_field_optional("Status", &self.metadata.status, self.precise, format_status)
+            .fmt_field_optional(
+                "Status",
+                &(self.metadata.status, self.metadata.underlying_status),
+                self.precise,
+                |(status, underlying_status)| {
+                    format_reported_status(status, underlying_status.as_ref())
+                },
+            )
             .fmt_field_optional(
                 "Retry count",
                 &self.metadata.retry_count,
@@ -849,6 +861,7 @@ impl AgentsMetadataResponseView {
                 AgentStatus::Retrying => ComfyColor::Yellow,
                 AgentStatus::Failed => ComfyColor::Red,
                 AgentStatus::Exited => ComfyColor::White,
+                AgentStatus::Sandboxed => ComfyColor::Magenta,
             }
         } else {
             ComfyColor::Reset
@@ -1028,8 +1041,19 @@ fn format_status(status: &AgentStatus) -> String {
         AgentStatus::Retrying => status_name.yellow(),
         AgentStatus::Failed => status_name.bright_red(),
         AgentStatus::Exited => status_name.white(),
+        AgentStatus::Sandboxed => status_name.magenta(),
     }
     .to_string()
+}
+
+fn format_reported_status(status: &AgentStatus, underlying_status: Option<&AgentStatus>) -> String {
+    match underlying_status {
+        Some(underlying_status) => format!(
+            "{} (replayed state: {underlying_status})",
+            format_status(status)
+        ),
+        None => format_status(status),
+    }
 }
 
 fn format_retry_count(retry_count: &u32) -> String {

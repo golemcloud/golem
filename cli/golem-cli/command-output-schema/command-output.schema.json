@@ -6494,6 +6494,7 @@
         "config": { "type": "array", "items": { "$ref": "#/definitions/AgentConfigEntryDto" } },
         "defaultConfig": { "type": "array", "items": { "$ref": "#/definitions/AgentConfigEntryDto" } },
         "status": { "type": "string" },
+        "underlyingStatus": { "type": ["string", "null"] },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "retryCount": { "type": "integer", "minimum": 0 },
         "pendingInvocationCount": { "type": "integer", "minimum": 0 },

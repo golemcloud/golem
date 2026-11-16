@@ -1219,6 +1219,7 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
             value: golem_common::base_model::json::NormalizedJsonValue(json!("default-secret")),
         }],
         status: golem_common::model::AgentStatus::Idle,
+        underlying_status: None,
         component_revision: golem_common::model::component::ComponentRevision::new(1).unwrap(),
         retry_count: 0,
         pending_invocation_count: 0,
@@ -2470,6 +2471,7 @@ fn arb_agent_status() -> BoxedStrategy<golem_common::model::AgentStatus> {
         Just(golem_common::model::AgentStatus::Retrying),
         Just(golem_common::model::AgentStatus::Failed),
         Just(golem_common::model::AgentStatus::Exited),
+        Just(golem_common::model::AgentStatus::Sandboxed),
     ]
     .boxed()
 }
@@ -4516,6 +4518,7 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
             proptest::collection::vec(arb_agent_config_entry_dto(), 0..4),
             proptest::collection::vec(arb_agent_config_entry_dto(), 0..4),
             arb_agent_status(),
+            arb_agent_status(),
         ),
         (
             arb_small_u64(),
@@ -4548,6 +4551,7 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                 config,
                 default_config,
                 status,
+                underlying_status,
             ) = left;
             let (
                 component_revision,
@@ -4576,6 +4580,8 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                 config,
                 default_config,
                 status,
+                underlying_status: (status == golem_common::model::AgentStatus::Sandboxed)
+                    .then_some(underlying_status),
                 component_revision: golem_common::model::component::ComponentRevision::new(
                     component_revision,
                 )
