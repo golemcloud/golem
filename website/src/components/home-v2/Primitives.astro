@@ -1,6 +1,11 @@
 ---
-import { text as t, paragraphs, lines } from "../../data/home-preview/golem-2";
+import { text as t, paragraphs, lines, details } from "../../data/home-preview/golem-2";
 const calls = [1, 2, 3];
+const topics = [
+  { id: "actor", title: "Actor lifetime and calls" },
+  { id: "invocation", title: "Function durability and state" },
+  { id: "function", title: "Function identity and middleware" },
+];
 ---
 
 <div class="primitive-comparison">
@@ -15,9 +20,10 @@ const calls = [1, 2, 3];
         {kind === "Actors" ? (
           <figure
             class="primitive-diagram"
-            role="img"
+            role="group"
             aria-label="Three calls to the same actor ID reach one actor inside its durable, permissioned VM. The actor retains private state across calls."
           >
+            <span class="diagram-hint">Hover or tap + to explore</span>
             <div class="actor-flow" aria-hidden="true">
               <div class="actor-calls">
                 {calls.map((n) => (
@@ -38,19 +44,46 @@ const calls = [1, 2, 3];
                 </div>
               </div>
             </div>
+            <button
+              class="diagram-hotspot"
+              data-topic="actor"
+              type="button"
+              aria-label="Explore actor lifetime and calls"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="primitive-info-actor"
+            >
+              <span aria-hidden="true">+</span>
+            </button>
           </figure>
         ) : (
           <figure
             class="primitive-diagram"
-            role="img"
+            role="group"
             aria-label="Three independent calls run the same function f. Each call has its own input, output and fresh durable, permissioned VM. No private instance state carries into the next call."
           >
+            <div class="function-label">
+              <span>
+                Function <i>f</i>
+              </span>
+              <button
+                class="diagram-hotspot"
+                data-topic="function"
+                type="button"
+                aria-label="Explore function identity and middleware"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="primitive-info-function"
+              >
+                <span aria-hidden="true">+</span>
+              </button>
+            </div>
             <div class="function-flow" aria-hidden="true">
               {calls.map((n) => (
                 <div class="function-call">
                   <span class="call-label">Call {n}</span>
                   <span class="primitive-arrow" />
-                  <div class="primitive-enclosure function-enclosure">
+                  <div class="primitive-enclosure function-enclosure" data-invocation={n}>
                     <span class="primitive-vm-label">Durable, permissioned VM</span>
                     <span class="primitive-symbol">ƒ</span>
                   </div>
@@ -59,6 +92,17 @@ const calls = [1, 2, 3];
                 </div>
               ))}
             </div>
+            <button
+              class="diagram-hotspot"
+              data-topic="invocation"
+              type="button"
+              aria-label="Explore function durability and state"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="primitive-info-invocation"
+            >
+              <span aria-hidden="true">+</span>
+            </button>
           </figure>
         )}
         <div class="primitive-examples">
@@ -75,6 +119,37 @@ const calls = [1, 2, 3];
     ))
   }
 </div>
+
+{
+  topics.map(({ id, title }) => (
+    <div
+      class="primitive-popover"
+      id={`primitive-info-${id}`}
+      data-primitive-card={id}
+      popover="manual"
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby={`primitive-title-${id}`}
+      tabindex="-1"
+    >
+      <svg class="primitive-leader" aria-hidden="true">
+        <path />
+      </svg>
+      <div class="primitive-popover-content">
+        <h4 id={`primitive-title-${id}`}>{title}</h4>
+        <button class="primitive-close" type="button" aria-label={`Close ${title.toLowerCase()}`}>
+          ×
+        </button>
+        <p>{details[1][title]}</p>
+      </div>
+    </div>
+  ))
+}
+
+<script>
+  import { setupPrimitiveHotspots } from "./primitive-hotspots";
+  setupPrimitiveHotspots();
+</script>
 
 <style>
   .primitive-comparison {
@@ -107,10 +182,147 @@ const calls = [1, 2, 3];
     line-height: 1.75;
   }
   .primitive-diagram {
+    position: relative;
+    padding-top: 44px;
     margin: 0;
     font-family: var(--font-mono);
     font-size: 12px;
     color: #43563c;
+  }
+  .diagram-hint {
+    position: absolute;
+    top: 14px;
+    left: 0;
+    color: #59664f;
+    font-size: 10px;
+  }
+  .function-label {
+    position: absolute;
+    top: 0;
+    left: 74px;
+    display: flex;
+    align-items: center;
+    height: 44px;
+    gap: 2px;
+    color: #344b31;
+    font-size: 12px;
+  }
+  .function-label i {
+    font-family: Georgia, serif;
+    font-size: 18px;
+  }
+  .diagram-hotspot {
+    position: absolute;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transform: translate(-50%, -50%);
+  }
+  .function-label .diagram-hotspot {
+    position: relative;
+    transform: none;
+  }
+  .diagram-hotspot > span {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border: 1px solid #617a56;
+    border-radius: 50%;
+    background: #f7f7f0;
+    color: #344b31;
+    font: 15px/1 var(--font-mono);
+  }
+  .diagram-hotspot:hover > span,
+  .diagram-hotspot[aria-expanded="true"] > span {
+    border-color: #8d5410;
+    background: #ffce8a;
+    color: #49300f;
+  }
+  .primitive-comparison[data-active-topic="actor"] .actor-id,
+  .primitive-comparison[data-active-topic="function"] .function-enclosure .primitive-symbol {
+    color: #8d5410;
+    text-decoration: underline;
+    text-underline-offset: 5px;
+  }
+  .primitive-comparison[data-active-topic="invocation"] .function-enclosure {
+    border-color: #9e6b29;
+    box-shadow: 0 0 0 1px #9e6b29;
+  }
+  .primitive-popover {
+    position: fixed;
+    left: var(--card-left, 20px);
+    top: var(--card-top, 20px);
+    width: 336px;
+    max-width: calc(100vw - 40px);
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    border: 1px solid #b6c3aa;
+    border-radius: 6px;
+    background: #fffef7;
+    color: #18221d;
+    box-shadow: 0 12px 32px #18221d20;
+    font:
+      14px/1.65 Inter,
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
+  }
+  .primitive-popover-content {
+    position: relative;
+    padding: 22px;
+  }
+  .primitive-popover h4 {
+    margin: 0 30px 12px 0;
+    font-size: 16px;
+    line-height: 1.4;
+    font-weight: 500;
+    letter-spacing: -0.025em;
+  }
+  .primitive-popover p {
+    margin: 0;
+    color: #4d5b4c;
+  }
+  .primitive-close {
+    position: absolute;
+    right: 4px;
+    top: 6px;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    background: transparent;
+    color: #43563c;
+    font-size: 22px;
+    cursor: pointer;
+  }
+  .primitive-popover :focus-visible,
+  .primitive-popover:focus-visible {
+    outline: 2px solid #a56b16;
+    outline-offset: 3px;
+  }
+  .primitive-leader {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .primitive-leader path {
+    fill: none;
+    stroke: #9e773e;
+    stroke-width: 1;
+    stroke-dasharray: 3 4;
   }
   .actor-flow {
     display: grid;
@@ -249,6 +461,9 @@ const calls = [1, 2, 3];
     white-space: nowrap;
   }
   @media (max-width: 1100px) {
+    .function-label {
+      left: 60px;
+    }
     .primitive-comparison {
       gap: 32px;
     }
@@ -278,6 +493,19 @@ const calls = [1, 2, 3];
     }
   }
   @media (max-width: 600px) {
+    .primitive-popover {
+      left: 16px;
+      right: 16px;
+      top: auto;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      width: auto;
+      max-width: none;
+      max-height: calc(50dvh - 16px);
+      overflow: auto;
+    }
+    .primitive-leader {
+      display: none;
+    }
     .primitive-examples ul {
       gap: 4px;
     }
@@ -291,6 +519,25 @@ const calls = [1, 2, 3];
     }
   }
   @media (forced-colors: active) {
+    .diagram-hotspot {
+      forced-color-adjust: none;
+    }
+    .diagram-hotspot > span {
+      background: Canvas;
+      color: CanvasText;
+    }
+    .diagram-hotspot[aria-expanded="true"] > span {
+      background: Highlight;
+      color: HighlightText;
+      border-color: Highlight;
+    }
+    .diagram-hotspot > span,
+    .primitive-popover {
+      border-color: CanvasText;
+    }
+    .primitive-leader path {
+      stroke: CanvasText;
+    }
     .primitive-enclosure,
     .primitive-examples li {
       border-color: CanvasText;
