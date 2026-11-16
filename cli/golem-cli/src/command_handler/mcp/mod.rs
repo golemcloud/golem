@@ -881,8 +881,8 @@ fn failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, classify, error_envelope, management_tools,
-        tool_call_argv,
+        ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, ResultShape, classify, error_envelope,
+        management_tools, success, tool_call_argv,
     };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
     use crate::command_handler::agent::invocation_session::InvocationFailure;
@@ -1171,6 +1171,45 @@ mod tests {
         };
         assert!(no_stream);
         assert_eq!(arguments, vec!["-5".to_string(), "x".to_string()]);
+    }
+
+    #[test]
+    fn tool_invoke_returns_the_help_of_a_tool_as_its_result() {
+        let tool = tool("tool_invoke");
+        let help = crate::model::cli_output::to_structured_output_value(
+            crate::model::tool_invoke::ToolInvokeHelpView {
+                help: "Usage: bash run <script>".to_string(),
+            },
+        )
+        .unwrap();
+        let result = success(&tool, format!("{help}\n").as_bytes());
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let structured = result.structured_content.unwrap();
+        let documents = match tool.shape {
+            ResultShape::Document => vec![structured.clone()],
+            ResultShape::Documents => structured["items"].as_array().unwrap().clone(),
+        };
+        assert_eq!(documents, vec![help]);
+
+        let schema = Value::Object((*tool.tool.output_schema.clone().unwrap()).clone());
+        let validator = jsonschema::options().build(&schema).unwrap();
+        assert!(
+            validator.is_valid(&structured),
+            "{:?}",
+            validator
+                .iter_errors(&structured)
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+        );
+        let mut without_help = structured.clone();
+        match tool.shape {
+            ResultShape::Document => without_help.as_object_mut().unwrap().remove("help"),
+            ResultShape::Documents => without_help["items"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("help"),
+        };
+        assert!(!validator.is_valid(&without_help));
     }
 
     #[test]
