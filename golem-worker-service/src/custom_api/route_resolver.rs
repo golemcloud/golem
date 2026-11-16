@@ -24,10 +24,10 @@ use crate::ingress::TrustedIngress;
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::model::agent::http_files::HttpRequestTarget;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeLogin};
+use golem_schema::http::HttpRequestTarget;
 use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
     CompiledRoutes, CorsOptions, MountFileSource, OriginPattern, PathSegment, RouteMatch,
@@ -418,8 +418,8 @@ impl RouteResolver {
                 // TODO: Have some helper for synthethic vs user defined routes
                 route_id: -1,
                 route_match: RouteMatch::Method {
-                    method: golem_common::model::agent::HttpMethod::Get(
-                        golem_common::model::Empty {},
+                    method: golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(Default::default()),
                     ),
                     trailing_slash: target.trailing_slash(),
                 },
@@ -443,14 +443,18 @@ impl RouteResolver {
             };
             for (method, path, behavior) in [
                 (
-                    golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {}),
+                    golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(Default::default()),
+                    ),
                     pkce_authorization_path(&scheme.id),
                     RichRouteBehaviour::OidcPkceAuthorize(OidcPkceBehaviour {
                         security_scheme: scheme.clone(),
                     }),
                 ),
                 (
-                    golem_common::model::agent::HttpMethod::Post(golem_common::model::Empty {}),
+                    golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Post(Default::default()),
+                    ),
                     pkce_token_path(&scheme.id),
                     RichRouteBehaviour::OidcPkceToken(OidcPkceBehaviour {
                         security_scheme: scheme.clone(),
@@ -661,11 +665,11 @@ impl DomainHttpApi {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::HttpMethod;
     use golem_common::model::component::ComponentId;
     use golem_common::model::deployment::DeploymentRevision;
+    use golem_schema::Empty;
     use golem_service_base::custom_api::{
         CompiledRoute, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
     };
@@ -760,9 +764,11 @@ pub(super) mod tests {
             route_id: id,
             route_match: method
                 .map(|method| RouteMatch::Method {
-                    method: HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
-                        value: method.into(),
-                    }),
+                    method: HttpMethod::Method(golem_schema::http::HttpMethod::Custom(
+                        golem_schema::http::CustomHttpMethod {
+                            value: method.into(),
+                        },
+                    )),
                     trailing_slash: path.len() > 1 && path.ends_with('/'),
                 })
                 .unwrap_or(RouteMatch::MountPrefix),
@@ -1619,7 +1625,10 @@ pub(super) mod tests {
                 security_schemes: HashMap::new(),
                 routes: vec![CompiledRoute {
                     route_id: 7,
-                    route_match: HttpMethod::Get(Empty {}).into(),
+                    route_match: HttpMethod::Method(golem_schema::http::HttpMethod::Get(
+                        Default::default(),
+                    ))
+                    .into(),
                     path: self
                         .0
                         .iter()

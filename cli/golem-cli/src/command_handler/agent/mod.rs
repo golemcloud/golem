@@ -3686,7 +3686,7 @@ mod tests {
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
+    use golem_common::model::{IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
         NamedField, OutputSchema,
@@ -3694,6 +3694,7 @@ mod tests {
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
+    use golem_schema::Empty;
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;

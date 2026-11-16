@@ -516,7 +516,7 @@ mod mounted_tests {
             let RouteBehaviour::Mount(router) = &mut route.behavior else {
                 unreachable!()
             };
-            router.file_bindings = golem_common::model::agent::FileMapping::compile_list(
+            router.file_bindings = golem_schema::http::FileMapping::compile_list(
                 mount["mappings"]
                     .as_array()
                     .unwrap()

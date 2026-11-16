@@ -16,9 +16,9 @@ use crate::api::make_open_api_service;
 use crate::bootstrap::Services;
 use crate::config::{ComponentCompilationConfig, LoginConfig, RegistryServiceConfig};
 use golem_common::config::{DbConfig, DbSqliteConfig};
-use golem_common::model::Empty;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentId, EnvironmentName};
+use golem_schema::Empty;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::model::auth::AuthCtx;
 use poem::http::StatusCode;
@@ -301,7 +301,6 @@ mod stored_invalid_binding_name {
     use crate::bootstrap::Services;
     use crate::config::{ComponentCompilationConfig, LoginConfig, RegistryServiceConfig};
     use golem_common::config::{DbConfig, DbSqliteConfig};
-    use golem_common::model::Empty;
     use golem_common::model::application::{ApplicationCreation, ApplicationName};
     use golem_common::model::component::{
         ComponentCreation, ComponentName, ComponentUpdate, ToolDeploymentConfigUpdate,
@@ -317,6 +316,7 @@ mod stored_invalid_binding_name {
     use golem_common::schema::tool::{
         CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
     };
+    use golem_schema::Empty;
     use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::repo::Blob;

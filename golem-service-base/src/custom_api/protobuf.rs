@@ -1336,11 +1336,10 @@ impl From<CorsOptions> for golem_api_grpc::proto::golem::customapi::CorsOptions 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::agent::{
-        AgentFileContentHash, FileMapping, FileResponseHeader, HttpMethod,
-    };
+    use golem_common::model::agent::{AgentFileContentHash, HttpMethod};
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
+    use golem_schema::http::{FileMapping, FileResponseHeader};
     use test_r::test;
 
     #[test]
@@ -1426,7 +1425,7 @@ mod tests {
             id: golem_common::model::security_scheme::SecuritySchemeId::new(),
             revision: SecuritySchemeRevision::new(7).unwrap(),
             name: SecuritySchemeName("frontend-login".into()),
-            provider_type: Provider::Google(golem_common::model::Empty {}),
+            provider_type: Provider::Google(golem_schema::Empty {}),
             client_id: ClientId::new("client".into()),
             client_secret: ClientSecret::new("secret".into()),
             redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
@@ -1573,7 +1572,7 @@ mod tests {
                 let headers = headers
                     .into_iter()
                     .map(
-                        |(name, value)| proto::golem::component::FileResponseHeader {
+                        |(name, value)| golem_schema::proto::golem::http::FileResponseHeader {
                             name: name.into(),
                             value: value.into(),
                         },
@@ -1709,9 +1708,11 @@ mod tests {
         for route_match in [
             RouteMatch::MountPrefix,
             RouteMatch::Method {
-                method: HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
-                    value: "ANY".into(),
-                }),
+                method: HttpMethod::Method(golem_schema::http::HttpMethod::Custom(
+                    golem_schema::http::CustomHttpMethod {
+                        value: "ANY".into(),
+                    },
+                )),
                 trailing_slash: true,
             },
         ] {
@@ -1726,7 +1727,8 @@ mod tests {
     #[test]
     fn mounted_dispatch_rejects_invalid_pairings_and_index() {
         let mut invalid = route(router());
-        invalid.route_match = HttpMethod::Get(golem_common::model::Empty {}).into();
+        invalid.route_match =
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())).into();
         let encoded: proto::golem::customapi::CompiledRoute = invalid.into();
         assert!(CompiledRoute::try_from(encoded).is_err());
         let encoded: proto::golem::customapi::CompiledRoute =
@@ -1800,7 +1802,7 @@ mod tests {
             assert!(CompiledRoute::try_from(invalid).is_err());
         }
         let any: proto::golem::customapi::RouteMatch =
-            RouteMatch::from(HttpMethod::Any(golem_common::model::Empty {})).into();
+            RouteMatch::from(HttpMethod::Any(golem_schema::Empty {})).into();
         assert!(RouteMatch::try_from(any).is_err());
 
         for segment in [
@@ -1818,7 +1820,7 @@ mod tests {
             );
         }
         let trailing = RouteMatch::Method {
-            method: HttpMethod::Get(golem_common::model::Empty {}),
+            method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())),
             trailing_slash: true,
         };
         assert!(

@@ -327,8 +327,8 @@ message RouteBehaviour {
     optional MountTarget handler = 1;
     optional MountTarget openapi_provider = 2;
     MountFileSource files = 3;
-    repeated golem.component.FileMapping file_bindings = 4;
-    repeated golem.component.FileResponseHeader file_response_headers = 5;
+    repeated golem.http.FileMapping file_bindings = 4;
+    repeated golem.http.FileResponseHeader file_response_headers = 5;
   }
 
   message MountAgent {

@@ -11,7 +11,6 @@ use crate::custom_api::oidc::model::{
 use crate::custom_api::oidc::session_store::{SessionStore, SessionStoreError};
 use crate::mcp::InvocationHarness;
 use async_trait::async_trait;
-use golem_common::base_model::Empty;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName, HttpMethod};
@@ -21,6 +20,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::{
     AgentConstructorSchema, InputSchema, OutputSchema, SchemaGraph, SchemaType,
 };
+use golem_schema::Empty;
 use golem_service_base::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledRoute,
     CompiledRoutes, CompiledSchema, CorsOptions, DurableStreamRepresentation,
@@ -728,7 +728,7 @@ fn durable_stream_routes() -> CompiledRoutes {
         vec![
             route(
                 route_id_offset + 1,
-                HttpMethod::Post(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Post(Default::default())),
                 vec![PathSegment::Literal {
                     value: prefix.into(),
                 }],
@@ -741,49 +741,49 @@ fn durable_stream_routes() -> CompiledRoutes {
             ),
             route(
                 route_id_offset + 2,
-                HttpMethod::Get(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())),
                 slot_path.clone(),
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 3,
-                HttpMethod::Post(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Post(Default::default())),
                 slot_path.clone(),
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 4,
-                HttpMethod::Delete(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Delete(Default::default())),
                 slot_path,
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 5,
-                HttpMethod::Delete(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Delete(Default::default())),
                 session_path,
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 6,
-                HttpMethod::Get(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())),
                 fork_slot_path.clone(),
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 7,
-                HttpMethod::Put(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Put(Default::default())),
                 fork_slot_path.clone(),
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 8,
-                HttpMethod::Delete(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Delete(Default::default())),
                 fork_slot_path,
                 RequestBodySchema::Unused,
                 behaviour,
@@ -1497,7 +1497,7 @@ async fn durable_stream_successful_fork_preserves_partial_utf8_byte_prefix() {
 #[test]
 async fn immutable_file_corpus_through_request_handler() {
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
-    use golem_common::model::agent::FileMapping;
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::RouterFileIndexEntry;
     use golem_service_base::replayable_stream::ReplayableStream;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -1639,7 +1639,7 @@ async fn immutable_file_corpus_through_request_handler() {
 async fn immutable_files_over_http1_and_http2_do_not_cache_contents() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
-    use golem_common::model::agent::FileMapping;
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::RouterFileIndexEntry;
     use golem_service_base::replayable_stream::ReplayableStream;
     use golem_service_base::storage::blob::{
@@ -1931,8 +1931,8 @@ async fn ordinary_traffic_lazy_openapi_corpus() {
     use crate::custom_api::openapi::test_support::{controlled, provider_routes};
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
     use futures::{FutureExt, StreamExt};
-    use golem_common::model::agent::FileMapping;
     use golem_common::model::filesystem::FileReadHead;
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::RouterFileIndexEntry;
     use golem_service_base::model::FileReadResponse;
     use golem_service_base::replayable_stream::ReplayableStream;

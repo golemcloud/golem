@@ -4,10 +4,10 @@ use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
 use crate::service::worker::{WorkerResult, WorkerServiceError};
 use bytes::Bytes;
 use futures::{FutureExt, StreamExt};
-use golem_common::model::agent::{FileMapping, FileResponseHeader};
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadExtent, FileReadHead, FileReadMetadata,
 };
+use golem_schema::http::{FileMapping, FileResponseHeader};
 use golem_service_base::custom_api::{ConstructorParameter, PathSegmentType};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::auth::AuthCtx;
