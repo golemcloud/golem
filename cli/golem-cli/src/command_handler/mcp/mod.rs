@@ -26,6 +26,7 @@
 //! tool runs only when the call passes `confirm: true`. Calls run one at a time, because the CLI's
 //! log state and output are global.
 
+use super::agent::invocation_session::InvocationFailure;
 use super::partial_match::ErrorHandler;
 use super::{CommandHandler, CommandHandlerHooks, Handlers, LazyContext};
 use crate::command::{GolemCliCommand, GolemCliCommandParseResult, GolemCliGlobalFlags};
@@ -559,6 +560,15 @@ fn classify(error: &anyhow::Error, tool: &ManagementTool) -> ToolError {
         }
         return tool_error;
     }
+    if let Some(failure) = find_cause::<InvocationFailure>(error) {
+        let mut tool_error = ToolError::new(failure.code.as_str());
+        if let Some(stderr) = &failure.stderr {
+            tool_error
+                .details
+                .insert("stderr".to_string(), json!(stderr));
+        }
+        return tool_error;
+    }
     if let Some(HintError::EnvironmentHasNoDeployment) = find_cause::<HintError>(error) {
         return ToolError::new(platform_error_id(error_code::ENVIRONMENT_NOT_DEPLOYED));
     }
@@ -875,11 +885,13 @@ mod tests {
         tool_call_argv,
     };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
+    use crate::command_handler::agent::invocation_session::InvocationFailure;
     use crate::command_handler::interactive::{self, Ask, InteractiveHandler, refuse_prompts};
     use crate::command_table::CommandRow;
     use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
     use crate::error::{LoginRequired, ProfileMissing, PromptAnswer};
     use crate::model::format::Format;
+    use golem_common::model::invocation_session_public::PublicErrorCode;
     use inquire::{Select, Text};
     use serde_json::{Value, json};
     use test_r::test;
@@ -1067,6 +1079,17 @@ mod tests {
             assert_eq!(report["payload"]["status"], 404);
             assert_eq!(report["payload"]["service"], "Worker");
         }
+
+        // As `agent invoke` reports a failure of its invocation session, under the revert hint.
+        let failed = anyhow::Error::new(InvocationFailure {
+            code: PublicErrorCode::PreviousInvocationFailed,
+            message: "rejected".to_string(),
+            stderr: Some("value is too large".to_string()),
+        })
+        .context("The previous invocation failed");
+        let report = reported(failed, "agent_invoke");
+        assert_eq!(report["error"], "previous-invocation-failed");
+        assert_eq!(report["payload"]["stderr"], "value is too large");
 
         let login = anyhow::Error::new(LoginRequired {
             login: "profile cloud".to_string(),

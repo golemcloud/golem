@@ -21,7 +21,7 @@ use golem_cli::config::{AuthenticationConfig, Config, Profile, ProfileDeletion, 
 use golem_cli::{fs, versions};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::environment::{EnvironmentName, EnvironmentUpdate};
-use indoc::formatdoc;
+use indoc::{formatdoc, indoc};
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::RunningService;
 use rmcp::transport::TokioChildProcess;
@@ -726,7 +726,7 @@ async fn mcp_serve_reports_a_failed_invocation_with_the_platform_error() {
         json!({"agent_id": agent, "function_name": "add", "arguments": ["11"]}),
     )
     .await;
-    assert_eq!(error_code(&failed), "internal-agent-execution-failed");
+    assert_eq!(error_code(&failed), "invocation-failed", "{failed:?}");
 
     let refused = call(
         &client,
@@ -736,7 +736,7 @@ async fn mcp_serve_reports_a_failed_invocation_with_the_platform_error() {
     .await;
     assert_eq!(
         error_code(&refused),
-        "internal-previous-invocation-failed",
+        "previous-invocation-failed",
         "{refused:?}"
     );
     let message = error_message(&refused);
@@ -745,12 +745,12 @@ async fn mcp_serve_reports_a_failed_invocation_with_the_platform_error() {
         "{message}"
     );
     assert!(message.contains("agent revert"), "{message}");
-    let agent_error = &error(&refused)["payload"]["agent_error"];
+    let payload = &error(&refused)["payload"];
     assert!(
-        agent_error["stderr"]
+        payload["stderr"]
             .as_str()
             .is_some_and(|stderr| stderr.contains("value is too large")),
-        "{agent_error}"
+        "{payload}"
     );
     client.cancel().await.unwrap();
 
@@ -760,7 +760,75 @@ async fn mcp_serve_reports_a_failed_invocation_with_the_platform_error() {
         .await;
     assert!(!outputs.success());
     assert!(outputs.stderr_contains("The previous invocation failed"));
-    assert!(outputs.stderr_contains("INTERNAL_PREVIOUS_INVOCATION_FAILED"));
+    assert!(outputs.stderr_contains("previous-invocation-failed"));
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn mcp_serve_reports_a_failed_streaming_invocation_with_its_code() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, "mcp-streams", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd("mcp-streams");
+    fs::write_str(
+        ctx.cwd_path_join("src/counter-agent.ts"),
+        indoc! { r#"
+            import { z } from 'zod';
+            import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
+
+            export const CounterAgent = defineAgent({
+              name: 'CounterAgent',
+              id: { name: z.string() },
+              http: http.mount('/counters/{name}'),
+              methods: {
+                explode: method({ input: {}, returns: s.stream(z.number()) }),
+              },
+            });
+
+            export const CounterAgentImpl = CounterAgent.implement({
+              init: () => ({}),
+              methods: {
+                explode() {
+                  console.error('intentional stream stderr');
+                  throw new Error('intentional stream failure');
+                },
+              },
+            });
+        "# },
+    )
+    .unwrap();
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            "retry-policy",
+            "create",
+            "no-retries",
+            "--priority",
+            "100",
+            "--predicate",
+            "true",
+            "--policy",
+            "never",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let client = mcp_client(&ctx, &[]).await;
+    let explode = json!({"agent_id": r#"CounterAgent("mcp-stream")"#, "function_name": "explode"});
+    let failed = call(&client, "agent_invoke", explode).await;
+    assert_eq!(error_code(&failed), "invocation-failed", "{failed:?}");
+    let payload = &error(&failed)["payload"];
+    assert!(
+        payload["stderr"]
+            .as_str()
+            .is_some_and(|stderr| stderr.contains("intentional stream stderr")),
+        "{payload}"
+    );
+    client.cancel().await.unwrap();
 }
 
 #[test]

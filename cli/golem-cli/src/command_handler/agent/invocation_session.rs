@@ -525,6 +525,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let mut output_streams = HashMap::<u32, OutputStream>::new();
     let bindings = session.delivery_tracker();
     let mut failed = false;
+    let mut invocation_failure = None;
     let mut accepted = false;
     // Events show the key the server accepted the invocation under once it has; before that,
     // such as for a rejection, the key the session sent.
@@ -749,6 +750,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     &bindings,
                     &mut output_streams,
                     &output_tx,
+                    &mut invocation_failure,
                 ).await {
                     Ok(response_failed) => failed |= response_failed,
                     Err(error) if error.downcast_ref::<InputFailureSignal>().is_some() => {
@@ -824,6 +826,11 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     }
     if input_failure_open && let Ok(failure) = input_failure_rx.try_recv() {
         return Err(failure.error);
+    }
+    if let Some(failure) = invocation_failure {
+        // The events or the log have reported the failure already, so the CLI prints nothing
+        // more; the failure stays the source, with its public code, for structured reports.
+        return Err(anyhow::Error::new(failure).context(NonSuccessfulExit));
     }
     if failed {
         bail!(NonSuccessfulExit);
@@ -1874,6 +1881,7 @@ async fn handle_response(
     bindings: &DeliveryTracker,
     output_streams: &mut HashMap<u32, OutputStream>,
     output_tx: &OutputChannel,
+    invocation_failure: &mut Option<InvocationFailure>,
 ) -> anyhow::Result<bool> {
     let mut failed = false;
     match response {
@@ -1891,6 +1899,11 @@ async fn handle_response(
             ..
         }) => {
             failed = true;
+            *invocation_failure = Some(InvocationFailure {
+                code,
+                message: message.clone(),
+                stderr: stderr.clone(),
+            });
             let reason = code.as_str().to_string();
             if structured {
                 let mut event = event(AgentInvocationSessionEventKind::Rejected, idempotency_key);
@@ -2130,6 +2143,11 @@ async fn handle_response(
                     stderr,
                 } => {
                     failed = true;
+                    *invocation_failure = Some(InvocationFailure {
+                        code,
+                        message: message.clone(),
+                        stderr: stderr.clone(),
+                    });
                     (code.as_str().to_string(), Some(message), stderr)
                 }
             };
