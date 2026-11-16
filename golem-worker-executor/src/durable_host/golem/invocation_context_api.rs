@@ -35,7 +35,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{OplogIndex, Timestamp};
 use golem_service_base::headers::TraceContextHeaders;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 
@@ -274,7 +274,7 @@ impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn start_span(&mut self, name: String) -> anyhow::Result<Resource<SpanEntry>> {
-        let attributes = HashMap::from([(
+        let attributes = BTreeMap::from([(
             "name".to_string(),
             golem_common::model::invocation_context::AttributeValue::String(name),
         )]);
@@ -356,7 +356,7 @@ pub struct SpanEntry {
 
 fn guest_span_started<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
-    attributes: HashMap<String, golem_common::model::invocation_context::AttributeValue>,
+    attributes: BTreeMap<String, golem_common::model::invocation_context::AttributeValue>,
 ) -> SpanStarted {
     SpanStarted {
         span_id: golem_common::model::invocation_context::SpanId::generate(),
@@ -471,7 +471,7 @@ async fn set_guest_span_attributes<Ctx: WorkerCtx>(
         ResolvedCall::Live(begun) => begun.start_live(ctx, request).await?,
         ResolvedCall::Replay(handle) => handle,
     };
-    let mut applied = HashMap::new();
+    let mut applied = BTreeMap::new();
     for (key, value) in attributes {
         span.set_attribute(key.clone(), value.clone());
         applied.insert(key, value);

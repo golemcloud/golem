@@ -1,6 +1,6 @@
 ---
 name: golem-debug-agent-history
-description: "Querying the operation log. Use when dumping or searching the oplog, or debugging agent behavior from its recorded history."
+description: "Querying the operation log. Use when dumping or searching the oplog, debugging agent behavior from its recorded history, or exporting an obfuscated oplog for a bug report."
 ---
 
 # Debugging Agent History
@@ -31,8 +31,32 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 | `--no-open` | Do not open the served viewer in a browser. Requires `--serve`. |
 | `--html <FILE>` | Write the selected entries into a self-contained interactive HTML viewer at `FILE` instead of printing them. Every entry is embedded, so prefer `--serve` for large oplogs. Can be combined with `--from` or `--query`. In structured formats the entries are still emitted on stdout. |
 | `--open` | Open the file written by `--html` in the default browser. |
+| `--obfuscate` | Export an obfuscated report for a bug report: customer values become tokens. Tokens are equal only inside one export, because each CLI process draws a new random key. The report is for reading, not for replay. |
+| `--keep-scalars` | Requires `--obfuscate`. Show numbers, bools, datetimes, durations and the mantissa, scale and unit of quantities in clear; never byte lists, discriminants, lengths or text. Leaks amounts, counters, numeric IDs, dates in values, resource IDs, consumed fuel, and every bool and small number that a token hides. |
+| `--keep-shape` | Requires `--obfuscate`. Show discriminants, presence, and list, map and byte lengths; the values stay tokens. Leaks whether an optional value was present, which case occurred, item counts and payload sizes; map entries are sorted by value, so their order can show which token stands for which value. |
+| `--keep-error-text` | Requires `--obfuscate`. Keep the free text of error messages. Leaks any customer value that the text contains, such as a URL, an input value or a file name. |
+| `--max-entry-bytes <N>` | Requires `--obfuscate`. Read an entry that the oplog page omitted only when its size is at most `N` bytes (default 16777216). A larger entry stays omitted with its size. |
 
 If neither `--from` nor `--query` is provided, the entire oplog is streamed.
+
+### Obfuscated export
+
+`--obfuscate` turns the output into a report for a bug report: customer values become tokens, and Golem metadata stays in clear. Without it, the output is the raw oplog and is not safe to share. The report is not anonymous, so tell the user its limits before they share it. See [Sharing an oplog](https://learn.golem.cloud/next/debug/oplog-export) for the details:
+
+- A token is a pseudonym: equal values give equal tokens, so a reader who knows one value learns every place where it occurs.
+- Some data is always kept: env and config entry names, names from customer code such as agent type, method, type and field names, and entry timestamps and sizes.
+- The `--keep-*` flags keep more data, and `--keep-error-text` can leak any customer value that an error message quotes.
+
+Rules:
+
+- The structured output is a sequence of documents: one `agent.oplog-export-header`, one `agent.oplog-export-entry` per entry and one `agent.oplog-export-coverage`, not the `agent.oplog` documents. Branch on `$type`.
+- A sequence without a coverage document is from a failed export, and the exit code is not zero.
+- Check `incomplete`, `hydrationFailures` and `startUnknown` in the coverage document before you use the report. `incomplete` is `true` when one of the two lists is not empty. `hostTypeMismatches` lists host payloads whose type differs from the type that the CLI expects, for example after a server upgrade; they are tokens in full, so use a CLI of the server's version.
+- An omitted `Create` entry above `--max-entry-bytes` fails the export. Export again with a larger limit.
+- Agent references are `agent:<token>`, and the report holds only the named agent.
+- Tokens are equal only inside one export or one `--serve` session. Do not compare two reports by their tokens.
+- The `--keep-*` flags and `--max-entry-bytes` need `--obfuscate`. `--omit-payloads` cannot be used with it. `--serve --obfuscate` works; a served page that answers HTTP 409 means that the agent was created again, so start the viewer again.
+- The user who exports reads the raw oplog with the `oplog : read` permission. Obfuscation protects the shared report, not the read.
 
 ### Output
 
@@ -96,4 +120,14 @@ golem agent oplog <AGENT_ID> --serve
 Write the viewer into a self-contained HTML file with the entries embedded, and open it:
 ```shell
 golem agent oplog <AGENT_ID> --html oplog.html --open
+```
+
+Export an obfuscated report for a bug report into an HTML file:
+```shell
+golem agent oplog <AGENT_ID> --obfuscate --html report.html
+```
+
+Serve the viewer with each page obfuscated:
+```shell
+golem agent oplog <AGENT_ID> --obfuscate --serve
 ```

@@ -1,5 +1,5 @@
 use crate::Tracing;
-use crate::app::TestContext;
+use crate::app::{TestContext, cmd};
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use reqwest::StatusCode;
 use test_r::{inherit_test_dep, test, timeout};
@@ -44,6 +44,39 @@ async fn server_refuses_well_known_token_on_non_loopback_address(_tracing: &Trac
         "{output}"
     );
     assert!(output.contains("router.address = 0.0.0.0"), "{output}");
+}
+
+#[test]
+#[timeout("10m")]
+async fn unauthenticated_requests_get_json_unauthorized(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for path in [
+        "/v1/me/token".to_string(),
+        format!("/v1/components/{}/workers/agent", uuid::Uuid::new_v4()),
+    ] {
+        let response = client
+            .get(format!("http://127.0.0.1:{}{path}", ctx.router_port()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "AUTH_UNAUTHORIZED", "{path}: {body}");
+    }
+
+    ctx.add_env_var("GOLEM_AUTH_TOKEN", "rotated-token");
+    let output = ctx.cli([cmd::ACCOUNT, "usage", "show"]).await;
+
+    assert!(!output.success());
+    assert!(output.stderr_contains("401"), "{}", output.stderr_text());
+    assert!(
+        output.stderr_contains("Could not authenticate user using token (AUTH_UNAUTHORIZED)"),
+        "{}",
+        output.stderr_text()
+    );
 }
 
 #[test]
