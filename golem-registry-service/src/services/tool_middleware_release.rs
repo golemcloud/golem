@@ -527,12 +527,7 @@ impl ToolMiddlewareReleaseService {
         } = &provision.source;
         let component = self
             .component_service
-            .get_component_revision(
-                *component_id,
-                *component_revision,
-                false,
-                &AuthCtx::system(),
-            )
+            .get_source_component_revision(*component_id, *component_revision, &AuthCtx::system())
             .await
             .map_err(|error| {
                 anyhow::anyhow!("invalid system tool middleware component source: {error}")
@@ -609,7 +604,7 @@ impl ToolMiddlewareReleaseService {
         } = release.source;
         let component = self
             .component_service
-            .get_component_revision(component_id, component_revision, false, &AuthCtx::system())
+            .get_source_component_revision(component_id, component_revision, &AuthCtx::system())
             .await
             .map_err(|_| ToolMiddlewareReleaseError::ImmutableReleaseConflict)?;
         let deployed = self
