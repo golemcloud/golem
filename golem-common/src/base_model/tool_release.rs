@@ -14,7 +14,7 @@
 
 use crate::base_model::account::{AccountEmail, AccountId};
 use crate::base_model::diff::Hash;
-use crate::base_model::tool::{ToolName, ToolSource};
+use crate::base_model::tool::{BUILTIN_BASH_TOOL_NAME, ToolName, ToolSource};
 use crate::schema::tool::Tool;
 use crate::{declare_enums, declare_structs, declare_unions, newtype_uuid};
 use chrono::{DateTime, Utc};
@@ -141,6 +141,15 @@ declare_unions! {
     pub enum ToolReleaseReference {
         ById(ToolReleaseById),
         ByCoordinates(ToolReleaseByCoordinates),
+    }
+}
+
+impl ToolRelease {
+    /// True for a release of the built-in shell: the server provisioned it as the built-in `bash`
+    /// tool. A user's release with the same name is an ordinary tool.
+    pub fn is_builtin_shell(&self) -> bool {
+        self.origin == ToolReleaseOrigin::ProtectedSystem
+            && self.name.as_str() == BUILTIN_BASH_TOOL_NAME
     }
 }
 

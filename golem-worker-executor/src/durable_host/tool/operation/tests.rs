@@ -71,6 +71,7 @@ fn activation(filesystem: FilesystemCapability) -> Arc<EntityActivation> {
                             "tools".to_string(),
                         ),
                     },
+                    shell: false,
                 }),
             },
             filesystem,

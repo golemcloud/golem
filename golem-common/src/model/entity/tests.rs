@@ -71,6 +71,7 @@ fn activation() -> EntityActivation {
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
         source,
+        shell: false,
     };
 
     EntityActivation::new(
@@ -980,4 +981,71 @@ fn entity_tool_middleware_name_desert_decodes_and_re_encodes_stored_names() {
         desert_rust::deserialize::<AgentEntity>(&bytes).unwrap(),
         entity
     );
+}
+
+#[test]
+fn entity_scope_refuses_a_calling_principal_that_is_not_its_owner_agent() {
+    use crate::base_model::caller::ToolPrincipal;
+
+    let owner = owner();
+    let scope_with = |calling_principal: Principal| {
+        EntityInvocationScope::new(
+            EntityInvocationId::new(
+                OwnedAgentEntityId {
+                    owner: owner.clone(),
+                    entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
+                },
+                OplogIndex::from_u64(84),
+            )
+            .unwrap(),
+            OplogIndex::from_u64(81),
+            Arc::new(activation()),
+            calling_principal,
+            InvocationExecutionMode::Live,
+            InvocationId(uuid::Uuid::from_u128(0x5c0e)),
+            false,
+            InvocationId(uuid::Uuid::from_u128(0x5c0f)),
+        )
+    };
+    let accepted = scope_with(owner_principal(&owner)).unwrap();
+
+    let other_agent = owner_principal(&OwnedAgentId::new(
+        owner.environment_id,
+        &AgentId {
+            component_id: owner.agent_id.component_id,
+            agent_id: "Example(\"other\")".to_string(),
+        },
+    ));
+    let owners_tool = Principal::Tool(ToolPrincipal {
+        issuer: "https://golem.example".to_string(),
+        environment_id: owner.environment_id,
+        tool_name: ToolName::try_from("search").unwrap(),
+    });
+    for refused in [other_agent, owners_tool, Principal::Anonymous] {
+        let kind = refused.kind();
+        assert_eq!(
+            scope_with(refused.clone()).unwrap_err(),
+            "Entity invocation calling principal must be its owner agent",
+            "{kind} was accepted by the constructor"
+        );
+
+        let mut json = serde_json::to_value(&accepted).unwrap();
+        json["callingPrincipal"] = serde_json::to_value(&refused).unwrap();
+        let error = serde_json::from_value::<EntityInvocationScope>(json)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("calling principal must be its owner agent"),
+            "{kind} was accepted from JSON: {error}"
+        );
+
+        let mut protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope =
+            accepted.clone().into();
+        protobuf.calling_principal = Some(refused.into());
+        assert_eq!(
+            EntityInvocationScope::try_from(protobuf).unwrap_err(),
+            "Entity invocation calling principal must be its owner agent",
+            "{kind} was accepted from protobuf"
+        );
+    }
 }

@@ -228,6 +228,7 @@ impl CompilerFixture {
                 secret_keys_revealable: Default::default(),
                 filesystem_access: ToolFilesystemAccess::Denied,
                 source,
+                shell: false,
             },
             agent,
             tool_name,

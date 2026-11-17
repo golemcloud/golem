@@ -240,6 +240,7 @@ fn binding(
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
         source: tool.source.clone(),
+        shell: false,
     }
 }
 

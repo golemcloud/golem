@@ -1080,6 +1080,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
                     component_revision,
                     component_name: ComponentName("tools".to_string()),
                 },
+                shell: false,
             }),
         },
         AgentEntity::ToolMiddleware(middleware_name) => EntityActivationPolicy::ToolMiddleware {

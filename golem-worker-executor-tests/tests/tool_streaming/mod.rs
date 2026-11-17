@@ -950,6 +950,9 @@ pub(crate) fn deployment_state(
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access,
                     source: tool.registration.source.clone(),
+                    // The registry marks the built-in `bash` release as the shell; the tests
+                    // deploy the built-in `bash` component in its place.
+                    shell: provider_component_name == "golem:bash" && name.as_str() == "bash",
                 },
             )
         })
@@ -1960,6 +1963,7 @@ fn native_deployment_state(
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: ToolFilesystemAccess::Unset,
         source,
+        shell: false,
     };
     let mut state = ToolDeploymentState {
         deployment_revision,
@@ -2011,6 +2015,7 @@ fn native_deployment_state(
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,
             source: helper_source,
+            shell: false,
         },
     );
     state

@@ -330,6 +330,9 @@ pub const TOOL_METADATA_WIT_VERSION: &str = "0.1.0";
 /// configuration.
 pub const BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL: &str = "builtin-tool-owner@golem.cloud";
 
+/// Name of the built-in `bash` tool release that a server provisions.
+pub const BUILTIN_BASH_TOOL_NAME: &str = "bash";
+
 /// Version of the built-in `bash` tool release that a server provisions.
 pub const BUILTIN_BASH_TOOL_VERSION: &str = "0.3.2";
 
@@ -343,7 +346,7 @@ pub struct DefaultTool {
 }
 
 pub const DEFAULT_TOOLS: &[DefaultTool] = &[DefaultTool {
-    name: "bash",
+    name: BUILTIN_BASH_TOOL_NAME,
     version: BUILTIN_BASH_TOOL_VERSION,
     filesystem_access: ToolFilesystemAccess::Allowed,
 }];
@@ -482,7 +485,7 @@ pub struct ToolRegistration {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", desert(evolution(FieldAdded("shell", false))))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledToolBinding {
     pub deployment_revision: DeploymentRevision,
@@ -506,6 +509,11 @@ pub struct CompiledToolBinding {
     #[cfg_attr(feature = "full", desert(default))]
     pub filesystem_access: ToolFilesystemAccess,
     pub source: ToolSource,
+    /// The built-in shell: a command that it runs is a call of the agent or tool that calls or
+    /// hosts it, so the shell itself never appears as a caller. Only the registry sets it, for a
+    /// release of the built-in `bash` tool.
+    #[serde(default)]
+    pub shell: bool,
 }
 
 /// The exact registration and binding accepted for a tool invocation.

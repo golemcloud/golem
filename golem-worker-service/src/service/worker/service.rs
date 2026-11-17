@@ -8099,6 +8099,7 @@ mod tests {
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: Default::default(),
                 source: registered.registration.source.clone(),
+                shell: false,
             };
             let mut effective_definition = definition.clone();
             effective_definition.commands.nodes[0].doc.summary = summary.into();

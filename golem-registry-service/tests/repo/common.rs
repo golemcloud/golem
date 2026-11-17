@@ -11549,6 +11549,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                         secret_keys_revealable: SecretKeyScope::All,
                         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
                         source,
+                        shell: false,
                     },
                 )
             })
@@ -12421,6 +12422,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
         source: remote_source,
+        shell: false,
     };
     let mut remote_deployment = deployment_creation(
         4,
