@@ -1389,11 +1389,19 @@ task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` o
 has completed `DurableStateRemoved`, because nothing committed to the generation can run after
 that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
 still fail and leave an invocation an earlier attempt with the same key committed. A failed
-deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
-worker's status before the bind, with or without a fingerprint, without panicking on a stopped
-status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
-deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
-as reads do, until a retried delete claims it. Failures after the bind keep
+deletion attempt and a lost-shard retirement keep their own errors. A failed deletion leaves its
+stopped generation cached until a retried delete claims it, so the reads that can reach a resident
+worker without a bound task scope use the fallible status reads. They include admission before the
+bind, with or without a fingerprint; local RPC reads, including the pinned status and the wait for
+an invocation result; the gRPC interrupt, resume, update, plugin activation and deactivation, and
+cancel calls; the wait for initialization after create; a scheduled invocation wake; and durable
+stream session reads. `Worker::try_get_last_known_status` answers a stopped status actor with the
+routing miss when the shard was lost, with "Worker is being deleted" when a deletion owns the
+generation, and otherwise with the actor's runtime error. `try_lookup_invocation_result` gives the
+routing miss too but leaves the deletion's refusal to its caller, because its callers can hold the
+instance lock. A wake refused this way is not acknowledged and runs again after its lease. Only the
+deletion's `OwnedWorkJoined` stage and executor shutdown stop the status actor of a generation that
+is still reachable; a lost-shard retirement does not. Failures after the bind keep
 their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
 while it runs. External-tool sessions bind the same way after each acquisition. A call on an
 existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
