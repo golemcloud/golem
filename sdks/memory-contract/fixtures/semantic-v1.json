@@ -1,0 +1,620 @@
+{
+  "version": "1.0.0",
+  "ids": {
+    "O1": "00000000-0000-4000-8000-000000000001",
+    "O2": "00000000-0000-4000-8000-000000000002",
+    "O3": "00000000-0000-4000-8000-000000000003",
+    "S1": "00000000-0000-4000-8000-000000000011",
+    "S2": "00000000-0000-4000-8000-000000000012"
+  },
+  "callers": {
+    "alice": "(\"https://issuer.example\",\"alice\")",
+    "bob": "(\"https://issuer.example\",\"bob\")"
+  },
+  "cases": [
+    {
+      "id": "custom/observe-recall-forget",
+      "description": "A custom memory records a source, returns it as evidence and forgets it by observation ID.",
+      "members": { "m": {} },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Orion delivery moved to Friday"] }, "expect": { "ok": "@O1" } },
+        { "op": "recall", "memory": "m", "input": { "query": "orion", "limit": 5 }, "expect": { "ok": [{ "text": "Orion delivery moved to Friday", "sources": ["@O1"] }] } },
+        { "op": "forget", "memory": "m", "input": { "observationIds": ["@O1"] }, "expect": { "ok": null } },
+        { "op": "recall", "memory": "m", "input": { "query": "orion", "limit": 5 }, "expect": { "ok": [] } }
+      ],
+      "expectState": { "m": { "sources": [] } }
+    },
+    {
+      "id": "identity/composite-allocates-once",
+      "description": "The entry composite allocates an absent ID once and sends the same ID to every member.",
+      "members": { "a": {}, "b": {} },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        { "op": "observe", "memory": "p", "caller": "alice", "input": { "parts": ["Mira owns Atlas"] }, "expect": { "ok": { "capture": "new" } } }
+      ],
+      "expectState": {
+        "a": { "sources": [{ "id": "$new", "parts": ["Mira owns Atlas"], "caller": "alice" }] },
+        "b": { "sources": [{ "id": "$new", "parts": ["Mira owns Atlas"], "caller": "alice" }] }
+      }
+    },
+    {
+      "id": "identity/same-id-same-content-keeps-original",
+      "description": "Repeating an identical observation adds no duplicate and keeps the original provenance, even for another caller.",
+      "members": { "m": {} },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "caller": "bob", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } }
+      ],
+      "expectState": { "m": { "sources": [{ "id": "@O1", "parts": ["Mira owns Atlas"], "caller": "alice" }] } }
+    },
+    {
+      "id": "identity/same-id-different-content-conflicts",
+      "description": "Different content under a recorded ID is an input error and changes nothing.",
+      "members": { "m": {} },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Orion"] }, "expect": { "error": { "kind": "input" } } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Atlas"], "refs": ["chat:42"] }, "expect": { "error": { "kind": "input" } } }
+      ],
+      "expectState": { "m": { "sources": [{ "id": "@O1", "parts": ["Mira owns Atlas"], "caller": "alice" }] } }
+    },
+    {
+      "id": "identity/equal-text-distinct-ids",
+      "description": "Equal text under distinct IDs remains distinct evidence.",
+      "members": { "m": {} },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Atlas shipped"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O2", "parts": ["Atlas shipped"] }, "expect": { "ok": "@O2" } },
+        { "op": "recall", "memory": "m", "input": { "query": "atlas", "limit": 5 }, "expect": { "ok": [{ "text": "Atlas shipped", "sources": ["@O1"] }, { "text": "Atlas shipped", "sources": ["@O2"] }] } }
+      ],
+      "expectState": {
+        "m": { "sources": [{ "id": "@O1", "parts": ["Atlas shipped"], "caller": "alice" }, { "id": "@O2", "parts": ["Atlas shipped"], "caller": "alice" }] }
+      }
+    },
+    {
+      "id": "repair/partial-product-write",
+      "description": "A product write that failed in its second member is repaired by repeating the same ID and content. Only the missing member is written.",
+      "members": { "a": {}, "b": { "faults": [{ "op": "observe", "nth": 1, "error": "storage" }] } },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        { "op": "observe", "memory": "p", "caller": "alice", "input": { "id": "@O1", "parts": ["Orion moved to Friday"] }, "expect": { "error": { "kind": "storage", "member": "b" } } },
+        { "expectState": { "a": { "sources": [{ "id": "@O1", "parts": ["Orion moved to Friday"], "caller": "alice" }] }, "b": { "sources": [] } } },
+        { "op": "observe", "memory": "p", "caller": "alice", "input": { "id": "@O1", "parts": ["Orion moved to Friday"] }, "expect": { "ok": "@O1" } }
+      ],
+      "expectState": {
+        "a": { "sources": [{ "id": "@O1", "parts": ["Orion moved to Friday"], "caller": "alice" }] },
+        "b": { "sources": [{ "id": "@O1", "parts": ["Orion moved to Friday"], "caller": "alice" }] }
+      },
+      "expectTrace": [
+        { "event": "member", "member": "a", "op": "observe", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "observe", "outcome": "storage" },
+        { "event": "member", "member": "a", "op": "observe", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "observe", "outcome": "ok" }
+      ]
+    },
+    {
+      "id": "repair/conflict-stops-at-first-member",
+      "description": "A content conflict fails in the first member, names it, and writes no later member.",
+      "members": { "a": {}, "b": {} },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        { "op": "observe", "memory": "p", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "p", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Orion"] }, "expect": { "error": { "kind": "input", "member": "a" } } }
+      ],
+      "expectState": {
+        "a": { "sources": [{ "id": "@O1", "parts": ["Mira owns Atlas"], "caller": "alice" }] },
+        "b": { "sources": [{ "id": "@O1", "parts": ["Mira owns Atlas"], "caller": "alice" }] }
+      },
+      "expectTrace": [
+        { "event": "member", "member": "a", "op": "observe", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "observe", "outcome": "ok" },
+        { "event": "member", "member": "a", "op": "observe", "outcome": "input" }
+      ]
+    },
+    {
+      "id": "cancellation/overlapping-calls-keep-their-own-signals",
+      "description": "Two overlapping observations on one memory have distinct callers and signals. Cancelling the first does not cancel the second, and the first source stays committed.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "gate": "g1", "then": { "text": "summary A" } }, { "gate": "g2", "then": { "text": "summary B" } }] },
+      "steps": [
+        { "start": "first", "op": "observe", "memory": "m", "caller": "alice", "signal": "s1", "input": { "id": "@O1", "parts": ["Atlas review on Monday"] } },
+        { "start": "second", "op": "observe", "memory": "m", "caller": "bob", "signal": "s2", "input": { "id": "@O2", "parts": ["Orion review on Tuesday"] } },
+        { "cancel": "s1" },
+        { "await": "first", "expect": { "cancelled": true } },
+        { "release": "g2" },
+        { "await": "second", "expect": { "ok": "@O2" } },
+        { "release": "g1" }
+      ],
+      "expectState": {
+        "m": {
+          "sources": [{ "id": "@O1", "parts": ["Atlas review on Monday"], "caller": "alice" }, { "id": "@O2", "parts": ["Orion review on Tuesday"], "caller": "bob" }],
+          "derived": [{ "source": "@O2", "kind": "summary", "text": "summary B" }]
+        }
+      },
+      "expectTrace": [
+        { "event": "model-start", "role": "summarizer", "call": 1, "source": "@O1" },
+        { "event": "model-start", "role": "summarizer", "call": 2, "source": "@O2" },
+        { "event": "model-end", "role": "summarizer", "call": 1, "outcome": "cancelled" },
+        { "event": "model-end", "role": "summarizer", "call": 2, "outcome": "ok" }
+      ]
+    },
+    {
+      "id": "cancellation/is-not-an-enrichment-diagnostic",
+      "description": "Cancellation during enrichment propagates. It is neither a diagnostic nor a successful empty derivation, so a later same-caller observation retries the source.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "gate": "g1", "then": { "text": "never committed" } }, { "text": "summary A" }, { "text": "summary B" }] },
+      "steps": [
+        { "start": "first", "op": "observe", "memory": "m", "caller": "alice", "signal": "s1", "input": { "id": "@O1", "parts": ["Atlas review on Monday"] } },
+        { "cancel": "s1" },
+        { "await": "first", "expect": { "cancelled": true } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O2", "parts": ["Orion review on Tuesday"] }, "expect": { "ok": "@O2" } }
+      ],
+      "expectState": {
+        "m": { "derived": [{ "source": "@O1", "kind": "summary", "text": "summary A" }, { "source": "@O2", "kind": "summary", "text": "summary B" }] }
+      },
+      "expectTrace": [
+        { "event": "model-start", "role": "summarizer", "call": 1, "source": "@O1" },
+        { "event": "model-end", "role": "summarizer", "call": 1, "outcome": "cancelled" },
+        { "event": "model-start", "role": "summarizer", "call": 2, "source": "@O1" },
+        { "event": "model-end", "role": "summarizer", "call": 2, "outcome": "ok" },
+        { "event": "model-start", "role": "summarizer", "call": 3, "source": "@O2" },
+        { "event": "model-end", "role": "summarizer", "call": 3, "outcome": "ok" }
+      ]
+    },
+    {
+      "id": "derivation/forget-during-model-work",
+      "description": "Forgetting a source while its summary is being generated removes it. The late result fails the support recheck and resurrects nothing.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "gate": "g1", "then": { "text": "late summary" } }] },
+      "steps": [
+        { "start": "obs", "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Orion moved to Friday"] } },
+        { "op": "forget", "memory": "m", "caller": "bob", "input": { "observationIds": ["@O1"] }, "expect": { "ok": null } },
+        { "release": "g1" },
+        { "await": "obs", "expect": { "ok": "@O1" } },
+        { "op": "recall", "memory": "m", "input": { "query": "orion late summary", "limit": 5 }, "expect": { "ok": [] } }
+      ],
+      "expectState": { "m": { "sources": [], "derived": [] } }
+    },
+    {
+      "id": "derivation/first-valid-commit-wins",
+      "description": "Two overlapping derivations of one source both call the model. The first valid commit wins and the later result neither overwrites nor duplicates it.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "gate": "g1", "then": { "text": "summary one" } }, { "gate": "g2", "then": { "text": "summary two" } }] },
+      "steps": [
+        { "start": "first", "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Atlas depends on Orion"] } },
+        { "start": "repeat", "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Atlas depends on Orion"] } },
+        { "release": "g2" },
+        { "await": "repeat", "expect": { "ok": "@O1" } },
+        { "release": "g1" },
+        { "await": "first", "expect": { "ok": "@O1" } }
+      ],
+      "expectState": {
+        "m": {
+          "sources": [{ "id": "@O1", "parts": ["Atlas depends on Orion"], "caller": "alice" }],
+          "derived": [{ "source": "@O1", "kind": "summary", "text": "summary two" }]
+        }
+      },
+      "expectModelCalls": { "summarizer": 2 }
+    },
+    {
+      "id": "derivation/same-identified-caller-retry",
+      "description": "A failed enrichment is retried only by a later observation of the same identified caller, before that observation is processed.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "error": "provider" }, { "text": "summary two" }, { "text": "summary one" }, { "text": "summary three" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "caller": "bob", "input": { "id": "@O2", "parts": ["Bob owns Orion"] }, "expect": { "ok": "@O2" } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O3", "parts": ["Atlas ships Friday"] }, "expect": { "ok": "@O3" } }
+      ],
+      "expectState": {
+        "m": {
+          "derived": [
+            { "source": "@O2", "kind": "summary", "text": "summary two" },
+            { "source": "@O1", "kind": "summary", "text": "summary one" },
+            { "source": "@O3", "kind": "summary", "text": "summary three" }
+          ]
+        }
+      },
+      "expectTrace": [
+        { "event": "model-start", "role": "summarizer", "call": 1, "source": "@O1" },
+        { "event": "model-end", "role": "summarizer", "call": 1, "outcome": "error" },
+        { "event": "diagnostic", "member": "m", "source": "@O1", "role": "summarizer", "cause": "error" },
+        { "event": "model-start", "role": "summarizer", "call": 2, "source": "@O2" },
+        { "event": "model-end", "role": "summarizer", "call": 2, "outcome": "ok" },
+        { "event": "model-start", "role": "summarizer", "call": 3, "source": "@O1" },
+        { "event": "model-end", "role": "summarizer", "call": 3, "outcome": "ok" },
+        { "event": "model-start", "role": "summarizer", "call": 4, "source": "@O3" },
+        { "event": "model-end", "role": "summarizer", "call": 4, "outcome": "ok" }
+      ]
+    },
+    {
+      "id": "derivation/anonymous-sources-do-not-match",
+      "description": "Anonymous sources do not match across invocations, so a later anonymous observation does not retry an earlier one.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "error": "provider" }, { "text": "summary two" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "input": { "id": "@O2", "parts": ["Atlas ships Friday"] }, "expect": { "ok": "@O2" } }
+      ],
+      "expectState": {
+        "m": {
+          "sources": [{ "id": "@O1", "parts": ["Mira owns Atlas"], "caller": null }, { "id": "@O2", "parts": ["Atlas ships Friday"], "caller": null }],
+          "derived": [{ "source": "@O2", "kind": "summary", "text": "summary two" }]
+        }
+      },
+      "expectModelCalls": { "summarizer": 2 }
+    },
+    {
+      "id": "derivation/at-most-one-earlier-source",
+      "description": "One later observation retries at most one earlier source of the same caller.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "error": "provider" }, { "error": "provider" }, { "error": "provider" }, { "text": "retried" }, { "text": "summary three" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O2", "parts": ["Atlas depends on Orion"] }, "expect": { "ok": "@O2" } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O3", "parts": ["Orion moved to Friday"] }, "expect": { "ok": "@O3" } }
+      ],
+      "expectState": {
+        "m": { "derivedAmong": { "sources": ["@O1", "@O2"], "count": 1 } }
+      },
+      "expectModelCalls": { "summarizer": 5 }
+    },
+    {
+      "id": "derivation/successful-empty-is-complete",
+      "description": "A successful empty derivation is recorded and not retried as a failure.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "text": "" }, { "text": "summary two" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["ok"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O2", "parts": ["Atlas ships Friday"] }, "expect": { "ok": "@O2" } }
+      ],
+      "expectState": {
+        "m": { "derived": [{ "source": "@O1", "kind": "summary", "text": "" }, { "source": "@O2", "kind": "summary", "text": "summary two" }] }
+      },
+      "expectModelCalls": { "summarizer": 2 }
+    },
+    {
+      "id": "derivation/malformed-output-is-a-failed-derivation",
+      "description": "Malformed model output is a failed derivation with a diagnostic, not a successful empty one, so it is retried.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "malformed": true }, { "text": "summary one" }, { "text": "summary two" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O2", "parts": ["Atlas ships Friday"] }, "expect": { "ok": "@O2" } }
+      ],
+      "expectState": {
+        "m": { "derived": [{ "source": "@O1", "kind": "summary", "text": "summary one" }, { "source": "@O2", "kind": "summary", "text": "summary two" }] }
+      },
+      "expectTrace": [
+        { "event": "model-start", "role": "summarizer", "call": 1, "source": "@O1" },
+        { "event": "model-end", "role": "summarizer", "call": 1, "outcome": "malformed" },
+        { "event": "diagnostic", "member": "m", "source": "@O1", "role": "summarizer", "cause": "malformed" },
+        { "event": "model-start", "role": "summarizer", "call": 2, "source": "@O1" },
+        { "event": "model-end", "role": "summarizer", "call": 2, "outcome": "ok" },
+        { "event": "model-start", "role": "summarizer", "call": 3, "source": "@O2" },
+        { "event": "model-end", "role": "summarizer", "call": 3, "outcome": "ok" }
+      ]
+    },
+    {
+      "id": "enrichment/failure-keeps-source-and-reads-do-not-retry",
+      "description": "After enrichment fails, the literal source stays retrievable, and reads make no enrichment call.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "error": "provider" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Orion moved to Friday"] }, "expect": { "ok": "@O1" } },
+        { "op": "recall", "memory": "m", "caller": "alice", "input": { "query": "orion", "limit": 5 }, "expect": { "ok": [{ "text": "Orion moved to Friday", "sources": ["@O1"] }] } },
+        { "op": "context", "memory": "m", "caller": "alice", "input": { "query": "orion", "tokenBudget": 10 }, "expect": { "ok": { "items": [{ "text": "Orion moved to Friday", "sources": ["@O1"] }], "tokens": 0 } } }
+      ],
+      "expectState": { "m": { "sources": [{ "id": "@O1", "parts": ["Orion moved to Friday"], "caller": "alice" }], "derived": [] } },
+      "expectModelCalls": { "summarizer": 1 }
+    },
+    {
+      "id": "retrieval/query-embedding-failure-is-an-error",
+      "description": "With an embedder the default retrieval is hybrid. A failed query embedding is an error, not an empty result. Lexical reads skip the embedding.",
+      "members": { "m": { "queryEmbedder": true } },
+      "models": { "embedder": [{ "error": "provider" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Orion moved to Friday"] }, "expect": { "ok": "@O1" } },
+        { "op": "recall", "memory": "m", "input": { "query": "orion", "limit": 3 }, "expect": { "error": { "kind": "retrieval-model" } } },
+        { "op": "recall", "memory": "m", "input": { "query": "orion", "limit": 3, "retrieval": "lexical" }, "expect": { "ok": [{ "text": "Orion moved to Friday", "sources": ["@O1"] }] } }
+      ],
+      "expectModelCalls": { "embedder": 1 }
+    },
+    {
+      "id": "retrieval/zero-limit-and-budget-call-no-model",
+      "description": "A zero limit or a zero budget returns an empty result without model calls.",
+      "members": { "m": { "queryEmbedder": true, "summarizer": true } },
+      "models": { "summarizer": [{ "text": "summary" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Orion moved to Friday"] }, "expect": { "ok": "@O1" } },
+        { "op": "recall", "memory": "m", "input": { "query": "orion", "limit": 0 }, "expect": { "ok": [] } },
+        { "op": "context", "memory": "m", "input": { "query": "orion", "tokenBudget": 0 }, "expect": { "ok": { "items": [], "tokens": 0 } } }
+      ],
+      "expectModelCalls": { "summarizer": 1, "embedder": 0 }
+    },
+    {
+      "id": "context/complete-items-skip-oversized",
+      "description": "Packing keeps complete items, skips an item that does not fit and still considers later items. The fixture counter counts '#' characters.",
+      "members": { "m": {} },
+      "steps": [
+        { "op": "observe", "memory": "m", "input": { "id": "@O1", "parts": ["alpha ########"] }, "expect": { "ok": "@O1" } },
+        { "op": "observe", "memory": "m", "input": { "id": "@O2", "parts": ["alpha ###"] }, "expect": { "ok": "@O2" } },
+        { "op": "observe", "memory": "m", "input": { "id": "@O3", "parts": ["alpha ##"] }, "expect": { "ok": "@O3" } },
+        { "op": "context", "memory": "m", "input": { "query": "alpha", "tokenBudget": 5 }, "expect": { "ok": { "items": [{ "text": "alpha ###", "sources": ["@O2"] }, { "text": "alpha ##", "sources": ["@O3"] }], "tokens": 5 } } },
+        { "op": "context", "memory": "m", "input": { "query": "alpha", "tokenBudget": 4 }, "expect": { "ok": { "items": [{ "text": "alpha ###", "sources": ["@O2"] }], "tokens": 3 } } }
+      ]
+    },
+    {
+      "id": "product/recall-interleaves-and-deduplicates",
+      "description": "Product reads every member, interleaves in member order, merges identical text with the same sources and keeps every origin, keeps equal text with other sources, then applies the final limit.",
+      "members": {
+        "a": { "items": [{ "text": "Atlas depends on Orion", "sources": ["@S1"] }, { "text": "Mira owns Atlas", "sources": ["@S1"] }] },
+        "b": { "items": [{ "text": "Atlas depends on Orion", "sources": ["@S1"] }, { "text": "Orion moved to Friday", "sources": ["@S2"] }, { "text": "Mira owns Atlas", "sources": ["@S2"] }] }
+      },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        {
+          "op": "recall", "memory": "p", "input": { "query": "atlas orion", "limit": 4 },
+          "expect": { "ok": [
+            { "text": "Atlas depends on Orion", "sources": ["@S1"], "origins": ["a", "b"] },
+            { "text": "Mira owns Atlas", "sources": ["@S1"], "origins": ["a"] },
+            { "text": "Orion moved to Friday", "sources": ["@S2"], "origins": ["b"] },
+            { "text": "Mira owns Atlas", "sources": ["@S2"], "origins": ["b"] }
+          ] }
+        },
+        {
+          "op": "recall", "memory": "p", "input": { "query": "atlas orion", "limit": 2 },
+          "expect": { "ok": [
+            { "text": "Atlas depends on Orion", "sources": ["@S1"], "origins": ["a", "b"] },
+            { "text": "Mira owns Atlas", "sources": ["@S1"], "origins": ["a"] }
+          ] }
+        }
+      ]
+    },
+    {
+      "id": "product/context-packs-under-one-budget",
+      "description": "Product asks every member for context within the full budget, then packs the combined items under one final budget.",
+      "members": {
+        "a": { "items": [{ "text": "atlas ###", "sources": ["@S1"] }] },
+        "b": { "items": [{ "text": "orion ####", "sources": ["@S2"] }, { "text": "atlas #", "sources": ["@S2"] }] }
+      },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        { "op": "context", "memory": "p", "input": { "query": "atlas orion", "tokenBudget": 5 }, "expect": { "ok": { "items": [{ "text": "atlas ###", "sources": ["@S1"], "origins": ["a"] }, { "text": "atlas #", "sources": ["@S2"], "origins": ["b"] }], "tokens": 4 } } }
+      ]
+    },
+    {
+      "id": "fallback/empty-falls-through",
+      "description": "Fallback returns the first nonempty member result. Empty is the only fallback condition.",
+      "members": { "a": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S1"] }] }, "b": { "items": [{ "text": "Orion moved to Friday", "sources": ["@S2"] }] } },
+      "memories": { "f": { "fallback": ["a", "b"] } },
+      "steps": [
+        { "op": "recall", "memory": "f", "input": { "query": "orion", "limit": 5 }, "expect": { "ok": [{ "text": "Orion moved to Friday", "sources": ["@S2"], "origins": ["b"] }] } },
+        { "op": "recall", "memory": "f", "input": { "query": "friday mira", "limit": 5 }, "expect": { "ok": [{ "text": "Mira owns Atlas", "sources": ["@S1"], "origins": ["a"] }] } },
+        { "op": "recall", "memory": "f", "input": { "query": "zeus", "limit": 5 }, "expect": { "ok": [] } },
+        { "op": "context", "memory": "f", "input": { "query": "orion", "tokenBudget": 10 }, "expect": { "ok": { "items": [{ "text": "Orion moved to Friday", "sources": ["@S2"], "origins": ["b"] }], "tokens": 0 } } }
+      ],
+      "expectTrace": [
+        { "event": "member", "member": "a", "op": "recall", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "recall", "outcome": "ok" },
+        { "event": "member", "member": "a", "op": "recall", "outcome": "ok" },
+        { "event": "member", "member": "a", "op": "recall", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "recall", "outcome": "ok" },
+        { "event": "member", "member": "a", "op": "context", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "context", "outcome": "ok" }
+      ]
+    },
+    {
+      "id": "fallback/error-propagates",
+      "description": "A failing member is an error, not an empty result. Fallback does not try the next member.",
+      "members": { "a": { "faults": [{ "op": "recall", "nth": 1, "error": "storage" }] }, "b": { "items": [{ "text": "Orion moved to Friday", "sources": ["@S2"] }] } },
+      "memories": { "f": { "fallback": ["a", "b"] } },
+      "steps": [
+        { "op": "recall", "memory": "f", "input": { "query": "orion", "limit": 5 }, "expect": { "error": { "kind": "storage", "member": "a" } } }
+      ],
+      "expectTrace": [{ "event": "member", "member": "a", "op": "recall", "outcome": "storage" }]
+    },
+    {
+      "id": "arbiter/no-classifier-without-a-choice",
+      "description": "Arbiter returns empty when every member is empty and uses a sole nonempty result directly. Neither case calls the classifier.",
+      "members": { "a": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S1"] }] }, "b": { "items": [{ "text": "Orion moved to Friday", "sources": ["@S2"] }] } },
+      "memories": { "r": { "arbiter": ["a", "b"] } },
+      "steps": [
+        { "op": "recall", "memory": "r", "input": { "query": "zeus", "limit": 5 }, "expect": { "ok": [] } },
+        { "op": "recall", "memory": "r", "input": { "query": "orion", "limit": 5 }, "expect": { "ok": [{ "text": "Orion moved to Friday", "sources": ["@S2"], "origins": ["b"] }] } }
+      ],
+      "expectModelCalls": { "classifier": 0 }
+    },
+    {
+      "id": "arbiter/classifier-selects-one-member",
+      "description": "With several nonempty results, the classifier selects one named member's result. The arbiter merges nothing.",
+      "members": { "a": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S1"] }] }, "b": { "items": [{ "text": "Atlas moved to Friday", "sources": ["@S2"] }] } },
+      "memories": { "r": { "arbiter": ["a", "b"] } },
+      "models": { "classifier": [{ "select": "b" }, { "select": "a" }] },
+      "steps": [
+        { "op": "recall", "memory": "r", "input": { "query": "atlas", "limit": 5 }, "expect": { "ok": [{ "text": "Atlas moved to Friday", "sources": ["@S2"], "origins": ["b"] }] } },
+        { "op": "context", "memory": "r", "input": { "query": "atlas", "tokenBudget": 10 }, "expect": { "ok": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S1"], "origins": ["a"] }], "tokens": 0 } } }
+      ],
+      "expectModelCalls": { "classifier": 2 }
+    },
+    {
+      "id": "arbiter/invalid-selection-and-classifier-failure",
+      "description": "A selection that names no member is an invalid-selection error. A classifier failure is an arbiter error.",
+      "members": { "a": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S1"] }] }, "b": { "items": [{ "text": "Atlas moved to Friday", "sources": ["@S2"] }] } },
+      "memories": { "r": { "arbiter": ["a", "b"] } },
+      "models": { "classifier": [{ "select": "c" }, { "error": "provider" }] },
+      "steps": [
+        { "op": "recall", "memory": "r", "input": { "query": "atlas", "limit": 5 }, "expect": { "error": { "kind": "invalid-selection" } } },
+        { "op": "recall", "memory": "r", "input": { "query": "atlas", "limit": 5 }, "expect": { "error": { "kind": "arbiter" } } }
+      ]
+    },
+    {
+      "id": "forget/reference-targets-recorded-origins",
+      "description": "An item reference removes the item from its recorded origins only. A merged item removes from every origin. Unrelated data stays.",
+      "members": {
+        "a": { "items": [{ "text": "Atlas depends on Orion", "sources": ["@S1"] }, { "text": "Mira owns Atlas", "sources": ["@S1"] }] },
+        "b": { "items": [{ "text": "Atlas depends on Orion", "sources": ["@S1"] }, { "text": "Orion moved to Friday", "sources": ["@S2"] }] }
+      },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        { "op": "recall", "memory": "p", "input": { "query": "atlas orion", "limit": 5 }, "as": "hits" },
+        { "op": "forget", "memory": "p", "input": { "references": [{ "result": "hits", "index": 0 }] }, "expect": { "ok": null } },
+        { "op": "forget", "memory": "p", "input": { "references": [{ "result": "hits", "index": 1 }] }, "expect": { "ok": null } }
+      ],
+      "expectState": {
+        "a": { "items": [] },
+        "b": { "items": [{ "text": "Orion moved to Friday", "sources": ["@S2"] }] }
+      },
+      "expectTrace": [
+        { "event": "member", "member": "a", "op": "recall", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "recall", "outcome": "ok" },
+        { "event": "member", "member": "a", "op": "forget", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "forget", "outcome": "ok" },
+        { "event": "member", "member": "a", "op": "forget", "outcome": "ok" }
+      ]
+    },
+    {
+      "id": "forget/observation-removes-support",
+      "description": "Forgetting an observation removes its support from shared items. An item survives while another retained source supports it.",
+      "members": { "a": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S1", "@S2"] }] }, "b": {} },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        { "op": "observe", "memory": "p", "caller": "alice", "input": { "id": "@S1", "parts": ["Mira said she owns Atlas"] }, "expect": { "ok": "@S1" } },
+        { "op": "observe", "memory": "p", "caller": "alice", "input": { "id": "@S2", "parts": ["The roster lists Mira on Atlas"] }, "expect": { "ok": "@S2" } },
+        { "op": "forget", "memory": "p", "input": { "observationIds": ["@S1"] }, "expect": { "ok": null } },
+        { "expectState": {
+          "a": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S2"] }], "sources": [{ "id": "@S2", "parts": ["The roster lists Mira on Atlas"], "caller": "alice" }] },
+          "b": { "sources": [{ "id": "@S2", "parts": ["The roster lists Mira on Atlas"], "caller": "alice" }] }
+        } },
+        { "op": "forget", "memory": "p", "input": { "observationIds": ["@S2"] }, "expect": { "ok": null } }
+      ],
+      "expectState": { "a": { "items": [], "sources": [] }, "b": { "sources": [] } }
+    },
+    {
+      "id": "forget/derived-item-leaves-its-source",
+      "description": "Deleting a derived item keeps its source. The source may support a later derivation.",
+      "members": { "m": { "summarizer": true } },
+      "models": { "summarizer": [{ "text": "short summary" }, { "text": "second summary" }, { "text": "summary two" }] },
+      "steps": [
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O1", "parts": ["Orion moved to Friday"] }, "expect": { "ok": "@O1" } },
+        { "op": "recall", "memory": "m", "input": { "query": "summary", "limit": 5 }, "as": "hits", "expect": { "ok": [{ "text": "short summary", "sources": ["@O1"] }] } },
+        { "op": "forget", "memory": "m", "input": { "references": [{ "result": "hits", "index": 0 }] }, "expect": { "ok": null } },
+        { "op": "recall", "memory": "m", "input": { "query": "orion summary", "limit": 5 }, "expect": { "ok": [{ "text": "Orion moved to Friday", "sources": ["@O1"] }] } },
+        { "op": "observe", "memory": "m", "caller": "alice", "input": { "id": "@O2", "parts": ["Atlas ships Monday"] }, "expect": { "ok": "@O2" } }
+      ],
+      "expectState": {
+        "m": {
+          "sources": [{ "id": "@O1", "parts": ["Orion moved to Friday"], "caller": "alice" }, { "id": "@O2", "parts": ["Atlas ships Monday"], "caller": "alice" }],
+          "derived": [{ "source": "@O1", "kind": "summary", "text": "second summary" }, { "source": "@O2", "kind": "summary", "text": "summary two" }]
+        }
+      }
+    },
+    {
+      "id": "forget/failure-names-the-member",
+      "description": "A failed forget names the member. Earlier members' removals remain, and success is not claimed.",
+      "members": { "a": {}, "b": { "faults": [{ "op": "forget", "nth": 1, "error": "storage" }] } },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        { "op": "observe", "memory": "p", "caller": "alice", "input": { "id": "@O1", "parts": ["Mira owns Atlas"] }, "expect": { "ok": "@O1" } },
+        { "op": "forget", "memory": "p", "input": { "observationIds": ["@O1"] }, "expect": { "error": { "kind": "storage", "member": "b" } } }
+      ],
+      "expectState": { "a": { "sources": [] }, "b": { "sources": [{ "id": "@O1", "parts": ["Mira owns Atlas"], "caller": "alice" }] } }
+    },
+    {
+      "id": "forget/invalid-selectors",
+      "description": "Forget needs exactly one selector kind, and a reference from another memory is rejected.",
+      "members": { "m": {}, "other": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S1"] }] } },
+      "steps": [
+        { "op": "recall", "memory": "other", "input": { "query": "atlas", "limit": 1 }, "as": "foreign" },
+        { "op": "forget", "memory": "m", "input": {}, "expect": { "error": { "kind": "input" } } },
+        { "op": "forget", "memory": "m", "input": { "observationIds": ["@S1"], "references": [{ "result": "foreign", "index": 0 }] }, "expect": { "error": { "kind": "input" } } },
+        { "op": "forget", "memory": "m", "input": { "references": [{ "result": "foreign", "index": 0 }] }, "expect": { "error": { "kind": "input" } } }
+      ],
+      "expectState": { "other": { "items": [{ "text": "Mira owns Atlas", "sources": ["@S1"] }] } }
+    },
+    {
+      "id": "construction/duplicate-member-names",
+      "description": "Composite members have unique names.",
+      "members": { "a": {} },
+      "memories": { "p": { "product": ["a", "a"] } },
+      "expectConstruction": { "p": { "error": { "kind": "input" } } }
+    },
+    {
+      "id": "construction/member-fan-out-counts-nested-members",
+      "description": "Member fan-out counts every member of the composite tree, nested composites included.",
+      "members": { "m1": {}, "m2": {}, "m3": {}, "m4": {}, "m5": {}, "m6": {}, "m7": {}, "m8": {} },
+      "memories": {
+        "inner": { "product": ["m6", "m7"] },
+        "eight": { "product": ["m1", "m2", "m3", "m4", "m5", "inner"] },
+        "inner2": { "fallback": ["m7", "m8"] },
+        "nine": { "product": ["m1", "m2", "m3", "m4", "m5", "m6", "inner2"] }
+      },
+      "expectConstruction": { "eight": "ok", "nine": { "error": { "kind": "limit", "limit": "memberFanOut" } } }
+    },
+    {
+      "id": "limits/shared-candidate-rows",
+      "description": "Composite members share the remaining candidate-row allowance. Exhaustion is a limit error naming the member, not an empty result.",
+      "members": {
+        "a": { "items": [{ "text": "atlas one", "sources": ["@S1"] }, { "text": "atlas two", "sources": ["@S1"] }] },
+        "b": { "items": [{ "text": "atlas three", "sources": ["@S2"] }, { "text": "atlas four", "sources": ["@S2"] }] },
+        "c": { "items": [{ "text": "atlas five", "sources": ["@S2"] }] }
+      },
+      "memories": { "ab": { "product": ["a", "b"], "limits": { "candidateRows": 3 } }, "ac": { "product": ["a", "c"], "limits": { "candidateRows": 3 } } },
+      "steps": [
+        { "op": "recall", "memory": "ab", "input": { "query": "atlas", "limit": 10 }, "expect": { "error": { "kind": "limit", "limit": "candidateRows", "member": "b" } } },
+        { "op": "recall", "memory": "ac", "input": { "query": "atlas", "limit": 10 }, "expect": { "ok": [
+          { "text": "atlas one", "sources": ["@S1"], "origins": ["a"] },
+          { "text": "atlas five", "sources": ["@S2"], "origins": ["c"] },
+          { "text": "atlas two", "sources": ["@S1"], "origins": ["a"] }
+        ] } }
+      ]
+    },
+    {
+      "id": "limits/candidate-bytes-count-utf8",
+      "description": "Candidate bytes count UTF-8 bytes, not characters or UTF-16 code units.",
+      "members": {
+        "fits": { "limits": { "candidateBytes": 8 }, "items": [{ "text": "atlas é", "sources": ["@S1"] }] },
+        "over": { "limits": { "candidateBytes": 8 }, "items": [{ "text": "atlas éé", "sources": ["@S1"] }] }
+      },
+      "steps": [
+        { "op": "recall", "memory": "fits", "input": { "query": "atlas", "limit": 1 }, "expect": { "ok": [{ "text": "atlas é", "sources": ["@S1"] }] } },
+        { "op": "recall", "memory": "over", "input": { "query": "atlas", "limit": 1 }, "expect": { "error": { "kind": "limit", "limit": "candidateBytes" } } }
+      ]
+    },
+    {
+      "id": "tools/namespace-collision",
+      "description": "Two toolsets with the same namespace collide at assembly. An explicit namespace avoids the collision. A namespace selects no storage.",
+      "members": { "m1": {}, "m2": {} },
+      "steps": [
+        { "op": "tools", "memory": "m1", "input": {}, "as": "t1", "expect": { "ok": { "roles": ["recall", "note", "forget"] } } },
+        { "op": "tools", "memory": "m2", "input": {}, "as": "t2" },
+        { "op": "tools", "memory": "m2", "input": { "namespace": "notes" }, "as": "t3" },
+        { "op": "assemble", "toolsets": ["t1", "t2"], "expect": { "error": { "kind": "input" } } },
+        { "op": "assemble", "toolsets": ["t1", "t3"], "expect": { "ok": null } },
+        { "op": "tool", "toolset": "t1", "role": "note", "caller": "alice", "input": { "text": "Atlas ships Friday" }, "expect": { "ok": { "capture": "noted" } } }
+      ],
+      "expectState": {
+        "m1": { "sources": [{ "id": "$noted", "parts": ["Atlas ships Friday"], "caller": "alice" }] },
+        "m2": { "sources": [] }
+      }
+    },
+    {
+      "id": "tools/composite-tools-use-composite-operations",
+      "description": "A composite exposes one toolset through its own operations. Note insertion broadcasts one observation to every member.",
+      "members": { "a": {}, "b": {} },
+      "memories": { "p": { "product": ["a", "b"] } },
+      "steps": [
+        { "op": "tools", "memory": "p", "input": {}, "as": "t", "expect": { "ok": { "roles": ["recall", "note", "forget"] } } },
+        { "op": "tool", "toolset": "t", "role": "note", "caller": "alice", "input": { "text": "Orion moved to Friday" }, "expect": { "ok": { "capture": "noted" } } }
+      ],
+      "expectState": {
+        "a": { "sources": [{ "id": "$noted", "parts": ["Orion moved to Friday"], "caller": "alice" }] },
+        "b": { "sources": [{ "id": "$noted", "parts": ["Orion moved to Friday"], "caller": "alice" }] }
+      },
+      "expectTrace": [
+        { "event": "member", "member": "a", "op": "observe", "outcome": "ok" },
+        { "event": "member", "member": "b", "op": "observe", "outcome": "ok" }
+      ]
+    }
+  ]
+}

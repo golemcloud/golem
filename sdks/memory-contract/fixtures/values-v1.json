@@ -1,0 +1,88 @@
+{
+  "version": "1.0.0",
+  "encoding": "Every leaf value is written in the shared Golem schema encoding: the REST wire form that ExternalSchemaValue in golem-common/src/schema/external.rs reads and writes (see test-data/rest-wire-form). The container that carries a SQLite cell or a Cozo value is the producer's tool schema. ME-01 does not define that container.",
+  "sqlite": {
+    "cells": [
+      { "id": "null", "column": "untyped", "bind": { "storageClass": "null" }, "read": { "storageClass": "null" } },
+      { "id": "integer-beyond-js-safe", "column": "untyped", "bind": { "storageClass": "integer", "value": { "kind": "s64", "value": "9007199254740993" } }, "read": { "storageClass": "integer", "value": { "kind": "s64", "value": "9007199254740993" } } },
+      { "id": "integer-negative-beyond-js-safe", "column": "untyped", "bind": { "storageClass": "integer", "value": { "kind": "s64", "value": "-9007199254740995" } }, "read": { "storageClass": "integer", "value": { "kind": "s64", "value": "-9007199254740995" } } },
+      { "id": "integer-min", "column": "untyped", "bind": { "storageClass": "integer", "value": { "kind": "s64", "value": "-9223372036854775808" } }, "read": { "storageClass": "integer", "value": { "kind": "s64", "value": "-9223372036854775808" } } },
+      { "id": "integer-max", "column": "untyped", "bind": { "storageClass": "integer", "value": { "kind": "s64", "value": "9223372036854775807" } }, "read": { "storageClass": "integer", "value": { "kind": "s64", "value": "9223372036854775807" } } },
+      { "id": "integer-small-stays-integer", "column": "untyped", "bind": { "storageClass": "integer", "value": { "kind": "s64", "value": "7" } }, "read": { "storageClass": "integer", "value": { "kind": "s64", "value": "7" } } },
+      { "id": "real-fraction", "column": "untyped", "bind": { "storageClass": "real", "value": { "kind": "f64", "value": 1.5 } }, "read": { "storageClass": "real", "value": { "kind": "f64", "value": 1.5 } } },
+      { "id": "real-whole-stays-real", "column": "untyped", "bind": { "storageClass": "real", "value": { "kind": "f64", "value": 7.0 } }, "read": { "storageClass": "real", "value": { "kind": "f64", "value": 7.0 } } },
+      { "id": "real-negative-zero", "column": "untyped", "bind": { "storageClass": "real", "value": { "kind": "f64", "value": -0.0 } }, "read": { "storageClass": "real", "value": { "kind": "f64", "value": -0.0 } } },
+      {
+        "id": "real-affinity-negative-zero",
+        "column": "real",
+        "note": "A REAL-affinity column may store a whole-number real as an integer and converts it back to a real on read (sqlite.org/datatype3.html, section 3). The sign of -0.0 does not survive. Memory schemas that need -0.0 use an untyped column.",
+        "bind": { "storageClass": "real", "value": { "kind": "f64", "value": -0.0 } },
+        "read": { "storageClass": "real", "value": { "kind": "f64", "value": 0.0 } }
+      },
+      { "id": "real-positive-infinity", "column": "untyped", "bind": { "storageClass": "real", "value": { "kind": "f64", "value": { "$float": "positive-infinity" } } }, "read": { "storageClass": "real", "value": { "kind": "f64", "value": { "$float": "positive-infinity" } } } },
+      { "id": "real-negative-infinity", "column": "untyped", "bind": { "storageClass": "real", "value": { "kind": "f64", "value": { "$float": "negative-infinity" } } }, "read": { "storageClass": "real", "value": { "kind": "f64", "value": { "$float": "negative-infinity" } } } },
+      {
+        "id": "real-nan-reads-null",
+        "column": "untyped",
+        "note": "SQLite stores a bound NaN as NULL. A codec must report the NULL it reads, not invent a NaN.",
+        "bind": { "storageClass": "real", "value": { "kind": "f64", "value": { "$float": "nan" } } },
+        "read": { "storageClass": "null" }
+      },
+      { "id": "text-empty", "column": "untyped", "bind": { "storageClass": "text", "value": { "kind": "string", "value": "" } }, "read": { "storageClass": "text", "value": { "kind": "string", "value": "" } } },
+      { "id": "text-non-ascii", "column": "untyped", "bind": { "storageClass": "text", "value": { "kind": "string", "value": "Mira ✓ 🙂 é" } }, "read": { "storageClass": "text", "value": { "kind": "string", "value": "Mira ✓ 🙂 é" } } },
+      { "id": "text-looks-numeric", "column": "untyped", "bind": { "storageClass": "text", "value": { "kind": "string", "value": "9007199254740993" } }, "read": { "storageClass": "text", "value": { "kind": "string", "value": "9007199254740993" } } },
+      { "id": "blob-empty", "column": "untyped", "bind": { "storageClass": "blob", "value": { "kind": "binary", "value": { "bytes": [] } } }, "read": { "storageClass": "blob", "value": { "kind": "binary", "value": { "bytes": [] } } } },
+      { "id": "blob-nonempty", "column": "untyped", "bind": { "storageClass": "blob", "value": { "kind": "binary", "value": { "bytes": [0, 255, 128, 10] } } }, "read": { "storageClass": "blob", "value": { "kind": "binary", "value": { "bytes": [0, 255, 128, 10] } } } }
+    ],
+    "batches": [
+      {
+        "id": "batch/middle-statement-fails",
+        "description": "One atomic batch is one transaction. A failing middle statement leaves none of the batch's writes.",
+        "setup": ["CREATE TABLE kv(k TEXT PRIMARY KEY, v)", "INSERT INTO kv VALUES ('existing', 1)"],
+        "statements": [
+          { "sql": "INSERT INTO kv VALUES (?, ?)", "params": [{ "storageClass": "text", "value": { "kind": "string", "value": "a" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "9007199254740993" } }] },
+          { "sql": "INSERT INTO kv VALUES (?, ?)", "params": [{ "storageClass": "text", "value": { "kind": "string", "value": "existing" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }] },
+          { "sql": "INSERT INTO kv VALUES (?, ?)", "params": [{ "storageClass": "text", "value": { "kind": "string", "value": "c" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "3" } }] }
+        ],
+        "expect": { "failedStatement": 1 },
+        "check": "SELECT k, v FROM kv ORDER BY k",
+        "rows": [[{ "storageClass": "text", "value": { "kind": "string", "value": "existing" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "1" } }]]
+      },
+      {
+        "id": "batch/all-statements-commit",
+        "description": "A batch whose statements all succeed commits every write.",
+        "setup": ["CREATE TABLE kv(k TEXT PRIMARY KEY, v)"],
+        "statements": [
+          { "sql": "INSERT INTO kv VALUES (?, ?)", "params": [{ "storageClass": "text", "value": { "kind": "string", "value": "a" } }, { "storageClass": "blob", "value": { "kind": "binary", "value": { "bytes": [] } } }] },
+          { "sql": "INSERT INTO kv VALUES (?, ?)", "params": [{ "storageClass": "text", "value": { "kind": "string", "value": "b" } }, { "storageClass": "null" }] }
+        ],
+        "expect": { "ok": true },
+        "check": "SELECT k, v FROM kv ORDER BY k",
+        "rows": [
+          [{ "storageClass": "text", "value": { "kind": "string", "value": "a" } }, { "storageClass": "blob", "value": { "kind": "binary", "value": { "bytes": [] } } }],
+          [{ "storageClass": "text", "value": { "kind": "string", "value": "b" } }, { "storageClass": "null" }]
+        ]
+      }
+    ]
+  },
+  "cozo": {
+    "description": "Semantic expectations for Cozo values. The shared tool schema of the cozo tool (ST-32) carries each distinction and serializes it with the shared Golem encoding. These cases state what must survive a round trip through that schema; schemaType stays open until the producer defines it. Ordinary JSON-number coercion fails these cases.",
+    "values": [
+      { "id": "int-beyond-js-safe", "cozo": "9007199254740993", "expect": { "cozoKind": "Int", "leaf": { "kind": "s64", "value": "9007199254740993" } }, "schemaType": "open" },
+      { "id": "int-min", "cozo": "-9223372036854775808", "expect": { "cozoKind": "Int", "leaf": { "kind": "s64", "value": "-9223372036854775808" } }, "schemaType": "open" },
+      { "id": "float-whole-stays-float", "cozo": "7.0", "expect": { "cozoKind": "Float", "leaf": { "kind": "f64", "value": 7.0 } }, "schemaType": "open" },
+      { "id": "int-whole-stays-int", "cozo": "7", "expect": { "cozoKind": "Int", "leaf": { "kind": "s64", "value": "7" } }, "schemaType": "open" },
+      { "id": "float-negative-zero", "cozo": "-0.0", "expect": { "cozoKind": "Float", "leaf": { "kind": "f64", "value": -0.0 } }, "schemaType": "open" },
+      { "id": "null", "cozo": "null", "expect": { "cozoKind": "Null" }, "schemaType": "open" },
+      { "id": "string", "cozo": "'Mira ✓'", "expect": { "cozoKind": "Str", "leaf": { "kind": "string", "value": "Mira ✓" } }, "schemaType": "open" },
+      { "id": "bytes", "cozo": "decode_base64('AP8=')", "expect": { "cozoKind": "Bytes", "leaf": { "kind": "binary", "value": { "bytes": [0, 255] } } }, "schemaType": "open" },
+      { "id": "list-mixed", "cozo": "[1, 1.0, 'x']", "expect": { "cozoKind": "List", "elements": [{ "cozoKind": "Int", "leaf": { "kind": "s64", "value": "1" } }, { "cozoKind": "Float", "leaf": { "kind": "f64", "value": 1.0 } }, { "cozoKind": "Str", "leaf": { "kind": "string", "value": "x" } }] }, "schemaType": "open" },
+      { "id": "uuid", "cozo": "to_uuid('00000000-0000-4000-8000-000000000001')", "expect": { "cozoKind": "Uuid", "text": "00000000-0000-4000-8000-000000000001", "notEqualTo": "the string with the same text" }, "schemaType": "open" },
+      { "id": "vector-f32", "cozo": "vec([1.5, 0.25], 'F32')", "expect": { "cozoKind": "Vec", "precision": "F32", "dimension": 2, "elements": [{ "kind": "f32", "value": 1.5 }, { "kind": "f32", "value": 0.25 }], "notEqualTo": "a list of floats" }, "schemaType": "open" },
+      { "id": "vector-f64", "cozo": "vec([1.5, 0.1], 'F64')", "expect": { "cozoKind": "Vec", "precision": "F64", "dimension": 2, "elements": [{ "kind": "f64", "value": 1.5 }, { "kind": "f64", "value": 0.1 }] }, "schemaType": "open" },
+      { "id": "validity-assert", "cozo": "[1700000000000000, true]", "column": "Validity", "expect": { "cozoKind": "Validity", "timestampMicros": { "kind": "s64", "value": "1700000000000000" }, "assert": true }, "schemaType": "open" },
+      { "id": "validity-retract", "cozo": "[1700000000000000, false]", "column": "Validity", "expect": { "cozoKind": "Validity", "timestampMicros": { "kind": "s64", "value": "1700000000000000" }, "assert": false }, "schemaType": "open" },
+      { "id": "json", "cozo": "json('{\"a\": [1, 9007199254740993]}')", "expect": { "cozoKind": "Json", "json": "{\"a\": [1, 9007199254740993]}", "notEqualTo": "a Cozo list or string" }, "schemaType": "open" }
+    ]
+  }
+}

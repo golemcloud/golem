@@ -1,0 +1,257 @@
+{
+  "version": "1.0.0",
+  "cells": "Parameters and rows use the cell encoding of values-v1.json.",
+  "sqliteProfile": {
+    "everyOpen": [
+      { "sql": "PRAGMA temp_store = MEMORY", "verify": "PRAGMA temp_store", "expect": 2 },
+      { "sql": "PRAGMA secure_delete = ON", "verify": "PRAGMA secure_delete", "expect": 1 }
+    ],
+    "durableInitialization": [
+      { "sql": "PRAGMA journal_mode = DELETE", "expect": "delete" },
+      { "fts5": "INSERT INTO <fts>(<fts>, rank) VALUES('secure-delete', 1)", "verify": "SELECT v FROM <fts>_config WHERE k = 'secure-delete'", "expect": 1 }
+    ],
+    "readOnlyOpen": [
+      { "verify": "PRAGMA journal_mode", "expect": "delete", "onMismatch": "fail with the reason; do not convert the database" }
+    ],
+    "ftsReaderMinimumVersion": "3.42.0",
+    "rules": [
+      "Every Memory-owned connection applies everyOpen on open and on reopen.",
+      "Only a durable write path applies durableInitialization. A read-only query does not repeat persistent FTS5 configuration writes.",
+      "The profile applies to Memory-owned databases only, not to unrelated application databases or to Cozo's internal storage."
+    ]
+  },
+  "sqliteWorkloads": [
+    {
+      "id": "fts5/match",
+      "setup": [
+        { "sql": "CREATE VIRTUAL TABLE chunks USING fts5(body)" },
+        { "sql": "INSERT INTO chunks(rowid, body) VALUES (1, 'Mira owns Atlas'), (2, 'Atlas depends on Orion'), (3, 'Orion delivery moved to Friday')" }
+      ],
+      "queries": [
+        {
+          "sql": "SELECT rowid FROM chunks WHERE chunks MATCH ? ORDER BY rowid",
+          "params": [{ "storageClass": "text", "value": { "kind": "string", "value": "orion" } }],
+          "rows": [
+            [{ "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }],
+            [{ "storageClass": "integer", "value": { "kind": "s64", "value": "3" } }]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fts5/secure-delete",
+      "setup": [
+        { "sql": "CREATE VIRTUAL TABLE chunks USING fts5(body)" },
+        { "sql": "INSERT INTO chunks(chunks, rank) VALUES('secure-delete', 1)" },
+        { "sql": "INSERT INTO chunks(rowid, body) VALUES (1, 'Mira owns Atlas'), (2, 'Atlas depends on Orion')" },
+        { "sql": "DELETE FROM chunks WHERE rowid = 1" }
+      ],
+      "queries": [
+        { "sql": "SELECT v FROM chunks_config WHERE k = 'secure-delete'", "rows": [[{ "storageClass": "integer", "value": { "kind": "s64", "value": "1" } }]] },
+        { "sql": "SELECT rowid FROM chunks WHERE chunks MATCH 'mira'", "rows": [] },
+        { "sql": "SELECT rowid FROM chunks WHERE chunks MATCH 'atlas'", "rows": [[{ "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }]] }
+      ],
+      "note": "This workload checks the effective setting and the logical result. Residue and cost on actual artifacts remain downstream measurements."
+    },
+    {
+      "id": "recursive-cte/bounded-with-cycle",
+      "setup": [
+        { "sql": "CREATE TABLE edge(src TEXT, dst TEXT)" },
+        { "sql": "INSERT INTO edge VALUES ('mira', 'atlas'), ('atlas', 'orion'), ('orion', 'friday'), ('atlas', 'mira')" }
+      ],
+      "queries": [
+        {
+          "sql": "WITH RECURSIVE reach(node, depth) AS (SELECT dst, 1 FROM edge WHERE src = ? UNION SELECT edge.dst, reach.depth + 1 FROM reach JOIN edge ON edge.src = reach.node WHERE reach.depth < ?) SELECT node, min(depth) FROM reach GROUP BY node ORDER BY min(depth), node",
+          "params": [
+            { "storageClass": "text", "value": { "kind": "string", "value": "mira" } },
+            { "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }
+          ],
+          "rows": [
+            [{ "storageClass": "text", "value": { "kind": "string", "value": "atlas" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "1" } }],
+            [{ "storageClass": "text", "value": { "kind": "string", "value": "mira" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }],
+            [{ "storageClass": "text", "value": { "kind": "string", "value": "orion" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sort/materialized-grouping",
+      "setup": [
+        { "sql": "CREATE TABLE obs(id INTEGER PRIMARY KEY, author TEXT, body TEXT)" },
+        { "sql": "INSERT INTO obs VALUES (1, 'bob', 'x'), (2, 'alice', 'y'), (3, 'bob', 'z'), (4, 'carol', 'w')" }
+      ],
+      "queries": [
+        {
+          "sql": "SELECT author, count(*) AS n FROM obs GROUP BY author ORDER BY n DESC, author",
+          "rows": [
+            [{ "storageClass": "text", "value": { "kind": "string", "value": "bob" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }],
+            [{ "storageClass": "text", "value": { "kind": "string", "value": "alice" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "1" } }],
+            [{ "storageClass": "text", "value": { "kind": "string", "value": "carol" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "1" } }]
+          ]
+        }
+      ],
+      "note": "Grouping and sorting on an unindexed column needs a temporary b-tree. With temp_store = MEMORY it needs no temporary file."
+    },
+    {
+      "id": "pages/keyset",
+      "setup": [
+        { "sql": "CREATE TABLE obs(id INTEGER PRIMARY KEY, body TEXT)" },
+        { "sql": "INSERT INTO obs VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')" }
+      ],
+      "queries": [
+        { "sql": "SELECT id FROM obs WHERE id > ? ORDER BY id LIMIT ?", "params": [{ "storageClass": "integer", "value": { "kind": "s64", "value": "0" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }], "rows": [[{ "storageClass": "integer", "value": { "kind": "s64", "value": "1" } }], [{ "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }]] },
+        { "sql": "SELECT id FROM obs WHERE id > ? ORDER BY id LIMIT ?", "params": [{ "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }], "rows": [[{ "storageClass": "integer", "value": { "kind": "s64", "value": "3" } }], [{ "storageClass": "integer", "value": { "kind": "s64", "value": "4" } }]] },
+        { "sql": "SELECT id FROM obs WHERE id > ? ORDER BY id LIMIT ?", "params": [{ "storageClass": "integer", "value": { "kind": "s64", "value": "4" } }, { "storageClass": "integer", "value": { "kind": "s64", "value": "2" } }], "rows": [] }
+      ]
+    }
+  ],
+  "cosineScans": [
+    {
+      "id": "cosine/top-k-across-pages",
+      "description": "SDK code reads bounded pages and computes cosine similarity. No vector extension or SQL function is used. The workload stores each vector as a little-endian f32 blob; that layout belongs to this workload, not to a backend schema. A page shorter than pageSize ends the scan. Equal similarity orders by id.",
+      "setup": [{ "sql": "CREATE TABLE vec(id INTEGER PRIMARY KEY, v BLOB)" }],
+      "vectors": [
+        { "id": 1, "f32": [1, 0] },
+        { "id": 2, "f32": [0.6, 0.8] },
+        { "id": 3, "f32": [0, 1] },
+        { "id": 4, "f32": [-1, 0] },
+        { "id": 5, "f32": [0.8, -0.6] }
+      ],
+      "pageQuery": "SELECT id, v FROM vec WHERE id > ? ORDER BY id LIMIT ?",
+      "pageSize": 2,
+      "query": [1, 0],
+      "top": 2,
+      "expect": { "ids": [1, 5], "pagesRead": 3 }
+    }
+  ],
+  "cozoWorkloads": {
+    "status": "Written for CozoScript as documented for Cozo 0.7.6. ME-01 does not execute these scripts. ME-03 and ST-31 run them on the selected engine and fix any defect in the script text through this fixture.",
+    "setup": [
+      ":create edge {src: String, dst: String}",
+      "?[src, dst] <- [['mira', 'atlas'], ['atlas', 'orion'], ['orion', 'friday'], ['atlas', 'mira']] :put edge {src, dst}",
+      ":create seed {id: Int => v: <F32; 2>}",
+      "?[id, v] <- [[1, vec([1, 0])], [2, vec([0.6, 0.8])], [3, vec([0, 1])], [5, vec([0.8, -0.6])]] :put seed {id => v}"
+    ],
+    "queries": [
+      {
+        "id": "cozo/recursive-bounded-with-cycle",
+        "script": "reach[node, d] := *edge{src: $start, dst: node}, d = 1\nreach[node, d] := reach[mid, d0], d0 < $hops, *edge{src: mid, dst: node}, d = d0 + 1\n?[node, min(d)] := reach[node, d]\n:order min(d), node",
+        "params": { "start": { "kind": "string", "value": "mira" }, "hops": { "kind": "s64", "value": "2" } },
+        "rows": [["atlas", 1], ["mira", 2], ["orion", 2]]
+      },
+      {
+        "id": "cozo/bounded-vector-scan",
+        "script": "?[id, d] := *seed{id, v}, d = cos_dist(v, vec($q))\n:order d\n:limit 2",
+        "params": { "q": { "kind": "list", "value": { "elements": [{ "kind": "f64", "value": 1.0 }, { "kind": "f64", "value": 0.0 }] } } },
+        "expectIds": [1, 5]
+      }
+    ],
+    "freshness": {
+      "id": "cozo/fresh-after-durable-write",
+      "write": "?[src, dst] <- [['orion', 'monday']] :put edge {src, dst}",
+      "query": "?[dst] := *edge{src: 'orion', dst}\n:order dst",
+      "rowsAfterWrite": [["friday"], ["monday"]]
+    },
+    "mutatingForms": [
+      { "id": "cozo/refuse/put", "script": "?[src, dst] <- [['x', 'y']] :put edge {src, dst}" },
+      { "id": "cozo/refuse/rm", "script": "?[src, dst] <- [['mira', 'atlas']] :rm edge {src, dst}" },
+      { "id": "cozo/refuse/replace", "script": "?[src, dst] <- [['x', 'y']] :replace edge {src: String, dst: String}" },
+      { "id": "cozo/refuse/create", "script": ":create other {k: Int}" },
+      { "id": "cozo/refuse/create-in-query", "script": "?[k] <- [[1]] :create other {k}" },
+      { "id": "cozo/refuse/ensure", "script": "?[src, dst] <- [['mira', 'atlas']] :ensure edge {src, dst}" },
+      { "id": "cozo/refuse/index", "script": "::index create edge:by_dst {dst}" },
+      { "id": "cozo/refuse/trigger", "script": "::set_triggers edge on put { ?[src] := _new[src, dst] }" },
+      { "id": "cozo/refuse/remove-relation", "script": "::remove edge" },
+      { "id": "cozo/refuse/rename-relation", "script": "::rename edge -> edge2" }
+    ]
+  },
+  "sqliteRefusalSetup": [
+    { "sql": "CREATE TABLE obs(id INTEGER PRIMARY KEY, body TEXT)" },
+    { "sql": "INSERT INTO obs VALUES (1, 'a'), (2, 'b')" },
+    { "sql": "CREATE VIRTUAL TABLE chunks USING fts5(body)" },
+    { "sql": "INSERT INTO chunks(rowid, body) VALUES (1, 'Mira owns Atlas')" },
+    { "sql": "INSERT INTO chunks(rowid, body) VALUES (2, 'Atlas depends on Orion')" }
+  ],
+  "sqliteMutatingForms": [
+    { "id": "sqlite/refuse/insert", "sql": "INSERT INTO obs VALUES (9, 'x')" },
+    { "id": "sqlite/refuse/update", "sql": "UPDATE obs SET body = 'x'" },
+    { "id": "sqlite/refuse/delete", "sql": "DELETE FROM obs" },
+    { "id": "sqlite/refuse/cte-delete", "sql": "WITH old AS (SELECT id FROM obs) DELETE FROM obs WHERE id IN (SELECT id FROM old)" },
+    { "id": "sqlite/refuse/create", "sql": "CREATE TABLE t(x)" },
+    { "id": "sqlite/refuse/drop", "sql": "DROP TABLE obs" },
+    { "id": "sqlite/refuse/pragma-write", "sql": "PRAGMA user_version = 7" },
+    { "id": "sqlite/refuse/journal-mode-change", "sql": "PRAGMA journal_mode = WAL" },
+    { "id": "sqlite/refuse/vacuum", "sql": "VACUUM" },
+    { "id": "sqlite/refuse/fts-command", "sql": "INSERT INTO chunks(chunks) VALUES('optimize')" },
+    { "id": "sqlite/refuse/attach-and-write", "sql": "ATTACH '{dir}/other.db' AS other; CREATE TABLE other.t(x)", "note": "{dir} is the directory of the supplied database." },
+    { "id": "sqlite/refuse/second-statement-writes", "sql": "SELECT 1; DELETE FROM obs" }
+  ],
+  "lifecycle": [
+    {
+      "id": "query/protects-supplied-files",
+      "engines": ["sqlite", "cozo"],
+      "scenario": "Run a query on a supplied database file that has its normal sidecars. Observe every filesystem operation on the supplied files during open, prepare, execute, finalize and close, through denied write authority or an operation log.",
+      "pass": "No supplied file or sidecar is created, changed or deleted at any time. Writes to invocation-private scratch are allowed. A final unchanged hash alone does not pass this scenario."
+    },
+    {
+      "id": "query/refuses-mutating-input",
+      "engines": ["sqlite", "cozo"],
+      "scenario": "Send each entry of sqliteMutatingForms or cozoWorkloads.mutatingForms to the query command.",
+      "pass": "The engine refuses each one with a structured error. The database stays unchanged. Text matching in Memory or a transaction that never commits does not pass this scenario."
+    },
+    {
+      "id": "query/refuses-recovery-writes",
+      "engines": ["sqlite", "cozo"],
+      "scenario": "Leave the database in a state that needs recovery, such as a hot rollback journal after an interrupted durable write. Run a query.",
+      "pass": "The query fails with a reason that names recovery. It does not reopen the database writable, delete a journal or WAL file, or open with immutable=1. A later durable write path can recover the database."
+    },
+    {
+      "id": "query/fresh-after-durable-write",
+      "engines": ["sqlite", "cozo"],
+      "scenario": "Run a query, then a durable write that changes its result, then the same query again in the same invocation and in a later invocation.",
+      "pass": "Both later queries return the changed result. No cached result is returned."
+    },
+    {
+      "id": "query/failed-open-leaves-no-file",
+      "engines": ["sqlite", "cozo"],
+      "scenario": "Run a query on a missing path and on a file that is not a database.",
+      "pass": "Each query fails with a structured error and creates no file at the path or beside it."
+    },
+    {
+      "id": "batch/one-invocation",
+      "engines": ["sqlite", "cozo"],
+      "scenario": "Run values-v1.json batch cases through the durable batch command, and inject a failure between two statements of the batch.",
+      "pass": "One batch is one tool invocation and one transaction. After the failure, none of the batch's writes remain. Separate BEGIN, write and COMMIT invocations do not pass this scenario."
+    },
+    {
+      "id": "connection/profile-on-reopen",
+      "engines": ["sqlite"],
+      "scenario": "Open a Memory database, restore the agent, then use the Memory again so that it reopens the connection lazily.",
+      "pass": "The reopened connection reports the sqliteProfile.everyOpen values before its first statement."
+    }
+  ],
+  "hooks": {
+    "status": "Exact registration syntax and the supply of stable names remain open. These scenarios fix the required behavior.",
+    "scenarios": [
+      { "id": "hooks/cross-build-stable-name", "scenario": "Build A registers a Memory hook under a stable name, saves a snapshot, then build B with changed code and the same hook name loads it.", "pass": "Build B restores the state that build A saved." },
+      { "id": "hooks/changed-name-loads-empty", "scenario": "Build B registers the hook under a different name and loads build A's snapshot.", "pass": "Build B skips the old hook part and loads empty state for the new name. This shows why names must stay stable." },
+      { "id": "hooks/added-hook-loads-empty", "scenario": "Build B adds a hook that build A did not have.", "pass": "The added hook receives empty state." },
+      { "id": "hooks/duplicate-name-rejected", "scenario": "Register two hooks with the same name.", "pass": "Registration fails." },
+      { "id": "hooks/unknown-parts", "scenario": "Load a snapshot that has an unknown hook: part and, separately, a part in an unknown namespace.", "pass": "The unknown hook: part is skipped. The unknown namespace is rejected." },
+      { "id": "hooks/independent-of-tool-namespace", "scenario": "Two memories use the same semantic tool namespace and different hook names. Save and restore.", "pass": "Each memory restores its own state. The tool namespace does not select a hook identity." },
+      { "id": "hooks/genuine-1.6-envelopes", "scenario": "Load genuine 1.6 TypeScript and Effect snapshot envelopes with db:<field> parts and the fileDatabases state field, together with mixed parts.", "pass": "The databases load unchanged without a second reader." },
+      { "id": "hooks/open-transaction-refuses-save", "scenario": "Request an automatic snapshot and, separately, a manual update while a Memory connection has an open transaction.", "pass": "The automatic snapshot is skipped with a diagnostic reason and the agent does not restart. The manual update fails with the reason. Application work is neither committed nor rolled back." },
+      { "id": "hooks/lazy-reacquire", "scenario": "Load a snapshot before agent load, then use the Memory.", "pass": "Hook load restores descriptors and private bytes and opens no connection or tool binding. The first use reopens them and reapplies the connection profile. No forgotten source support returns." }
+    ]
+  },
+  "cards": {
+    "status": "ST-28 and ST-32 supply the actual package cards. These scenarios fix the expected inheritance.",
+    "packageDefault": { "capability": "filesystem(?env)", "path": "/**", "operations": ["read", "list", "stat", "write", "delete"], "mount": false },
+    "scenarios": [
+      { "id": "cards/omitted-card-inherits-default", "scenario": "Declare the sqlite3 or cozo tool without a card.", "pass": "The declaration inherits packageDefault." },
+      { "id": "cards/narrowed-card-replaces-default", "scenario": "Declare the tool with a narrowed card for one directory, including its journal and sidecar files.", "pass": "Only the narrowed card applies. Access outside the directory is denied." },
+      { "id": "cards/installation-grants-nothing", "scenario": "Install the package without deploying a grant for the card.", "pass": "Calls fail until a deployment authorizes the card." },
+      { "id": "cards/denied-paths", "scenario": "Use ATTACH, a computed path or a path alias to reach a file outside the authorized paths or another agent's file.", "pass": "Access is denied with a structured error." }
+    ]
+  }
+}

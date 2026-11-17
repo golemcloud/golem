@@ -1,0 +1,83 @@
+import { Callout } from "nextra/components"
+
+# Memory
+
+<Callout type="warning">
+  This page is preliminary. It describes the planned Memory contract. No Golem SDK ships the Memory
+  API yet, and names and details can change before release.
+</Callout>
+
+A **memory** keeps what an agent learns from its work, supplies relevant context to later model
+calls, and looks up specific details when they matter. Memory is a library in each Golem SDK, not a
+separate service. Its data lives in the agent's own files and guest state, so it is suspended,
+recovered, isolated, and deleted together with the agent.
+
+Golem plans two built-in memories: one backed by SQLite, which keeps observations and finds similar
+passages, and one backed by CozoDB, which keeps a graph of sourced facts. You can also write your own
+memory, and you can compose memories. Agent code uses the same API with each of them.
+
+## Operations
+
+Every memory has the same five operations:
+
+```text
+observe(observation) -> ObservationId
+recall({ query, limit, retrieval? }) -> MemoryItem[]
+context({ query, tokenBudget, measureTokens, retrieval? }) -> Context
+forget({ references | observationIds }) -> Unit
+tools(namespace = "memory") -> LocalTool[]
+```
+
+- **`observe`** records an observation: ordered text parts, source references, and the original
+  caller of the invocation. It returns the observation ID. Repeating an observation with the same ID
+  and content changes nothing; different content under the same ID is an error.
+- **`recall`** returns evidence items, each with the IDs of the observations that support it. It does
+  not generate an answer.
+- **`context`** packs complete items within a token budget. You supply the function that counts the
+  tokens of the rendered context. An item that does not fit is skipped, never truncated.
+- **`forget`** removes exact items or whole observations, together with everything derived from them.
+  It never interprets a query. A fact that another retained observation supports survives.
+- **`tools`** returns local tools that let a model recall, add notes, and forget. Their default
+  namespace is `memory`; two toolsets with the same names cannot be combined.
+
+Every operation uses the cancellation of the current invocation. Cancelling one invocation does not
+cancel another invocation that uses the same memory, and it does not undo writes that already
+completed.
+
+## Derived knowledge
+
+A memory can use models to summarize observations, extract facts, or embed text. This work is
+optional: if a model call fails, the observation is still recorded and a later observation from the
+same caller retries the missing work. Model calls run outside database transactions. A result whose
+observation was forgotten meanwhile is discarded, so forgetting cannot be undone by late model work.
+
+## Composition
+
+Memories compose into one memory:
+
+- **Product** uses all members and combines their results, keeping each item's sources and the
+  members that returned it.
+- **Fallback** uses the first member that returns a nonempty result. An error is never treated as
+  empty.
+- **Arbiter** reads all members and lets a classifier choose one member's result.
+
+```text
+memory = product(sqlite: sqliteMemory, graph: graphMemory)
+items  = memory.recall({ query: "who needs to know about the Orion delay", limit: 5 })
+```
+
+Every composite writes to its members in order. If a member fails, the error names it; repeating the
+same observation repairs the members that missed it.
+
+## Limits
+
+Each memory has finite limits on the work of one operation: candidate rows and bytes, vector rows
+and dimensions, graph hops, visits and edges, and the number of members in a composition. Running out
+is an error, not an empty result. These limits bound work; quotas and retention bound the data an
+agent keeps.
+
+## Contract and conformance
+
+The language-neutral contract and the conformance fixtures that every SDK tests against are in
+[`sdks/memory-contract`](https://github.com/golemcloud/golem/tree/main/sdks/memory-contract). They also
+fix the default limits, the default prompts, and the storage profile of the built-in memories.

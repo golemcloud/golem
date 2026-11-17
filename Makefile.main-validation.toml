@@ -342,6 +342,7 @@ private = true
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error node --test .github/scripts/release-channel.test.mjs
+exec --fail-on-error node --test sdks/memory-contract/check.test.mjs
 exec --fail-on-error cargo test --locked --manifest-path .github/scripts/release-tooling-tests/Cargo.toml
 exec --fail-on-error cargo build --target wasm32-wasip2 -p golem-schema --no-default-features --features guest
 exec --fail-on-error cargo test -p golem-schema --no-default-features --features guest --test owned_typed_wit -- --nocapture --report-time
