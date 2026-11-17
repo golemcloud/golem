@@ -1940,6 +1940,56 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
     );
 }
 
+#[test]
+fn p2_tcp_socket_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::types::SerializableSocketError;
+    use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+    let local = SerializableP3IpSocketAddress {
+        address: SerializableIpAddress::IPv4 {
+            address: [127, 0, 0, 1],
+        },
+        port: 40123,
+        flow_info: None,
+        scope_id: None,
+    };
+    let remote = SerializableP3IpSocketAddress {
+        port: 5432,
+        ..local.clone()
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpStartBind>(
+        super::HostRequestSocketsTcpBind {
+            local_address: local.clone(),
+        },
+        super::HostResponseSocketsTcpBind {
+            result: Ok(local.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpStartConnect>(
+        super::HostRequestSocketsTcpConnect {
+            remote_address: remote.clone(),
+        },
+        super::HostResponseSocketsTcpStartConnect {
+            result: Err(SerializableSocketError::from_result(Ok(
+                ErrorCode::ConcurrencyConflict,
+            ))),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpFinishConnect>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsTcpFinishConnect {
+            result: Ok((local, remote)),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpFinishConnect>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsTcpFinishConnect {
+            result: Err(SerializableSocketError::from_result(Ok(
+                ErrorCode::WouldBlock,
+            ))),
+        },
+    );
+}
+
 fn assert_host_payload_pair_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
 where
     Pair: HostPayloadPair,

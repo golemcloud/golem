@@ -67,17 +67,8 @@ struct PeerLog {
     connections: Vec<Connection>,
 }
 
-/// How a [`TcpPeer`] answers the first line it reads on a connection.
-#[derive(Clone, Copy, Debug)]
-enum Reply {
-    Silent,
-    /// `"{text}\n"`, the same on every connection.
-    Fixed(&'static str),
-}
-
-/// A TCP peer on `127.0.0.1`. On each connection it first writes `greeting`, answers the first
-/// line it reads as `reply` says and then closes its write side. It keeps every byte it reads
-/// per connection, and notes when the agent closes a connection.
+/// A TCP peer on `127.0.0.1`. On each connection it first writes `greeting`. It keeps every byte
+/// it reads per connection, and notes when the agent closes a connection.
 struct TcpPeer {
     port: u16,
     log: Arc<Mutex<PeerLog>>,
@@ -86,7 +77,7 @@ struct TcpPeer {
 }
 
 impl TcpPeer {
-    async fn start(greeting: &'static [u8], reply: Reply) -> anyhow::Result<Self> {
+    async fn start(greeting: &'static [u8]) -> anyhow::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let log = Arc::new(Mutex::new(PeerLog::default()));
@@ -106,31 +97,15 @@ impl TcpPeer {
                     let changed = changed.clone();
                     tokio::spawn(async move {
                         let _ = stream.write_all(greeting).await;
-                        let mut replied = false;
                         let mut buffer = [0u8; 1024];
                         loop {
                             match stream.read(&mut buffer).await {
                                 Ok(0) | Err(_) => break,
                                 Ok(n) => {
-                                    let has_line = {
-                                        let mut log = log.lock().unwrap();
-                                        let received = &mut log.connections[index].received;
-                                        received.extend_from_slice(&buffer[..n]);
-                                        received.contains(&b'\n')
-                                    };
+                                    log.lock().unwrap().connections[index]
+                                        .received
+                                        .extend_from_slice(&buffer[..n]);
                                     changed.notify_waiters();
-                                    let answer = match reply {
-                                        Reply::Silent => None,
-                                        Reply::Fixed(text) => Some(format!("{text}\n")),
-                                    };
-                                    if let Some(answer) = answer
-                                        && has_line
-                                        && !replied
-                                    {
-                                        replied = true;
-                                        let _ = stream.write_all(answer.as_bytes()).await;
-                                        let _ = stream.shutdown().await;
-                                    }
                                 }
                             }
                         }
@@ -391,7 +366,7 @@ async fn p3_tcp_socket_kept_across_invocations_is_lost_after_replay(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abcdef", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"abcdef").await?;
     let mut session =
         Session::start(deps, &context, host_api_tests, sockets(), "p3-tcp-kept").await?;
 
@@ -452,7 +427,7 @@ async fn g2_send_on_a_replayed_connection_reports_connection_broken(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"").await?;
     let mut session = Session::start(deps, &context, host_api_tests, sockets(), "g2").await?;
     let connected: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
@@ -488,7 +463,7 @@ async fn g3_getters_are_equal_before_and_after_replay(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"").await?;
     let mut session = Session::start(deps, &context, host_api_tests, sockets(), "g3").await?;
     let connected: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
@@ -575,7 +550,7 @@ async fn p3_tcp_bind_and_configured_options_replay_without_native_bind(
         .await?;
     assert_eq!(changed, Ok(63));
     assert_eq!(session.starts("sockets::types::tcp-socket::bind").await?, 1);
-    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"").await?;
     let connect: Result<(), String> = session
         .call(
             "p3_tcp_connect_existing",
@@ -643,7 +618,7 @@ async fn p3_failed_tcp_connect_preserves_closed_state_after_replay(
             .await?,
         1
     );
-    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"").await?;
     let reconnect: Result<(), String> = session
         .call(
             "p3_tcp_connect_existing",
@@ -667,7 +642,7 @@ async fn p3_tcp_receive_in_flight_at_a_crash_completes_with_connection_broken(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"abc").await?;
     let session = Session::start(
         deps,
         &context,
@@ -760,8 +735,8 @@ async fn p3_tcp_interleaved_receives_replay_to_their_own_sockets(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let upper = TcpPeer::start(b"ABC", Reply::Silent).await?;
-    let lower = TcpPeer::start(b"xyz", Reply::Silent).await?;
+    let upper = TcpPeer::start(b"ABC").await?;
+    let lower = TcpPeer::start(b"xyz").await?;
     let mut session = Session::start(
         deps,
         &context,
@@ -873,51 +848,165 @@ async fn p3_udp_completed_exchange_replays_without_contacting_the_peer(
     session.finish().await
 }
 
-/// P2 TCP records only the permission check of a connect, and the reads and writes run
-/// natively also on replay. Replay therefore connects again and sends again, and the replayed
-/// read gets whatever the peer answers now. This replay succeeds only because the peer answers
-/// the same and the agent returns no address: a different answer or a returned local port makes
-/// the replayed invocation diverge. SK-09 and SK-10 (GOL-1182, GOL-1183) replace this with
-/// recorded results and a visible loss.
+/// A completed P2 TCP connect replays from its recorded `finish-connect` result. Replay does not
+/// connect again, and `local-address` returns the recorded address, so an invocation that
+/// returned it replays without divergence. A second socket, created after the first replayed
+/// `finish-connect`, keeps its own address too. The streams of a replayed connection are lost:
+/// the next write fails with `connection-reset`, the P2 code for a lost connection, and the peer
+/// gets nothing.
 #[test]
 #[timeout("3m")]
-async fn p2_tcp_replay_connects_and_sends_again(
+async fn p2_tcp_completed_connect_replays_without_connecting_again(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"", Reply::Fixed("pong")).await?;
+    let peer = TcpPeer::start(b"").await?;
     let mut session =
         Session::start(deps, &context, host_api_tests, sockets(), "p2-tcp-replay").await?;
 
-    let _: Result<(), String> = session
-        .call("p2_tcp_connect", data_value!("a".to_string(), peer.port))
+    let mut addresses = Vec::new();
+    for slot in ["a", "b"] {
+        let connected: Result<(), String> = session
+            .call("p2_tcp_connect", data_value!(slot.to_string(), peer.port))
+            .await?;
+        assert_eq!(connected, Ok(()));
+        let address: Result<String, String> = session
+            .call("p2_tcp_local_address", data_value!(slot.to_string()))
+            .await?;
+        addresses.push(address.map_err(anyhow::Error::msg)?);
+    }
+    assert_ne!(addresses[0], addresses[1]);
+    peer.wait_until("two connections", |connections| connections.len() == 2)
         .await?;
+
+    session.restart_executor().await?;
+    for (slot, before) in ["a", "b"].into_iter().zip(&addresses) {
+        let after: Result<String, String> = session
+            .call("p2_tcp_local_address", data_value!(slot.to_string()))
+            .await?;
+        assert_eq!(after.as_ref(), Ok(before), "local address of slot {slot}");
+    }
+    assert_eq!(peer.connections().len(), 2, "replay does not connect again");
+    assert_eq!(
+        session.starts("sockets::tcp::finish_connect").await?,
+        2,
+        "replay records no new finish-connect"
+    );
+
     let sent: Result<(), String> = session
         .call(
             "p2_tcp_send",
             data_value!("a".to_string(), b"ping\n".to_vec()),
         )
         .await?;
-    assert_eq!(sent, Ok(()));
-    let answer: Result<Vec<u8>, String> = session
-        .call("p2_tcp_receive", data_value!("a".to_string(), 5u32))
+    assert_eq!(
+        sent,
+        Err("last-operation-failed: connection reset".to_string()),
+        "the lost connection reports connection-reset"
+    );
+    let received: Result<Vec<u8>, String> = session
+        .call("p2_tcp_receive", data_value!("b".to_string(), 1u32))
         .await?;
-    assert_eq!(answer, Ok(b"pong\n".to_vec()));
-    assert_eq!(peer.connections().len(), 1);
+    assert_eq!(
+        received,
+        Err("last-operation-failed: connection reset".to_string()),
+        "the lost connection reports connection-reset"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        peer.connections()
+            .iter()
+            .all(|connection| connection.received.is_empty()),
+        "a lost connection sends nothing"
+    );
+    session.finish().await
+}
+
+/// Each `finish-connect` result is recorded, `would-block` too. Replay returns the same results
+/// in the same order, so the agent counts the same number of `would-block` results, with no native
+/// connect.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_connect_with_would_block_results_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"").await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-would-block",
+    )
+    .await?;
+
+    let would_block: Result<u32, String> = session
+        .call(
+            "p2_tcp_connect_counting",
+            data_value!("a".to_string(), peer.port),
+        )
+        .await?;
+    let would_block = would_block.map_err(anyhow::Error::msg)?;
+    assert!(would_block >= 1, "the first finish-connect would block");
+    let finishes = session.starts("sockets::tcp::finish_connect").await?;
+    assert_eq!(finishes, would_block as usize + 1);
+    let before: Result<String, String> = session
+        .call("p2_tcp_local_address", data_value!("a".to_string()))
+        .await?;
+    let before = before.map_err(anyhow::Error::msg)?;
 
     session.restart_executor().await?;
-    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
-    assert_eq!(log, vec![received("a", b"pong\n")]);
-    let connections = peer.connections();
-    assert_eq!(connections.len(), 2, "replay connects again");
+    let after: Result<String, String> = session
+        .call("p2_tcp_local_address", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after, Ok(before));
     assert_eq!(
-        connections[1].received,
-        b"ping\n".to_vec(),
-        "replay sends again"
+        session.starts("sockets::tcp::finish_connect").await?,
+        finishes
     );
+    assert_eq!(peer.connections().len(), 1, "replay does not connect again");
+    session.finish().await
+}
+
+/// S10 on P2: a read-only method cannot connect a P2 TCP socket. `start-connect` is a recorded
+/// write, so the read-only guard refuses it before any poll can drive the native connect.
+#[test]
+#[timeout("3m")]
+async fn s10_p2_connect_in_a_read_only_method_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"").await?;
+    let session = Session::start(deps, &context, host_api_tests, sockets(), "s10-p2").await?;
+    let result = session
+        .executor()
+        .invoke_and_await_agent(
+            &session.component,
+            &session.agent_id,
+            "p2_tcp_connect_read_only",
+            data_value!(peer.port),
+        )
+        .await;
+    let error = format!(
+        "{:?}",
+        result.expect_err("the read-only connect is refused")
+    );
+    assert!(
+        error.contains("sockets::tcp::start_connect"),
+        "the refusal names the host function: {error}"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(peer.connections().len(), 0, "the peer sees no connection");
     session.finish().await
 }
 
@@ -934,7 +1023,7 @@ async fn an_open_p3_tcp_receive_stream_blocks_snapshots_and_manual_updates(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"abc").await?;
     let session = Session::start(
         deps,
         &context,
@@ -1009,7 +1098,7 @@ async fn an_open_p2_tcp_socket_does_not_block_snapshots(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
+    let peer = TcpPeer::start(b"abc").await?;
     let mut session = Session::start(
         deps,
         &context,

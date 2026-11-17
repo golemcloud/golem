@@ -566,6 +566,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsTypesTcpSocketConnect => {
             pair::<host_functions::P3SocketsTypesTcpSocketConnect>(Bare::Neither)
         }
+        HostFunctionName::P3SocketsTypesTcpSocketBind => {
+            pair::<host_functions::P3SocketsTypesTcpSocketBind>(Bare::Neither)
+        }
         HostFunctionName::P3SocketsTypesUdpSocketConnect => {
             pair::<host_functions::P3SocketsTypesUdpSocketConnect>(Bare::Neither)
         }
@@ -642,6 +645,15 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         }
         HostFunctionName::SocketsUdpPermissionCheck => {
             pair::<host_functions::SocketsUdpPermissionCheck>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpStartBind => {
+            pair::<host_functions::SocketsTcpStartBind>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpStartConnect => {
+            pair::<host_functions::SocketsTcpStartConnect>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpFinishConnect => {
+            pair::<host_functions::SocketsTcpFinishConnect>(Bare::Neither)
         }
         HostFunctionName::GolemPermissionsSelfWallet => {
             pair::<host_functions::GolemPermissionsSelfWallet>(Bare::Neither)

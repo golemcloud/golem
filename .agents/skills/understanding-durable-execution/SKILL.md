@@ -96,8 +96,19 @@ cached effective values. A successful setter invalidates its option cache; the n
 and caches the native effective value, including OS rounding and buffer limits. Unset option getters
 still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
 socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
-than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
-reconnects as described below. Replayed websocket handles use their connect-time
+than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP
+uses the same table: `start-bind` (`WriteLocal`) records the selected local address, `start-connect`
+(`WriteLocal`) records its result, and every `finish-connect` result, `would-block` too, is a
+`WriteRemote` call with both endpoints. Replay binds and connects nothing natively. A replayed
+successful `finish-connect` pushes `LostTcpInputStream` and `LostTcpOutputStream` as children of
+the socket, in the native order, so the reps stay the same; their first operation fails with
+`connection-reset` (P2 has no `connection-broken`) and their pollables are ready at once. A
+`finish-connect` whose connect started before the reconstruction, incomplete or not yet finished,
+completes with `connection-reset`. The native socket of a replayed entry stays unbound and
+unconnected, so its pollable is ready at once, and the entry answers the address getters and the
+states the native socket no longer holds. Because `start-connect` is a recorded write, the read-only
+guard refuses a P2 connect before a poll can drive the native connect. P2 TCP reads and writes are
+not recorded yet. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
 one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
@@ -731,17 +742,12 @@ before peer readiness, then repair the original poll Start for durable agents. S
 and sync a real allocation and run in the privileged managed-XFS suite. These tests do not establish a
 bound for other host waits; preserve the permit-owned billing window.
 
-P2 TCP `start_connect` re-executes natively on reconstruction. A completed connect poll must drive
-the new native connect future before returning its recorded readiness, otherwise synchronous
-`finish_connect` can return `WouldBlock` and diverge. `TcpConnectReplay` in
-`durable_host/sockets/tcp.rs` classifies only socket pollables with an unfinished connect.
-`durable_host/io/poll.rs` revalidates their recorded-ready `poll` or `ready` result without changing
-the oplog. Only the native TCP readiness wait selects the existing typed interrupt signal, after
-completed replay has closed the durable handle. Replay resolution, the recorded terminal and
-file-readiness revalidation stay outside that race. `NativeIoWait` uses the same `InterruptSources`
-subscription as `DurableWorkerCtx::create_interrupt_signal`: it subscribes before checking invocation
-and tail-work deadlines and settled owner failure, then also observes entity cancellation. A deadline
-can leave `ExecutionStatus` Running, so its latch is required for a late subscriber.
+`NativeIoWait` uses the same `InterruptSources` subscription as
+`DurableWorkerCtx::create_interrupt_signal`: it subscribes before checking invocation and tail-work
+deadlines and settled owner failure, then also observes entity cancellation. A deadline can leave
+`ExecutionStatus` Running, so its latch is required for a late subscriber. Replay never drives a
+native P2 connect: a recorded-ready `poll` or `ready` returns its recorded result, and the socket
+of a replayed connect has no native connect future.
 `tests/api/interruption/host/p2/tcp/poll.rs` keeps the TCP peer silent after connect
 reconstruction, then applies a second monthly stop. It retains the original connect poll and ready
 terminals and incomplete input Start, checks observable cleanup and accounting,
@@ -751,13 +757,9 @@ does not establish an elapsed billing interval. The colocated production-window 
 `closed_owner_window_does_not_accrue_over_known_metering_intervals` advances the existing MeteringClock
 after physical permit release, retains allocated memory and the same owner/meter, and asserts no
 memory or mode-specific storage accrual and no filesystem resampling over known intervals.
-Peer withholding does not control TCP connect readiness, so
-this integrated case is not a connect-timeout witness. Failed native reconnect outcomes remain a raw-P2 replay
-limitation; readiness does not guarantee the original successful connection result.
 
-Successful pollable drops clear classification. Native socket deletion requires all pollable
-children to be dropped first, so socket cleanup need not scan unrelated subscriptions. This does
-not revalidate HTTP, UDP or TCP input pollables. Exported P2 `pollable.ready` remains a nonblocking
+Native socket deletion requires all pollable children to be dropped first. Replay does not
+revalidate HTTP, UDP or TCP pollables. Exported P2 `pollable.ready` remains a nonblocking
 live probe, as verified by `tests/api/p2_ready.rs`.
 
 ### Primary DB/KV completion before stop
@@ -947,7 +949,7 @@ with the composed interruption sources around only the native input future. Succ
 File streams use the separate filesystem observation path above; unknown streams keep their existing behavior. Native stream cancellation,
 resource deletion and invocation-result commit remain outside the select.
 
-Raw TCP and reconstructed connect keep their existing unbiased selects. Native-wait tests use
+Raw TCP input keeps its existing unbiased select. Native-wait tests use
 real WASI pollables and streams with independently assembled
 production sources. They cover deadline/entity cancellation before subscription and during actual
 Pending, typed errors, native completion, and resource ownership. They do not establish whole-Worker

@@ -392,6 +392,12 @@ oplog_payload! {
         P3SocketsBind {
             local_address: SerializableP3IpSocketAddress
         },
+        SocketsTcpBind {
+            local_address: SerializableP3IpSocketAddress
+        },
+        SocketsTcpConnect {
+            remote_address: SerializableP3IpSocketAddress
+        },
         GolemToolInvoke {
             tool_name: String,
             command_path: Vec<String>,
@@ -775,6 +781,16 @@ oplog_payload! {
         P3SocketsBind {
             result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
         },
+        SocketsTcpBind {
+            result: Result<SerializableP3IpSocketAddress, SerializableSocketError>
+        },
+        SocketsTcpStartConnect {
+            result: Result<(), SerializableSocketError>
+        },
+        SocketsTcpFinishConnect {
+            /// The local and remote addresses of the connection.
+            result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableSocketError>
+        },
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
         },
@@ -1102,6 +1118,9 @@ pub mod host_functions {
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsUdpPermissionCheck => "sockets::udp::permissions", "check", SocketsUdpPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (SocketsTcpStartBind => "sockets::tcp", "start_bind", SocketsTcpBind, SocketsTcpBind),
+        (SocketsTcpStartConnect => "sockets::tcp", "start_connect", SocketsTcpConnect, SocketsTcpStartConnect),
+        (SocketsTcpFinishConnect => "sockets::tcp", "finish_connect", NoInput, SocketsTcpFinishConnect),
         (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
         (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }

@@ -572,7 +572,6 @@ impl PrivateDurableWorkerState {
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
-            tcp_connect_replay: sockets::tcp::TcpConnectReplay::default(),
             open_tcp_input_streams: HashSet::new(),
             open_tcp_output_streams: HashSet::new(),
             p2_timer_deadlines: HashMap::new(),

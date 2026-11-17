@@ -61,6 +61,16 @@ fn error(error: impl std::fmt::Debug) -> String {
     format!("{error:?}")
 }
 
+/// Describes a P2 stream error with the host's description of a failed operation.
+fn stream_error(error: p2::StreamError) -> String {
+    match error {
+        p2::StreamError::LastOperationFailed(error) => {
+            format!("last-operation-failed: {}", error.to_debug_string())
+        }
+        p2::StreamError::Closed => "closed".to_string(),
+    }
+}
+
 /// Reads from a P3 receive stream until `len` bytes arrived or the stream ended. Returns the bytes
 /// and whether the stream ended.
 async fn p3_read(stream: &mut p3::StreamReader<u8>, len: usize) -> Result<(Vec<u8>, bool), String> {
@@ -106,14 +116,14 @@ fn p2_write(output: &p2::OutputStream, data: &[u8]) -> Result<(), String> {
     let mut rest = data;
     while !rest.is_empty() {
         output.subscribe().block();
-        let budget = output.check_write().map_err(error)? as usize;
+        let budget = output.check_write().map_err(stream_error)? as usize;
         let n = budget.min(rest.len());
         if n > 0 {
-            output.write(&rest[..n]).map_err(error)?;
+            output.write(&rest[..n]).map_err(stream_error)?;
             rest = &rest[n..];
         }
     }
-    output.blocking_flush().map_err(error)
+    output.blocking_flush().map_err(stream_error)
 }
 
 /// Reads from a P2 input stream until `len` bytes arrived or the peer closed the stream.
@@ -123,7 +133,7 @@ fn p2_read(input: &p2::InputStream, len: usize) -> Result<Vec<u8>, String> {
         match input.blocking_read((len - collected.len()) as u64) {
             Ok(bytes) => collected.extend_from_slice(&bytes),
             Err(p2::StreamError::Closed) => break,
-            Err(other) => return Err(error(other)),
+            Err(other) => return Err(stream_error(other)),
         }
     }
     Ok(collected)
@@ -227,6 +237,9 @@ pub trait SocketSession {
 
     /// Connects a P2 TCP socket and keeps it with its streams in `slot`.
     fn p2_tcp_connect(&self, slot: String, port: u16) -> Result<(), String>;
+    /// Connects a P2 TCP socket like `p2_tcp_connect`, but calls `finish-connect` again at once
+    /// after its first two `would-block` results. Returns the number of `would-block` results.
+    fn p2_tcp_connect_counting(&self, slot: String, port: u16) -> Result<u32, String>;
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String>;
     fn p2_tcp_send(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String>;
@@ -664,6 +677,36 @@ impl SocketSession for SocketSessionImpl {
             },
         );
         Ok(())
+    }
+
+    fn p2_tcp_connect_counting(&self, slot: String, port: u16) -> Result<u32, String> {
+        let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(p2::IpAddressFamily::Ipv4)
+            .map_err(error)?;
+        socket
+            .start_connect(&p2::instance_network(), p2_loopback(port))
+            .map_err(error)?;
+        let mut would_block = 0;
+        let (input, output) = loop {
+            match socket.finish_connect() {
+                Ok(streams) => break streams,
+                Err(wasi::sockets::network::ErrorCode::WouldBlock) => {
+                    would_block += 1;
+                    if would_block > 2 {
+                        socket.subscribe().block();
+                    }
+                }
+                Err(other) => return Err(error(other)),
+            }
+        };
+        self.insert(
+            slot,
+            Slot::P2Tcp {
+                input,
+                output,
+                socket,
+            },
+        );
+        Ok(would_block)
     }
 
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String> {
