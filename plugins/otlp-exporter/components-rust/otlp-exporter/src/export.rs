@@ -5,7 +5,7 @@ use crate::otlp_json::{
     OtlpSpan, OtlpSpanLink, OtlpValue, SpanStatus,
 };
 use crate::state::{PendingSpan, ResourceIdentity};
-use golem_rust::schema::wit::wire::{AgentId, ComponentId};
+use golem_rust::schema::wit::wire::AgentId;
 use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
 
@@ -82,35 +82,31 @@ fn combined_trace_state(trace_states: &[String]) -> Option<String> {
     (!trace_states.is_empty()).then(|| trace_states.join(","))
 }
 
+fn format_agent_id(agent_id: &AgentId) -> String {
+    format_uuid(agent_id.uuid.high_bits, agent_id.uuid.low_bits)
+}
+
 fn build_service_name(
     config: &ExporterConfig,
-    component_id: &ComponentId,
-    worker_id: &AgentId,
+    agent_id: &AgentId,
+    agent_type_name: Option<&str>,
 ) -> String {
-    match config.service_name_mode {
-        ServiceNameMode::AgentId => {
-            let comp_uuid = format_uuid(component_id.uuid.high_bits, component_id.uuid.low_bits);
-            format!("{}/{}", comp_uuid, worker_id.agent_id)
-        }
-        ServiceNameMode::AgentType => worker_id
-            .agent_id
-            .split_once('(')
-            .map_or(worker_id.agent_id.as_str(), |(agent_type, _)| agent_type)
-            .to_string(),
+    match (&config.service_name_mode, agent_type_name) {
+        (ServiceNameMode::AgentType, Some(agent_type_name)) => agent_type_name.to_string(),
+        _ => format_agent_id(agent_id),
     }
 }
 
 pub(crate) fn build_resource_attributes(
     config: &ExporterConfig,
-    component_id: &ComponentId,
-    worker_id: &AgentId,
+    agent_id: &AgentId,
     metadata: &golem_rust::oplog_processor::host::AgentMetadata,
     identity: Option<&ResourceIdentity>,
 ) -> Vec<KeyValue> {
     let mut attributes = build_resource_attributes_for_revision(
         config,
-        component_id,
-        worker_id,
+        agent_id,
+        metadata.agent_type_name.as_deref(),
         metadata.component_revision,
     );
     if let Some(identity) = identity {
@@ -143,15 +139,13 @@ fn append_identity_attributes(attributes: &mut Vec<KeyValue>, identity: &Resourc
 
 fn build_resource_attributes_for_revision(
     config: &ExporterConfig,
-    component_id: &ComponentId,
-    worker_id: &AgentId,
+    agent_id: &AgentId,
+    agent_type_name: Option<&str>,
     component_revision: u64,
 ) -> Vec<KeyValue> {
-    let component_id_str = format_uuid(component_id.uuid.high_bits, component_id.uuid.low_bits);
-    let agent_id_str = format!("{}/{}", component_id_str, worker_id.agent_id);
-    let service_name = build_service_name(config, component_id, worker_id);
+    let service_name = build_service_name(config, agent_id, agent_type_name);
 
-    vec![
+    let mut attributes = vec![
         KeyValue {
             key: "service.name".to_string(),
             value: OtlpValue {
@@ -161,13 +155,7 @@ fn build_resource_attributes_for_revision(
         KeyValue {
             key: "golem.agent.id".to_string(),
             value: OtlpValue {
-                string_value: agent_id_str,
-            },
-        },
-        KeyValue {
-            key: "golem.component.id".to_string(),
-            value: OtlpValue {
-                string_value: component_id_str,
+                string_value: format_agent_id(agent_id),
             },
         },
         KeyValue {
@@ -176,7 +164,16 @@ fn build_resource_attributes_for_revision(
                 string_value: component_revision.to_string(),
             },
         },
-    ]
+    ];
+    if let Some(agent_type_name) = agent_type_name {
+        attributes.push(KeyValue {
+            key: "golem.agent.type".to_string(),
+            value: OtlpValue {
+                string_value: agent_type_name.to_string(),
+            },
+        });
+    }
+    attributes
 }
 
 async fn send_otlp_request(
@@ -307,19 +304,12 @@ mod tests {
         }
     }
 
-    fn component_id() -> ComponentId {
-        ComponentId {
+    fn agent_id() -> AgentId {
+        AgentId {
             uuid: Uuid {
-                high_bits: 0x0011223344556677,
+                high_bits: 0x0011223344558677,
                 low_bits: 0x8899aabbccddeeff,
             },
-        }
-    }
-
-    fn agent_id(value: &str) -> AgentId {
-        AgentId {
-            component_id: component_id(),
-            agent_id: value.to_string(),
         }
     }
 
@@ -333,56 +323,44 @@ mod tests {
     }
 
     #[test]
-    fn agent_type_service_name_ignores_constructor_parameters_and_phantom_id() {
-        let first = agent_id("ShoppingCart(\"alice\", 1)");
-        let second =
-            agent_id("ShoppingCart(\"bob (preferred)\", 2)[00000000-0000-0000-0000-000000000001]");
-        let config = config(ServiceNameMode::AgentType);
-
-        assert_eq!(
-            build_service_name(&config, &component_id(), &first),
-            "ShoppingCart"
-        );
-        assert_eq!(
-            build_service_name(&config, &component_id(), &second),
-            "ShoppingCart"
-        );
-    }
-
-    #[test]
-    fn agent_type_service_name_accepts_external_tool_owners_without_an_agent_type() {
-        let worker_id = agent_id("~golem-external-tool-owner-00000000-0000-0000-0000-000000000003");
+    fn agent_type_service_name_is_the_agent_type_name() {
         assert_eq!(
             build_service_name(
                 &config(ServiceNameMode::AgentType),
-                &component_id(),
-                &worker_id
+                &agent_id(),
+                Some("ShoppingCart")
             ),
-            worker_id.agent_id
+            "ShoppingCart"
         );
     }
 
     #[test]
-    fn agent_id_service_name_and_resource_identity_attributes_are_unchanged() {
-        let worker_id = agent_id("ShoppingCart(\"alice\")[00000000-0000-0000-0000-000000000002]");
-        let component_id = component_id();
+    fn agent_type_service_name_falls_back_to_the_agent_id_without_an_agent_type() {
+        assert_eq!(
+            build_service_name(&config(ServiceNameMode::AgentType), &agent_id(), None),
+            "00112233-4455-8677-8899-aabbccddeeff"
+        );
+    }
+
+    #[test]
+    fn agent_id_service_name_and_agent_id_attribute_are_the_agent_id() {
         let attributes = build_resource_attributes_for_revision(
             &config(ServiceNameMode::AgentId),
-            &component_id,
-            &worker_id,
+            &agent_id(),
+            Some("ShoppingCart"),
             7,
         );
-        let component = "00112233-4455-6677-8899-aabbccddeeff";
+        let agent = "00112233-4455-8677-8899-aabbccddeeff";
 
-        assert_eq!(
-            attribute(&attributes, "service.name"),
-            format!("{component}/{}", worker_id.agent_id)
+        assert_eq!(attribute(&attributes, "service.name"), agent);
+        assert_eq!(attribute(&attributes, "golem.agent.id"), agent);
+        assert_eq!(attribute(&attributes, "golem.component.version"), "7");
+        assert_eq!(attribute(&attributes, "golem.agent.type"), "ShoppingCart");
+        assert!(
+            attributes
+                .iter()
+                .all(|attribute| attribute.key != "golem.component.id")
         );
-        assert_eq!(
-            attribute(&attributes, "golem.agent.id"),
-            format!("{component}/{}", worker_id.agent_id)
-        );
-        assert_eq!(attribute(&attributes, "golem.component.id"), component);
     }
 
     #[test]

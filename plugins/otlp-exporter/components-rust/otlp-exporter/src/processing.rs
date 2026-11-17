@@ -1125,7 +1125,7 @@ mod tests {
         RawSpanClosedParameters, ResourceTypeId, RevertParameters, SpanLink, Timestamp,
         WalletVersionToken, WorkerError, WrappedFunctionType,
     };
-    use golem_rust::schema::wit::wire::{AccountId, AgentId, ComponentId, Uuid};
+    use golem_rust::schema::wit::wire::{AccountId, AgentId, Uuid};
     use golem_rust::wasip3::clocks::system_clock::Instant;
 
     fn instant(seconds: i64, nanoseconds: u32) -> Instant {
@@ -1306,10 +1306,8 @@ mod tests {
         };
         OplogEntry::Create(RawCreateParameters {
             timestamp: instant(10, 0),
-            agent_id: AgentId {
-                component_id: ComponentId { uuid: uuid(1) },
-                agent_id: "agent".to_string(),
-            },
+            agent_id: AgentId { uuid: uuid(1) },
+            agent_type_name: Some("Agent".to_string()),
             owner_kind: OwnerKind::ComponentAgent,
             agent_mode: AgentMode::Durable,
             component_revision: 1,
@@ -1321,7 +1319,6 @@ mod tests {
             initial_total_linear_memory_size: initial_memory,
             initial_active_plugins: Vec::new(),
             local_agent_config: Vec::new(),
-            original_phantom_id: None,
             instance_id: uuid(instance),
         })
     }
@@ -1412,21 +1409,31 @@ mod tests {
         })
     }
 
+    const INVOCATION: Uuid = Uuid {
+        high_bits: 0,
+        low_bits: 1,
+    };
+    const FAILED_INVOCATION: Uuid = Uuid {
+        high_bits: 0,
+        low_bits: 2,
+    };
+    const NEXT_INVOCATION: Uuid = Uuid {
+        high_bits: 0,
+        low_bits: 3,
+    };
+
     fn invocation_started(trace_id: &str, context: Vec<SpanData>) -> OplogEntry {
-        invocation_started_with_id(1, trace_id, context)
+        invocation_started_with_id(INVOCATION, trace_id, context)
     }
 
     fn invocation_started_with_id(
-        invocation_id: u64,
+        invocation_id: Uuid,
         trace_id: &str,
         context: Vec<SpanData>,
     ) -> OplogEntry {
         OplogEntry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
             timestamp: instant(12, 0),
-            invocation_id: Uuid {
-                high_bits: 0,
-                low_bits: invocation_id,
-            },
+            invocation_id,
             payload: OplogPayload::Inline(Vec::new()),
             trace_id: trace_id.to_string(),
             trace_states: Vec::new(),
@@ -1445,10 +1452,7 @@ mod tests {
     fn invocation_finished() -> OplogEntry {
         OplogEntry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
             timestamp: instant(20, 0),
-            invocation_id: Uuid {
-                high_bits: 0,
-                low_bits: 1,
-            },
+            invocation_id: INVOCATION,
             result: OplogPayload::Inline(Vec::new()),
             method_name: None,
             consumed_fuel: 0,
@@ -1766,7 +1770,7 @@ mod tests {
             &mut state,
             90,
             vec![start(
-                "golem::rpc::wasm-rpc::new",
+                "golem::rpc::wasm-rpc::upsert",
                 Some(opening("rpc-connection")),
             )],
         );
@@ -2017,27 +2021,21 @@ mod tests {
 
     #[test]
     fn next_invocation_start_closes_failed_implicit_span_after_revert() {
-        for (next_id, kind, expected_kind) in [
-            (1, OplogErrorKind::Invocation, "invocation"),
-            (2, OplogErrorKind::Invocation, "invocation"),
-        ] {
+        for next_invocation in [FAILED_INVOCATION, NEXT_INVOCATION] {
             let mut state = state();
             handle_span_started(&mut state, opening("explicit"), None);
             let failed = process_entries(
                 &mut state,
                 vec![
                     invocation_started_with_id(
-                        1,
+                        FAILED_INVOCATION,
                         "trace-failed",
                         vec![local_span("failed-invocation", None, false)],
                     ),
                     OplogEntry::Error(RawErrorParameters {
                         timestamp: instant(18, 0),
-                        kind,
-                        invocation_id: Some(Uuid {
-                            high_bits: 0,
-                            low_bits: 1,
-                        }),
+                        kind: OplogErrorKind::Invocation,
+                        invocation_id: Some(FAILED_INVOCATION),
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
                         retry_policy_state: None,
@@ -2046,7 +2044,7 @@ mod tests {
             );
 
             assert!(failed.log_records[0].attributes.iter().any(|attribute| {
-                attribute.key == "error.kind" && attribute.value.string_value == expected_kind
+                attribute.key == "error.kind" && attribute.value.string_value == "invocation"
             }));
             assert!(failed.spans.is_empty());
             assert_eq!(state.implicit_spans.len(), 1);
@@ -2057,7 +2055,7 @@ mod tests {
                 vec![
                     revert_original_start(),
                     invocation_started_with_id(
-                        next_id,
+                        next_invocation,
                         "trace-retry",
                         vec![local_span("retry-invocation", None, false)],
                     ),
