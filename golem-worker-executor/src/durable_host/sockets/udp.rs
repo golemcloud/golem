@@ -244,8 +244,8 @@ async fn native_bind<Ctx: WorkerCtx>(
 }
 
 /// Prepares the native socket for a live operation. Replay rebuilds a socket without its
-/// endpoint, so at its first live operation the native socket is bound on the recorded local
-/// address, and, when the guest holds streams of it, streamed again to the recorded remote
+/// endpoint, so at its first live operation the native socket is bound as P3 UDP binds it, on
+/// the bind request's address with the recorded port, and, when the guest holds streams of it, streamed again to the recorded remote
 /// address; neither sends a packet. Returns `false` when the socket is `Lost`: the recorded
 /// address is not free, or it was not free before.
 async fn ensure_native_endpoint<Ctx: WorkerCtx>(
@@ -259,7 +259,7 @@ async fn ensure_native_endpoint<Ctx: WorkerCtx>(
     if entry.native_bound {
         return Ok(true);
     }
-    let Some(local_address) = entry.local_address.clone() else {
+    let Some(local_address) = entry.udp_rebuild_bind_address() else {
         return Ok(true);
     };
     let remote_address = entry.remote_address.clone().map(Into::into);
@@ -324,6 +324,19 @@ fn native_addresses<Ctx: WorkerCtx>(
     (local, remote)
 }
 
+/// The local address of the entry after a `stream` call, before the recorded change: a
+/// disconnect resets it as P3 `disconnect` does.
+fn stream_local_address(
+    entry: &SocketEntry,
+    disconnects: bool,
+) -> Option<SerializableP3IpSocketAddress> {
+    if disconnects {
+        Some(entry.udp_local_address_after_disconnect())
+    } else {
+        entry.local_address.clone()
+    }
+}
+
 fn has_streams<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     socket: u32,
@@ -347,11 +360,13 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         self.observe_function_call("sockets::udp", "start_bind");
         let rep = self_.rep();
         let mut bound_live = false;
+        let request = HostRequestSocketsUdpBind {
+            local_address: local_address.into(),
+        };
+        let bind_request = request.local_address.clone();
         let response = DurableCallSession::<SocketsUdpStartBind, NotCancellable>::invoke(
             self,
-            HostRequestSocketsUdpBind {
-                local_address: local_address.into(),
-            },
+            request,
             DurableFunctionType::WriteLocal,
             async |ctx| -> wasmtime::Result<_> {
                 let entry = udp_entry(ctx, rep)?;
@@ -398,6 +413,7 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
                 let entry = udp_entry(self, rep).map_err(SocketError::trap)?;
                 entry.phase = SocketPhase::Bound;
                 entry.local_address = Some(address);
+                entry.bind_request = Some(bind_request);
                 entry.native_bound = bound_live;
                 entry.bind_pending = true;
                 Ok(())
@@ -447,6 +463,12 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
                 "UDP streams not dropped yet",
             )));
         }
+        // `stream(none)` disconnects a connected socket, as P3 `disconnect` does.
+        let disconnects = remote_address.is_none()
+            && udp_entry(self, rep)
+                .map_err(SocketError::trap)?
+                .remote_address
+                .is_some();
         let mut natives = None;
         let response = DurableCallSession::<SocketsUdpStream, NotCancellable>::invoke(
             self,
@@ -471,12 +493,16 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
                     Err(error) => Err(recorded_error(error)?),
                 };
                 // Also after a failed call: a failed connect can leave the socket disconnected.
-                let (local_address, remote_address) = native_addresses(ctx, rep);
+                let (native_local, native_remote) = native_addresses(ctx, rep);
+                let expected = stream_local_address(udp_entry(ctx, rep)?, disconnects);
                 Ok(HostResponseSocketsUdpStream {
                     result,
                     lost: false,
-                    local_address,
-                    remote_address,
+                    local_address: SocketEntry::udp_local_address_change(
+                        expected.as_ref(),
+                        native_local,
+                    ),
+                    remote_address: native_remote,
                 })
             },
         )
@@ -485,12 +511,15 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         apply_lost(self, rep, response.lost)?;
         if !response.lost {
             let entry = udp_entry(self, rep).map_err(SocketError::trap)?;
-            if response.remote_address.is_some() {
-                entry.phase = SocketPhase::Connected;
-            } else if response.local_address.is_some() {
-                entry.phase = SocketPhase::Bound;
+            entry.local_address = stream_local_address(entry, disconnects);
+            if let Some(address) = response.local_address {
+                entry.local_address = Some(address);
             }
-            entry.local_address = response.local_address;
+            entry.phase = if response.remote_address.is_some() {
+                SocketPhase::Connected
+            } else {
+                SocketPhase::Bound
+            };
             entry.remote_address = response.remote_address;
         }
         response.result.map_err(SocketError::from)?;
@@ -801,10 +830,10 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
                 };
                 // A send on a socket whose disconnect released its port binds it implicitly.
                 let (native_local, _) = native_addresses(ctx, socket);
-                let local_address = native_local.filter(|address| {
-                    udp_entry(ctx, socket)
-                        .is_ok_and(|entry| entry.local_address.as_ref() != Some(address))
-                });
+                let local_address = SocketEntry::udp_local_address_change(
+                    udp_entry(ctx, socket)?.local_address.as_ref(),
+                    native_local,
+                );
                 Ok(HostResponseSocketsUdpSend {
                     result,
                     lost: false,

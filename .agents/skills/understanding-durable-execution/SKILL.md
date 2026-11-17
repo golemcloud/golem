@@ -1051,11 +1051,16 @@ commit and notification. These tests do not establish exactly-once datagram cons
 across the receive-before-End crash window.
 
 P3 UDP keeps its endpoint in the socket's `SocketEntries` entry. Bind records the selected local
-address (`P3SocketsBind`, also for port 0); connect, send and receive record an implicit bind or a
-loss as `SerializableP3UdpEndpoint` in their response. Replay updates the entry and touches no
-native socket; `disconnect` and the address getters are not recorded and use only the entry. At
-the first live operation, `ensure_native_endpoint` binds the native socket on the recorded local
-address and connects it again when the entry is connected, without sending a packet. When that
+address (`P3SocketsBind`, also for port 0) and keeps the bind request in the entry; connect, send
+and receive record every local-address change, such as an implicit bind or a wildcard bind that
+connect narrows to an interface address, or a loss as `SerializableP3UdpEndpoint` in their
+response. Replay updates the entry and touches no native socket; `disconnect` and the address
+getters are not recorded and use only the entry. `disconnect` resets the local address to the bind
+request, or to the unspecified address with port 0 after an implicit bind, because the native
+socket releases an implicitly bound port. At the first live operation, `ensure_native_endpoint`
+binds the native socket on the bind request's address with the recorded port and connects it again
+when the entry is connected, without sending a packet; an unspecified address with port 0 stays
+unbound until the next send binds it implicitly. When that
 fails, the entry becomes `Lost` and every later operation returns `connection-broken`; the rebuild
 is not checked against grants again, each datagram still is. Send records only the target and the
 result, never the datagram. An incomplete send completes with `connection-broken` and is not sent
@@ -1063,16 +1068,18 @@ again; an incomplete receive re-executes after the rebuild.
 
 P2 UDP (`durable_host/sockets/udp.rs`) uses the same entry and the same lazy rebuild.
 `start-bind` (`WriteLocal`) records the selected local address, `stream` (`WriteRemote`) the
-result and the native local and remote addresses after the call, `receive` (`ReadRemote`) the
-datagrams and their sources, `check-send` (`ReadLocal`) the permit, and `send` (`WriteRemote`)
-the destinations, the result and the count, never the bytes. The entry takes the addresses that
-`stream` records even when it fails: a connect fixes a wildcard local address, a disconnect can
-release an ephemeral port, and a failed connect can leave the socket disconnected. A `send` that
-binds a new local port records it too, so the rebuild binds the port the peer last saw.
+result, `receive` (`ReadRemote`) the datagrams and their sources, `check-send` (`ReadLocal`) the
+permit, and `send` (`WriteRemote`) the destinations, the result and the count, never the bytes.
+The local address follows the P3 rules through the shared `SocketEntry` helpers: the entry keeps
+the bind request, `stream(none)` on a connected socket resets the local address to it as P3
+`disconnect` does, and `stream` and `send` record every other change of the native local address
+(`udp_local_address_change`). `stream` also records the native remote address after the call,
+even when it fails, because a failed connect can leave the socket disconnected.
 The guest's datagram streams are `DurableIncomingDatagramStream` and
 `DurableOutgoingDatagramStream`; a replayed `stream` pushes them without native streams, in the
 native order, so later resource reps do not change. At the first live operation the host binds the
-native socket on the recorded address and calls native `stream` again with the recorded remote
+native socket on the bind request's address with the recorded port (`udp_rebuild_bind_address`,
+as P3) and calls native `stream` again with the recorded remote
 address when the guest holds streams. A loss is recorded as `lost: true` and reported as
 `connection-reset`, the code P2 TCP also uses for a lost connection (P2 has no
 `connection-broken`). An incomplete send completes with `connection-reset` and is never sent

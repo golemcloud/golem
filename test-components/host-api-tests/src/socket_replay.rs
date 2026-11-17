@@ -232,6 +232,8 @@ pub trait SocketSession {
 
     /// Binds a P3 UDP socket on `127.0.0.1:port` and keeps it in `slot`.
     fn p3_udp_bind(&self, slot: String, port: u16) -> Result<(), String>;
+    /// Binds a P3 UDP socket on `0.0.0.0:port` and keeps it in `slot`.
+    fn p3_udp_bind_any(&self, slot: String, port: u16) -> Result<(), String>;
     /// Creates a P3 UDP socket without binding it and keeps it in `slot`.
     fn p3_udp_create(&self, slot: String) -> Result<(), String>;
     fn p3_udp_connect(&self, slot: String, port: u16) -> Result<(), String>;
@@ -647,6 +649,18 @@ impl SocketSession for SocketSessionImpl {
     fn p3_udp_bind(&self, slot: String, port: u16) -> Result<(), String> {
         let socket = p3::UdpSocket::create(p3::IpAddressFamily::Ipv4).map_err(error)?;
         socket.bind(p3_loopback(port)).map_err(error)?;
+        self.insert(slot, Slot::P3Udp { socket });
+        Ok(())
+    }
+
+    fn p3_udp_bind_any(&self, slot: String, port: u16) -> Result<(), String> {
+        let socket = p3::UdpSocket::create(p3::IpAddressFamily::Ipv4).map_err(error)?;
+        socket
+            .bind(p3::IpSocketAddress::Ipv4(p3::Ipv4SocketAddress {
+                address: (0, 0, 0, 0),
+                port,
+            }))
+            .map_err(error)?;
         self.insert(slot, Slot::P3Udp { socket });
         Ok(())
     }

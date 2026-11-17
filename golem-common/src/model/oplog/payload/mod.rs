@@ -796,8 +796,11 @@ oplog_payload! {
         },
         /// `lost` is set when the call found that the socket could not get its recorded local
         /// address back after a reconstruction.
-        /// The native local and remote addresses after the call, also after a failed call:
-        /// connect and disconnect can change both.
+        /// `local_address` is the new native local address when the call changed it, as P3 UDP
+        /// records an endpoint change: the interface address that a connect selects for a
+        /// wildcard bind, or a port that a failed connect released. `remote_address` is the
+        /// native remote address after the call, also after a failed call, because a failed
+        /// connect can leave the socket disconnected.
         SocketsUdpStream {
             result: Result<(), SerializableSocketError>,
             lost: bool,
@@ -812,8 +815,8 @@ oplog_payload! {
             result: Result<u64, SerializableSocketError>,
             lost: bool,
         },
-        /// The number of datagrams sent. `local_address` is set when the send bound the socket
-        /// implicitly on a new local address.
+        /// The number of datagrams sent. `local_address` is the new native local address when
+        /// the send changed it: after a disconnect released the port, the send binds a new one.
         SocketsUdpSend {
             result: Result<u64, SerializableSocketError>,
             lost: bool,
