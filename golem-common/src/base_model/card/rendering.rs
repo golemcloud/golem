@@ -706,12 +706,24 @@ impl RenderFragment for NetworkResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {
         Ok(match self {
             Self::Any => "*".to_string(),
-            Self::HostPort { host, ports } => match ports {
-                PortPattern::Any => host.clone(),
-                PortPattern::Single(port) => format!("{host}:{port}"),
-                PortPattern::Range { start, end } => format!("{host}:{start}-{end}"),
-            },
+            Self::HostPort { host, ports } => {
+                let host = render_network_host(host);
+                match ports {
+                    PortPattern::Any => host,
+                    PortPattern::Single(port) => format!("{host}:{port}"),
+                    PortPattern::Range { start, end } => format!("{host}:{start}-{end}"),
+                }
+            }
+            Self::SocketAddress { host, port } => format!("{}:{port}", render_network_host(host)),
         })
+    }
+}
+
+fn render_network_host(host: &str) -> String {
+    if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
     }
 }
 

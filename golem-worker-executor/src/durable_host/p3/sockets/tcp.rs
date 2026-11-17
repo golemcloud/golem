@@ -17,7 +17,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::durable_host::TcpSocketStreamDirection;
-use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
     DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource,
@@ -32,6 +31,7 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, run_deniable_access, run_read_access, wasi_sockets_view,
 };
+use crate::durable_host::sockets::policy::SocketPolicy;
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
@@ -62,19 +62,13 @@ use wasmtime_wasi::sockets::{TcpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
 
-pub(super) const UNSUPPORTED_SOCKET_TARGET: &str = "unsupported socket address";
-
-pub(super) fn socket_target(
-    address: &types::IpSocketAddress,
-) -> Option<golem_common::model::card::PermissionTarget> {
-    match address {
-        types::IpSocketAddress::Ipv4(address) => {
-            let (a, b, c, d) = address.address;
-            let host = std::net::Ipv4Addr::new(a, b, c, d).to_string();
-            tcp_target(&host, address.port).ok()
-        }
-        types::IpSocketAddress::Ipv6(_) => None,
-    }
+/// The socket policy of the Store, for the permission target of a connect or datagram.
+pub(super) fn socket_policy<Ctx: WorkerCtx, U: 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+) -> SocketPolicy {
+    store.with(|mut access| {
+        SocketPolicy::new(&durable_worker_ctx::<Ctx, U>(access.data_mut()).state.config)
+    })
 }
 
 fn serialize_tcp_stream_result(
@@ -1454,9 +1448,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 "connect",
             )
         });
-        let targets = socket_target(&remote_address)
-            .map(|target| vec![target])
-            .ok_or_else(|| UNSUPPORTED_SOCKET_TARGET.to_string());
+        let targets = socket_policy(store)
+            .target(remote_address.into())
+            .map(|target| vec![target]);
         let request_address = remote_address;
         let response = run_deniable_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _>(
             store,
@@ -1488,18 +1482,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             .map_err(|error| types::ErrorCode::from(error).into())
     }
 
+    /// Agents expose no ports, so `listen` is always refused and its implicit bind never happens.
     async fn listen(
         mut store: Access<'_, U, Self>,
-        socket: Resource<TcpSocket>,
+        _socket: Resource<TcpSocket>,
     ) -> SocketResult<StreamReader<Resource<TcpSocket>>> {
         observe_function_call_store::<Ctx, U>(
             store.as_context_mut().data_mut(),
             "sockets::types::tcp-socket",
             "listen",
         );
-        let store =
-            Access::<U, WasiSockets>::new(store.as_context_mut(), wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(store, socket).await
+        Err(types::ErrorCode::AccessDenied.into())
     }
 
     async fn send(
