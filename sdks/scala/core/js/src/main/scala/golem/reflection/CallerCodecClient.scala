@@ -10,12 +10,12 @@
 
 package golem.reflection
 
-import golem.config.{ConfigOverride, ConfigOverrideEncoder}
+import golem.config.ConfigOverride
 import golem.runtime.{InputRecordCodec, OutputCodec, OutputMetadata}
+import golem.runtime.rpc.CreateOptions
 import golem.schema.SchemaValue
-import golem.Datetime
+import golem.{AgentId, Datetime}
 
-import java.util.UUID
 import scala.concurrent.Future
 import golem.concurrent.Implicits.global
 import scala.annotation.targetName
@@ -63,58 +63,20 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
   def client(implicit full: Capability <:< Full): CallerCodecClientFactory[Constructor, Config] =
     new CallerCodecClientFactory(this.asInstanceOf[AgentClientDefinition[Full, Constructor, Config]])
 
-  def agentId(
-    input: Constructor,
-    phantomId: Option[UUID] = None
-  )(implicit full: Capability <:< Full): Either[GolemReflectError, ParsedAgentId] =
-    try ParsedAgentId.create(contractName.get, constructorCodec.get.toValue(input), phantomId)
-    catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
-
-  def bind(agentId: ParsedAgentId)(implicit
-    canBind: CanBindAgentClient[Capability]
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
-    bindWithOverrides(agentId, Nil)
-
   /**
-   * Overrides are used only if binding creates a worker; an existing worker
-   * keeps its initial config.
+   * A client of the existing agent with the given ID. A definition with a
+   * contract name binds that agent type; a method-only definition binds the
+   * agent type that the type tag of the ID names. An unknown ID, or the ID of
+   * an agent of another type, gives
+   * [[golem.runtime.rpc.AgentRpcError.NotFound]].
    */
-  def bindWithOverrides(agentId: ParsedAgentId, overrides: List[ConfigOverride])(implicit
+  def getById(agentId: AgentId)(implicit
     canBind: CanBindAgentClient[Capability]
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
-    for {
-      parts <- agentId.parts
-      _     <- contractName match {
-             case None       => Right(())
-             case Some(name) =>
-               Either.cond(
-                 parts.typeName == name,
-                 (),
-                 GolemReflectError.Identity(s"Agent client definition '$name' cannot bind '${parts.typeName}'")
-               )
-           }
-      _ <- contractMode match {
-             case Some(AgentMode.Ephemeral) =>
-               Left(
-                 GolemReflectError.Identity(
-                   s"Cannot bind an existing identity to ephemeral agent type '${contractName.get}'"
-                 )
-               )
-             case _ => Right(())
-           }
-      _ <- constructorCodec match {
-             case None        => Right(())
-             case Some(codec) => ReflectionInternals.validate(SchemaRef(codec.graph), parts.constructorValue)
-           }
-      transport <- Transport.create(parts.typeName, parts.constructorValue, parts.phantomId, overrides)
-    } yield new CallerCodecAgentClient(transport)
-
-  def bindWithConfig(agentId: ParsedAgentId, config: Config)(implicit
-    full: Capability <:< Full,
-    canBind: CanBindAgentClient[Capability]
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
-    try bindWithOverrides(agentId, configCodec.fold(List.empty[ConfigOverride])(_.overrides(config)))
-    catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
+  ): Future[Either[GolemReflectError, CallerCodecAgentClient]] =
+    contractName.map(Right(_)).getOrElse(Transport.typeNameOf(agentId)) match {
+      case Left(error) => Future.successful(Left(error))
+      case Right(name) => Transport.getById(name, agentId).map(_.map(new CallerCodecAgentClient(_)))
+    }
 }
 
 object AgentClientDefinition {
@@ -168,75 +130,65 @@ final case class CallerCodecMethod[Input, Output](
   output: OutputCodec[Output]
 )
 
-final case class CallerCodecPhantomClient(
-  agentId: ParsedAgentId,
-  phantomId: UUID,
-  client: CallerCodecAgentClient
-)
-
 final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
   definition: AgentClientDefinition[Full, Constructor, Config]
 ) {
-  def get(input: Constructor): Either[GolemReflectError, CallerCodecAgentClient] =
-    getWithOverrides(input, Nil)
 
-  def get(input: Constructor, config: Config): Either[GolemReflectError, CallerCodecAgentClient] =
-    encodeConfig(config).flatMap(getWithOverrides(input, _))
+  /**
+   * A client of the keyed agent of the constructor parameters. A durable agent
+   * is created when it is missing; every invocation of an ephemeral agent runs
+   * on a new one-shot instance.
+   */
+  def upsert(input: Constructor): Either[GolemReflectError, CallerCodecAgentClient] =
+    encodeConstructor(input)
+      .flatMap(Transport.upsert(definition.contractName.get, _))
+      .map(new CallerCodecAgentClient(_))
 
-  def getPhantom(input: Constructor, phantomId: UUID): Either[GolemReflectError, CallerCodecAgentClient] =
-    create(input, Some(phantomId), Nil)
-
-  def getPhantom(
+  /**
+   * Creates a durable agent. With `keyed`, it is the keyed agent of the
+   * constructor parameters, and an existing one gives
+   * [[golem.runtime.rpc.AgentRpcError.Conflict]]; otherwise the new agent has
+   * no key and a new ID. `env` is added to the environment the manifest
+   * defines.
+   */
+  def create(
     input: Constructor,
-    phantomId: UUID,
-    config: Config
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
-    encodeConfig(config).flatMap(create(input, Some(phantomId), _))
+    keyed: Boolean = false,
+    env: Map[String, String] = Map.empty
+  ): Future[Either[GolemReflectError, CallerCodecAgentClient]] =
+    createWithOverrides(input, CreateOptions(keyed, Nil, env))
 
-  def newPhantom(
-    input: Constructor
-  ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
-    newPhantomWithOverrides(input, Nil)
-
-  def newPhantom(
+  /** Like the other `create`, with `config` overriding local configuration. */
+  def create(
     input: Constructor,
-    config: Config
-  ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
-    encodeConfig(config).flatMap(newPhantomWithOverrides(input, _))
-
-  private def newPhantomWithOverrides(
-    input: Constructor,
-    overrides: List[ConfigOverride]
-  ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
-    if (definition.contractMode.contains(AgentMode.Ephemeral)) create(input, None, overrides).map(Left(_))
-    else {
-      val phantom = UUID.randomUUID()
-      for {
-        constructor <- encodeConstructor(input)
-        id          <- ParsedAgentId.create(definition.contractName.get, constructor, Some(phantom))
-        transport   <- Transport.create(definition.contractName.get, constructor, Some(phantom), overrides)
-        client       = new CallerCodecAgentClient(transport)
-      } yield Right(CallerCodecPhantomClient(id, phantom, client))
+    config: Config,
+    keyed: Boolean,
+    env: Map[String, String]
+  ): Future[Either[GolemReflectError, CallerCodecAgentClient]] =
+    encodeConfig(config) match {
+      case Left(error)      => Future.successful(Left(error))
+      case Right(overrides) => createWithOverrides(input, CreateOptions(keyed, overrides, env))
     }
 
-  private def getWithOverrides(input: Constructor, overrides: List[ConfigOverride]) =
-    requireDurable("get").flatMap(_ => create(input, None, overrides))
+  /** See [[AgentClientDefinition.getById]]. */
+  def getById(agentId: AgentId): Future[Either[GolemReflectError, CallerCodecAgentClient]] =
+    requireDurable("getById") match {
+      case Left(error) => Future.successful(Left(error))
+      case Right(_)    =>
+        Transport.getById(definition.contractName.get, agentId).map(_.map(new CallerCodecAgentClient(_)))
+    }
 
-  private def create(
+  private def createWithOverrides(
     input: Constructor,
-    phantomId: Option[UUID],
-    overrides: List[ConfigOverride]
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
-    encodeConstructor(input).flatMap(createValue(_, phantomId, overrides))
-
-  private def createValue(
-    constructor: SchemaValue,
-    phantomId: Option[UUID],
-    overrides: List[ConfigOverride]
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
-    Transport
-      .create(definition.contractName.get, constructor, phantomId, overrides)
-      .map(new CallerCodecAgentClient(_))
+    options: CreateOptions
+  ): Future[Either[GolemReflectError, CallerCodecAgentClient]] =
+    requireDurable("create").flatMap(_ => encodeConstructor(input)) match {
+      case Left(error)        => Future.successful(Left(error))
+      case Right(constructor) =>
+        Transport
+          .create(definition.contractName.get, constructor, options)
+          .map(_.map(new CallerCodecAgentClient(_)))
+    }
 
   private def encodeConstructor(input: Constructor): Either[GolemReflectError, SchemaValue] =
     try Right(definition.constructorCodec.get.toValue(input))
@@ -255,6 +207,10 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
 }
 
 final class CallerCodecAgentClient private[reflection] (transport: Transport) {
+
+  /** The ID of the target agent; see [[ReflectedAgentClient.agentId]]. */
+  def agentId(): Future[Either[GolemReflectError, AgentId]] = transport.agentId()
+
   def method[Input, Output](definition: CallerCodecMethod[Input, Output]): CallerCodecBoundMethod[Input, Output] =
     new CallerCodecBoundMethod(definition, transport)
 }

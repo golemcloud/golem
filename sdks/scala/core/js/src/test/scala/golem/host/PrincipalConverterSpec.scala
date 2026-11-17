@@ -60,10 +60,7 @@ object PrincipalConverterSpec extends ZIOSpecDefault {
         assertTrue(back == Right(p))
       },
       test("Agent") {
-        val p = Principal.Agent(
-          componentId = new java.util.UUID(123456789012345678L, 987654321098765432L),
-          agentId = "my-agent-1"
-        )
+        val p    = Principal.Agent(golem.AgentId(new java.util.UUID(123456789012345678L, 987654321098765432L)))
         val json = PrincipalConverter.toJson(p)
         val back = PrincipalConverter.fromJson(json)
         assertTrue(back == Right(p))

@@ -19,7 +19,6 @@ package golem.host.js.schema
 import golem.host.js.{
   JsAgentConfigSource,
   JsAgentMode,
-  JsComponentId,
   JsHttpEndpointDetails,
   JsHttpMountDetails,
   JsReadOnlyConfig,
@@ -252,14 +251,11 @@ object JsTypedAgentConfigValue {
  */
 @js.native
 sealed trait JsRegisteredAgentType extends js.Object {
-  def agentType: JsAgentType       = js.native
-  def implementedBy: JsComponentId = js.native
+  def agentType: JsAgentType = js.native
 }
 object JsRegisteredAgentType {
-  def apply(agentType: JsAgentType, implementedBy: JsComponentId): JsRegisteredAgentType =
-    js.Dynamic
-      .literal("agentType" -> agentType, "implementedBy" -> implementedBy)
-      .asInstanceOf[JsRegisteredAgentType]
+  def apply(agentType: JsAgentType): JsRegisteredAgentType =
+    js.Dynamic.literal("agentType" -> agentType).asInstanceOf[JsRegisteredAgentType]
 }
 
 @js.native

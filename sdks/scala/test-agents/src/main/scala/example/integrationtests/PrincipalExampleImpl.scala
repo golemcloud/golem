@@ -26,8 +26,8 @@ final class PrincipalAgentImpl(input: String, principal: Principal) extends Prin
   private val creatorInfo: String = principal match {
     case Principal.Oidc(sub, issuer, _, email, _, _, _, _, _, _) =>
       s"OIDC user: sub=$sub, issuer=$issuer, email=${email.getOrElse("N/A")}"
-    case Principal.Agent(componentId, agentId) =>
-      s"Agent: componentId=$componentId, agentId=$agentId"
+    case Principal.Agent(agentId) =>
+      s"Agent: agentId=$agentId"
     case Principal.GolemUser(accountId) =>
       s"Golem user: accountId=$accountId"
     case Principal.Anonymous =>
@@ -41,7 +41,7 @@ final class PrincipalAgentImpl(input: String, principal: Principal) extends Prin
     val callerInfo = caller match {
       case Principal.Anonymous                            => "anonymous"
       case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"OIDC:$sub"
-      case Principal.Agent(_, agentId)                    => s"agent:$agentId"
+      case Principal.Agent(agentId)                       => s"agent:$agentId"
       case Principal.GolemUser(accountId)                 => s"user:$accountId"
     }
     Future.successful(s"Current caller: $callerInfo")

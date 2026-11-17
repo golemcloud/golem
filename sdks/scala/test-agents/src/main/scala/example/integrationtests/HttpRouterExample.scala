@@ -58,7 +58,7 @@ final class ScalaWebsiteImpl(config: Config[WebsiteConfig]) extends ScalaWebsite
           )
         )
       case "/scala/dependency" =>
-        HttpDocumentsClient.get("from-router").update(config.value.greeting).map(_ => text("updated"))
+        HttpDocumentsClient.upsert("from-router").update(config.value.greeting).map(_ => text("updated"))
       case "/scala/fail-before" => Future.failed(new IllegalStateException("handler failure"))
       case "/scala/fail-after"  =>
         var first = true

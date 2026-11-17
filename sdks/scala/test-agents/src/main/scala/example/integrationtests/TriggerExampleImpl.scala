@@ -37,7 +37,7 @@ final class TriggerTargetImpl(@unused private val name: String) extends TriggerT
 
 @agentImplementation()
 final class TriggerCallerImpl(@unused private val name: String) extends TriggerCaller {
-  private val target = TriggerTargetClient.get("target-instance")
+  private val target = TriggerTargetClient.upsert("target-instance")
 
   override def fireProcess(): Future[String] = {
     target.process.trigger(42, "hello")

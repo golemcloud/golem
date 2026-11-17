@@ -79,7 +79,7 @@ final class Gol40ReflectionToolImpl extends Gol40ReflectionTool {
 
   private def principalLabel(principal: Principal): String = principal match {
     case Principal.Anonymous                            => "anonymous"
-    case Principal.Agent(_, name)                       => s"agent:$name"
+    case Principal.Agent(id)                            => s"agent:$id"
     case Principal.GolemUser(_)                         => "golem-user"
     case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
   }

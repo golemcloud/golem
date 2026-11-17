@@ -49,23 +49,16 @@ private[autowire] object AgentImplementationRuntime {
       bindings = implType.methods.map(MethodBinding.wire(implType.metadata, _)),
       mode = mode,
       snapshotHandlers = implType.snapshotHandlers,
-      restoreInstance = implType.snapshotHandlers.map {
-        handlers => (bytes, agentId, identityInput, phantomId, principal) =>
-          FutureInterop.toPromise(SchemaPayload.withWireInput(identityInput) { value =>
-            val identity = implType.ctorCodec.decode(value)
-            val fields   = identity match {
-              case ()                => Vector.empty
-              case values: Vector[?] => values.asInstanceOf[Vector[Any]]
-              case value             => Vector(value)
-            }
-            val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
-            val context     = SnapshotRestoreContext(fields, agentId, phantomId, principal, freshConfig)
-            handlers
-              .load(bytes, context)
-              .map(instance => RestoredInstance(instance, freshConfig))(
-                scala.concurrent.ExecutionContext.parasitic
-              )
-          })
+      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, principal) =>
+        FutureInterop.toPromise {
+          val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
+          val context     = SnapshotRestoreContext(agentId, principal, freshConfig)
+          handlers
+            .load(bytes, context)
+            .map(instance => RestoredInstance(instance, freshConfig))(
+              scala.concurrent.ExecutionContext.parasitic
+            )
+        }
       }
     )
     AgentRegistry.register(definition)
@@ -104,26 +97,16 @@ private[autowire] object AgentImplementationRuntime {
       bindings = bindings,
       mode = mode,
       snapshotHandlers = implType.snapshotHandlers,
-      restoreInstance = implType.snapshotHandlers.map {
-        handlers => (bytes, agentId, identityInput, phantomId, principal) =>
-          SchemaPayload.decode[Ctor](identityInput)(implType.ctorCodec) match {
-            case Left(error)     => scala.scalajs.js.Promise.reject(new IllegalArgumentException(error.toString))
-            case Right(identity) =>
-              val fields = identity match {
-                case ()                => Vector.empty
-                case values: Vector[?] => values.asInstanceOf[Vector[Any]]
-                case value             => Vector(value)
-              }
-              val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
-              val context     = SnapshotRestoreContext(fields, agentId, phantomId, principal, freshConfig)
-              FutureInterop.toPromise(
-                handlers
-                  .load(bytes, context)
-                  .map(instance => RestoredInstance(instance, freshConfig))(
-                    scala.concurrent.ExecutionContext.parasitic
-                  )
-              )
-          }
+      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, principal) =>
+        val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
+        val context     = SnapshotRestoreContext(agentId, principal, freshConfig)
+        FutureInterop.toPromise(
+          handlers
+            .load(bytes, context)
+            .map(instance => RestoredInstance(instance, freshConfig))(
+              scala.concurrent.ExecutionContext.parasitic
+            )
+        )
       }
     )
 

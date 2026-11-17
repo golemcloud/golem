@@ -1012,7 +1012,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
             parameters = js.Array[js.Tuple2[String, String]]()
           ),
           sourceComponentRevision = js.BigInt("9007199254740993"),
-          targetAgentId = js.Dynamic.literal(agentId = "processor-agent"),
+          targetAgentId =
+            js.Dynamic.literal(uuid = js.Dynamic.literal(highBits = js.BigInt("3"), lowBits = js.BigInt("4"))),
           confirmedUpTo = js.BigInt("11"),
           sendingUpTo = js.BigInt("15"),
           lastBatchStart = js.BigInt("12")
@@ -1021,6 +1022,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.OplogProcessorCheckpoint].params
       assertTrue(
         parsed.sourceComponentRevision == BigInt("9007199254740993"),
+        parsed.targetAgentId == golem.AgentId(new java.util.UUID(3L, 4L)),
         parsed.confirmedUpTo == BigInt(11),
         parsed.sendingUpTo == BigInt(15),
         parsed.lastBatchStart == BigInt(12)

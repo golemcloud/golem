@@ -38,7 +38,7 @@ final class CounterImpl(@unused private val name: String) extends Counter {
 @agentImplementation()
 final class RpcClientImpl(@unused private val name: String) extends RpcClient {
   override def callCounter(counterId: String): Future[Int] =
-    CounterClient.get(counterId).increment()
+    CounterClient.upsert(counterId).increment()
 }
 
 @agentImplementation()
@@ -100,7 +100,7 @@ object SnapshotCounterImpl {
     bytes: Array[Byte],
     context: golem.runtime.SnapshotRestoreContext
   ): Future[SnapshotCounterImpl] = Future.successful {
-    val instance = new SnapshotCounterImpl(context.identity[String](0))
+    val instance = new SnapshotCounterImpl(context.agentId.toString)
     instance.value = decodeU32(bytes)
     instance
   }
@@ -136,7 +136,7 @@ object AutoSnapshotCounterImpl {
     state: SnapshotCounterState,
     context: golem.runtime.SnapshotRestoreContext
   ): Future[AutoSnapshotCounterImpl] = Future.successful {
-    val instance = new AutoSnapshotCounterImpl(context.identity[String](0))
+    val instance = new AutoSnapshotCounterImpl(context.agentId.toString)
     instance.state = state
     instance
   }
@@ -193,7 +193,7 @@ final class ApprovalWorkflowImpl(private val workflowId: String) extends Approva
 final class HumanAgentImpl(private val username: String) extends HumanAgent {
   override def decide(workflowId: String, decision: String): Future[String] =
     ApprovalWorkflowClient
-      .get(workflowId)
+      .upsert(workflowId)
       .complete(decision)
       .map { ok =>
         if (ok) s"$username decided $decision for $workflowId"

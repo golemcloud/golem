@@ -14,7 +14,6 @@ const hostModules = [
   `
         const unavailable = () => { throw new Error("Unexpected host call: ${specifier}"); };
         export const SchemaValueStream = { wrap: unavailable, unwrap: unavailable };
-        export const parseAgentId = unavailable;
         export const getSelfMetadata = unavailable;
       `,
 ]);

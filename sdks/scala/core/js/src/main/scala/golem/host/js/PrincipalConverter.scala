@@ -16,7 +16,7 @@
 
 package golem.host.js
 
-import golem.{CanonicalUuid, Principal}
+import golem.{AgentId, CanonicalUuid, Principal}
 import zio.blocks.schema.json.Json
 
 import scala.scalajs.js
@@ -44,10 +44,7 @@ object PrincipalConverter {
           )
         case "agent" =>
           val p = dynamic.asInstanceOf[JsPrincipalAgent].value
-          Principal.Agent(
-            componentId = JsUuid.toUuid(p.agentId.componentId.uuid),
-            agentId = p.agentId.agentId
-          )
+          Principal.Agent(agentId = JsAgentId.toAgentId(p.agentId))
         case "golem-user" =>
           val p = dynamic.asInstanceOf[JsPrincipalGolemUser].value
           Principal.GolemUser(accountId = JsUuid.toUuid(p.accountId.uuid))
@@ -68,12 +65,11 @@ object PrincipalConverter {
     case Principal.Anonymous =>
       Json.Object("tag" -> Json.String("anonymous"))
 
-    case Principal.Agent(componentId, agentId) =>
+    case Principal.Agent(agentId) =>
       Json.Object(
         "tag" -> Json.String("agent"),
         "val" -> Json.Object(
-          "componentId" -> Json.String(componentId.toString),
-          "agentId"     -> Json.String(agentId)
+          "agentId" -> Json.String(agentId.toString)
         )
       )
 
@@ -121,11 +117,10 @@ object PrincipalConverter {
                   case "anonymous" => Right(Principal.Anonymous)
                   case "agent"     =>
                     for {
-                      valObj      <- getObj(json, "val")
-                      cidStr      <- getStr(valObj, "componentId")
-                      componentId <- CanonicalUuid.parse(cidStr)
-                      agentId     <- getStr(valObj, "agentId")
-                    } yield Principal.Agent(componentId, agentId)
+                      valObj  <- getObj(json, "val")
+                      aidStr  <- getStr(valObj, "agentId")
+                      agentId <- AgentId.parse(aidStr)
+                    } yield Principal.Agent(agentId)
                   case "golem-user" =>
                     for {
                       valObj    <- getObj(json, "val")

@@ -58,7 +58,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
         state <- snapshot.decodeState[Saved]
         bytes <- snapshot.requirePart("index", "Application/Octet-Stream")
       } yield {
-        val restored = new IndexImpl("restored:" + context.identity[String](0))
+        val restored = new IndexImpl("restored:" + context.agentId)
         restored.saved = state
         restored.index = bytes.clone()
         restored
@@ -212,16 +212,16 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
         IndexImpl.initializations = 0
         IndexImpl.restorations = 0
         Guest.resetForTesting()
-        val identityInput = SchemaPayload.encode[String]("init")(InputRecordCodec.single[String]("name"))
+        val agentId = golem.AgentId(java.util.UUID.fromString("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
         js.Dynamic.global
           .selectDynamic("globalThis")
           .updateDynamic("__golemScalaTestHost")(
             js.Dynamic.literal(
               "getSelfMetadata" -> (() =>
-                js.Dynamic.literal("agentId" -> js.Dynamic.literal("agentId" -> "multipart-index()"))
-              ),
-              "parseAgentId" -> ((_: String) =>
-                js.Array[js.Any]("multipart-index", js.Dynamic.literal("value" -> identityInput), js.undefined)
+                js.Dynamic.literal(
+                  "agentId"       -> golem.host.js.JsAgentId.fromAgentId(agentId),
+                  "agentTypeName" -> "multipart-index"
+                )
               )
             )
           )
@@ -230,7 +230,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
           .fromState(Saved(17, "restore"), Map("index" -> SnapshotPart(bytes, "application/octet-stream")))
           .toOption
           .get
-        val context = SnapshotRestoreContext(Vector("init"), "multipart-index()", None, Principal.Anonymous, None)
+        val context = SnapshotRestoreContext(agentId, Principal.Anonymous, None)
         for {
           wrong <- defn.snapshotHandlers.get
                      .load(SnapshotPayload(Array.emptyByteArray, "application/octet-stream"), context)

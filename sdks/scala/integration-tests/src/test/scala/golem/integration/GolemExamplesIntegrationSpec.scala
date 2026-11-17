@@ -542,12 +542,12 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     Sample(
       "agent-registry-query",
       "samples/agent-registry/repl-agent-query.ts",
-      Contains("agentType=", "agentName=")
+      Contains("agentType=", "agentId=")
     ),
     Sample(
-      "agent-registry-phantom",
-      "samples/agent-registry/repl-phantom.ts",
-      Contains("phantom counter")
+      "agent-registry-create",
+      "samples/agent-registry/repl-create.ts",
+      Contains("created counter", "getById counter.increment() = 2")
     ),
 
     // --- Host API explorer ---

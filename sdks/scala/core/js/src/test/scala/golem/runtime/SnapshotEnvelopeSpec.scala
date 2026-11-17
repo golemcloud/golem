@@ -31,10 +31,8 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
     email = Some("user@example.com")
   )
 
-  private val testAgentPrincipal = Principal.Agent(
-    componentId = new java.util.UUID(123456789012345678L, 987654321098765432L),
-    agentId = "agent-1"
-  )
+  private val testAgentPrincipal =
+    Principal.Agent(golem.AgentId(new java.util.UUID(123456789012345678L, 987654321098765432L)))
 
   private def buildJsonEnvelope(principal: Principal, stateJson: String): Array[Byte] = {
     val principalJsonStr = new String(PrincipalConverter.toJson(principal), "UTF-8")
@@ -139,11 +137,11 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
         assertTrue(invalidPrincipal.isLeft, wrongVersion.left.exists(_.contains("version")))
       },
       test("Agent principal JSON matches Rust format") {
-        val componentId = java.util.UUID.fromString("550e8400-e29b-41d4-a716-446655440000")
-        val principal   = Principal.Agent(componentId, "MyAgent(\"x\")")
-        val jsonStr     = new String(PrincipalConverter.toJson(principal), "UTF-8")
+        val agentId   = java.util.UUID.fromString("550e8400-e29b-41d4-a716-446655440000")
+        val principal = Principal.Agent(golem.AgentId(agentId))
+        val jsonStr   = new String(PrincipalConverter.toJson(principal), "UTF-8")
         assertTrue(
-          jsonStr == """{"tag":"agent","val":{"componentId":"550e8400-e29b-41d4-a716-446655440000","agentId":"MyAgent(\"x\")"}}"""
+          jsonStr == """{"tag":"agent","val":{"agentId":"550e8400-e29b-41d4-a716-446655440000"}}"""
         )
       },
       test("Anonymous principal JSON matches Rust format") {

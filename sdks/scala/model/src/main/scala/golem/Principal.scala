@@ -36,10 +36,7 @@ object Principal {
     preferredUsername: Option[String] = None
   ) extends Principal
 
-  final case class Agent(
-    componentId: UUID,
-    agentId: String
-  ) extends Principal
+  final case class Agent(agentId: AgentId) extends Principal
 
   final case class GolemUser(
     accountId: UUID
