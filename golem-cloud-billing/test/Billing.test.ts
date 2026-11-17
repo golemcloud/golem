@@ -754,7 +754,7 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
       const html = await page(jar)
       expect(html).toContain("<h1>Suspended</h1>")
-      expect(html).toContain("Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account.")
+      expect(html).toContain("An invoice for paid overage is not paid, so Golem stopped the agents of this account.")
       expect(html).toContain(`action="/billing/portal"`)
 
       await deliver(
@@ -1359,10 +1359,10 @@ describe("Polar billing", () => {
       await unpaidAfterEnd(accountId)
 
       const html = await page(jar)
-      expect(html).toContain("The subscription of the invoice has ended, so Polar does not charge the invoice again.")
+      expect(html).toContain("The subscription of the invoice has ended, and Polar does not try the payment again.")
       expect(html).toContain(`action="/billing/settle"`)
-      expect(html).toContain("Settle $3.45")
-      expect(html).toContain("When the account owes no more paid overage, your plan is Free")
+      expect(html).toContain("Settle $3.45 here. This amount includes the tax of the invoice.")
+      expect(html).toContain("When the account owes no paid overage, your plan is Free")
       expect(html).not.toContain("Pay the invoice")
 
       const response = await postSettle(jar)
@@ -1423,7 +1423,7 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
       expect(html).toContain("Settle $3.45")
-      expect(html).toContain("When the account owes no more paid overage, your plan is Paid")
+      expect(html).toContain("When the account owes no paid overage, your plan is Paid")
 
       await deliver("order.created", settlementOrder(accountId))
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
