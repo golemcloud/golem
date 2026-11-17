@@ -57,9 +57,12 @@ async fn env_vars(
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
-        .with_str(
+        .with(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
-            "/tmp/ittest-local-object-store/golem",
+            std::env::temp_dir()
+                .join("ittest-local-object-store/golem")
+                .to_string_lossy()
+                .to_string(),
         )
         .with_str("GOLEM__REGISTRY_SERVICE__TYPE", "Dynamic")
         .with("GOLEM__ENGINE__ENABLE_FS_CACHE", "true".to_string())
@@ -71,4 +74,23 @@ async fn env_vars(
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_optional_otlp("component_compilation_service", otlp)
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::env_vars;
+    use test_r::test;
+    use tracing::Level;
+
+    #[test]
+    async fn blob_root_uses_process_temp_directory() {
+        let env = env_vars(8083, 9094, Level::INFO, false, false).await;
+        assert_eq!(
+            env["GOLEM__BLOB_STORAGE__CONFIG__ROOT"],
+            std::env::temp_dir()
+                .join("ittest-local-object-store/golem")
+                .to_string_lossy()
+        );
+        assert_eq!(env["GOLEM__BLOB_STORAGE__TYPE"], "LocalFileSystem");
+    }
 }
