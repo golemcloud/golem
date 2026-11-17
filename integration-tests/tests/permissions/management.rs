@@ -38,7 +38,7 @@
 //! | --- | --- |
 //! | Interrupting or resuming a standalone tool invocation, or reading its oplog, without the grant looks like an unknown invocation | GOL-1079 and GOL-1086 (the entry points); GOL-1417 adds the command rows |
 //! | Closing a tool-owned webhook without `close-webhook` looks like an unknown webhook | GOL-1390 (the webhook commands); the later of GOL-1390 and GOL-1403 adds the rows |
-//! | A manual update of an agent with the never-live mark | Open: decision 2 of the GOL-1403 plan, after the snapshot-migration rehearsal design (`MANUAL_UPDATE_OF_A_MARKED_AGENT`) |
+//! | `agent : replay` admits the restricted manual snapshot-migration rehearsal on a never-live fork, which only validates the load (D12, `MANUAL_UPDATE_OF_A_MARKED_AGENT`) | The executor review and tests of the rehearsal: host-call safety, exact idle, restart behavior and the supported cases. The issue that builds the rehearsal and its gate relative to the replay PR are not agreed yet. GOL-1420 for the mark |
 //!
 //! Fixtures that this draft does not have yet are named where they are
 //! used: `Fixture::BashTool` and `Fixture::StaticFileConfigTool`, and the
@@ -153,8 +153,7 @@ enum LooksLike {
 ///
 /// `spec` spells the request: `stage[ condition]: part, part`, then
 /// ` + if condition: parts` for parts that the target adds, then
-/// ` | marked: parts` or ` | marked: undecided` for what the never-live mark
-/// changes. A part is `class verb @target [resource]`.
+/// ` | marked: parts` for what the never-live mark changes. A part is `class verb @target [resource]`.
 struct ExpectedRequest {
     spec: &'static str,
     grants: &'static [(Grant, LooksLike)],
@@ -550,7 +549,8 @@ const CASES: &[Case] = &[
         ],
         Effect::Updated,
     ),
-    // `marked: undecided` waits for decision 2 of the GOL-1403 plan.
+    // On a never-live fork this is the restricted snapshot-migration
+    // rehearsal of D12; its admission is pending (see the module docs).
     selected(
         "mode=manual",
         case(
@@ -560,7 +560,7 @@ const CASES: &[Case] = &[
             &[
                 PREPARE,
                 expected(
-                    "operation: agent update-revision @agent | marked: undecided",
+                    "operation: agent update-revision @agent | marked: agent replay @agent",
                     &[control("update-revision", "")],
                 ),
                 AWAIT_UPDATE,
@@ -992,7 +992,6 @@ fn spell_request(request: &Request) -> String {
     match request.marked {
         Marked::Same => {}
         Marked::Instead(parts) => spelled.push_str(&format!(" | marked: {}", spell_parts(parts))),
-        Marked::Undecided => spelled.push_str(" | marked: undecided"),
     }
     spelled
 }
@@ -3098,9 +3097,12 @@ async fn management_cancel_needs_the_invocation_cancel_grant(
 }
 
 /// A type-wide `replay` grant updates and deletes a sandbox fork of the type,
-/// and neither updates nor deletes an agent of the type without the mark, nor
-/// a fork of another type. The manual update of a marked agent is not a case
-/// here: it waits for decision 2 (`MANUAL_UPDATE_OF_A_MARKED_AGENT`).
+/// and neither updates, automatically or manually, nor deletes an agent of
+/// the type without the mark, nor a fork of another type. The manual update
+/// of a marked fork, the restricted snapshot-migration rehearsal, is not a
+/// positive case here: its admission waits for the executor review of its
+/// host-call safety, exact idle, restart behavior and supported cases, and
+/// for an owner (`MANUAL_UPDATE_OF_A_MARKED_AGENT`).
 #[test]
 #[timeout("10m")]
 #[ignore = "pending: the never-live mark and the fork that sets it (GOL-1420); the replay verb (GOL-1276), 2.0 grant installation (GOL-1275, GOL-1297) and the 2.0 card model (GOL-1289), all Aditya Salunkhe"]
@@ -3108,6 +3110,7 @@ async fn management_replay_cannot_change_a_real_agent(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let update = adapters(&["agent", "update"], "automatic")[0];
+    let manual = adapters(&["agent", "update"], "manual")[0];
     let delete = adapters(&["agent", "delete"], "delete")[0];
     let seed = Seed::new(deps, Fixture::Repository).await?;
     give(
@@ -3118,7 +3121,7 @@ async fn management_replay_cannot_change_a_real_agent(
         ],
     )
     .await?;
-    for real in [update, delete] {
+    for real in [update, manual, delete] {
         let before = seed.observe().await?;
         let trace = (real.run)(&seed).await?;
         let unknown = (real.run)(&seed.with_unknown_agent()).await?;
@@ -3126,7 +3129,7 @@ async fn management_replay_cannot_change_a_real_agent(
         assert_eq!(seed.observe().await?, before, "replay changed a real agent");
     }
     anyhow::bail!(
-        "pending: the marked half of this case needs a sandbox fork with the never-live mark, which GOL-1420 supplies, and a fork of another type as the negative owner control"
+        "pending: the marked half of this case needs a sandbox fork with the never-live mark, which GOL-1420 supplies, and a fork of another type as the negative owner control; its manual rehearsal waits for the executor review and an owner of the rehearsal"
     )
 }
 

@@ -172,20 +172,23 @@ pub enum Marked {
     /// On an agent with the mark, the request has these parts instead. This
     /// is a choice of the target, not a second grant that also allows it.
     Instead(&'static [Part]),
-    /// What the mark changes is not decided yet. The server must not ship a
-    /// rule for the request on an agent with the mark until it is.
-    Undecided,
 }
 
 /// What the never-live mark does to a manual update.
 ///
-/// Open: this waits for decision 2 of the GOL-1403 implementation plan, which
-/// waits for the separate design of a snapshot-migration rehearsal. D12 lets
-/// `agent : replay` allow the automatic update and the deletion of a sandbox
-/// fork; it does not say what a manual update of one needs. Neither a refusal
-/// nor a replay grant for the rehearsal is decided. Fill this in when the
-/// decision is made.
-pub const MANUAL_UPDATE_OF_A_MARKED_AGENT: Marked = Marked::Undecided;
+/// On an agent with the persisted never-live mark, a manual update is the
+/// restricted snapshot-migration rehearsal of D12 (decision 2 of the GOL-1403
+/// plan): the source revision of the fork saves its state, the target
+/// revision loads it, and the rehearsal stops. It validates the load only:
+/// no invocation runs after the load, no fresh external operation runs, and
+/// the source does not change. `agent : replay` on the fork authorizes it.
+///
+/// This is the grant, not the admission. The server admits the rehearsal
+/// only after the executor review and tests settle its host-call safety,
+/// exact idle and restart behavior, and the supported cases; the issue that
+/// builds it, and its gate relative to the replay PR, are not agreed yet.
+/// Nothing here builds the rehearsal or refuses a marked manual update.
+pub const MANUAL_UPDATE_OF_A_MARKED_AGENT: Marked = Marked::Instead(&[REPLAY]);
 
 /// One part of an operation: a class and verb, with the target and resource
 /// that it checks.
@@ -720,9 +723,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         stdin_marker_args: &[],
         destructive: false,
     },
-    // The automatic update of a sandbox fork is `agent : replay` (D12). What
-    // the mark changes in a manual update is open: see
-    // `MANUAL_UPDATE_OF_A_MARKED_AGENT`.
+    // The automatic update of a sandbox fork is `agent : replay` (D12), and so
+    // is its manual update, as the restricted snapshot-migration rehearsal:
+    // see `MANUAL_UPDATE_OF_A_MARKED_AGENT` for what of it is still open.
     CommandRow {
         path: &["agent", "update"],
         modes: &[
@@ -1267,7 +1270,7 @@ mod test {
                 // is named in a `403`.
                 let parts = match request.marked {
                     Marked::Instead(instead) => [request.parts, instead],
-                    Marked::Same | Marked::Undecided => [request.parts, &[]],
+                    Marked::Same => [request.parts, &[]],
                 };
                 for parts in parts {
                     let first_tool = parts.iter().position(|part| part.target == Tool);
