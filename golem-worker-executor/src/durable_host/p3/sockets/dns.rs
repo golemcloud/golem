@@ -14,7 +14,9 @@
 
 use crate::durable_host::authorization::targets::dns_target;
 use crate::durable_host::concurrent::reserve_invocation_id_before_await;
-use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
+use crate::durable_host::durability::{
+    ClassifiedHostError, CustomInvocationContext, HostFailureKind,
+};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, run_deniable_access_classified, wasi_sockets_view,
 };
@@ -36,6 +38,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)?;
+        let custom_invocation = store.guest_task_context::<CustomInvocationContext>()?;
         let targets = dns_target(&name)
             .map(|target| vec![target])
             .map_err(|error| error.to_string());
@@ -85,6 +88,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
             },
         )
         .await?;
+
+        if let Ok(addresses) = &response.result {
+            store.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut()).link_resolved_addresses(
+                    custom_invocation.as_deref(),
+                    &name,
+                    addresses.0.iter().cloned().map(std::net::IpAddr::from),
+                )
+            })?;
+        }
 
         Ok(response
             .result

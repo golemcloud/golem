@@ -387,6 +387,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
+        if let Err(error) = store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .rebuild_resolved_names(snapshot_index)
+            .await
+        {
+            Self::emit_snapshot_recovery_event(
+                store,
+                snapshot_index,
+                false,
+                Some(error.to_string()),
+            );
+            return SnapshotRecoveryResult::Unavailable(error);
+        }
+
         if let Err(error) = load_load_snapshot_guest(&mut store.as_context_mut(), instance) {
             Self::emit_snapshot_recovery_event(
                 store,
@@ -691,6 +707,37 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 bootstrap,
             )
             .await?;
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Rebuilds the links of the Store's address lookups from the history up to `through`, which a
+    /// start from the snapshot at `through` skips. The links that the Store made before, such as
+    /// those of the lookups of a core initializer, stay after them. Without agent sockets no
+    /// connect reads the links, so the history is not scanned.
+    pub(in crate::durable_host) async fn rebuild_resolved_names(
+        &mut self,
+        through: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if !self.state.config.agent_sockets.enabled {
+            return Ok(());
+        }
+        let deleted_regions = self
+            .public_state
+            .worker()
+            .get_last_known_status()
+            .await
+            .deleted_regions
+            .clone();
+        let mut resolved_names = sockets::resolved_names::ResolvedNames::rebuild(
+            self.state.oplog.as_ref(),
+            through,
+            &deleted_regions,
+        )
+        .await?;
+        resolved_names.extend(std::mem::take(&mut self.state.resolved_names));
+        self.state.resolved_names = resolved_names;
         Ok(())
     }
 }

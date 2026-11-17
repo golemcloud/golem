@@ -2100,7 +2100,16 @@ fn network_grant(resource: &str) -> NetworkResourcePattern {
 
 fn socket(address: &str) -> NetworkResourcePattern {
     let address: std::net::SocketAddr = address.parse().unwrap();
-    NetworkResourcePattern::socket_address(address.ip(), address.port())
+    NetworkResourcePattern::socket_address(address.ip(), address.port(), Vec::new())
+}
+
+fn linked_socket(address: &str, hostnames: &[&str]) -> NetworkResourcePattern {
+    let address: std::net::SocketAddr = address.parse().unwrap();
+    NetworkResourcePattern::socket_address(
+        address.ip(),
+        address.port(),
+        hostnames.iter().map(|name| name.to_string()).collect(),
+    )
 }
 
 #[test]
@@ -2201,7 +2210,8 @@ fn named_network_grants_reach_internal_socket_destinations() {
 #[test]
 fn wildcard_network_denials_cover_internal_socket_destinations() {
     let holder = RecipientPattern::parse("acme/shop/prod/cart/agent").unwrap();
-    let target = |address: &str| network_target::socket_target(address.parse().unwrap());
+    let target =
+        |address: &str| network_target::socket_target(address.parse().unwrap(), Vec::new());
     let surface = |positive: &str, negative: &str| {
         EffectiveSurface::from_grants(
             &[network("*", network_grant(positive))],
@@ -2266,4 +2276,92 @@ fn test_name(value: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
+}
+
+#[test]
+fn linked_hostnames_reach_socket_destinations_under_d28() {
+    let linked = |address: &str| linked_socket(address, &["db.test"]);
+    // An exact hostname grant reaches every address the name was linked to, internal or not.
+    for address in ["10.0.0.5:5432", "127.0.0.1:5432", "93.184.215.14:5432"] {
+        assert!(
+            network_grant("db.test:5432").subsumes(&linked(address)),
+            "{address}"
+        );
+        assert!(
+            network_grant("db.test").subsumes(&linked(address)),
+            "{address}"
+        );
+    }
+    assert!(!network_grant("db.test:5432").subsumes(&linked("10.0.0.5:5433")));
+    assert!(!network_grant("db.test:5432").subsumes(&socket("10.0.0.5:5432")));
+    assert!(!network_grant("other.test:5432").subsumes(&linked("10.0.0.5:5432")));
+    // A wildcard hostname grant reaches a linked address only when it is public.
+    for wildcard in ["*.test:5432", "*", "*:5432"] {
+        let grant = network_grant(wildcard);
+        assert!(!grant.subsumes(&linked("10.0.0.5:5432")), "{wildcard}");
+        assert!(!grant.subsumes(&linked("127.0.0.1:5432")), "{wildcard}");
+    }
+    assert!(network_grant("*.test:5432").subsumes(&linked("93.184.215.14:5432")));
+    assert!(!network_grant("*.test:5432").subsumes(&socket("93.184.215.14:5432")));
+    // The address keeps its own rules next to the links.
+    assert!(network_grant("10.0.0.5:5432").subsumes(&linked("10.0.0.5:5432")));
+    assert!(
+        network_grant("db.test:5432")
+            .subsumes(&linked_socket("10.0.0.5:5432", &["a.test", "db.test"]))
+    );
+}
+
+#[test]
+fn denials_of_a_linked_hostname_cover_the_address() {
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/agent").unwrap();
+    let surface = |positive: &str, negative: &str| {
+        EffectiveSurface::from_grants(
+            &[network("*", network_grant(positive))],
+            &[network("*", network_grant(negative))],
+            &[],
+            &[],
+            &holder,
+        )
+        .unwrap()
+    };
+    let target = |hostnames: Vec<String>| {
+        network_target::socket_target("10.0.0.5:5432".parse().unwrap(), hostnames)
+    };
+    let linked = || target(vec!["db.test".to_string()]);
+    assert!(
+        surface("10.0.0.5:5432", "other.test")
+            .authorize(&linked())
+            .unwrap()
+    );
+    assert!(
+        !surface("10.0.0.5:5432", "db.test")
+            .authorize(&linked())
+            .unwrap()
+    );
+    assert!(
+        !surface("10.0.0.5:5432", "*.test:5432")
+            .authorize(&linked())
+            .unwrap()
+    );
+    assert!(
+        surface("10.0.0.5:5432", "db.test")
+            .authorize(&target(Vec::new()))
+            .unwrap()
+    );
+    assert!(
+        !surface("db.test:5432", "10.0.0.5")
+            .authorize(&linked())
+            .unwrap()
+    );
+}
+
+#[test]
+fn looked_up_names_link_as_grants_name_them() {
+    assert_eq!(
+        network_target::link_hostname("DB.Test."),
+        Some("db.test".to_string())
+    );
+    for unlinked in ["10.0.0.5", "::1", "[::1]", "", "*.test", "a b"] {
+        assert_eq!(network_target::link_hostname(unlinked), None, "{unlinked}");
+    }
 }

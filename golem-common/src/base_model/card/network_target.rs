@@ -37,13 +37,22 @@ pub fn network_target(
     }))
 }
 
-/// The permission target of a raw socket connect or outgoing datagram to `address`.
-pub fn socket_target(address: SocketAddr) -> PermissionTarget {
+/// The permission target of a raw socket connect or outgoing datagram to `address`, with the
+/// hostnames that the agent's recorded lookups linked to the address.
+pub fn socket_target(address: SocketAddr, hostnames: Vec<String>) -> PermissionTarget {
     PermissionTarget::Network(ClassPermissionTarget {
         verb: Some(NetworkVerb::Connect),
         owner: EmptyOwnerPattern,
-        resource: NetworkResourcePattern::socket_address(address.ip(), address.port()),
+        resource: NetworkResourcePattern::socket_address(address.ip(), address.port(), hostnames),
     })
+}
+
+/// The hostname that an address lookup of `name` links its addresses to: the name as a grant
+/// names it. An IP literal or an invalid name links nothing.
+pub fn link_hostname(name: &str) -> Option<String> {
+    normalize_host(name)
+        .ok()
+        .filter(|host| host.parse::<IpAddr>().is_err())
 }
 
 fn normalize_host(host: &str) -> Result<String, NetworkTargetError> {

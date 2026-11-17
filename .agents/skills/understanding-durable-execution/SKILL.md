@@ -3239,6 +3239,22 @@ from its arguments and the configuration only. The executor binds its gRPC and H
 before it creates any agent, so the configuration holds the bound ports. Tests:
 `tests/scope_cards/socket_policy.rs`.
 
+**Hostname links.** Each Store keeps a `ResolvedNames` index
+(`durable_host/sockets/resolved_names.rs`) that links the addresses of its completed P2 and P3
+address lookups to the looked-up hostname. The permission target of a connect or outgoing datagram
+carries the hostnames linked to its address, so an exact hostname grant such as `db.test` reaches
+the addresses that a lookup of `db.test` returned, also internal ones. A wildcard hostname grant
+reaches only public addresses through a link (D28), and a denial still matches linked hostnames.
+The index holds at most 1024 links (`MAX_RESOLVED_NAME_LINKS`) and evicts the least recently
+linked one. Only lookups that replay returns again link: lookups in snapshotting mode and the
+physical calls of a custom durable invocation do not. Replay fills the index again from the
+recorded lookups. A snapshot recovery skips the history before the snapshot, so
+`rebuild_resolved_names` scans it for completed lookups of the primary Store, leaves out entity
+bodies, observational calls and the regions that no replay runs (deleted, jumped and failed update
+attempts), and merges the result under the links that the Store already has. The lookup itself is
+checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
+a port needs a portless grant for the lookup too.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can

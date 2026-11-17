@@ -77,12 +77,16 @@ pub enum NetworkResourcePattern {
         host: String,
         ports: PortPattern,
     },
-    /// The destination of a raw socket connect or outgoing datagram. It is a request, never a
-    /// grant: card text never parses to it. A grant whose host has a wildcard matches it only when
-    /// the address is [`AddressClass::Public`]; every other address needs a grant that names it.
+    /// The destination of a raw socket connect or outgoing datagram, with the hostnames that the
+    /// agent's recorded address lookups linked to the address. It is a request, never a grant:
+    /// card text never parses to it. A grant matches it when it matches the address or one of the
+    /// hostnames, and a grant whose host has a wildcard matches it only when the address is
+    /// [`AddressClass::Public`]. Every other address needs a grant that names it: the address
+    /// itself, or an exact linked hostname.
     SocketAddress {
         host: String,
         port: u16,
+        hostnames: Vec<String>,
     },
 }
 
@@ -105,20 +109,33 @@ impl NetworkResourcePattern {
         }
     }
 
-    pub fn socket_address(ip: IpAddr, port: u16) -> Self {
+    /// A socket destination; `hostnames` are the normalized hostnames linked to `ip`.
+    pub fn socket_address(ip: IpAddr, port: u16, hostnames: Vec<String>) -> Self {
         Self::SocketAddress {
             host: canonical_ip_host(ip),
             port,
+            hostnames,
         }
     }
 
     /// Whether this pattern, used as a denial, covers `other`. A denial with a wildcard host also
-    /// covers socket destinations that are not public.
+    /// covers socket destinations that are not public, and a denial that covers a linked hostname
+    /// covers the address.
     pub fn denies(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::HostPort { host, ports }, Self::SocketAddress { host: target, port }) => {
-                host_pattern_subsumes(host, target) && ports.subsumes(&PortPattern::Single(*port))
+            (
+                Self::HostPort { host, ports },
+                Self::SocketAddress {
+                    host: target,
+                    port,
+                    hostnames,
+                },
+            ) => {
+                ports.subsumes(&PortPattern::Single(*port))
+                    && std::iter::once(target)
+                        .chain(hostnames)
+                        .any(|name| host_pattern_subsumes(host, name))
             }
             _ => self.subsumes(other),
         }
@@ -192,10 +209,19 @@ impl ResourcePattern for NetworkResourcePattern {
             ) => host_pattern_subsumes(ah, bh) && ap.subsumes(bp),
             (Self::Any, Self::SocketAddress { host, .. }) => wildcard_host_reaches(host),
             (Self::Any, _) => true,
-            (Self::HostPort { host, ports }, Self::SocketAddress { host: target, port }) => {
+            (
+                Self::HostPort { host, ports },
+                Self::SocketAddress {
+                    host: target,
+                    port,
+                    hostnames,
+                },
+            ) => {
                 (!host.contains('*') || wildcard_host_reaches(target))
-                    && host_pattern_subsumes(host, target)
                     && ports.subsumes(&PortPattern::Single(*port))
+                    && std::iter::once(target)
+                        .chain(hostnames)
+                        .any(|name| host_pattern_subsumes(host, name))
             }
             (Self::HostPort { .. }, Self::Any) => false,
             (Self::SocketAddress { .. }, _) => false,

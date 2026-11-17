@@ -15,7 +15,6 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::concurrent::{DurableCallSession, NotCancellable, ResolvedCall};
-use crate::durable_host::sockets::policy::SocketPolicy;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::SafeDisplay;
@@ -231,10 +230,9 @@ async fn authorize_addresses<Ctx: WorkerCtx>(
     let response = 'response: {
         let handle = match begun.resolve(ctx).await.map_err(SocketError::trap)? {
             ResolvedCall::Live(begun) => {
-                let policy = SocketPolicy::new(&ctx.state.config);
                 let targets = addresses
                     .iter()
-                    .map(|address| policy.target(std::net::SocketAddr::from(*address)))
+                    .map(|address| ctx.socket_target(std::net::SocketAddr::from(*address)))
                     .collect::<Result<Vec<_>, _>>();
                 let denial = match targets {
                     Ok(targets) => ctx
