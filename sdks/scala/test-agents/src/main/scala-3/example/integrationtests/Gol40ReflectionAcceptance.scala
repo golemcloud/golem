@@ -198,11 +198,11 @@ final class ScalaGol40ReflectionAcceptanceImpl(name: String) extends ScalaGol40R
           reflectedNested.contains("nested/inspect") &&
           reflectedNested.contains("shared-prefix:asymmetric") &&
           reflectedNested.contains("89") &&
-          reflectedNested.contains(generatedPrincipal),
+          reflectedNested.contains(jsonString(generatedPrincipal)),
         generatedNested = generatedNested.toString,
         reflectedNested = reflectedNested,
         typedErrorMatches = generatedErrorMatches && reflectedErrorMatches,
-        principalMatches = reflectedPrincipal.contains(generatedPrincipal),
+        principalMatches = reflectedPrincipal == jsonString(generatedPrincipal),
         generatedPrincipal = generatedPrincipal,
         reflectedPrincipal = reflectedPrincipal,
         streamMatches = generatedBytes == List(0, 2, 5, 9, -1) &&
@@ -229,6 +229,10 @@ final class ScalaGol40ReflectionAcceptanceImpl(name: String) extends ScalaGol40R
     expectRight(invoked)
       .map(_.map(_.toString).getOrElse(""))
   }
+
+  // The principal text holds double quotes, so inside JSON text it appears in its escaped form.
+  private def jsonString(text: String): String =
+    "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
   private def expectRight[E, A](future: Future[Either[E, A]]): Future[A] =
     future.flatMap {
