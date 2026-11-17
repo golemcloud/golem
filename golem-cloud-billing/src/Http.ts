@@ -23,9 +23,9 @@ import {
   signedInPage,
   signedOutPage
 } from "./Page.ts"
-import { Polar } from "./Polar.ts"
+import { type CheckoutSession, Polar } from "./Polar.ts"
 import { type Account, type AccountLimits, Registry } from "./Registry.ts"
-import { pastDueGraceEnd, planFor, type SettlementOffer, settlementFor } from "./Settlement.ts"
+import { make as makeSettlement, pastDueGraceEnd, planFor, type SettlementOffer, settlementFor } from "./Settlement.ts"
 import { type Subscription, Subscriptions } from "./Subscriptions.ts"
 import * as Webhooks from "./Webhooks.ts"
 
@@ -48,6 +48,13 @@ const page = (body: SafeHtml, status = 200) =>
     contentType: "text/html; charset=utf-8",
     headers: securityHeaders
   })
+
+/**
+ * How long an open checkout must still take payments for the checkout route to send the person
+ * back to it, in place of a new checkout. A second click then does not make the deletion hold of
+ * the checkout longer.
+ */
+export const CHECKOUT_REUSE_MS = 60 * 60 * 1000
 
 const errorPage = HttpServerResponse.text("An error occurred. Reload the page.", {
   status: 500,
@@ -125,6 +132,7 @@ export const routes = HttpRouter.use((router) =>
     const config = yield* BillingConfig
     const { pool } = yield* Database
     const handleWebhook = yield* Webhooks.makeHandler
+    const settlement = yield* makeSettlement
     const cliCommand = cliBootstrapCommand(config.publicApiUrl)
     const home = new URL("/", config.baseUrl).href
     // The query parameter of the page after a settlement: the IDs of the orders that it pays.
@@ -377,16 +385,59 @@ export const routes = HttpRouter.use((router) =>
             if (!offered) {
               return HttpServerResponse.redirect("/", { status: 303 })
             }
-            const url = yield* polar.createCheckout({
-              productId: config.polar.productId,
-              externalCustomerId: user.golemAccountId,
-              customerEmail: user.email,
-              customerName: user.name === "" ? undefined : user.name,
-              customerIpAddress: clientAddress(request),
-              successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
-              returnUrl: home
-            })
-            return HttpServerResponse.redirect(url, { status: 303 })
+            // The URL of a checkout holds the client secret that pays it. The route sends it to
+            // the browser only after the deletion hold of the checkout is in the registry, so the
+            // registry never deletes an account while Polar can take a payment for it. A checkout
+            // whose route fails before then can never be paid; its row holds the account until it
+            // expires (`Subscriptions.holdCandidates`).
+            const accountId = user.golemAccountId
+            const { session, reasons } = yield* subscriptions.withAccountLock(
+              accountId,
+              Effect.gen(function* () {
+                const now = new Date()
+                const reusable = yield* subscriptions.reusableCheckout(
+                  accountId,
+                  new Date(now.getTime() + CHECKOUT_REUSE_MS)
+                )
+                let session: CheckoutSession | undefined
+                if (reusable !== undefined) {
+                  session = yield* polar.getCheckout(reusable.checkoutId)
+                  if (session.status !== "open") {
+                    yield* subscriptions.recordCheckoutStatus(reusable.checkoutId, session.status)
+                  }
+                }
+                if (session === undefined || session.status === "expired" || session.status === "failed") {
+                  session = yield* polar.createCheckout({
+                    productId: config.polar.productId,
+                    externalCustomerId: accountId,
+                    customerEmail: user.email,
+                    customerName: user.name === "" ? undefined : user.name,
+                    customerIpAddress: clientAddress(request),
+                    successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
+                    returnUrl: home
+                  })
+                  yield* subscriptions.recordCheckout({
+                    checkoutId: session.id,
+                    accountId,
+                    expiresAt: session.expiresAt
+                  })
+                }
+                return { session, reasons: yield* settlement.reconcile(accountId, now) }
+              })
+            )
+            if (session.status !== "open") {
+              // The person paid the checkout in another tab; the page waits for the subscription.
+              const notice = new URL(home)
+              notice.searchParams.set("checkout_id", session.id)
+              return HttpServerResponse.redirect(notice.href, { status: 303 })
+            }
+            if (reasons === "deleted" || !reasons.includes("openCheckout")) {
+              yield* Effect.logWarning("Refused a checkout that no deletion hold covers").pipe(
+                Effect.annotateLogs({ golemAccountId: accountId, checkoutId: session.id, reasons: String(reasons) })
+              )
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            return HttpServerResponse.redirect(session.url, { status: 303 })
           }).pipe(
             Effect.catch((error) =>
               Effect.logError("Cannot start the checkout").pipe(

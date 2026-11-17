@@ -1,8 +1,9 @@
 import { createPolarCore } from "@polar-sh/sdk/2026-10"
-import { createCheckouts } from "@polar-sh/sdk/2026-10/services/checkouts"
+import { createCheckouts, getCheckouts } from "@polar-sh/sdk/2026-10/services/checkouts"
 import { createCustomerSessions } from "@polar-sh/sdk/2026-10/services/customer_sessions"
 import { Config, Context, Data, Effect, Layer, Redacted } from "effect"
 import { HttpBody, HttpClient, HttpClientError } from "effect/http"
+import type { CheckoutStatus } from "./Subscriptions.ts"
 
 export interface PolarConfigShape {
   /** The base URL of the Polar API: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. */
@@ -96,6 +97,30 @@ const customerFields = (request: CheckoutRequest) => ({
   return_url: request.returnUrl
 })
 
+/**
+ * A checkout session of Polar. `url` is the checkout page; it holds the client secret of the
+ * session, which is the only way to pay it.
+ */
+export interface CheckoutSession {
+  readonly id: string
+  readonly url: string
+  readonly status: CheckoutStatus
+  /** When Polar stops taking the payment of the open checkout: 24 hours after its creation. */
+  readonly expiresAt: Date
+}
+
+const toCheckoutSession = (checkout: {
+  readonly id: string
+  readonly url: string
+  readonly status: CheckoutStatus
+  readonly expires_at: string
+}): CheckoutSession => ({
+  id: checkout.id,
+  url: checkout.url,
+  status: checkout.status,
+  expiresAt: new Date(checkout.expires_at)
+})
+
 /** The SDK errors with an HTTP status: `PolarClientError` and `PolarServerError`. */
 const statusOf = (error: unknown): number | undefined =>
   typeof error === "object" && error !== null && "statusCode" in error && typeof error.statusCode === "number"
@@ -118,8 +143,10 @@ const sdkCall = <A>(operation: string, call: () => Promise<A>): Effect.Effect<A,
 export interface PolarShape {
   /** Sends usage events to `POST /v1/events/ingest`. */
   readonly ingestEvents: (events: ReadonlyArray<PolarEvent>) => Effect.Effect<void, PolarError>
-  /** Creates a checkout session and returns the URL of its checkout page. */
-  readonly createCheckout: (request: CheckoutRequest) => Effect.Effect<string, PolarError>
+  /** Creates a checkout session (scope `checkouts:write`). */
+  readonly createCheckout: (request: CheckoutRequest) => Effect.Effect<CheckoutSession, PolarError>
+  /** Reads a checkout session (`checkouts:read` or `checkouts:write`). */
+  readonly getCheckout: (checkoutId: string) => Effect.Effect<CheckoutSession, PolarError>
   /** Creates a checkout session of a settlement and returns the URL of its checkout page. */
   readonly createSettlementCheckout: (request: SettlementCheckoutRequest) => Effect.Effect<string, PolarError>
   /**
@@ -166,6 +193,7 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
 
     const core = createPolarCore({ accessToken: Redacted.value(accessToken), baseUrl })
     const checkouts = createCheckouts(core)
+    const checkout = getCheckouts(core)
     const customerSessions = createCustomerSessions(core)
 
     const createCheckout = (request: CheckoutRequest) =>
@@ -175,7 +203,10 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
           ...customerFields(request),
           allow_discount_codes: true
         })
-      ).pipe(Effect.map((checkout) => checkout.url))
+      ).pipe(Effect.map(toCheckoutSession))
+
+    const getCheckout = (checkoutId: string) =>
+      sdkCall("get_checkout", () => checkout(checkoutId)).pipe(Effect.map(toCheckoutSession))
 
     const createSettlementCheckout = (request: SettlementCheckoutRequest) =>
       sdkCall("create_settlement_checkout", () =>
@@ -212,6 +243,13 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
           Effect.mapError(toPolarError("delete_customer"))
         )
 
-    return { ingestEvents, createCheckout, createSettlementCheckout, createCustomerPortalUrl, deleteCustomer }
+    return {
+      ingestEvents,
+      createCheckout,
+      getCheckout,
+      createSettlementCheckout,
+      createCustomerPortalUrl,
+      deleteCustomer
+    }
   })
 )

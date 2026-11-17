@@ -28,6 +28,7 @@ export const workloadGrants: Readonly<Record<Workload, ReadonlyArray<readonly [s
     ["SELECT, INSERT, DELETE", "verification"],
     ["SELECT, INSERT, UPDATE", "polar_subscriptions"],
     ["SELECT, INSERT, UPDATE", "polar_orders"],
+    ["SELECT, INSERT, UPDATE", "polar_checkouts"],
     ["SELECT, INSERT", "overage_settlements"],
     ["SELECT, INSERT", "polar_webhook_deliveries"],
     ["SELECT", "usage_events"],
@@ -45,10 +46,11 @@ export const workloadGrants: Readonly<Record<Workload, ReadonlyArray<readonly [s
     ["SELECT (golem_account_id), DELETE", "user"],
     ["SELECT", "polar_subscriptions"],
     ["SELECT", "polar_orders"],
+    ["SELECT", "polar_checkouts"],
     ["SELECT", "overage_settlements"],
     ["SELECT", "usage_events"],
     ["SELECT", "usage_settlements"],
-    ["SELECT, INSERT", "deleted_account_cleanups"],
+    ["SELECT, INSERT, UPDATE (polar_customer_deleted_at)", "deleted_account_cleanups"],
     ["SELECT, DELETE", "deletion_holds"],
     ["SELECT (account_id, deleted_at)", "public.accounts"]
   ]

@@ -49,9 +49,9 @@ is gone.
 
 The connections of the app set `search_path` to its schema (`billing` by default). The app keeps
 its tables there: the tables of Better Auth (`user`, `session`, `account` and `verification`),
-`polar_subscriptions`, `polar_orders`, `overage_settlements`, `polar_webhook_deliveries`,
-`usage_events`, `deleted_account_cleanups`, `deletion_holds`, `usage_settlements` and
-`usage_settlement_history`.
+`polar_subscriptions`, `polar_orders`, `polar_checkouts`, `overage_settlements`,
+`polar_webhook_deliveries`, `usage_events`, `deleted_account_cleanups`, `deletion_holds`,
+`usage_settlements` and `usage_settlement_history`.
 
 `node main.mjs migrate` creates and changes these tables. It is the only DDL of the app. It runs
 once and exits, with a nonzero exit code when it fails, and needs only the `GOLEM__DB__*`
@@ -73,18 +73,18 @@ same grants.
 - `golem_cloud_billing` owns the schema `billing` and every table in it. Only `migrate` uses it. It
   has no privilege on the registry tables.
 - `golem_cloud_billing_web`, for the web app: SELECT, INSERT and UPDATE on `user`, `account`,
-  `polar_subscriptions` and `polar_orders`; SELECT, INSERT, UPDATE and DELETE on `session` and
-  `deletion_holds`; SELECT, INSERT and DELETE on `verification`; SELECT and INSERT on
-  `overage_settlements` and `polar_webhook_deliveries`; SELECT on `usage_events` and
+  `polar_subscriptions`, `polar_orders` and `polar_checkouts`; SELECT, INSERT, UPDATE and DELETE
+  on `session` and `deletion_holds`; SELECT, INSERT and DELETE on `verification`; SELECT and
+  INSERT on `overage_settlements` and `polar_webhook_deliveries`; SELECT on `usage_events` and
   `usage_settlements`; SELECT (`account_id`, `deleted_at`) on `public.accounts`.
 - `golem_cloud_billing_push`, for `push-usage`: SELECT, INSERT and UPDATE on `usage_events`;
   SELECT on `polar_subscriptions`, `public.account_monthly_policy_revisions` and
   `public.account_monthly_policy_attribution`.
 - `golem_cloud_billing_cleanup`, for `cleanup-deleted-accounts`: SELECT (`golem_account_id`) and
-  DELETE on `user`; SELECT and INSERT on `deleted_account_cleanups`; SELECT and DELETE on
-  `deletion_holds`; SELECT on `polar_subscriptions`, `polar_orders`, `overage_settlements`,
-  `usage_events` and `usage_settlements`; SELECT (`account_id`, `deleted_at`) on
-  `public.accounts`. The ON DELETE
+  DELETE on `user`; SELECT, INSERT and UPDATE (`polar_customer_deleted_at`) on
+  `deleted_account_cleanups`; SELECT and DELETE on `deletion_holds`; SELECT on
+  `polar_subscriptions`, `polar_orders`, `polar_checkouts`, `overage_settlements`, `usage_events`
+  and `usage_settlements`; SELECT (`account_id`, `deleted_at`) on `public.accounts`. The ON DELETE
   CASCADE of `session` and `account` runs as the owner of those tables, so a delete of a user also
   deletes its sessions and GitHub accounts.
 
@@ -102,7 +102,7 @@ registry data:
 The other columns of `accounts`, for example the email, stay out of reach. Everything
 else comes from the registry HTTP API. As the signed-in user, the app calls
 `POST /v1/login/oauth2` at sign-in and `GET /v1/accounts/{account_id}` for the account page. As
-the billing account, the webhooks and the sweep call `GET /v1/me/token`,
+the billing account, the checkout route, the webhooks and the sweep call `GET /v1/me/token`,
 `GET /v1/accounts/{account_id}`, `PUT /v1/accounts/{account_id}/plan`, and `PUT` and `DELETE`
 `/v1/accounts/{account_id}/deletion-holds/{holder_account_id}` (see
 [Subscriptions](#subscriptions)).
@@ -147,7 +147,14 @@ plan.
   until the webhook changes it. The page offers the checkout, and the route accepts it, only for
   an account on the free plan or on the default plan whose latest subscription is not `past_due`
   (`canCheckOut` in `src/Page.ts`). The route redirects any other request to `/`, also when the
-  registry or the database fails.
+  registry or the database fails. Under the lock of the account, the route records the checkout
+  in `polar_checkouts` and places the [deletion hold](#deletion-hold) of the checkout before it
+  redirects: the URL of the checkout holds the client secret that pays it, so the person can pay
+  only a checkout that holds the account. When the database or the registry fails, the route
+  shows the error page and never sends the URL. A second click goes back to the open checkout
+  while it takes payments for more than an hour (`CHECKOUT_REUSE_MS`), so the hold does not grow
+  with each click. When the person paid that checkout in another tab, the route redirects to
+  `/?checkout_id=...` and starts no new checkout.
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Settlement.** `POST /billing/settle` creates a checkout session of the settlement product for
@@ -161,9 +168,11 @@ plan.
   403 before the app reads its body, and a body above 1 MiB gets 413. The handler verifies the
   Standard Webhooks signature with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a
   `webhook-id` that it handled before, and stores the subscription in `polar_subscriptions` or the
-  order in `polar_orders`. A paid order of the settlement product records a settlement instead. A state never replaces a state with a later `modified_at`, so a late
-  delivery cannot undo a newer one. Then it sets the [deletion hold](#deletion-hold) and the plan
-  from the table above. A failed payment (`subscription.past_due`) also logs `payment_failed`. An
+  order in `polar_orders`. A subscription links the checkout that started it (`checkout_id`) in
+  `polar_checkouts`. A paid order of the settlement product records a settlement instead. A state
+  never replaces a state with a later `modified_at`, so a late delivery cannot undo a newer one.
+  Then it sets the [deletion hold](#deletion-hold) and the plan from the table above. A failed
+  payment (`subscription.past_due`) also logs `payment_failed`. An
   account on the default plan moves only to the paid plan. An account on any other plan, for
   example an internal plan that an administrator gave it, keeps it, and gets the deletion hold all
   the same. An event of an account that the registry deleted is stored and answers 200, without a
@@ -188,7 +197,9 @@ plan.
   period end, a `pending` order that is older than one hour, a `past_due` subscription whose
   past-due grace ends, usage events that the usage push recorded, sent or held in the last 24
   hours for an account without a subscription that continues, and usage settlements of the last 24
-  hours.
+  hours. Before that, it reads from Polar each checkout that expired 5 minutes
+  (`CHECKOUT_READ_DELAY_MS`) before and that no subscription links, and records its status (see
+  [Deletion hold](#deletion-hold)).
 - **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
   account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
   delivers the webhook again. A 404 of the registry for an account that is not deleted also
@@ -305,9 +316,10 @@ lists it as pending, also after its settlement.
 
 Golem does not charge early, and a cancellation runs to the end of the period: Polar bills paid
 overage on the order at the end of the period. So the registry must not delete an account while
-the account has a billable subscription or owes paid overage. The app places a deletion hold on
-the account through the registry (`Settlement.holdFor`) while any of these is true, and removes it
-when none is:
+the account has a billable subscription or owes paid overage. A checkout can start a subscription
+for 24 hours, so the registry must not delete the account of an unfinished checkout either. The
+app places a deletion hold on the account through the registry (`Settlement.holdFor`) while any of
+these is true, and removes it when none is:
 
 | Reason | When |
 | --- | --- |
@@ -316,6 +328,21 @@ when none is:
 | `unbilledUsage` | a billable subscription, and a usage event that no order bills yet |
 | `unsettledUsage` | no billable subscription, and a usage event that no order bills yet |
 | `unpaidOverage` | the account owes an unpaid order (see [Unpaid orders](#unpaid-orders)) |
+| `openCheckout` | a checkout of the paid product is `open`, and no subscription links it |
+| `paidCheckout` | Polar took the payment of a checkout (`confirmed` or `succeeded`), and no subscription links it |
+
+A checkout is unfinished from its creation until a subscription webhook links it
+(`checkout_id`), or until Polar reports it `expired` or `failed`. Polar takes the payment of a
+checkout for 24 hours, and has no API that closes a checkout earlier or makes it shorter. The app
+does not read a checkout before its expiry: until then the row says `open`, and a payment brings
+the subscription webhook. The sweep reads each unfinished checkout from Polar 5 minutes after its
+expiry, which covers a clock of Polar that runs behind. Polar refuses the payment of an expired
+checkout, also before its job marks the checkout `expired`, so the sweep records an `open`
+checkout as `expired`, and the hold comes off. A checkout that Polar reports `confirmed` or
+`succeeded` keeps the account held until its subscription comes, with no time limit; the sweep
+reads a `confirmed` one again every 5 minutes. The checkouts of the settlement product hold
+nothing: the account owes paid overage while the page offers them, and a payment of a settlement
+for orders that the account no longer owes logs a warning for an operator.
 
 A usage event that no order bills yet is not held, and is not sent yet, or was sent after the
 newest order of the account while the latest subscription of the account can still create an
@@ -347,8 +374,9 @@ A reconcile places the hold before it changes the plan, and removes the hold aft
 plan, so the account is never on the paid plan without a hold. The table `deletion_holds` records
 the holds that the app placed. The sweep reconciles every account with a billable subscription and
 no row there: a subscription from before the app placed holds, or one whose last placement failed.
-It also reconciles the accounts without a billable subscription whose usage events changed, and the
-accounts with a new usage settlement, because no webhook comes for either. And it reconciles each
+It also reconciles the accounts without a billable subscription whose usage events changed, the
+accounts with a new usage settlement, because no webhook comes for either, and the accounts with an
+unfinished checkout and no row, whose placement in the checkout route failed. And it reconciles each
 account whose row is older than an hour (`HOLD_RECHECK_MS`). A placement refreshes the row, and a
 removal that failed keeps it, so the sweep tries the removal again with no time limit.
 
@@ -364,16 +392,20 @@ until then, and adds a row with the same time, the operator and the reason to
 not count these events either. A later event counts again.
 
 Do not remove the hold of the app in the registry instead (`override-deletion-hold`): the next
-reconcile places it again while the reason holds, and after a delete the cleanup checks the same
-reasons and keeps the user, so the person cannot sign up again.
+reconcile places it again while the reason holds. After a delete, the cleanup checks the same
+reasons (see [Deleted accounts](#deleted-accounts)): it cancels a subscription that is not
+canceled at the period end at once, and for each other reason it keeps the user, so the person
+cannot sign up again until the reason clears.
 
 The registry refuses `DELETE /v1/accounts/{account_id}` with 409 while the account has a hold, and
 shows the reason text to the person, for example in `golem-cli account delete`. The text starts
 with `Golem Cloud billing:` and has one sentence for each reason that tells the person what to do:
 cancel the subscription and wait for the end of the period, wait for the invoice, or pay it. Only
 a billable subscription has an invoice to come, so the text of `unsettledUsage` promises none: it
-says to try again in an hour, and then to contact Golem Cloud at `sales@golem.cloud`. The rest of
-the paid period is not refunded.
+says to try again in an hour, and then to contact Golem Cloud at `sales@golem.cloud`. The text of
+`openCheckout` names the time after which the delete works: 10 minutes after the expiry of the
+open checkout that expires last. The text of `paidCheckout` says to try again in an hour, and then
+to contact Golem Cloud. The rest of the paid period is not refunded.
 
 ## Billable overage
 
@@ -428,18 +460,32 @@ code 1.
 to Polar fails. A CronJob runs it. It needs only the `GOLEM__DB__*` variables and the Polar
 variables, with a Polar token that has only `customers:write`.
 
-For each account in `user.golem_account_id` or `polar_subscriptions` that the registry deleted, it:
+For each account in `user.golem_account_id`, `polar_subscriptions` or `polar_checkouts` that the
+registry deleted, it:
 
 1. checks the reasons of [Deletion hold](#deletion-hold) again, with the subscriptions and orders
    of every product. The hold makes them false before the delete, but an administrator can remove
-   the hold. An account with a reason keeps its Polar customer and its user, and each run logs the
-   warning `deleted_account_unsettled`, so the cleanup never ends a paid period early;
+   the hold.
+   - A billable subscription that is not canceled at the period end (`subscription`) would charge
+     the person again for an account that does not exist. The cleanup deletes the Polar customer at
+     once, and logs the error `deleted_account_subscription_canceled` with the subscriptions: an
+     operator refunds what the person paid for the time after the delete. Golem loses the paid
+     overage that Polar has not billed.
+   - With any other reason, the account keeps its Polar customer and its user, and each run logs the
+     warning `deleted_account_unsettled`. A subscription that is canceled at the period end runs to
+     its end, and an unfinished checkout waits until Polar expires it or its subscription comes;
 2. deletes the Polar customer with `DELETE /v1/customers/external/{external_id}`. Polar cancels
-   its subscriptions, which have all ended by now, and clears its external ID. A 404 counts as
-   deleted. The table `deleted_account_cleanups` records the account, so later runs do
-   not call Polar for it again;
+   its subscriptions at once, with no refund, and clears its external ID. A 404 counts as deleted.
+   The table `deleted_account_cleanups` records the time of the delete, so later runs do not call
+   Polar for the account again;
 3. deletes the Better Auth user of the account, with its sessions and GitHub accounts, and the
    row of the account in `deletion_holds`.
+
+A run also checks the accounts that `deleted_account_cleanups` records. When the app recorded a
+billable subscription that is not canceled at the period end after the delete of the customer,
+Polar created a new customer with the external ID for it, for example for a checkout that the app
+did not create. The cleanup deletes that customer too, logs `deleted_account_subscription_canceled`,
+and records the new time.
 
 The subscriptions, orders and usage events of the account stay. A person who signs up again with
 the same GitHub identity gets a new Golem account at once. The billing app refuses its sign-in
@@ -472,7 +518,7 @@ until the cleanup has deleted the user of the deleted account (see
 | `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH` | | The overage prices that the paid plan shows next to the paid-overage switch, in USD, as decimal numbers such as `0.045`. Polar bills with the metered prices of the product, so these values must match the product. A change needs a restart, not a new image. |
 | `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE` | `7 days` | How long an account keeps the paid plan after a payment of its subscription fails, as a duration such as `7 days` or `30 minutes` (see [Subscriptions](#subscriptions)). `0 seconds` turns the past-due grace off. Polar revokes the subscription after its last retry, 21 days after the failed payment, so a longer value has no effect. A test can use a short value, so that the past-due grace ends within the test. |
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
-| `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` and `customer_sessions:write`, `push-usage` needs `events:write`, and `cleanup-deleted-accounts` needs `customers:write`. Each gets its own token. |
+| `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` (which also reads a checkout) and `customer_sessions:write`, `push-usage` needs `events:write`, and `cleanup-deleted-accounts` needs `customers:write`. Each gets its own token. |
 | `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |
 | `POLAR_SETTLEMENT_PRODUCT_ID` | | The Polar product of a settlement: a private one-time product with a fixed price, which each checkout replaces with an ad-hoc price. It must differ from `POLAR_PRODUCT_ID` and have the same tax category. |
 | `POLAR_WEBHOOK_SECRET` | | The secret that Polar signs the webhooks with (`whsec_...`). |

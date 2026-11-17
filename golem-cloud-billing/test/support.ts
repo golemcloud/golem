@@ -6,6 +6,7 @@ import * as App from "../src/App.ts"
 import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
 import { makePool } from "../src/Database.ts"
 import * as Http from "../src/Http.ts"
+import type { CheckoutStatus } from "../src/Subscriptions.ts"
 
 export const baseUrl = "http://localhost:3000"
 export const registryUrl = "http://registry.test"
@@ -33,6 +34,8 @@ export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
 export const registryDefaultPlanId = "8d2f6b1e-4a7c-4e93-9b05-6c1d3e8f2a47"
 export const polarApiUrl = "https://sandbox-api.polar.test"
 export const polarWebToken = "polar_oat_web_token_for_the_tests"
+/** The Polar token of the cleanup, which can only delete customers. */
+export const polarCleanupToken = "polar_oat_cleanup_token_for_the_tests"
 export const polarProductId = "115e800a-2b62-42e0-97bf-9e8a5d6022b3"
 export const polarSettlementProductId = "7c1d9e2a-4b3f-4e8a-9d6c-2f5b8a1e3c47"
 export const webhookSecret = `whsec_${Buffer.from("a webhook secret of 32 bytes!!!!").toString("base64")}`
@@ -199,6 +202,15 @@ export class FakeUpstreams {
   readonly deletionHolds = new Map<string, string>()
   /** The accounts that the registry deleted; it answers 404 for them, as for an account it hides. */
   readonly deletedAccounts = new Set<string>()
+  /**
+   * The checkouts of Polar by ID, with what `GET /v1/checkouts/{id}` reports. `POST /v1/checkouts/`
+   * creates `polar_c_1`, `polar_c_2` and so on, which Polar takes payments for 24 hours.
+   */
+  readonly checkouts = new Map<string, { status: CheckoutStatus; expiresAt: Date }>()
+  /** The status of `POST /v1/checkouts/`; with another status than 201, Polar creates no checkout. */
+  checkoutCreateStatus = 201
+  /** The external IDs of the Polar customers; `DELETE /v1/customers/external/{id}` removes one. */
+  readonly polarCustomers = new Set<string>()
 
   /** The Golem account of the access token of `identity`, created on first use. */
   accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
@@ -250,10 +262,17 @@ export class FakeUpstreams {
     const route = `${request.method} ${url.origin}${url.pathname}`
     const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "")
     switch (route) {
-      case `POST ${polarApiUrl}/v1/checkouts/`:
-        return bearer === polarWebToken
-          ? Response.json({ id: "polar_c_test", url: "https://sandbox.polar.sh/checkout/polar_c_test" }, { status: 201 })
-          : Response.json({ error: "invalid token" }, { status: 401 })
+      case `POST ${polarApiUrl}/v1/checkouts/`: {
+        if (bearer !== polarWebToken) {
+          return Response.json({ error: "invalid token" }, { status: 401 })
+        }
+        if (this.checkoutCreateStatus !== 201) {
+          return Response.json({ detail: "unavailable" }, { status: this.checkoutCreateStatus })
+        }
+        const id = `polar_c_${this.checkouts.size + 1}`
+        this.checkouts.set(id, { status: "open", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
+        return Response.json(this.checkoutJson(id), { status: 201 })
+      }
       case `POST ${polarApiUrl}/v1/customer-sessions/`:
         return bearer === polarWebToken
           ? Response.json(
@@ -311,6 +330,24 @@ export class FakeUpstreams {
             })
           : new Response(null, { status: 401 })
       default: {
+        const checkout = /^\/v1\/checkouts\/([^/]+)$/.exec(url.pathname)
+        if (url.origin === polarApiUrl && checkout !== null && request.method === "GET") {
+          if (bearer !== polarWebToken) {
+            return Response.json({ error: "invalid token" }, { status: 401 })
+          }
+          return this.checkouts.has(checkout[1]!)
+            ? Response.json(this.checkoutJson(checkout[1]!))
+            : Response.json({ detail: "Not found" }, { status: 404 })
+        }
+        const customer = /^\/v1\/customers\/external\/([^/]+)$/.exec(url.pathname)
+        if (url.origin === polarApiUrl && customer !== null && request.method === "DELETE") {
+          if (bearer !== polarCleanupToken) {
+            return Response.json({ error: "invalid token" }, { status: 401 })
+          }
+          return this.polarCustomers.delete(decodeURIComponent(customer[1]!))
+            ? new Response(null, { status: 204 })
+            : Response.json({ detail: "Not found" }, { status: 404 })
+        }
         const match = /^\/v1\/accounts\/([0-9a-f-]{36})(\/plan|\/limits|\/monthly-usage-mode|\/deletion-holds\/([0-9a-f-]{36}))?$/.exec(url.pathname)
         if (url.origin !== registryUrl || match === null) {
           return new Response(`No fake for ${route}`, { status: 599 })
@@ -410,6 +447,21 @@ export class FakeUpstreams {
         }
         return new Response(`No fake for ${route}`, { status: 599 })
       }
+    }
+  }
+
+  /** The URL of the checkout page of the checkout. */
+  checkoutUrl(checkoutId: string): string {
+    return `https://sandbox.polar.sh/checkout/${checkoutId}`
+  }
+
+  private checkoutJson(checkoutId: string) {
+    const checkout = this.checkouts.get(checkoutId)!
+    return {
+      id: checkoutId,
+      url: this.checkoutUrl(checkoutId),
+      status: checkout.status,
+      expires_at: checkout.expiresAt.toISOString()
     }
   }
 

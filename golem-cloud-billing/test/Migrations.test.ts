@@ -16,15 +16,16 @@ import { migrate, RegistryDatabase, type Workload } from "./registry.ts"
 import { dropSchema, queryPool, testConfig } from "./support.ts"
 
 /**
- * The tables of Better Auth, of the Polar subscriptions and orders, of the overage settlements, of
- * the usage push, of the cleanup, of the deletion holds, and of the usage settlements and their
- * history, in the order of their names.
+ * The tables of Better Auth, of the Polar subscriptions, orders and checkouts, of the overage
+ * settlements, of the usage push, of the cleanup, of the deletion holds, and of the usage
+ * settlements and their history, in the order of their names.
  */
 const appTables = [
   "account",
   "deleted_account_cleanups",
   "deletion_holds",
   "overage_settlements",
+  "polar_checkouts",
   "polar_orders",
   "polar_subscriptions",
   "polar_webhook_deliveries",
@@ -249,6 +250,6 @@ describe("database roles", () => {
   it("starts the web app, the usage push and the cleanup with the grants of their roles", async () => {
     await expect(startWebApp(registry.configs.web)).resolves.toBeDefined()
     await expect(pushUsage(registry.configs.push)).resolves.toEqual({ created: 0, sent: 0, held: 0 })
-    await expect(cleanup(registry.configs.cleanup)).resolves.toEqual({ deletedCustomers: 0, unsettled: 0, deletedUsers: 0 })
+    await expect(cleanup(registry.configs.cleanup)).resolves.toEqual({ deletedCustomers: 0, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 0 })
   })
 })

@@ -97,9 +97,10 @@ const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["
  * for a `subscription.*` or `order.*` event of the paid product stores the subscription or the
  * order, sets the deletion hold of the account (`Settlement.holdFor`) and moves the account to the
  * plan of its subscriptions and orders (`Settlement.planFor`). An account on any other plan keeps
- * it. A paid order of the settlement product records a settlement of the orders in its metadata.
- * An event of a deleted account is stored and answers 200, so that the account does not make
- * Polar disable the endpoint.
+ * it. A subscription links the checkout that started it (`checkout_id`), which finishes the
+ * checkout. A paid order of the settlement product records a settlement of the orders in its
+ * metadata. An event of a deleted account is stored and answers 200, so that the account does not
+ * make Polar disable the endpoint.
  * A failed registry or database call answers 500, so Polar delivers the webhook again. This
  * includes a 404 of the registry for an account that is not deleted: the permission share of the
  * billing account is missing.
@@ -143,6 +144,11 @@ export const makeHandler = Effect.gen(function* () {
       accountId,
       Effect.gen(function* () {
         yield* subscriptions.record(toSubscription(accountId, data))
+        // The checkout that started the subscription no longer holds the account: the
+        // subscription does, while it is billable.
+        if (data.checkout_id) {
+          yield* subscriptions.linkCheckout(data.checkout_id, accountId, data.id)
+        }
         if (payload.type === "subscription.past_due") {
           yield* Effect.logWarning("A payment of the subscription failed").pipe(
             Effect.annotateLogs({ event: "payment_failed", golemAccountId: accountId, subscriptionId: data.id })

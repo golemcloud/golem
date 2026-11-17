@@ -1,9 +1,12 @@
 import { Effect, Layer, Option, Ref, Schedule } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
+import { Polar } from "./Polar.ts"
 import { type Account, Registry, type RegistryError } from "./Registry.ts"
 import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts.ts"
 import {
   billableStatuses,
+  type Checkout,
+  type CheckoutStatus,
   type Subscription,
   Subscriptions,
   type SubscriptionsError,
@@ -56,6 +59,11 @@ import {
  * subscription ends and Polar has billed the paid overage and been paid for it. When Polar ends a
  * subscription before its period end, it never bills the paid overage after the newest order, and
  * that overage does not hold the account.
+ *
+ * A checkout of the paid product also holds the account, from before the person gets its URL until
+ * the app records the subscription that it started, or Polar reports that it expired or failed.
+ * Polar takes the payment of a checkout for 24 hours, and no API closes a checkout earlier, so
+ * without the hold a payment could start a subscription of a deleted account.
  */
 
 /**
@@ -100,6 +108,22 @@ export const SETTLEMENT_MAX_ORDERS = 13
  * failed keeps the old record, so the sweep tries it again, long after the last webhook.
  */
 export const HOLD_RECHECK_MS = 60 * 60 * 1000
+
+/**
+ * How long after the expiry of a checkout the sweep reads the checkout from Polar. Polar refuses
+ * the payment of an expired checkout, so an `open` checkout that the sweep reads is dead. The delay
+ * covers a clock of Polar that runs behind the clock of the app.
+ */
+export const CHECKOUT_READ_DELAY_MS = 5 * 60 * 1000
+
+/** How long the sweep waits before it reads a checkout again that is `confirmed`, or that it could not read. */
+export const CHECKOUT_READ_INTERVAL_MS = 5 * 60 * 1000
+
+/**
+ * The time after the expiry of a checkout that the hold text names. The sweep reads the checkout
+ * `CHECKOUT_READ_DELAY_MS` after the expiry, at a run of every minute, and then removes the hold.
+ */
+const CHECKOUT_HOLD_MARGIN_MS = CHECKOUT_READ_DELAY_MS + 5 * 60 * 1000
 
 /**
  * How long the sweep still checks a subscription after its end or after its past-due grace, or an
@@ -246,23 +270,33 @@ export type HoldReason =
   | "unsettledUsage"
   /** The account owes the paid overage of an unpaid order (`owedOrders`). */
   | "unpaidOverage"
+  /** A checkout of the paid product is `open`: Polar can still take its payment. */
+  | "openCheckout"
+  /**
+   * Polar took the payment of a checkout (`confirmed` or `succeeded`), and the app has not
+   * recorded the subscription that it started.
+   */
+  | "paidCheckout"
 
 /**
  * The reasons for a deletion hold on the account; none when the account has no billable
- * subscription and owes no paid overage. `unbilledUsage` is `Subscriptions.unbilledUsage`, which
- * does not count the overage that Polar drops when it ends a subscription before its period end.
+ * subscription, owes no paid overage and has no unfinished checkout. `unbilledUsage` is
+ * `Subscriptions.unbilledUsage`, which does not count the overage that Polar drops when it ends a
+ * subscription before its period end. `checkouts` are `Subscriptions.unfinishedCheckouts`.
  *
  * A billable subscription holds the account to the end of the period, also after a cancellation.
  * Paid overage needs the paid plan, and the paid plan needs a billable subscription, so the
  * account has a hold for as long as it can run up paid overage. The owner turns paid overage on
  * and off in the registry, which the app does not see, so a hold that followed the switch would
  * come too late. The cleanup of deleted accounts checks the same reasons before it deletes a
- * Polar customer, so it never ends a paid period early.
+ * Polar customer, so it ends a paid period early only after an administrator removed the hold, and
+ * only to stop a subscription that would charge again (see `Cleanup.ts`).
  */
 export const holdFor = (
   subscriptions: ReadonlyArray<Subscription>,
   unpaidOrders: ReadonlyArray<UnpaidOrder>,
-  unbilledUsage: boolean
+  unbilledUsage: boolean,
+  checkouts: ReadonlyArray<Checkout>
 ): ReadonlyArray<HoldReason> => {
   const reasons: Array<HoldReason> = []
   const billable = subscriptions.filter((subscription) => billableStatuses.includes(subscription.status))
@@ -277,8 +311,16 @@ export const holdFor = (
   if (owedOrders(subscriptions, unpaidOrders).length > 0) {
     reasons.push("unpaidOverage")
   }
+  if (checkouts.some((checkout) => checkout.status === "open")) {
+    reasons.push("openCheckout")
+  }
+  if (checkouts.some((checkout) => checkout.status === "confirmed" || checkout.status === "succeeded")) {
+    reasons.push("paidCheckout")
+  }
   return reasons
 }
+
+const utcDateTime = new Intl.DateTimeFormat("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" })
 
 /** Where the person asks for help when a deletion hold stays and an operator has to act. */
 export const CONTACT_EMAIL = "sales@golem.cloud"
@@ -289,19 +331,33 @@ export const CONTACT_EMAIL = "sales@golem.cloud"
  * which shows how to pay an unpaid order: the customer portal while Polar collects it, else a
  * settlement.
  * Only a billable subscription has an invoice to come, so the text of `unsettledUsage` promises
- * none.
+ * none. The text of `openCheckout` names when the hold of the open checkout that expires last
+ * ends; `checkouts` are the checkouts that gave the reasons.
  */
-export const holdReasonText = (reasons: ReadonlyArray<HoldReason>, billingUrl: string): string => {
-  const sentences: Record<HoldReason, string> = {
-    subscription: `The account has a subscription to Paid. Cancel it in Manage billing at ${billingUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`,
-    canceledSubscription:
+export const holdReasonText = (
+  reasons: ReadonlyArray<HoldReason>,
+  billingUrl: string,
+  checkouts: ReadonlyArray<Checkout>
+): string => {
+  const openUntil = Math.max(
+    ...checkouts.filter((checkout) => checkout.status === "open").map((checkout) => checkout.expiresAt.getTime())
+  )
+  const sentences: Record<HoldReason, () => string> = {
+    subscription: () =>
+      `The account has a subscription to Paid. Cancel it in Manage billing at ${billingUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`,
+    canceledSubscription: () =>
       "The subscription to Paid is canceled and runs to the end of the period. Delete the account after the period ends.",
-    unbilledUsage:
+    unbilledUsage: () =>
       "The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid.",
-    unsettledUsage: `The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`,
-    unpaidOverage: `An invoice for paid overage is not paid. Pay it on the billing page at ${billingUrl}.`
+    unsettledUsage: () =>
+      `The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`,
+    unpaidOverage: () => `An invoice for paid overage is not paid. Pay it on the billing page at ${billingUrl}.`,
+    openCheckout: () =>
+      `A checkout for Paid from the billing page is open. Delete the account after ${utcDateTime.format(openUntil + CHECKOUT_HOLD_MARGIN_MS)} UTC.`,
+    paidCheckout: () =>
+      `Polar has a payment for Paid, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
   }
-  return ["Golem Cloud billing:", ...reasons.map((reason) => sentences[reason])].join(" ")
+  return ["Golem Cloud billing:", ...reasons.map((reason) => sentences[reason]())].join(" ")
 }
 
 export interface SettlementShape {
@@ -310,24 +366,38 @@ export interface SettlementShape {
    * at `now`. An account on the default plan (`BillingConfig.defaultPlanId`) moves only to the paid
    * plan. An account on a plan that the app does not manage keeps it, and gets the deletion hold
    * all the same. A deleted account keeps its plan and its deletion hold. The caller holds the
-   * account lock of `Subscriptions`.
+   * account lock of `Subscriptions`. Returns the reasons of the hold that the account has now, or
+   * `deleted` when the registry deleted the account.
    */
   readonly reconcile: (
     accountId: string,
     now: Date
-  ) => Effect.Effect<void, RegistryError | SubscriptionsError | RegistryAccountsError>
+  ) => Effect.Effect<ReadonlyArray<HoldReason> | "deleted", RegistryError | SubscriptionsError | RegistryAccountsError>
   /**
    * Reconciles every account whose plan or deletion hold can change with the time alone: a
    * subscription that ends within the settlement margin, an order that is still pending after
    * `ORDER_PAYMENT_GRACE_MS`, a subscription whose past-due grace ends, and the candidates of
-   * `Subscriptions.holdCandidates`.
+   * `Subscriptions.holdCandidates`. Before that, it reads from Polar each checkout that
+   * `Subscriptions.checkoutsToRead` gives for `CHECKOUT_READ_DELAY_MS` before `now`, and
+   * reconciles its account too.
    */
   readonly sweep: (now: Date) => Effect.Effect<void>
 }
 
-export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registry | RegistryAccounts | Subscriptions> = Effect.gen(
+/**
+ * The status to record for a checkout that the sweep read from Polar after its expiry. Polar
+ * refuses the payment of an expired checkout, also before its job marks the checkout `expired`.
+ */
+const statusAfterExpiry = (status: CheckoutStatus): CheckoutStatus => (status === "open" ? "expired" : status)
+
+export const make: Effect.Effect<
+  SettlementShape,
+  never,
+  BillingConfig | Polar | Registry | RegistryAccounts | Subscriptions
+> = Effect.gen(
   function* () {
     const config = yield* BillingConfig
+    const polar = yield* Polar
     const registry = yield* Registry
     const registryAccounts = yield* RegistryAccounts
     const subscriptions = yield* Subscriptions
@@ -389,21 +459,27 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
       Effect.gen(function* () {
         const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
         const unpaidOrders = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
+        const checkouts = yield* subscriptions.unfinishedCheckouts(accountId)
         const found = yield* getAccount(accountId)
         if (Option.isNone(found)) {
           yield* Effect.logInfo("The registry deleted the account; its plan and deletion hold stay").pipe(
             Effect.annotateLogs({ golemAccountId: accountId })
           )
-          return
+          return "deleted" as const
         }
         const account = found.value
 
-        const reasons = holdFor(accountSubscriptions, unpaidOrders, yield* subscriptions.unbilledUsage(accountId))
+        const reasons = holdFor(
+          accountSubscriptions,
+          unpaidOrders,
+          yield* subscriptions.unbilledUsage(accountId),
+          checkouts
+        )
         const holderId = yield* holderAccountId
         // The hold goes on before the plan changes and comes off after it, so the account is never
         // on the paid plan without a hold.
         if (reasons.length > 0) {
-          const reason = holdReasonText(reasons, billingUrl)
+          const reason = holdReasonText(reasons, billingUrl, checkouts)
           yield* registry.placeDeletionHold(config.registryBillingToken, accountId, holderId, reason)
           yield* subscriptions.recordHold(accountId, reason)
         }
@@ -415,6 +491,7 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
         yield* Effect.logDebug("Set the deletion hold of the account").pipe(
           Effect.annotateLogs({ golemAccountId: accountId, reasons: reasons.join(",") })
         )
+        return reasons
       }).pipe(
         // 409: the account changed between the read and the write; read it again.
         Effect.retry({
@@ -433,9 +510,42 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
         )
       )
 
+    // A failed read keeps the status, and records the time of the read, so the next read waits
+    // `CHECKOUT_READ_INTERVAL_MS`. The hold of the checkout stays.
+    const readCheckout = (checkout: Checkout) =>
+      polar.getCheckout(checkout.checkoutId).pipe(
+        Effect.map((session) => statusAfterExpiry(session.status)),
+        Effect.tap((status) =>
+          Effect.logInfo("Read a checkout after its expiry").pipe(
+            Effect.annotateLogs({ golemAccountId: checkout.accountId, checkoutId: checkout.checkoutId, status })
+          )
+        ),
+        Effect.catch((error) =>
+          Effect.logError("Cannot read the checkout from Polar").pipe(
+            Effect.annotateLogs({
+              golemAccountId: checkout.accountId,
+              checkoutId: checkout.checkoutId,
+              error: error.message
+            }),
+            Effect.as(checkout.status)
+          )
+        ),
+        Effect.flatMap((status) => subscriptions.recordCheckoutStatus(checkout.checkoutId, status)),
+        Effect.catch((error) =>
+          Effect.logError("Cannot record the status of the checkout").pipe(
+            Effect.annotateLogs({ checkoutId: checkout.checkoutId, error: error.message })
+          )
+        )
+      )
+
     const sweep = (now: Date) =>
       Effect.gen(function* () {
         const at = (offset: number) => new Date(now.getTime() + offset)
+        const expired = yield* subscriptions.checkoutsToRead(
+          at(-CHECKOUT_READ_DELAY_MS),
+          at(-CHECKOUT_READ_INTERVAL_MS)
+        )
+        yield* Effect.forEach(expired, readCheckout, { discard: true })
         const ending = yield* subscriptions.ending(
           config.polar.productId,
           at(-SWEEP_WINDOW_MS),
@@ -456,7 +566,15 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
           at(-SWEEP_WINDOW_MS),
           at(-HOLD_RECHECK_MS)
         )
-        const candidates = [...new Set([...ending, ...awaitingPayment, ...pastDueGraceEnding, ...holdCandidates])]
+        const candidates = [
+          ...new Set([
+            ...expired.map((checkout) => checkout.accountId),
+            ...ending,
+            ...awaitingPayment,
+            ...pastDueGraceEnding,
+            ...holdCandidates
+          ])
+        ]
         // The reconcile changes nothing for a deleted account, so the sweep skips it.
         const deleted = new Set(yield* registryAccounts.deletedAmong(candidates))
         yield* Effect.forEach(
@@ -477,7 +595,11 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
 )
 
 /** Runs the sweep every minute while the web app runs. Every replica runs it; the account lock orders them. */
-export const sweeper: Layer.Layer<never, never, BillingConfig | Registry | RegistryAccounts | Subscriptions> = Layer.effectDiscard(
+export const sweeper: Layer.Layer<
+  never,
+  never,
+  BillingConfig | Polar | Registry | RegistryAccounts | Subscriptions
+> = Layer.effectDiscard(
   Effect.gen(function* () {
     const { sweep } = yield* make
     yield* Effect.forkScoped(
