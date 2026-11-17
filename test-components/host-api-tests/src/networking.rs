@@ -483,6 +483,9 @@ pub trait Networking {
         data: Vec<u8>,
     ) -> Result<String, String>;
     async fn resolve_p3(&self, name: String) -> Result<Vec<String>, String>;
+    /// Queries `golem:network/dns` for the records of type `record_type` (`a`, `mx`, `txt`, ...)
+    /// of `name`, each rendered as `ttl data`.
+    async fn dns_resolve(&self, name: String, record_type: String) -> Result<Vec<String>, String>;
     /// Connects to `127.0.0.1:port` with a raw wasip3 TCP socket and reads the
     /// receive stream to completion, returning the collected bytes as a string.
     async fn tcp_collect_p3(&self, port: u16) -> Result<String, String>;
@@ -650,6 +653,46 @@ impl Networking for NetworkingImpl {
                 addresses
                     .into_iter()
                     .map(|address| format!("{address:?}"))
+                    .collect()
+            })
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn dns_resolve(&self, name: String, record_type: String) -> Result<Vec<String>, String> {
+        use golem_rust::bindings::golem::network::dns::{RecordData, RecordType, resolve};
+
+        let record_type = match record_type.as_str() {
+            "a" => RecordType::A,
+            "aaaa" => RecordType::Aaaa,
+            "cname" => RecordType::Cname,
+            "mx" => RecordType::Mx,
+            "ns" => RecordType::Ns,
+            "ptr" => RecordType::Ptr,
+            "srv" => RecordType::Srv,
+            "txt" => RecordType::Txt,
+            "caa" => RecordType::Caa,
+            "soa" => RecordType::Soa,
+            "naptr" => RecordType::Naptr,
+            other => return Err(format!("unknown record type {other}")),
+        };
+        resolve(name, record_type)
+            .await
+            .map(|records| {
+                records
+                    .into_iter()
+                    .map(|record| {
+                        let data = match record.data {
+                            RecordData::A((a, b, c, d)) => format!("{a}.{b}.{c}.{d}"),
+                            RecordData::Mx(mx) => format!("{} {}", mx.preference, mx.exchange),
+                            RecordData::Txt(strings) => strings
+                                .iter()
+                                .map(|s| String::from_utf8_lossy(s).into_owned())
+                                .collect::<Vec<_>>()
+                                .join(""),
+                            other => format!("{other:?}"),
+                        };
+                        format!("{} {data}", record.ttl)
+                    })
                     .collect()
             })
             .map_err(|error| format!("{error:?}"))

@@ -24,14 +24,14 @@ use test_r::{test, timeout};
 const API: [&str; 2] = ["p2", "p3"];
 
 /// A TCP peer that counts the connections it accepts.
-struct CountingPeer {
-    address: std::net::SocketAddr,
+pub(super) struct CountingPeer {
+    pub(super) address: std::net::SocketAddr,
     accepted: Arc<AtomicUsize>,
     _task: tokio_util::task::AbortOnDropHandle<()>,
 }
 
 impl CountingPeer {
-    async fn start(address: &str) -> anyhow::Result<Self> {
+    pub(super) async fn start(address: &str) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(address).await?;
         let address = listener.local_addr()?;
         let accepted = Arc::new(AtomicUsize::new(0));
@@ -49,7 +49,7 @@ impl CountingPeer {
         })
     }
 
-    fn accepted(&self) -> usize {
+    pub(super) fn accepted(&self) -> usize {
         self.accepted.load(Ordering::SeqCst)
     }
 }
@@ -65,7 +65,7 @@ fn network_permission(resource: &str) -> PolymorphicPermissionPattern {
         .expect("valid test network permission")
 }
 
-async fn networking_component(
+pub(super) async fn networking_component(
     executor: &TestWorkerExecutor,
     context: &TestContext,
     host_api_tests: &PrecompiledComponent,
@@ -90,7 +90,7 @@ async fn networking_component(
         .await
 }
 
-async fn socket_operation(
+pub(super) async fn socket_operation(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     agent: &golem_common::model::agent::ParsedAgentKey,
@@ -109,7 +109,7 @@ async fn socket_operation(
         .into_typed::<Result<String, String>>()
 }
 
-fn assert_denied(result: &Result<String, String>, what: &str) {
+pub(super) fn assert_denied(result: &Result<String, String>, what: &str) {
     assert!(
         result
             .as_ref()

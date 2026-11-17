@@ -11,6 +11,7 @@ drop_when_full = 0.25
 ttl = "8h"
 
 [agent_sockets]
+dns_servers = []
 enabled = false
 refused_ports = []
 
@@ -468,6 +469,7 @@ without_time = false
 # ttl = "8h"
 #
 # [agent_sockets]
+# dns_servers = []
 # enabled = false
 # refused_ports = []
 #
@@ -927,6 +929,7 @@ without_time = false
 # ttl = "8h"
 #
 # [agent_sockets]
+# dns_servers = []
 # enabled = false
 # refused_ports = []
 #
@@ -1385,6 +1388,7 @@ without_time = false
 # ttl = "8h"
 #
 # [agent_sockets]
+# dns_servers = []
 # enabled = false
 # refused_ports = []
 #

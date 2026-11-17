@@ -45,6 +45,7 @@ wasmtime::component::bindgen!({
         "golem:websocket/client.[method]websocket-connection.close": concurrent | trappable,
         "golem:websocket/client.[method]websocket-connection.receive": store | async | trappable,
         "golem:websocket/client.[method]websocket-connection.receive-with-timeout": store | async | trappable,
+        "golem:network/dns.resolve": concurrent | trappable,
         "golem:durability/durability.begin-custom-durable-invocation": concurrent | trappable,
         "golem:durability/durability.begin-custom-durable-invocation-async": store | async | trappable,
         "golem:durability/durability.[static]live-custom-durable-invocation.finish": concurrent | trappable,

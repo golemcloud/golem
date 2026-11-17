@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The links from addresses to the hostnames that the Store's completed address lookups
-//! returned them for, so that a hostname grant matches a raw-socket connect to the address.
+//! The links from addresses to the hostnames that the Store's completed address lookups and
+//! `golem:network/dns` A and AAAA lookups returned them for, so that a hostname grant matches a raw-socket connect to the address.
 //!
 //! Every completed lookup of the Store adds its links, live and on replay, in the order the
 //! lookups complete; a tool entity Store has its own index. The links are derived from the
@@ -27,7 +27,8 @@ use crate::worker::status::regions::unreplayed_regions;
 use golem_common::model::card::network_target::link_hostname;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    HostRequest, HostRequestP3SocketsResolveName, HostRequestSocketsResolveName, HostResponse,
+    HostRequest, HostRequestNetworkDnsResolve, HostRequestP3SocketsResolveName,
+    HostRequestSocketsResolveName, HostResponse, HostResponseNetworkDnsResolve,
     HostResponseP3SocketsResolveName, HostResponseSocketsResolveName, OplogEntry, OplogIndex,
     OplogPayload,
 };
@@ -141,6 +142,16 @@ impl ResolvedNames {
                     result: Ok(addresses),
                 }),
             ) => (name, addresses),
+            (
+                HostRequest::NetworkDnsResolve(HostRequestNetworkDnsResolve { name, .. }),
+                HostResponse::NetworkDnsResolve(HostResponseNetworkDnsResolve {
+                    result: Ok(records),
+                }),
+            ) => {
+                let addresses = super::dns::linked_addresses(&records).collect::<Vec<_>>();
+                self.insert(&name, addresses);
+                return;
+            }
             _ => return,
         };
         self.insert(&name, addresses.0.into_iter().map(IpAddr::from));
@@ -180,6 +191,7 @@ impl LookupScan {
                     function_name,
                     HostFunctionName::SocketsIpNameLookupResolveAddresses
                         | HostFunctionName::P3SocketsIpNameLookupResolveAddresses
+                        | HostFunctionName::GolemNetworkDnsResolve
                 );
                 if lookup
                     && !in_entity
@@ -366,6 +378,81 @@ mod tests {
         for unlinked in ["10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"] {
             assert!(names.hostnames(ip(unlinked)).is_empty(), "{unlinked}");
         }
+        assert_eq!(names.links.len(), 2);
+    }
+
+    #[test]
+    fn the_rebuild_links_the_address_records_of_dns_record_lookups() {
+        use golem_common::model::oplog::types::{
+            SerializableDnsRecord, SerializableDnsRecordData, SerializableDnsRecordType,
+        };
+        let record_lookup = |name: &str, records: Vec<SerializableDnsRecordData>| {
+            let mut start = lookup_start(None, false, "");
+            let OplogEntry::Start {
+                function_name,
+                request,
+                ..
+            } = &mut start
+            else {
+                unreachable!()
+            };
+            *function_name = HostFunctionName::GolemNetworkDnsResolve;
+            *request = Some(OplogPayload::Inline(Box::new(
+                HostRequest::NetworkDnsResolve(HostRequestNetworkDnsResolve {
+                    name: name.to_string(),
+                    record_type: SerializableDnsRecordType::A,
+                }),
+            )));
+            let mut end = lookup_end(0, [0, 0, 0, 0]);
+            let OplogEntry::End { response, .. } = &mut end else {
+                unreachable!()
+            };
+            *response = Some(OplogPayload::Inline(Box::new(
+                HostResponse::NetworkDnsResolve(HostResponseNetworkDnsResolve {
+                    result: Ok(records
+                        .into_iter()
+                        .map(|data| SerializableDnsRecord { ttl: 60, data })
+                        .collect()),
+                }),
+            )));
+            (start, end)
+        };
+        let (a_start, mut a_end) = record_lookup(
+            "db.test",
+            vec![
+                SerializableDnsRecordData::A(ip("10.0.0.1").into()),
+                SerializableDnsRecordData::Aaaa(ip("fd00::1").into()),
+            ],
+        );
+        let (mx_start, mut mx_end) = record_lookup(
+            "mail.test",
+            vec![SerializableDnsRecordData::Mx {
+                preference: 10,
+                exchange: "10.0.0.2".to_string(),
+            }],
+        );
+        for (end, start) in [(&mut a_end, 2), (&mut mx_end, 4)] {
+            let OplogEntry::End { start_index, .. } = end else {
+                unreachable!()
+            };
+            *start_index = OplogIndex::from_u64(start);
+        }
+        let mut scan = LookupScan::default();
+        for (offset, entry) in [a_start, a_end, mx_start, mx_end].into_iter().enumerate() {
+            scan.observe(OplogIndex::from_u64(offset as u64 + 2), entry);
+        }
+        let mut names = ResolvedNames::default();
+        for (request, response) in scan.replayed_lookups() {
+            let (OplogPayload::Inline(request), OplogPayload::Inline(response)) =
+                (request, response)
+            else {
+                unreachable!()
+            };
+            names.insert_recorded(*request, *response);
+        }
+        assert_eq!(names.hostnames(ip("10.0.0.1")), vec!["db.test"]);
+        assert_eq!(names.hostnames(ip("fd00::1")), vec!["db.test"]);
+        assert!(names.hostnames(ip("10.0.0.2")).is_empty());
         assert_eq!(names.links.len(), 2);
     }
 

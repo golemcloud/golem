@@ -1190,6 +1190,8 @@ struct PrivateDurableWorkerState {
     /// The hostnames that this Store's completed address lookups linked to addresses, for the
     /// grant check of socket connects and datagrams.
     resolved_names: sockets::resolved_names::ResolvedNames,
+    /// The resolver of the Store's `golem:network/dns` lookups, built at the first lookup.
+    dns_resolver: Option<hickory_resolver::TokioResolver>,
     open_tcp_input_streams: HashSet<u32>,
     open_tcp_output_streams: HashSet<u32>,
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
