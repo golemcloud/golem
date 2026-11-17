@@ -1,5 +1,5 @@
 import { Context, Data, Effect, Layer } from "effect"
-import { Database } from "./Database.ts"
+import { connectionOf, Database } from "./Database.ts"
 
 /** A failed read of the account tables of the registry. */
 export class RegistryAccountsError extends Data.TaggedError("RegistryAccountsError")<{
@@ -41,7 +41,9 @@ export const layer: Layer.Layer<RegistryAccounts, never, Database> = Layer.effec
     const { pool, config } = yield* Database
     const registry = `"${config.registrySchema}"`
     const query = <R extends object>(text: string, values: ReadonlyArray<unknown>) =>
-      Effect.tryPromise({ try: () => pool.query<R & Record<string, unknown>>(text, [...values]), catch: failure })
+      Effect.flatMap(connectionOf(pool), (connection) =>
+        Effect.tryPromise({ try: () => connection.query<R & Record<string, unknown>>(text, [...values]), catch: failure })
+      )
 
     const isDeleted = (accountId: string) =>
       query<{ deleted: boolean }>(

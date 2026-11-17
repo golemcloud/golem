@@ -701,6 +701,37 @@ describe("Polar billing", () => {
       expect(upstreams.planChanges()).toEqual([])
     })
 
+    // Polar sends timestamps with microseconds; a JavaScript Date keeps milliseconds only.
+    it("does not undo a newer state with an older delivery of the same millisecond", async () => {
+      const accountId = randomUUID()
+
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, { status: "canceled", modified_at: "2026-11-04T11:00:00.123900Z" })
+      )
+      await deliver("subscription.active", subscription(accountId, { modified_at: "2026-11-04T11:00:00.123100Z" }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+      const stored = await pool.query("SELECT status FROM polar_subscriptions WHERE account_id = $1", [accountId])
+      expect(stored.rows).toEqual([{ status: "canceled" }])
+    })
+
+    it("does not make a paid order unpaid with an older delivery of the same millisecond", async () => {
+      const accountId = randomUUID()
+      await deliver("subscription.active", subscription(accountId))
+      const createdAt = new Date(Date.now() - 2 * Settlement.ORDER_PAYMENT_GRACE_MS).toISOString()
+
+      await deliver(
+        "order.paid",
+        order(accountId, { status: "paid", paid: true, created_at: createdAt, modified_at: "2026-11-04T11:00:00.123900Z" })
+      )
+      await deliver("order.updated", order(accountId, { created_at: createdAt, modified_at: "2026-11-04T11:00:00.123100Z" }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+      const stored = await pool.query("SELECT status FROM polar_orders WHERE account_id = $1", [accountId])
+      expect(stored.rows).toEqual([{ status: "paid" }])
+    })
+
     it("keeps Paid in the past-due grace when the payment of the price fails, then gives Free until the payment", async () => {
       const { jar, accountId } = await signedIn()
       const failedAt = new Date()

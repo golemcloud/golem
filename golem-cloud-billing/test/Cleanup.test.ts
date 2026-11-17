@@ -42,11 +42,17 @@ describe("cleanup of deleted accounts", () => {
   /** The JSON log lines of the cleanup runs of the test. */
   let logs: Array<Record<string, unknown>>
 
-  const cleanup = () =>
+  const cleanup = (maxConnections = registry.configs.cleanup.db.maxConnections) =>
     Effect.runPromise(
       Cleanup.cleanupDeletedAccounts.pipe(
         Effect.provide(Logger.layer([Logger.map(Logger.formatJson, (line) => void logs.push(JSON.parse(line)))])),
-        Effect.provide(cleanupLayer(registry.configs.cleanup, polarUrl, polarToken))
+        Effect.provide(
+          cleanupLayer(
+            { ...registry.configs.cleanup, db: { ...registry.configs.cleanup.db, maxConnections } },
+            polarUrl,
+            polarToken
+          )
+        )
       )
     )
 
@@ -142,6 +148,13 @@ describe("cleanup of deleted accounts", () => {
 
     expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 0 })
     expect(polar.deletes).toHaveLength(1)
+  })
+
+  it("runs on a pool of one connection, with the queries of the account lock on its connection", async () => {
+    const deleted = await deletedAccount()
+
+    expect(await cleanup(1)).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
+    expect(await rowsOf(deleted.userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
   })
 
   it("keeps the customer and the user of a deleted account that owes paid overage", async () => {

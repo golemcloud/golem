@@ -51,7 +51,7 @@ const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): S
   currentPeriodEnd: new Date(data.current_period_end),
   cancelAtPeriodEnd: data.cancel_at_period_end,
   endedAt: data.ended_at ? new Date(data.ended_at) : undefined,
-  modifiedAt: new Date(data.modified_at ?? data.created_at),
+  modifiedAt: data.modified_at ?? data.created_at,
   meteredPriceIds: (data.product?.prices ?? [])
     .filter((price) => price.amount_type === "metered_unit" || price.amount_type === "metered_tiers")
     .map((price) => price.id),
@@ -81,7 +81,7 @@ const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["
     subscriptionId,
     status: data.status,
     createdAt: new Date(data.created_at),
-    modifiedAt: new Date(data.modified_at ?? data.created_at),
+    modifiedAt: data.modified_at ?? data.created_at,
     items: items.map((item, index) => ({
       productPriceId: item.product_price_id,
       amount: item.amount,

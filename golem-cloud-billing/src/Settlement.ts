@@ -28,8 +28,8 @@ import {
  *   order is older than `ORDER_PAYMENT_GRACE_MS`. The plan has no monthly amounts and no overage,
  *   so the agents of the account stop until the order is paid or settled. A new subscription does
  *   not end the suspension.
- * - `paid`: a subscription is `active` and does not end within `SETTLEMENT_MARGIN_MS`, or a
- *   subscription is in the past-due grace. Only this plan has paid overage.
+ * - `paid`: a subscription is `active` or in the past-due grace, and does not end within
+ *   `SETTLEMENT_MARGIN_MS`. Only this plan has paid overage.
  * - `free`: otherwise. A declined payment of the price alone after the past-due grace, a
  *   cancellation, a pause and a trial give the free plan. A subscription that is canceled at the
  *   period end moves the account to free `SETTLEMENT_MARGIN_MS` before the end, so the usage push
@@ -247,8 +247,8 @@ export const planFor = (
   }
   return subscriptions.some(
     (subscription) =>
-      (subscription.status === "active" && !endsWithinMargin(subscription, now)) ||
-      inPastDueGrace(subscription, now, pastDueGraceMs)
+      (subscription.status === "active" || inPastDueGrace(subscription, now, pastDueGraceMs)) &&
+      !endsWithinMargin(subscription, now)
   )
     ? "paid"
     : "free"

@@ -1,7 +1,7 @@
 import { Data, Effect } from "effect"
 import type pg from "pg"
 import { tableNames as authTables } from "./Auth.ts"
-import { Database, requireTables, type SchemaError } from "./Database.ts"
+import { connectionOf, Database, requireTables, type SchemaError } from "./Database.ts"
 import { Polar, type PolarError } from "./Polar.ts"
 import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts.ts"
 import { holdFor } from "./Settlement.ts"
@@ -76,8 +76,11 @@ export const cleanupDeletedAccounts: Effect.Effect<
   const subscriptions = yield* Subscriptions
   const registryAccounts = yield* RegistryAccounts
   const polar = yield* Polar
+  // Inside the lock of an account, the queries run on the connection of the lock.
   const query = <R extends pg.QueryResultRow>(text: string, values: ReadonlyArray<unknown> = []) =>
-    Effect.tryPromise({ try: () => pool.query<R>(text, [...values]), catch: failure })
+    Effect.flatMap(connectionOf(pool), (connection) =>
+      Effect.tryPromise({ try: () => connection.query<R>(text, [...values]), catch: failure })
+    )
 
   const candidates = yield* query<{ account_id: string }>(
     `SELECT account_id::text AS account_id FROM polar_subscriptions

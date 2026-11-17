@@ -1,6 +1,6 @@
 import { Context, Data, Effect, Layer, RcMap, type Scope, Semaphore } from "effect"
 import type pg from "pg"
-import { Database, requireTables, type SchemaError } from "./Database.ts"
+import { connectionOf, Database, LockConnection, requireTables, type SchemaError } from "./Database.ts"
 
 /**
  * The statuses in which Polar bills the usage events of a subscription (`billable` of a Polar
@@ -24,8 +24,13 @@ export interface Subscription {
    * before `currentPeriodEnd`, which Polar keeps.
    */
   readonly endedAt: Date | undefined
-  /** `modified_at` of the subscription in Polar, or `created_at` before its first change. */
-  readonly modifiedAt: Date
+  /**
+   * `modified_at` of the subscription in Polar, or `created_at` before its first change: an ISO 8601
+   * timestamp with the microseconds of Polar. Two changes can come within one millisecond, and a
+   * JavaScript `Date` would make them equal, so the app keeps the text, and only PostgreSQL compares
+   * it (`record`).
+   */
+  readonly modifiedAt: string
   /** The metered prices of the product: an order item of one of them bills paid overage. */
   readonly meteredPriceIds: ReadonlyArray<string>
   /**
@@ -43,7 +48,8 @@ export interface Order {
   /** `draft`, `pending` (not paid), `paid`, `refunded`, `partially_refunded` or `void`. */
   readonly status: string
   readonly createdAt: Date
-  readonly modifiedAt: Date
+  /** `modified_at` of the order in Polar, or `created_at` before its first change, as `Subscription.modifiedAt`. */
+  readonly modifiedAt: string
   /**
    * `amount` is before the discount and the tax. `total` is what the order asks for the item: after
    * the discount, with the tax, and less the credit that a pending order uses
@@ -251,7 +257,8 @@ export interface SubscriptionsShape {
    * Runs `effect` while holding an advisory lock for the account, so that two webhooks of one
    * account, also on two replicas, change its plan one after the other. The callers of one
    * account in this process wait in a queue of the process, and hold no connection of the pool
-   * while they wait.
+   * while they wait. The lock holds one connection of the pool, and the queries of `Subscriptions`
+   * and `RegistryAccounts` in `effect` run on it (`Database.LockConnection`).
    */
   readonly withAccountLock: <A, E, R>(
     accountId: string,
@@ -431,7 +438,7 @@ interface SubscriptionRow {
   readonly current_period_end: Date | null
   readonly cancel_at_period_end: boolean
   readonly ended_at: Date | null
-  readonly modified_at: Date
+  readonly modified_at: string
   readonly metered_price_ids: Array<string>
   readonly past_due_at: Date | null
 }
@@ -450,7 +457,9 @@ const fromRow = (row: SubscriptionRow): Subscription => ({
 })
 
 const columns = `subscription_id, account_id::text AS account_id, product_id, status, current_period_end,
-                cancel_at_period_end, ended_at, modified_at, metered_price_ids, past_due_at`
+                cancel_at_period_end, ended_at,
+                to_char(modified_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS modified_at,
+                metered_price_ids, past_due_at`
 
 const failure = (error: unknown) =>
   new SubscriptionsError({ reason: error instanceof Error ? error.message : String(error) })
@@ -486,7 +495,9 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
     const accountQueues = yield* RcMap.make({ lookup: (_accountId: string) => Semaphore.make(1) })
 
     const query = <R extends object>(text: string, values: ReadonlyArray<unknown> = []) =>
-      Effect.tryPromise({ try: () => pool.query<R & pg.QueryResultRow>(text, [...values]), catch: failure })
+      Effect.flatMap(connectionOf(pool), (connection) =>
+        Effect.tryPromise({ try: () => connection.query<R & pg.QueryResultRow>(text, [...values]), catch: failure })
+      )
 
     const record = (subscription: Subscription) =>
       query(
@@ -660,7 +671,7 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
         `SELECT ${columns}
            FROM polar_subscriptions
           WHERE account_id = $1 AND product_id = $2
-          ORDER BY modified_at DESC
+          ORDER BY polar_subscriptions.modified_at DESC
           LIMIT 1`,
         [accountId, productId]
       ).pipe(Effect.map((result) => (result.rows[0] === undefined ? undefined : fromRow(result.rows[0]))))
@@ -733,7 +744,7 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
           },
           catch: failure
         }),
-        () => effect,
+        (client) => Effect.provideService(effect, LockConnection, client),
         (client) =>
           Effect.promise(async () => {
             try {
