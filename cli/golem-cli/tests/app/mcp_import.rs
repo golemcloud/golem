@@ -1836,7 +1836,7 @@ fn write_roundtrip_middleware(ctx: &TestContext, effect_port: u16) {
                 underlying.invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr).await
             }}
 
-            fn principal_class(principal: &Principal) -> &'static str {{
+            fn principal_class(principal: &golem_rust::tool::Principal) -> &'static str {{
                 principal.kind().as_str()
             }}
 
