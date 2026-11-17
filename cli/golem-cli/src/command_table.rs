@@ -313,8 +313,12 @@ pub enum InvocationSelector {
     /// The accepted invocation of a saved session (`--resume-session`,
     /// `--takeover-session`).
     Session,
-    /// Each invocation whose output the stream exposes.
-    EachExposed,
+    /// The invocations of the agent whose output a live connection to the
+    /// agent can carry. The server decides the part once, when the
+    /// connection opens, and refuses the connection without the grant. It
+    /// does not open the connection and hold back the output of some
+    /// invocations.
+    AgentConnection,
 }
 
 /// The resource side of a part.
@@ -505,14 +509,15 @@ const READ_ACCEPTED: Part = invocation(PendingVerb::InvocationRead, InvocationSe
 const CANCEL_ACCEPTED: Part =
     invocation(PendingVerb::InvocationCancel, InvocationSelector::Accepted);
 /// The live output connection that `agent invoke` opens to the agent before
-/// it dispatches, so that it names no invocation yet and can expose the
-/// output of other invocations of the agent. Raw stdout opens none.
+/// it dispatches, so that it names no invocation yet and can carry the
+/// output of other invocations of the agent. Without `invocation : read` the
+/// server refuses it. Raw stdout opens none.
 const OUTPUT_CONNECTION: Request = conditional(
     Follow,
     When::Without(&[arg("no_stream"), arg_is("stdout_format", &["raw"])]),
     &[invocation(
         PendingVerb::InvocationRead,
-        InvocationSelector::EachExposed,
+        InvocationSelector::AgentConnection,
     )],
 );
 const FOLLOW_ENTRIES: Request = conditional(
@@ -714,7 +719,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 PREPARE_AGENT,
                 operation(&[invocation(
                     PendingVerb::InvocationRead,
-                    InvocationSelector::EachExposed
+                    InvocationSelector::AgentConnection
                 )]),
             ]
         ),

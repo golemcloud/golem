@@ -146,6 +146,12 @@ enum LooksLike {
     /// The same response as for an invocation of the same agent that does
     /// not exist.
     UnknownInvocation,
+    /// The `404` that the owner gets for an agent of the same type that does
+    /// not exist, for a request whose server resolves the agent's absence.
+    /// The caller's own request on a missing agent is not the baseline: a
+    /// server that refuses every such request alike with a `403` would pass
+    /// that comparison.
+    MissingAgent,
     /// A `403`, for a part on a tool by name.
     Forbidden,
     /// Not decided yet, with what decides it. The case asserts no shape.
@@ -256,15 +262,14 @@ const INVOCATION_CANCEL: (Grant, LooksLike) = (
     grant("invocation", "cancel", On::TargetInvocations, ""),
     LooksLike::UnknownInvocation,
 );
-/// The output of an agent's invocations on a connection that names no
-/// invocation. The plan requires `invocation : read` on each exposed
-/// invocation; it does not say whether the connection without it is refused
-/// or carries no output of that invocation.
-const EXPOSED_OUTPUT: (Grant, LooksLike) = (
+/// The output of an agent's invocations on a live connection to the agent,
+/// which names no invocation. Without `invocation : read` the server
+/// refuses the connection; it does not open it and hold back output. The
+/// connection addresses the agent by its ID, so the refusal is the response
+/// for an agent that does not exist.
+const CONNECTION_OUTPUT: (Grant, LooksLike) = (
     grant("invocation", "read", On::TargetInvocations, ""),
-    LooksLike::Pending(
-        "the plan: whether a connection without `invocation : read` is refused or withholds the output",
-    ),
+    LooksLike::MissingAgent,
 );
 /// A saved session names its invocation by a server-signed token. The
 /// counterpart of an unknown invocation is a signed token for an invocation
@@ -300,8 +305,8 @@ const PREPARE_NEW: ExpectedRequest = ExpectedRequest {
     ..PREPARE
 };
 const OUTPUT_CONNECTION: ExpectedRequest = expected(
-    "follow without no_stream,stdout_format=raw: invocation read @invocation:each-exposed",
-    &[EXPOSED_OUTPUT],
+    "follow without no_stream,stdout_format=raw: invocation read @invocation:agent-connection",
+    &[CONNECTION_OUTPUT],
 );
 const INVOKE: ExpectedRequest = expected(
     "operation: agent invoke @agent [method]",
@@ -526,8 +531,8 @@ const CASES: &[Case] = &[
         &[
             PREPARE,
             expected(
-                "operation: invocation read @invocation:each-exposed",
-                &[EXPOSED_OUTPUT],
+                "operation: invocation read @invocation:agent-connection",
+                &[CONNECTION_OUTPUT],
             ),
         ],
         Effect::Reads("connected"),
@@ -1376,6 +1381,15 @@ impl Seed {
         Self {
             scheduled_invocation: uuid::Uuid::new_v4().to_string(),
             other_scheduled_invocation: uuid::Uuid::new_v4().to_string(),
+            ..self.clone()
+        }
+    }
+
+    /// The same seed, with the owner's authority in place of the caller's.
+    fn as_owner(&self) -> Self {
+        Self {
+            caller: self.owner.clone(),
+            caller_response: LastResponse::default(),
             ..self.clone()
         }
     }
@@ -3338,6 +3352,26 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
                                 "{at} request {position} differs from an unknown target"
                             );
                         }
+                        LooksLike::MissingAgent => {
+                            let missing = seed.as_owner().with_unknown_agent_at(*position);
+                            let missing = (adapter.run)(&missing).await?;
+                            let baseline = missing.outcomes.get(*position);
+                            assert!(
+                                matches!(
+                                    baseline,
+                                    Some(Outcome::Denied(Denial::Http(RawResponse {
+                                        status: 404,
+                                        ..
+                                    })))
+                                ),
+                                "{at} request {position}: the owner's request on a missing agent is not a 404: {baseline:?}"
+                            );
+                            assert_eq!(
+                                baseline,
+                                Some(&Outcome::Denied(denied)),
+                                "{at} request {position} differs from the owner's request on a missing agent"
+                            );
+                        }
                         LooksLike::Forbidden => assert!(
                             matches!(denied, Denial::Http(RawResponse { status: 403, .. })),
                             "{at} request {position} is not a 403 on a tool by name: {denied:?}"
@@ -3384,13 +3418,12 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
 }
 
 /// `view`, `oplog : read` and `tool : view` neither control nor invoke, also
-/// through REST calls that no client preflight guards. Each tested variant
-/// makes only reads that these grants allow before its operation, so that
-/// the operation itself is what is denied. A variant that also needs another
-/// grant before its operation is not tested here: the stream variants of
-/// `agent invoke` open the output connection first, and whether a connection
-/// without `invocation : read` is refused is open (`EXPOSED_OUTPUT`). Each
-/// mode has a variant without it that makes the same operation.
+/// through REST calls that no client preflight guards. These grants allow
+/// the reads that a mode makes before its operation, so that the operation
+/// itself is what is denied. The stream variants of `agent invoke` open the
+/// output connection first, which needs `invocation : read`: the server
+/// refuses that connection, and the command stops before its operation.
+/// Each mode also has a variant that reaches its operation.
 #[test]
 #[timeout("30m")]
 #[ignore = "pending: the 2.0 card model (GOL-1270, GOL-1271, GOL-1272, GOL-1276, GOL-1288, GOL-1289) and 2.0 grant installation (GOL-1275, GOL-1297), all Aditya Salunkhe"]
@@ -3400,32 +3433,35 @@ async fn management_read_grants_cannot_control_or_invoke(
     let read_grants = [VIEW, OPLOG_READ.0, TOOL_VIEW.0];
     for (path, mode) in CONTROLS_AND_STARTS {
         let case = case_of(path, mode);
-        let mut tested = 0;
+        let mut reached = 0;
         for adapter in adapters(path, mode) {
             let operation = operation_position(case, adapter);
-            let needs_another_grant = adapter.makes[..operation].iter().any(|index| {
+            // The first request before the operation that needs a grant
+            // other than the read grants: the server refuses it, and the
+            // command stops there.
+            let refused = adapter.makes[..operation].iter().position(|index| {
                 case.requests[*index]
                     .grants
                     .iter()
                     .any(|(grant, _)| !read_grants.contains(grant))
             });
-            if needs_another_grant {
-                continue;
-            }
-            tested += 1;
             let seed = Seed::new(deps, case.fixture).await?;
             seed.put_in(case.precondition).await?;
             give(&seed, &read_grants).await?;
             let before = seed.observe().await?;
             let trace = (adapter.run)(&seed).await?;
-            let operation = operation_position(case, adapter);
+            let denied_at = refused.unwrap_or(operation);
             assert!(
-                matches!(trace.outcomes.get(operation), Some(Outcome::Denied(_))),
-                "`{}` mode `{mode}` variant `{}` did not have its operation denied with read grants: {:?}",
+                matches!(trace.outcomes.get(denied_at), Some(Outcome::Denied(_)))
+                    && (refused.is_none() || trace.outcomes.len() == denied_at + 1),
+                "`{}` mode `{mode}` variant `{}` was not denied at request {denied_at} with read grants: {:?}",
                 path.join(" "),
                 adapter.variant,
                 trace.outcomes
             );
+            if refused.is_none() {
+                reached += 1;
+            }
             assert_eq!(
                 seed.observe().await?,
                 before,
@@ -3435,7 +3471,7 @@ async fn management_read_grants_cannot_control_or_invoke(
             );
         }
         assert!(
-            tested > 0,
+            reached > 0,
             "`{}` mode `{mode}` has no variant whose operation the read grants reach",
             path.join(" ")
         );
