@@ -17,7 +17,6 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
-use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
     DeferredCallReplayOutcome, DemandDelivery, DemandDeliveryMode, DurableCallSession,
@@ -33,6 +32,7 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, run_deniable_access, wasi_sockets_view,
 };
+use crate::durable_host::sockets::policy::SocketPolicy;
 use crate::durable_host::sockets::{SocketEntry, SocketPhase, TcpSocketOptions};
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurableWorkerCtx, TcpSocketStreamDirection};
@@ -65,8 +65,6 @@ use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 use wasmtime_wasi::sockets::{TcpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
-
-pub(super) const UNSUPPORTED_SOCKET_TARGET: &str = "unsupported socket address";
 
 fn tcp_entry<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
@@ -118,17 +116,13 @@ fn tcp_options<Ctx: WorkerCtx>(
     }
 }
 
-pub(super) fn socket_target(
-    address: &types::IpSocketAddress,
-) -> Option<golem_common::model::card::PermissionTarget> {
-    match address {
-        types::IpSocketAddress::Ipv4(address) => {
-            let (a, b, c, d) = address.address;
-            let host = std::net::Ipv4Addr::new(a, b, c, d).to_string();
-            tcp_target(&host, address.port).ok()
-        }
-        types::IpSocketAddress::Ipv6(_) => None,
-    }
+/// The socket policy of the Store, for the permission target of a connect or datagram.
+pub(super) fn socket_policy<Ctx: WorkerCtx, U: 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+) -> SocketPolicy {
+    store.with(|mut access| {
+        SocketPolicy::new(&durable_worker_ctx::<Ctx, U>(access.data_mut()).state.config)
+    })
 }
 
 fn serialize_tcp_stream_result(
@@ -1759,9 +1753,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 "connect",
             )
         });
-        let targets = socket_target(&remote_address)
-            .map(|target| vec![target])
-            .ok_or_else(|| UNSUPPORTED_SOCKET_TARGET.to_string());
+        let targets = socket_policy(store)
+            .target(remote_address.into())
+            .map(|target| vec![target]);
         let request_address = remote_address;
         let rep = socket.rep();
         let mut connected_live = false;
@@ -1895,6 +1889,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         }
     }
 
+    /// Agents expose no ports, so `listen` is always refused and its implicit bind never happens.
+    /// A socket that is recorded as bound but has no native bind after reconstruction reports
+    /// `connection-broken` first, like the other operations on it.
     async fn listen(
         mut store: Access<'_, U, Self>,
         socket: Resource<TcpSocket>,
@@ -1913,21 +1910,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 return Err(types::ErrorCode::ConnectionBroken.into());
             }
         }
-        let sockets =
-            Access::<U, WasiSockets>::new(store.as_context_mut(), wasi_sockets_view::<Ctx, U>);
-        let result =
-            <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(sockets, socket).await?;
-        let mut store = store.as_context_mut();
-        let address = {
-            let mut view = wasi_sockets_view::<Ctx, U>(store.data_mut());
-            types::HostTcpSocket::get_local_address(&mut view, Resource::new_borrow(rep))?
-        };
-        let entry = tcp_entry(durable_worker_ctx::<Ctx, U>(store.data_mut()), rep)
-            .map_err(SocketError::trap)?;
-        entry.phase = SocketPhase::Listening;
-        entry.local_address = Some(address.into());
-        entry.native_bound = true;
-        Ok(result)
+        Err(types::ErrorCode::AccessDenied.into())
     }
 
     async fn send(

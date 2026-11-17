@@ -1876,7 +1876,7 @@ scheduler that yields through Promise jobs. The default `setImmediate` yield is 
 `monotonic-clock::wait-for` call, which replay of a completed operation does not repeat, so its
 unclaimed `Start` stopped recovery (`tests/durability_effect.rs`).
 
-**Non-Rust SDK limitation:** MoonBit and Go custom combinators support
+**Non-Rust SDK limitation:** MoonBit custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1886,7 +1886,7 @@ Stop and join outstanding work before the body exits, including on failure or ca
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
 durability outside custom operations, to the Rust poll/drop scope integration, to TypeScript's or
-Scala's `durableAsync`, or to Effect's fiber-local scopes. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
+Scala's `durableAsync`, to Effect's fiber-local scopes, or to Go. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
 `wasm-rquickjs:custom-invocation-context` module, and its `GolemExecutionContext` captures the
 scope when a `Future` callback is registered (`ExecutionContext.prepare`), not when its source
 completes. A Scala parent finishes only after its nested operations close and no task that
@@ -1894,6 +1894,23 @@ completes. A Scala parent finishes only after its nested operations close and no
 and an operation started in a sealed scope begins and enters in the nearest admitting ancestor,
 so host and SDK agree on its parent. Callbacks run by
 other execution contexts, and work escaping an outermost operation, are not attributed to it.
+
+**Go custom operations** (`sdks/go/golem/durability.Run`, `internal/cdctx`) use async admission
+like Rust. The golemcloud/go runtime calls a switch hook whenever the goroutine about to run has
+another host context, and `cdctx` exchanges the task's context slot there; each scoped goroutine
+owns one snapshot handle while parked. Goroutines started in a body, and `time.AfterFunc`
+callbacks of its timers, inherit the scope, and `Run` waits for them before `finish-async`. An
+`iter.Pull` coroutine runs as part of the goroutine that switches to it: `coroswitch` hands over
+the switching goroutine's context and domain, whoever created the iterator. Because a completed
+body is skipped on replay, runtime state shared by every goroutine would carry the body's effects
+out of it. The runtime therefore makes no host call for itself on wasip1 (the
+scheduler, GC and scavenger read the latest clock reading the program made; a receive or select
+on a timer channel that is in no heap reads the clock itself), and each operation
+runs in its own runtime domain: its own clock (advanced only by reads in the domain and by the
+domain's recorded `wait-until`), timers heap, and random state seeded from its parent's stream on
+both the live and the replay path. go-pkg arms one clock wait per domain, in the domain's host
+context. Heap addresses are not isolated. Tests:
+`golem-worker-executor-tests/tests/agent_sdk_go/custom_durability_concurrency.rs`.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
@@ -2069,7 +2086,8 @@ finish; cancellation destroys descendants before the enclosing live resource and
 Closing a resource absent from the current stack is normal and leaves that stack unchanged.
 Finish validates active children and response decoding before removing the resource or scope.
 Nested work must complete or be dropped before its parent finishes. Detached work does not
-automatically acquire the scope. Other SDKs have synchronized bindings but do not yet propagate
+automatically acquire the scope. Go propagates scopes per goroutine through a runtime hook (see
+Go custom operations above). The other SDKs have synchronized bindings but do not yet propagate
 custom scopes across concurrent continuations; do not infer a cross-SDK concurrency fix.
 The synchronous exchange binding (`store | trappable`, not async) is essential: an async import
 would capture host-task context too early for the per-poll switch.
@@ -3288,6 +3306,22 @@ P2 UDP records explicit remote-address permission decisions in
 `sockets::udp::permissions::check`, for stream creation and addressed datagram batches. Its
 request holds the addresses; replay returns the recorded decision without consulting current
 permissions. Connected sends without an explicit address retain their stream's admission.
+
+The socket address policy (`durable_host/sockets/policy.rs`) is shared by P2 and P3. Before any
+grant check, `SocketPolicy::target` refuses cloud metadata and link-local destinations, and the
+executor's gRPC and HTTP ports and `agent_sockets.refused_ports` on loopback, unspecified and this
+host's own addresses. Operator authorization does not bypass it. Otherwise the target is a
+`NetworkResourcePattern::SocketAddress`: a grant with a wildcard host matches it only for an
+`AddressClass::Public` address that is not an address of this host (D28, `this_host`), while
+denials with a wildcard host still cover every address, and a denial of an IPv4 host covers the
+NAT64, 6to4 and IPv4-compatible forms that embed it. HTTP and WebSocket targets keep plain host
+matching and refuse IPv6 hosts. A refusal is recorded as the
+call's denial, like a grant denial (the P2 check call, or the `Start` of the P3 connect or send), so
+replay returns it. The Wasmtime `socket_addr_check`
+backstop refuses TCP listen, binds other than port 0 or loopback, and the refused destinations,
+from its arguments and the configuration only. The executor binds its gRPC and HTTP listeners
+before it creates any agent, so the configuration holds the bound ports. Tests:
+`tests/scope_cards/socket_policy.rs`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the

@@ -335,9 +335,10 @@ impl WorkerExecutorTestDependencies {
         // the error if another test in the same process already installed a provider.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
+        let config = golem_test_framework::config::EnvBasedTestDependenciesConfig::new();
         let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
+            config.redis_port,
+            config.redis_key_prefix,
             Level::INFO,
             Level::ERROR,
         ));
@@ -639,6 +640,11 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    /// The port the executor's gRPC API listens on.
+    pub fn grpc_port(&self) -> u16 {
+        self._run_details.grpc_port
+    }
+
     /// Exercises creation and lookup of the virtual owner used by native external-tool ingress.
     /// The returned worker is only valid while this executor's service graph is alive.
     pub async fn get_or_add_ephemeral_external_tool(

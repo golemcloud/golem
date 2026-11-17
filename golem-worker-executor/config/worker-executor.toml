@@ -12,6 +12,7 @@ ttl = "8h"
 
 [agent_sockets]
 enabled = false
+refused_ports = []
 
 [agent_status_checkpoint]
 enabled = true
@@ -473,6 +474,7 @@ without_time = false
 #
 # [agent_sockets]
 # enabled = false
+# refused_ports = []
 #
 # [agent_status_checkpoint]
 # enabled = true
@@ -936,6 +938,7 @@ without_time = false
 #
 # [agent_sockets]
 # enabled = false
+# refused_ports = []
 #
 # [agent_status_checkpoint]
 # enabled = true
@@ -1398,6 +1401,7 @@ without_time = false
 #
 # [agent_sockets]
 # enabled = false
+# refused_ports = []
 #
 # [agent_status_checkpoint]
 # enabled = true
