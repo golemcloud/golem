@@ -123,7 +123,7 @@ administrator gave the account.
 | Plan | Variable | When |
 | --- | --- | --- |
 | suspended | `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | paid overage is not paid: the account owes an unpaid order (see [Unpaid orders](#unpaid-orders)), its subscription is not in the past-due grace, and a payment of the subscription failed or the order is older than one hour |
-| paid | `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | an `active` subscription that does not end within 15 minutes, or a `past_due` subscription in the past-due grace |
+| paid | `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | an `active` subscription, or a `past_due` subscription in the past-due grace, that does not end within 15 minutes |
 | free | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID` | otherwise: no subscription, a declined payment of the price alone after the past-due grace, a cancellation, a trial, a pause |
 
 The paid plan is prepaid with optional postpay. Its price buys the monthly amounts in advance.
@@ -161,13 +161,16 @@ plan.
   403 before the app reads its body, and a body above 1 MiB gets 413. The handler verifies the
   Standard Webhooks signature with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a
   `webhook-id` that it handled before, and stores the subscription in `polar_subscriptions` or the
-  order in `polar_orders`. A paid order of the settlement product records a settlement instead. A state never replaces a state with a later `modified_at`, so a late
-  delivery cannot undo a newer one. Then it sets the [deletion hold](#deletion-hold) and the plan
-  from the table above. A failed payment (`subscription.past_due`) also logs `payment_failed`. An
-  account on the default plan moves only to the paid plan. An account on any other plan, for
-  example an internal plan that an administrator gave it, keeps it, and gets the deletion hold all
-  the same. An event of an account that the registry deleted is stored and answers 200, without a
-  change of the plan or the hold, so that deleted accounts do not make Polar disable the endpoint.
+  order in `polar_orders`. A paid order of the settlement product records a settlement instead. A
+  state never replaces a state with a later `modified_at`, so a late delivery cannot undo a newer
+  one. The app keeps `modified_at` as Polar sends it, with microseconds, and only PostgreSQL
+  compares it: a JavaScript `Date` would make two changes within one millisecond equal. Then it sets
+  the [deletion hold](#deletion-hold) and the plan from the table above. A failed payment
+  (`subscription.past_due`) also logs `payment_failed`. An account on the default plan moves only to
+  the paid plan. An account on any other plan, for example an internal plan that an administrator
+  gave it, keeps it, and gets the deletion hold all the same. An event of an account that the
+  registry deleted is stored and answers 200, without a change of the plan or the hold, so that
+  deleted accounts do not make Polar disable the endpoint.
 - **Metered prices.** An order item names its price. The subscription lists the prices of its
   product, so `polar_subscriptions` keeps the IDs of the metered prices, and the handler counts
   the items of these prices as overage.
@@ -190,10 +193,13 @@ plan.
   hours for an account without a subscription that continues, and usage settlements of the last 24
   hours.
 - **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
-  account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
-  delivers the webhook again. A 404 of the registry for an account that is not deleted also
-  answers 500: the permission share of the billing account is missing. A 409 of the registry (the
-  account changed between the read and the write) makes the handler read the account again.
+  account, also across replicas. The lock holds one connection of the pool, and the queries inside
+  the lock run on it, so the holder never waits for a connection that the webhooks which wait for
+  the lock hold. A pool of one connection works. When the registry or the database fails, the
+  handler answers 500 and Polar delivers the webhook again. A 404 of the registry for an account
+  that is not deleted also answers 500: the permission share of the billing account is missing. A
+  409 of the registry (the account changed between the read and the write) makes the handler read
+  the account again.
 
 The plan of a customer is not up to its owner: the registry refuses `set-plan` on the own account.
 The app changes plans and deletion holds with the token of a separate billing account

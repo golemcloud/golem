@@ -29,7 +29,7 @@ describe("canCheckOut", () => {
     status,
     currentPeriodEnd: undefined,
     cancelAtPeriodEnd: false,
-    modifiedAt: new Date("2026-11-04T10:00:00Z"),
+    modifiedAt: "2026-11-04T10:00:00Z",
     meteredPriceIds: [],
     pastDueAt: undefined,
     endedAt: undefined
