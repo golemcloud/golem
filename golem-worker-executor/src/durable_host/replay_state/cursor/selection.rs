@@ -420,6 +420,14 @@ impl CursorTx<'_> {
             claim.expected_parent_start_index(),
         ) {
             Some(bodies) => Ok(MissingStart::Blocked(BlockedOn::ActiveBody(bodies))),
+            // The export of an open invocation returned and its terminal is at the head: a call
+            // of the invocation's background work can have its `Start` after that terminal, so
+            // the claim is decided once the primary Store read the terminal. Before the export
+            // returned, every replayed call is one the live run made before the export returned,
+            // and its `Start` precedes the terminal.
+            None if self.st.returned_open_invocation_terminal_at_head() => {
+                Ok(MissingStart::Blocked(BlockedOn::CursorProgress))
+            }
             None => {
                 // The first unconsumed entry that the claiming owner would consume next.
                 let (index, entry) = match self.st.replay_buffer.front() {
@@ -976,6 +984,8 @@ impl CursorTx<'_> {
             StartClaimAttempt::Claimed(handle, entry) => (handle, entry),
             other => return Ok(other),
         };
+        self.st
+            .report_closed_anchor_claim(handle.start_idx(), &entry);
         if claim.is_reconstruction_claim() {
             let reconstruction = self.st.starts.register_reconstruction(
                 handle.start_idx(),

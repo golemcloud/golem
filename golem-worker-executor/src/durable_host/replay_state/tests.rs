@@ -3858,7 +3858,8 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
     .await;
     assert_eq!(
         rs.invocation_finish_before(OplogIndex::from_u64(6)),
-        Some(terminal)
+        Some(anchor),
+        "the invocation's own AgentInvocationStarted is a boundary before the cursor reaches it"
     );
     assert_eq!(
         rs.recorded_local_failure_of_invocation(anchor),
@@ -3871,10 +3872,19 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
         rs.recorded_local_failure_of_invocation(anchor),
         Some(terminal)
     );
+    assert!(
+        rs.recorded_local_failure_of_invocation(OplogIndex::from_u64(6))
+            .is_none(),
+        "the next invocation's boundary is its own Finished, not a local failure"
+    );
     rs.get_oplog_entry_agent_invocation_started()
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(
+        rs.invocation_finish_before(OplogIndex::from_u64(6)),
+        Some(terminal)
+    );
     let call = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -7006,8 +7016,8 @@ async fn completion_delivery_marker_in_later_invocation_parks_only_until_its_inv
     );
     assert_eq!(
         tracker.active_count(),
-        1,
-        "the wait is active again once its marker belongs to the current invocation"
+        0,
+        "the next invocation's AgentInvocationStarted still lies before the marker"
     );
 
     rs.get_oplog_entry_agent_invocation_started()
@@ -7016,7 +7026,11 @@ async fn completion_delivery_marker_in_later_invocation_parks_only_until_its_inv
         .expect("invocation B starts");
     let barrier = delivery.await.unwrap();
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(7));
-    assert_eq!(tracker.active_count(), 1);
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "the wait is active once its marker belongs to the current invocation"
+    );
     barrier.acknowledge();
     assert!(read_invocation_finished(&rs).await.unwrap().is_some());
     drop(activity);
@@ -7168,7 +7182,11 @@ async fn delivery_waits_sharing_a_later_invocation_boundary_park_without_oplog_r
         assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
     }
     assert!(read_invocation_finished(&rs).await.unwrap().is_some());
-    assert_eq!(rs.invocation_finish_before(marker_of(0)), None);
+    assert_eq!(
+        rs.invocation_finish_before(marker_of(0)),
+        Some(finish.next()),
+        "the next invocation's AgentInvocationStarted is the boundary after the finish"
+    );
     for delivery in &mut deliveries {
         assert!(
             tokio::time::timeout(Duration::from_millis(5), delivery.as_mut())
@@ -7178,17 +7196,23 @@ async fn delivery_waits_sharing_a_later_invocation_boundary_park_without_oplog_r
     }
     assert_eq!(
         tracker.active_count(),
-        CALLS as usize,
-        "every wait is active once its marker belongs to the current invocation"
+        0,
+        "every wait stays passive until the next invocation starts"
     );
 
     rs.get_oplog_entry_agent_invocation_started()
         .await
         .unwrap()
         .expect("invocation B starts");
+    assert_eq!(rs.invocation_finish_before(marker_of(0)), None);
     for delivery in deliveries {
         delivery.await.unwrap().acknowledge();
     }
+    assert_eq!(
+        tracker.active_count(),
+        CALLS as usize,
+        "every wait is active once its marker belongs to the current invocation"
+    );
     assert!(read_invocation_finished(&rs).await.unwrap().is_some());
     drop(activities);
     assert_eq!(tracker.active_count(), 0);
@@ -7216,6 +7240,11 @@ async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
     ];
     let marker = OplogIndex::from_u64(8);
     let visible = replay_state_over(entries.clone()).await;
+    visible
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation starts");
     assert_eq!(
         visible.invocation_finish_before(marker),
         Some(OplogIndex::from_u64(5))
@@ -7233,12 +7262,11 @@ async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
     )
     .await
     .unwrap();
-    assert_eq!(rs.invocation_finish_before(marker), None);
-
     rs.get_oplog_entry_agent_invocation_started()
         .await
         .unwrap()
         .expect("invocation starts");
+    assert_eq!(rs.invocation_finish_before(marker), None);
     let handle = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -7291,6 +7319,15 @@ async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
     .await;
     let finish = OplogIndex::from_u64(5);
     let marker = OplogIndex::from_u64(7);
+    // The invocation's own AgentInvocationStarted is a boundary until the cursor consumed it.
+    assert_eq!(
+        rs.invocation_finish_before(marker),
+        Some(OplogIndex::from_u64(2))
+    );
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation A starts");
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
     rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
@@ -7305,10 +7342,6 @@ async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
     rs.set_replay_target(OplogIndex::from_u64(8)).await.unwrap();
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
-    rs.get_oplog_entry_agent_invocation_started()
-        .await
-        .unwrap()
-        .expect("invocation A starts");
     let handle = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -15953,4 +15986,957 @@ fn unclosed_abandoned_starts_diverge_at_the_lowest_open_index() {
             divergence.actual
         );
     }
+}
+
+fn invocation_settled_for(invocation_id: golem_common::model::InvocationId) -> OplogEntry {
+    OplogEntry::agent_invocation_settled(invocation_id, 0)
+}
+
+fn other_invocation_id() -> golem_common::model::InvocationId {
+    uuid::Uuid::from_u128(2).into()
+}
+
+/// A `MonotonicClockNow` `Start` recorded by the guest call `ordinal` of the invocation whose
+/// `AgentInvocationStarted` is at `anchor`.
+fn anchored_start(anchor: u64, ordinal: u64) -> OplogEntry {
+    let mut entry = start_now();
+    let OplogEntry::Start { invocation_id, .. } = &mut entry else {
+        unreachable!();
+    };
+    *invocation_id = Some(DurableInvocationId::new(
+        OplogIndex::from_u64(anchor),
+        ordinal,
+    ));
+    entry
+}
+
+fn anchored_claim(anchor: u64, ordinal: u64) -> StartClaim {
+    StartClaim::unowned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+    )
+    .with_invocation_id(Some(DurableInvocationId::new(
+        OplogIndex::from_u64(anchor),
+        ordinal,
+    )))
+}
+
+async fn claim_anchored(rs: &ReplayState, anchor: u64, ordinal: u64) -> ReplayCallHandle {
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(anchored_claim(anchor, ordinal))
+        .await
+        .unwrap()
+    else {
+        panic!("the Start of guest call {ordinal} of anchor {anchor} must be claimed");
+    };
+    handle
+}
+
+/// Consumes the next `AgentInvocationStarted` and opens its invocation anchor.
+async fn start_open_invocation(rs: &ReplayState) -> OplogIndex {
+    start_open_invocation_with_handle(rs).await.0
+}
+
+/// [`start_open_invocation`], also returning the anchor's [`ExportReturned`] handle.
+async fn start_open_invocation_with_handle(rs: &ReplayState) -> (OplogIndex, ExportReturned) {
+    let started = rs
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    let export_returned = rs
+        .open_invocation_anchor(started.oplog_index)
+        .await
+        .unwrap();
+    (started.oplog_index, export_returned)
+}
+
+async fn read_open_anchor_terminal(
+    rs: &ReplayState,
+    invocation_id: golem_common::model::InvocationId,
+) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id),
+    )
+    .await
+    .expect("the open-anchor terminal read must not hang")
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn open_anchor_keeps_retained_starts_claimable_after_the_invocation_terminal() {
+    // A background Start recorded before Finished is still unclaimed when the primary Store reads
+    // Finished; its End and another background call follow Finished, then the settlement.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        invocation_finished(),
+        end_for(3, 41),
+        anchored_start(2, 1),
+        end_for(6, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    assert_eq!(anchor, OplogIndex::from_u64(2));
+
+    let (index, entry) = read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .expect("the invocation terminal is recorded");
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::AgentInvocationFinished { .. }));
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "the background Start recorded before Finished stays retained for its claim"
+    );
+
+    let first = claim_anchored(&rs, 2, 0).await;
+    assert_eq!(first.start_idx(), OplogIndex::from_u64(3));
+    assert!(matches!(
+        rs.await_resolution(first).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(5)
+    ));
+    let second = claim_anchored(&rs, 2, 1).await;
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(6));
+    rs.await_resolution(second).await.unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(8),
+        "the settlement is skipped as a hint before the anchor is closed"
+    );
+
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(8))
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn ordinary_reader_waits_for_the_open_anchor_terminal_once_the_export_returned() {
+    // After the export returned, background work replaying past an agent entry cannot consume
+    // the terminal of its own open invocation: its positional read waits until the primary
+    // Store read the terminal.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        remove_retry_policy(),
+        invocation_finished(),
+        remove_retry_policy(),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let invocation_id = replayed_invocation_id();
+    let mut terminal =
+        Box::pin(rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id));
+    assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
+
+    let (index, _) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(3));
+    let mut background = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(
+        &mut background,
+        "a positional read behind the open terminal",
+    )
+    .await;
+
+    let (index, _) = terminal.await.unwrap().unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    let (index, entry) = background.await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(5));
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(6))
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn ordinary_reader_reaching_the_open_terminal_before_the_export_returned_does_not_wait() {
+    // Before the export returned, a positional read that reaches the terminal is the guest's
+    // own divergent read: it receives the terminal, which its caller rejects, instead of
+    // waiting for a terminal read the blocked primary Store never makes.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    start_open_invocation(&rs).await;
+    let (index, entry) = tokio::time::timeout(Duration::from_secs(2), rs.get_oplog_entry(None))
+        .await
+        .expect("a positional read before the export returned must not hang")
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(3));
+    assert!(matches!(entry, OplogEntry::AgentInvocationFinished { .. }));
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_tolerates_a_never_claimed_closed_start_before_the_settlement() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        anchored_start(2, 0),
+        end_for(4, 42),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(6))
+    );
+    assert!(
+        !rs.has_unclaimed_retained_starts(),
+        "the abandoned Start is dropped at the settlement"
+    );
+    let next = rs
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("the next invocation starts");
+    assert_eq!(next.oplog_index, OplogIndex::from_u64(7));
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_rejects_history_that_ended_background_work_cannot_consume() {
+    // A never-claimed Start without a terminal before the settlement, and the next invocation
+    // started without a settlement, are divergences rather than the replay tail.
+    for entries in [
+        vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            anchored_start(2, 0),
+            invocation_settled_for(replayed_invocation_id()),
+            end_for(4, 42),
+        ],
+        vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        ],
+        vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            remove_retry_policy(),
+            invocation_settled_for(other_invocation_id()),
+            invocation_settled_for(replayed_invocation_id()),
+        ],
+    ] {
+        let rs = replay_state_over(entries).await;
+        let anchor = start_open_invocation(&rs).await;
+        read_open_anchor_terminal(&rs, replayed_invocation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            rs.close_invocation_anchor(anchor, &replayed_invocation_id()),
+        )
+        .await
+        .expect("closing an anchor must not hang");
+        assert!(
+            matches!(
+                result,
+                Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+            ),
+            "expected a divergence, got {result:?}"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn open_anchor_terminal_read_rejects_an_invocation_boundary_before_its_terminal() {
+    for (head, then) in [
+        (invocation_finished_for(other_invocation_id()), None),
+        (
+            invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+            None,
+        ),
+        (
+            invocation_settled_for(other_invocation_id()),
+            Some(invocation_finished()),
+        ),
+        (
+            invocation_settled_for(replayed_invocation_id()),
+            Some(invocation_finished()),
+        ),
+    ] {
+        let mut entries = vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            head,
+        ];
+        entries.extend(then);
+        let rs = replay_state_over(entries).await;
+        start_open_invocation(&rs).await;
+        let result = read_open_anchor_terminal(&rs, replayed_invocation_id()).await;
+        assert!(
+            matches!(
+                result,
+                Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+            ),
+            "expected a divergence, got {result:?}"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_at_the_replay_tail_keeps_the_retained_starts() {
+    // The recorded run crashed between Finished and the settlement.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        invocation_finished(),
+        end_for(3, 41),
+        anchored_start(2, 1),
+        end_for(6, 42),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let call = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(call).await.unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::ReplayTail
+    );
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "the live invocation end releases the Start left unclaimed at the replay tail"
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_finds_a_settlement_skipped_with_the_terminal() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(4),
+        "the settlement hint is skipped together with the terminal"
+    );
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(4))
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn interleaved_starts_of_two_anchors_are_claimed_by_their_own_invocations() {
+    // A store task of invocation A records a Start after A settled and before B started; B's
+    // own call is recorded after it, and their terminals interleave.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        invocation_finished(),
+        end_for(3, 41),
+        invocation_settled_for(replayed_invocation_id()),
+        anchored_start(2, 1),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        anchored_start(8, 0),
+        end_for(9, 43),
+        end_for(7, 42),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_a = start_open_invocation(&rs).await;
+    let call = claim_anchored(&rs, 2, 0).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(3));
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    rs.await_resolution(call).await.unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_a, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(6))
+    );
+
+    let anchor_b = start_open_invocation(&rs).await;
+    assert_eq!(anchor_b, OplogIndex::from_u64(8));
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "the Start of the closed anchor before B's start is retained"
+    );
+    let call_b = claim_anchored(&rs, 8, 0).await;
+    assert_eq!(call_b.start_idx(), OplogIndex::from_u64(9));
+    let call_a = claim_anchored(&rs, 2, 1).await;
+    assert_eq!(call_a.start_idx(), OplogIndex::from_u64(7));
+    assert!(matches!(
+        rs.await_resolution(call_b).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(10)
+    ));
+    assert!(matches!(
+        rs.await_resolution(call_a).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(11)
+    ));
+    let (index, _) = read_open_anchor_terminal(&rs, other_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(12));
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_b, &other_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(13))
+    );
+}
+
+/// [`assert_pending`] for a future whose output is not `Debug`.
+async fn assert_parked<F: Future>(future: &mut std::pin::Pin<Box<F>>, what: &str) {
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), future.as_mut())
+            .await
+            .is_err(),
+        "{what} must stay parked"
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn delivery_marker_in_the_next_invocation_parks_until_that_invocation_starts() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    // Invocation A records the End at 4 and finishes at 5; its background work records 6 before
+    // A settles at 7. Invocation B starts at 8, consumes the result and records the marker at 9.
+    // The cursor passes A's Finished and the settlement hint while A drains, so only B's
+    // AgentInvocationStarted keeps the wait passive until the drain ended.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        invocation_finished(),
+        remove_retry_policy(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        delivered_for(3),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_a = start_open_invocation(&rs).await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut delivery = Box::pin(rs.await_completion_delivery(
+        OplogIndex::from_u64(3),
+        OplogIndex::from_u64(9),
+        Some(&activity),
+    ));
+    assert_parked(&mut delivery, "a delivery wait while A drains").await;
+    assert_eq!(tracker.active_count(), 0);
+
+    let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(7),
+        "the settlement hint is skipped during the drain"
+    );
+    assert_parked(&mut delivery, "a delivery wait after the settlement hint").await;
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "a marker in the next invocation must not keep the draining invocation active"
+    );
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_a, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
+    assert_parked(&mut delivery, "a delivery wait before B starts").await;
+    assert_eq!(tracker.active_count(), 0);
+
+    let anchor_b = start_open_invocation(&rs).await;
+    delivery.await.unwrap().acknowledge();
+    assert_eq!(tracker.active_count(), 1);
+    read_open_anchor_terminal(&rs, other_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_b, &other_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(11))
+    );
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+/// The invocation's own guest code, before the export returns, asks for a host call that has
+/// no recorded `Start` while the next recorded entry is the invocation's terminal. Every call
+/// made before the export returned precedes the terminal, so this is a divergence with or
+/// without an open anchor, not a wait for the terminal read of the blocked primary Store.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_missing_start_before_the_export_returned_is_a_divergence_at_the_terminal() {
+    for open in [false, true] {
+        let rs = replay_state_over(vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            invocation_settled_for(replayed_invocation_id()),
+        ])
+        .await;
+        if open {
+            start_open_invocation(&rs).await;
+        } else {
+            rs.get_oplog_entry_agent_invocation_started()
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            rs.claim_start_or_replay_end(anchored_claim(2, 0)),
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Ok(Err(WorkerExecutorError::UnexpectedOplogEntry { .. }))
+            ),
+            "open anchor = {open}: expected a divergence, got {:?}",
+            result.map(|r| r.map(|_| ()))
+        );
+    }
+}
+
+/// Once the export returned and the primary Store is reading the terminal, a background call
+/// whose `Start` is missing at the terminal waits for that read, then diverges at the next
+/// entry.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_missing_background_start_waits_for_the_open_terminal_then_diverges() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        remove_retry_policy(),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+    ])
+    .await;
+    start_open_invocation(&rs).await;
+    let invocation_id = replayed_invocation_id();
+    let mut terminal =
+        Box::pin(rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id));
+    assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
+    let (index, _) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(3));
+
+    let mut claim = Box::pin(rs.claim_start_or_replay_end(anchored_claim(2, 0)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), claim.as_mut())
+            .await
+            .is_err(),
+        "a missing background Start at the returned open terminal waits for the terminal read"
+    );
+    let (index, _) = terminal.await.unwrap().unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    let result = tokio::time::timeout(Duration::from_secs(2), claim)
+        .await
+        .expect("the claim is decided once the terminal was read");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected a divergence at the next invocation's start, got {:?}",
+        result.map(|_| ())
+    );
+}
+
+/// Once the export returned, a background call whose `Start` is recorded after the terminal is
+/// claimed, and its result resolves after the primary Store read the terminal.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_background_start_after_the_open_terminal_resolves_once_the_terminal_is_read() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        remove_retry_policy(),
+        invocation_finished(),
+        anchored_start(2, 1),
+        end_for(5, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let invocation_id = replayed_invocation_id();
+    let mut terminal =
+        Box::pin(rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id));
+    assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
+    rs.get_oplog_entry(None).await.unwrap();
+
+    let call = tokio::time::timeout(Duration::from_secs(2), claim_anchored(&rs, 2, 1))
+        .await
+        .expect("a recorded background Start after the terminal is claimed");
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(5));
+    let mut resolution = Box::pin(rs.await_resolution(call));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), resolution.as_mut())
+            .await
+            .is_err(),
+        "the End after the open terminal resolves only once the terminal was read"
+    );
+    let (index, _) = terminal.await.unwrap().unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(
+        resolution.await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(6)
+    ));
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
+}
+
+/// The close runs after every guest task exited, and only a guest read consumes a reserved
+/// delivery marker, so a marker before the settlement is a divergence rather than a wait.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_rejects_a_reserved_delivery_marker_before_the_settlement() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        anchored_start(2, 0),
+        end_for(4, 42),
+        delivered_for(4),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let call = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(call).await.unwrap();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id()),
+    )
+    .await
+    .expect("closing an anchor must not wait at a delivery marker")
+    .expect_err("an unconsumed delivery marker before the settlement is a divergence");
+    assert!(
+        error.to_string().contains("CompletionDelivered"),
+        "unexpected error: {error}"
+    );
+}
+
+/// A's retained store task records a `Start` after A settled and before B started (as in
+/// `interleaved_starts_of_two_anchors_are_claimed_by_their_own_invocations`), and its `End`
+/// before B's terminal. The store task reaches its claim only after B closed. The claim must
+/// still find its recorded `Start` instead of having it dropped as B's abandoned progress.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_keeps_a_start_of_an_earlier_invocation_claimable() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        anchored_start(2, 0),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        end_for(5, 42),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_a = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_a, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(4))
+    );
+
+    let anchor_b = start_open_invocation(&rs).await;
+    assert_eq!(anchor_b, OplogIndex::from_u64(6));
+    read_open_anchor_terminal(&rs, other_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_b, &other_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(9))
+    );
+
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.claim_start_or_replay_end(anchored_claim(2, 0)),
+    )
+    .await
+    .expect("the claim must not hang");
+    match outcome {
+        Ok(ReplayStartClaimOutcome::Claimed { handle, .. }) => {
+            assert_eq!(handle.start_idx(), OplogIndex::from_u64(5));
+        }
+        Ok(ReplayStartClaimOutcome::ReplayEnded) => panic!(
+            "the recorded Start at 5 of the closed anchor A was dropped when B closed: the \
+             claim reports the replay end, so the recorded call would run again live"
+        ),
+        Ok(_) => panic!("the recorded Start at 5 of the closed anchor A was not claimed"),
+        Err(error) => panic!(
+            "the recorded Start at 5 of the closed anchor A was dropped when B closed: {error}"
+        ),
+    }
+}
+
+/// The same retained store task of A ends its call after B settled. Closing B must not treat
+/// A's still-running call as B's unclosed abandoned record.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_leaves_an_unfinished_start_of_an_earlier_invocation_retained() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        anchored_start(2, 0),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+        end_for(5, 42),
+    ])
+    .await;
+    let anchor_a = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    rs.close_invocation_anchor(anchor_a, &replayed_invocation_id())
+        .await
+        .unwrap();
+
+    let anchor_b = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, other_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_b, &other_invocation_id())
+            .await
+            .expect("closing B must not fail on the in-flight Start of A's retained store task"),
+        SettledAt::Recorded(OplogIndex::from_u64(8))
+    );
+
+    let handle = claim_anchored(&rs, 2, 0).await;
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(5));
+    assert!(matches!(
+        rs.await_resolution(handle).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(9)
+    ));
+}
+
+/// An entity body replays in its own Store and can outlive the primary Store's guest tasks, so
+/// closing the anchor waits for the body to consume its entry before the settlement.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_waits_for_an_entity_body_that_can_still_consume_the_head() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        start_named(HostFunctionName::GolemEntityInvoke),
+        entity_remove_retry_policy(4),
+        end_for(4, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let invocation_id = replayed_invocation_id();
+    let mut close = Box::pin(rs.close_invocation_anchor(anchor, &invocation_id));
+    assert_pending(&mut close, "closing the anchor behind an entity body entry").await;
+
+    let (index, entry) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(4)))
+        .await
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(5));
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), close)
+            .await
+            .expect("the close is decided once the body consumed its entry")
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
+}
+
+/// An entry of an entity body nobody replays before the settlement is a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_rejects_an_entry_of_an_entity_body_nobody_replays() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        entity_remove_retry_policy(2),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id()),
+    )
+    .await
+    .expect("closing an anchor must not wait for an entity body nobody replays");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected a divergence, got {result:?}"
+    );
+}
+
+/// The driver marks the export as returned before the primary Store reads the terminal. From
+/// then on background work at the terminal waits for the terminal read instead of reporting a
+/// divergence: a positional read does not take the terminal, a claim whose `Start` is missing
+/// at the terminal waits, and a call whose `Start` is recorded after the terminal is claimed
+/// and resolves once the terminal was read.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_marked_export_makes_background_work_wait_for_the_open_terminal_read() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        remove_retry_policy(),
+        anchored_start(2, 1),
+        end_for(5, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let (anchor, export_returned) = start_open_invocation_with_handle(&rs).await;
+    export_returned.mark();
+
+    let mut background = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(
+        &mut background,
+        "a positional read at the marked open terminal",
+    )
+    .await;
+    let mut missing = Box::pin(rs.claim_start_or_replay_end(anchored_claim(2, 2)));
+    assert_parked(
+        &mut missing,
+        "a claim missing its Start at the marked open terminal",
+    )
+    .await;
+    drop(missing);
+    let call = tokio::time::timeout(Duration::from_secs(2), claim_anchored(&rs, 2, 1))
+        .await
+        .expect("a recorded background Start after the terminal is claimed");
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(5));
+
+    let (index, _) = read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(3));
+    let (index, _) = tokio::time::timeout(Duration::from_secs(2), background)
+        .await
+        .expect("the positional read continues once the terminal was read")
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(
+        rs.await_resolution(call).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(6)
+    ));
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
 }

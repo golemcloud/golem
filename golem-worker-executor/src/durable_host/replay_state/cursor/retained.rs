@@ -219,13 +219,38 @@ impl CursorTx<'_> {
         Ok(true)
     }
 
-    /// Moves every retained `Start` into the invocation-boundary abandoned-record tolerance. The
-    /// replayed guest has produced its invocation result, so no owner can claim them anymore.
+    /// Moves retained `Start`s into the invocation-boundary abandoned-record tolerance: their
+    /// invocation and its background work have ended, so no owner can claim them anymore.
+    ///
+    /// With `settlement` `None` it moves every retained `Start`. With `Some((settled, anchor))` it
+    /// moves only the `Start`s recorded before `settled` that belong to the invocation anchored at
+    /// `anchor`: the ones without an invocation id, and the ones numbered under `anchor` or under
+    /// a `Start` this fold moves (an entity body or custom invocation of that invocation). The
+    /// `Start`s of other invocations stay retained, such as the `Start`s a retained store task of
+    /// an earlier invocation recorded, which that task can still claim.
     pub(super) fn fold_retained_into_abandoned(
         &mut self,
         abandoned: &mut AbandonedStarts,
+        settlement: Option<(OplogIndex, OplogIndex)>,
     ) -> Result<(), WorkerExecutorError> {
-        let retained = self.st.starts.take_retained();
+        let all = self.st.starts.take_retained();
+        let mut retained = std::collections::BTreeMap::new();
+        for (idx, start) in all {
+            let folds = match settlement {
+                None => true,
+                Some((settled, anchor)) => {
+                    idx < settled
+                        && super::selection::start_invocation_id(&start.entry).is_none_or(|id| {
+                            id.anchor == anchor || retained.contains_key(&id.anchor)
+                        })
+                }
+            };
+            if folds {
+                retained.insert(idx, start);
+            } else {
+                self.st.starts.insert_retained(idx, start);
+            }
+        }
         self.publish_retained_count();
         for (idx, retained) in retained {
             let OplogEntry::Start {
@@ -326,6 +351,8 @@ impl RetainedClaims<'_> {
         else {
             return Ok(None);
         };
+        self.st
+            .report_closed_anchor_claim(handle.start_idx(), &entry);
         if claim.is_reconstruction_claim() {
             let reconstruction = self.st.starts.register_reconstruction(
                 handle.start_idx(),

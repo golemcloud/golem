@@ -266,7 +266,12 @@ impl CursorTx<'_> {
             );
         }
         match oplog_entry {
-            OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+            OplogEntry::AgentInvocationStarted {
+                invocation_id,
+                wallet_pin,
+                ..
+            } => {
+                self.st.last_started_invocation = Some((read_idx, *invocation_id));
                 self.record_wallet_replay_event(
                     read_idx,
                     ReplayEvent::InvocationWalletPinned {
@@ -309,14 +314,23 @@ impl CursorTx<'_> {
                     )?;
                 }
             }
-            OplogEntry::AgentInvocationFinished { .. }
+            OplogEntry::AgentInvocationFinished { invocation_id, .. }
             | OplogEntry::AgentInvocationFailed {
                 entity_parent_start_index: None,
+                invocation_id,
                 ..
             } => {
-                if let Some(wallet) = &self.cursor.wallet {
+                // The background work of an open anchor still replays after its terminal;
+                // `ReplayState::close_invocation_anchor` finishes the invocation's wallet replay
+                // once that work settled.
+                if !self.st.is_open_invocation(invocation_id)
+                    && let Some(wallet) = &self.cursor.wallet
+                {
                     wallet.finish_replayed_invocation();
                 }
+            }
+            OplogEntry::AgentInvocationSettled { invocation_id, .. } => {
+                self.st.settled_invocations.insert(read_idx, *invocation_id);
             }
             OplogEntry::CardTransferStarted {
                 transfer_id,

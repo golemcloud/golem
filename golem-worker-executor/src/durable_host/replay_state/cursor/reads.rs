@@ -74,8 +74,14 @@ impl CursorTx<'_> {
         &mut self,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(None, None, None, UnclaimedStarts::Retain, condition)
-            .await
+        self.try_get_oplog_entry_inner(
+            None,
+            None,
+            BoundaryRead::None,
+            UnclaimedStarts::Retain,
+            condition,
+        )
+        .await
     }
 
     /// [`Self::try_get_oplog_entry`] for a `Start` claim's head fast path: an unclaimed `Start`
@@ -87,8 +93,14 @@ impl CursorTx<'_> {
         &mut self,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(None, None, None, UnclaimedStarts::Leave, condition)
-            .await
+        self.try_get_oplog_entry_inner(
+            None,
+            None,
+            BoundaryRead::None,
+            UnclaimedStarts::Leave,
+            condition,
+        )
+        .await
     }
 
     /// Consumes a delivery marker or consumer observation at its exact position and transfers
@@ -103,7 +115,7 @@ impl CursorTx<'_> {
             .try_get_oplog_entry_inner(
                 Some((start_index, marker_index)),
                 guest_order,
-                None,
+                BoundaryRead::None,
                 UnclaimedStarts::Retain,
                 |_| false,
             )
@@ -132,7 +144,7 @@ impl CursorTx<'_> {
         self.try_get_oplog_entry_inner(
             None,
             None,
-            Some(abandoned),
+            BoundaryRead::InvocationBoundary(abandoned),
             UnclaimedStarts::Retain,
             condition,
         )
@@ -143,7 +155,7 @@ impl CursorTx<'_> {
         &mut self,
         expected_delivery: Option<(Option<OplogIndex>, OplogIndex)>,
         guest_order: Option<&GuestReadOrder>,
-        mut abandoned: Option<&mut AbandonedStarts>,
+        mut boundary: BoundaryRead<'_>,
         unclaimed_starts: UnclaimedStarts,
         mut condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
@@ -153,6 +165,14 @@ impl CursorTx<'_> {
             self.st.skip_hints_after_delivery = false;
         }
         loop {
+            if let BoundaryRead::Settlement { anchor, .. } = &boundary
+                && self.st.first_settled_after(*anchor).is_some()
+            {
+                // The walk ends at a settlement; the entries after it belong to the next
+                // invocation.
+                return Ok(None);
+            }
+
             if self.cursor.at_replay_tail() {
                 // No further entries to read: nothing to drain, condition cannot match.
                 return Ok(None);
@@ -225,7 +245,9 @@ impl CursorTx<'_> {
                     self.skip_forward().await?;
                     continue;
                 }
-                if abandoned.is_some() && self.st.starts.get_retained(start_index).is_some() {
+                if boundary.tolerates_abandoned()
+                    && self.st.starts.get_retained(start_index).is_some()
+                {
                     return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
                         oplog_index: read_idx,
                         expected: ReplayStep::described(format!(
@@ -331,7 +353,7 @@ impl CursorTx<'_> {
                 continue;
             }
 
-            if abandoned.is_some()
+            if boundary.tolerates_abandoned()
                 && let OplogEntry::Start { function_name, .. } = &entry
                 && !AbandonedStarts::can_drain(function_name)
             {
@@ -350,12 +372,23 @@ impl CursorTx<'_> {
                 }));
             }
 
+            if matches!(boundary, BoundaryRead::None)
+                && self.st.is_returned_open_invocation_terminal(&entry)
+            {
+                // Once the export of an open invocation returned, only the open-anchor reader
+                // consumes its terminal. Any other reader waits for it, so background work
+                // recorded after the terminal is not handed the terminal while the primary Store
+                // has not read it yet.
+                self.st.replay_buffer.push_front((read_idx, entry));
+                return Ok(None);
+            }
+
             if condition(&entry) {
                 self.commit_consumed_entry(read_idx, &entry).await?;
-                if let Some(abandoned) = abandoned.as_deref_mut() {
+                if let BoundaryRead::InvocationBoundary(abandoned) = &mut boundary {
                     // The replayed guest has produced its invocation result: whatever is still
                     // retained is live-only abandoned progress nobody can claim anymore.
-                    self.fold_retained_into_abandoned(abandoned)?;
+                    self.fold_retained_into_abandoned(abandoned, None)?;
                 }
                 return Ok(Some((read_idx, entry)));
             } else if unclaimed_starts == UnclaimedStarts::Retain
@@ -378,6 +411,22 @@ impl CursorTx<'_> {
         }
     }
 
+    /// Whether the entity body whose invocation `Start` is at `owner` can still consume its entry
+    /// at the head `head_idx`: its `Start` is retained or claimed ahead, its body replays, or its
+    /// `Start` is recorded later and can still be claimed.
+    async fn entity_body_can_consume_head(
+        &self,
+        head_idx: OplogIndex,
+        owner: OplogIndex,
+    ) -> Result<bool, WorkerExecutorError> {
+        Ok(self.st.starts.get_retained(&owner).is_some()
+            || self.st.starts.is_claimed_ahead(&owner)
+            || self.cursor.reconstruction_claims.is_body_active(owner)
+            || self
+                .future_entity_start_can_be_claimed(head_idx, owner)
+                .await?)
+    }
+
     /// Classifies a positional read (`positional_reader_accepts`) that returned nothing while the
     /// cursor is still replaying. Such a read parked either at a reserved `CompletionDelivered`
     /// marker or at an entry another Store recorded through this shared cursor (an entity body
@@ -392,7 +441,9 @@ impl CursorTx<'_> {
     /// Anything else is an entity body nobody will reconstruct: waiting would hang replay, so the
     /// head is reported as the divergence it is. The invocation-boundary reader never waits on
     /// another Store: every entity body of the invocation has terminated before
-    /// `AgentInvocationFinished`, so an unconsumed body entry there is dead history.
+    /// `AgentInvocationFinished`, so an unconsumed body entry there is dead history. The
+    /// open-anchor reader waits like an ordinary reader: the background work of its invocation,
+    /// including entity bodies, still replays.
     pub(in crate::durable_host::replay_state) async fn check_parked_positional_read(
         &self,
         reader: PositionalReader,
@@ -407,7 +458,9 @@ impl CursorTx<'_> {
             // A positional reader never classifies a nested `Start` left at the head: its parent
             // may be a call of the reading Store.
             (_, HeadOwner::Unattributed | HeadOwner::ParentStart(_))
-            | (PositionalReader::Ordinary, HeadOwner::Agent) => return Ok(()),
+            | (PositionalReader::Ordinary | PositionalReader::OpenAnchor, HeadOwner::Agent) => {
+                return Ok(());
+            }
             (PositionalReader::InvocationBoundary, _) => {
                 return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
                     oplog_index: *head_idx,
@@ -418,15 +471,12 @@ impl CursorTx<'_> {
                     mismatched: Vec::new(),
                 }));
             }
-            (PositionalReader::Ordinary, HeadOwner::EntityBody(owner)) => owner,
+            (
+                PositionalReader::Ordinary | PositionalReader::OpenAnchor,
+                HeadOwner::EntityBody(owner),
+            ) => owner,
         };
-        let owner_can_consume = self.st.starts.get_retained(&owner).is_some()
-            || self.st.starts.is_claimed_ahead(&owner)
-            || self.cursor.reconstruction_claims.is_body_active(owner)
-            || self
-                .future_entity_start_can_be_claimed(*head_idx, owner)
-                .await?;
-        if owner_can_consume {
+        if self.entity_body_can_consume_head(*head_idx, owner).await? {
             Ok(())
         } else {
             Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -1330,6 +1380,315 @@ impl ReplayState {
                 return Ok(None);
             }
             progress.await;
+        }
+    }
+}
+
+impl CursorTx<'_> {
+    /// One transaction of [`ReplayState::get_oplog_entry_agent_invocation_terminal_in_open_anchor`].
+    /// Returns `None` while the reader must wait for cursor progress or at the replay tail.
+    async fn try_get_open_anchor_terminal(
+        &mut self,
+        invocation_id: golem_common::model::InvocationId,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        let Some((anchor, _)) = self.st.open_invocation(&invocation_id) else {
+            return Err(WorkerExecutorError::runtime(format!(
+                "the invocation {invocation_id} has no open invocation anchor"
+            )));
+        };
+        self.st.open_anchors[&anchor].export_returned.mark();
+        let settled_before = |st: &CursorState, bound: Option<OplogIndex>| {
+            st.first_settled_after(anchor)
+                .filter(|settled| bound.is_none_or(|bound| *settled < bound))
+        };
+        let settled_first = |settled: OplogIndex| {
+            boundary_divergence(
+                settled,
+                format!(
+                    "AgentInvocationSettled at {settled}, before the terminal of invocation \
+                     {invocation_id}"
+                ),
+            )
+        };
+        if let Some(settled) = settled_before(&self.st, None) {
+            return Err(settled_first(settled));
+        }
+        let read = self
+            .try_get_oplog_entry_inner(
+                None,
+                None,
+                BoundaryRead::OpenAnchor,
+                UnclaimedStarts::Retain,
+                |entry| is_invocation_terminal_of(entry, &invocation_id),
+            )
+            .await?;
+        if let Some(settled) = settled_before(&self.st, read.as_ref().map(|(index, _)| *index)) {
+            return Err(settled_first(settled));
+        }
+        if read.is_some() {
+            return Ok(read);
+        }
+        if !self.blocked_on_completion_delivery
+            && let Some((index, head)) = self.st.replay_buffer.front()
+            && (matches!(head, OplogEntry::AgentInvocationStarted { .. })
+                || primary_invocation_terminal_id(head).is_some())
+        {
+            // No background work consumes an invocation boundary, so waiting would hang.
+            return Err(boundary_divergence(
+                *index,
+                format!("{head:?} at {index}, before the terminal of invocation {invocation_id}"),
+            ));
+        }
+        self.check_parked_positional_read(PositionalReader::OpenAnchor)
+            .await?;
+        Ok(None)
+    }
+
+    /// One transaction of [`ReplayState::close_invocation_anchor`]. Returns `None` while an entity
+    /// body that can still consume the entry at the head has not consumed it.
+    async fn settle_open_anchor(
+        &mut self,
+        anchor: OplogIndex,
+        invocation_id: golem_common::model::InvocationId,
+    ) -> Result<Option<SettledAt>, WorkerExecutorError> {
+        if self
+            .st
+            .open_anchors
+            .get(&anchor)
+            .is_none_or(|open| open.invocation_id != invocation_id)
+        {
+            return Err(WorkerExecutorError::runtime(format!(
+                "the invocation anchor {anchor} of invocation {invocation_id} is not open"
+            )));
+        }
+        if self.st.settled_after(anchor, &invocation_id).is_none() {
+            // Every guest task of the invocation exited, so nothing can claim the records left
+            // before the settlement: the walk retains them for the abandoned-record tolerance.
+            self.try_get_oplog_entry_inner(
+                None,
+                None,
+                BoundaryRead::Settlement { anchor },
+                UnclaimedStarts::Retain,
+                |_| false,
+            )
+            .await?;
+        }
+        let settled = self.st.settled_after(anchor, &invocation_id);
+        if let Some(other) = self.st.first_settled_after(anchor)
+            && settled.is_none_or(|settled| other < settled)
+        {
+            return Err(boundary_divergence(
+                other,
+                format!(
+                    "the AgentInvocationSettled of another invocation at {other}, before the \
+                     settlement of invocation {invocation_id}"
+                ),
+            ));
+        }
+        let Some(settled) = settled else {
+            if self.cursor.at_replay_tail() && !self.blocked_on_completion_delivery {
+                // The live run appends the settlement. The retained `Start`s stay retained: the
+                // caller releases them at the live end of the drain
+                // (`release_retained_starts_at_live_invocation_end`).
+                self.finish_closed_anchor(anchor);
+                return Ok(Some(SettledAt::ReplayTail));
+            }
+            // An entity body replays in its own Store and can outlive the primary Store's guest
+            // tasks, so its entry at the head waits for it while it can still consume it.
+            if !self.blocked_on_completion_delivery
+                && let Some((head_idx, HeadOwner::EntityBody(owner))) = self
+                    .st
+                    .replay_buffer
+                    .front()
+                    .map(|(index, entry)| (*index, head_owner(entry)))
+                && self.entity_body_can_consume_head(head_idx, owner).await?
+            {
+                return Ok(None);
+            }
+            // A reserved `CompletionDelivered` marker or a guest stream observation at the head
+            // is consumed only by a guest read, and every guest task of the invocation exited.
+            let (index, head) = self
+                .st
+                .replay_buffer
+                .front()
+                .map(|(index, entry)| (*index, format!("{entry:?} at {index}")))
+                .unwrap_or_else(|| {
+                    (
+                        self.cursor.last_replayed_index().next(),
+                        "no entry".to_string(),
+                    )
+                });
+            return Err(boundary_divergence(
+                index,
+                format!(
+                    "{head}, before the settlement of invocation {invocation_id}, which no ended \
+                     background work of the invocation can consume"
+                ),
+            ));
+        };
+        let mut abandoned = AbandonedStarts::default();
+        self.fold_retained_into_abandoned(&mut abandoned, Some((settled, anchor)))?;
+        abandoned.finish(&self.cursor.owned_agent_id)?;
+        self.finish_closed_anchor(anchor);
+        Ok(Some(SettledAt::Recorded(settled)))
+    }
+
+    /// Finishes the wallet replay of the invocation anchored at `anchor`, closes the anchor, and
+    /// prunes the settlements no open or later anchor can need.
+    fn finish_closed_anchor(&mut self, anchor: OplogIndex) {
+        if let Some(wallet) = &self.cursor.wallet {
+            wallet.finish_replayed_invocation();
+        }
+        self.st.open_anchors.remove(&anchor);
+        self.st.last_closed_anchor = self.st.last_closed_anchor.max(Some(anchor));
+        // An anchor needs only the settlements after it, and later anchors lie after this one.
+        let keep_from = self
+            .st
+            .open_anchors
+            .keys()
+            .next()
+            .map_or(anchor, |lowest_open| anchor.min(*lowest_open))
+            .next();
+        self.st.settled_invocations = self.st.settled_invocations.split_off(&keep_from);
+        self.notify_progress = true;
+    }
+}
+
+impl ReplayState {
+    /// Opens the invocation anchor of the agent-method or constructor invocation whose
+    /// `AgentInvocationStarted` the cursor consumed at `anchor`. While the anchor is open, only
+    /// [`Self::get_oplog_entry_agent_invocation_terminal_in_open_anchor`] consumes the
+    /// invocation's terminal, the retained `Start`s stay claimable after that terminal, and the
+    /// wallet replay of the invocation stays open until [`Self::close_invocation_anchor`].
+    ///
+    /// The driver marks the returned [`ExportReturned`] when the invocation's export returns.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn open_invocation_anchor(
+        &self,
+        anchor: OplogIndex,
+    ) -> Result<ExportReturned, WorkerExecutorError> {
+        let export_returned = ExportReturned::default();
+        let handle = export_returned.clone();
+        self.run_owned_cursor_op(move |state| async move {
+            let mut st = state.cursor.state.lock().await;
+            let invocation_id = match st.last_started_invocation {
+                Some((started, invocation_id)) if started == anchor => invocation_id,
+                last => {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "cannot open the invocation anchor {anchor}: the last consumed \
+                         AgentInvocationStarted is {last:?}"
+                    )));
+                }
+            };
+            if st.last_closed_anchor.is_some_and(|closed| anchor <= closed)
+                || st
+                    .open_anchors
+                    .insert(
+                        anchor,
+                        OpenInvocation {
+                            invocation_id,
+                            export_returned: export_returned.clone(),
+                        },
+                    )
+                    .is_some()
+            {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "the invocation anchor {anchor} was already opened"
+                )));
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(handle)
+    }
+
+    /// The index and entry of the `AgentInvocationFinished` or `AgentInvocationFailed` of the
+    /// open-anchor invocation `invocation_id`, or `None` at the replay tail.
+    ///
+    /// The background work of the invocation replays concurrently and may consume entries
+    /// recorded before the terminal. An unclaimed `Start` is retained for it, and every other
+    /// entry its owner can still consume (a reserved delivery marker, an agent entry, an entity
+    /// body entry) is left at the head while the reader waits for cursor progress. Another
+    /// invocation's terminal, an `AgentInvocationStarted` or an `AgentInvocationSettled` before
+    /// the terminal is a divergence. Consuming the terminal keeps the retained `Start`s and the
+    /// wallet replay of the invocation open for its background work.
+    ///
+    /// The driver calls this only after the export returned, and the first call marks the
+    /// anchor's [`ExportReturned`] if the driver did not mark it already: from then on the other
+    /// readers leave the terminal at the head, and a claim that finds no `Start` before it waits
+    /// for this read instead of reporting a divergence.
+    ///
+    /// Like the ordinary reader, it waits on an agent-attributed or unattributed head that a
+    /// background task may still consume. Once every guest task exited, the driver's deadlock
+    /// detection turns a wait on a head nobody consumes into an error.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn get_oplog_entry_agent_invocation_terminal_in_open_anchor(
+        &self,
+        invocation_id: &golem_common::model::InvocationId,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        let invocation_id = *invocation_id;
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let read = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| tx.try_get_open_anchor_terminal(invocation_id).await)
+                        .await
+                })
+                .await?;
+            if read.is_some() {
+                return Ok(read);
+            }
+            if self.at_replay_tail() {
+                return Ok(None);
+            }
+            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
+                .await?;
+        }
+    }
+
+    /// Closes the open invocation anchor `anchor` of `invocation_id` and returns where the
+    /// invocation settled.
+    ///
+    /// The caller calls it after every guest task of the primary Store exited. At
+    /// [`SettledAt::Recorded`] the recorded settlement ends the invocation. At
+    /// [`SettledAt::ReplayTail`] the caller then calls
+    /// `release_retained_starts_at_live_invocation_end` and appends the `AgentInvocationSettled`.
+    ///
+    /// The walk to the invocation's `AgentInvocationSettled`, found by invocation id even when
+    /// the cursor already skipped it as a hint, tolerates live-only abandoned durable-call
+    /// records (see [`AbandonedStarts`]): the never-claimed `Start`s of this invocation recorded
+    /// before the settlement, and their terminals, are validated and dropped. The `Start`s of
+    /// other invocations stay retained for their owners. An entry of an entity body that can still
+    /// consume it makes the walk wait for that body. Any other entry before the settlement is a
+    /// divergence, including a reserved delivery marker or a guest stream observation, which only
+    /// an exited guest task could consume. At [`SettledAt::ReplayTail`] the retained `Start`s are
+    /// kept. Either way the wallet replay of the invocation finishes and the anchor is closed.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn close_invocation_anchor(
+        &self,
+        anchor: OplogIndex,
+        invocation_id: &golem_common::model::InvocationId,
+    ) -> Result<SettledAt, WorkerExecutorError> {
+        let invocation_id = *invocation_id;
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let settled = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| tx.settle_open_anchor(anchor, invocation_id).await)
+                        .await
+                })
+                .await?;
+            if let Some(settled) = settled {
+                return Ok(settled);
+            }
+            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
+                .await?;
         }
     }
 }
