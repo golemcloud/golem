@@ -88,7 +88,9 @@ class Store:
 
     def snapshot(self):
         with self.lock:
-            return json.dumps(self.data).encode()
+            runs = [run for run in self.data["runs"]
+                    if run["status"] in ("in_progress", "completed") and run["conclusion"] != "cancelled"]
+            return json.dumps({**self.data, "runs": runs}).encode()
 
     def update(self, run=None):
         with self.lock:

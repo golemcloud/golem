@@ -127,6 +127,28 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual([test["name"] for test in summary["failed"]], ["actual_failure"])
         self.assertEqual([report["file"] for report in summary["unreadable"]], ["a-bad.json", "b-partial.json"])
 
+    def test_dashboard_shows_only_running_and_non_cancelled_completed_attempts(self):
+        states = [("in_progress", ""), ("completed", "success"), ("completed", "failure"),
+                  ("completed", "cancelled"), ("queued", ""), ("pending", ""),
+                  ("waiting", ""), ("requested", ""), ("completed", "timed_out")]
+        for index, (status, conclusion) in enumerate(states):
+            run = copy.deepcopy(self.run)
+            run.update(run_id=901 + index, status=status, conclusion=conclusion)
+            self.assertEqual(self.publish(run)[0], 200)
+
+        status, payload = self.request("GET", "/data.json")
+        self.assertEqual(status, 200)
+        self.assertEqual([run["run_id"] for run in json.loads(payload)["runs"]], [909, 903, 902, 901])
+        self.assertEqual(len(json.loads(self.store.path.read_text())["runs"]), len(states))
+
+        pending = copy.deepcopy(self.run)
+        pending.update(run_id=906, status="in_progress", conclusion="")
+        self.assertEqual(self.publish(pending)[0], 200)
+        self.assertIn(906, [run["run_id"] for run in json.loads(self.request("GET", "/data.json")[1])["runs"]])
+        pending.update(status="completed", conclusion="cancelled")
+        self.assertEqual(self.publish(pending)[0], 200)
+        self.assertNotIn(906, [run["run_id"] for run in json.loads(self.request("GET", "/data.json")[1])["runs"]])
+
     def test_heartbeat_does_not_fabricate_a_run(self):
         status, _ = self.request("POST", "/api/heartbeat", {}, authorized=True)
         self.assertEqual(status, 200)
