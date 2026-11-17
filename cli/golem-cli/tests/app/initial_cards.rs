@@ -7,7 +7,10 @@ use test_r::{inherit_test_dep, test, timeout};
 inherit_test_dep!(Tracing);
 
 const AGENT_ID_WARNING: &str = "the initialCard does not allow the agent to read GOLEM_AGENT_ID, which the Golem SDKs need, so the agent fails at its first call or at snapshot load. Grant env(?agent) @ ?agent : read : GOLEM_AGENT_ID in the card, and do not exclude it in the upper bound.";
-const AGENT_ID_NOT_READABLE: &str = "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
+/// The 1.6.x SDKs fail with their own text when `GOLEM_AGENT_ID` is not visible: the Rust SDK with
+/// "GOLEM_AGENT_ID environment variable must be set" and the TypeScript SDK with
+/// "GOLEM_AGENT_ID is not set". Both name the variable.
+const AGENT_ID_NOT_READABLE: &str = "GOLEM_AGENT_ID";
 const FILESYSTEM_READ: &str = "filesystem(?agent) @ ?agent : read : /**";
 const AGENT_ID_READ: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
 
@@ -108,13 +111,13 @@ async fn initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_c
     assert!(!invoke.success(), "the first call succeeded");
     assert!(
         contains(&invoke, AGENT_ID_NOT_READABLE),
-        "the call error does not name the card grant"
+        "the call error does not name GOLEM_AGENT_ID"
     );
     let agent = ctx.cli([cmd::AGENT, cmd::GET, hidden]).await;
     assert!(agent.success_or_dump());
     assert!(
         contains(&agent, AGENT_ID_NOT_READABLE),
-        "the agent error does not name the card grant"
+        "the agent error does not name GOLEM_AGENT_ID"
     );
 
     write_counter_agent_card(&ctx, &manifest, &[FILESYSTEM_READ, AGENT_ID_READ]);
