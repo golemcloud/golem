@@ -9,7 +9,6 @@ struct MultipartIndex {
 
 ///|
 priv struct MultipartIndexState {
-  name : String
   revision : Int32
 } derive(ToJson, FromJson)
 
@@ -36,7 +35,7 @@ impl @agents.MultipartSnapshottable for MultipartIndex with fn save_snapshot_par
 ) {
   Ok(
     @agents.MultipartSnapshot::from_state(
-      MultipartIndexState::{ name: self.name, revision: self.revision, },
+      MultipartIndexState::{ revision: self.revision, },
       {
         "index": {
           bytes: self.index,
@@ -50,7 +49,7 @@ impl @agents.MultipartSnapshottable for MultipartIndex with fn save_snapshot_par
 ///|
 pub async fn MultipartIndex::load_snapshot_parts(
   snapshot : @agents.MultipartSnapshot,
-  _context : @agents.SnapshotRestoreContext,
+  context : @agents.SnapshotRestoreContext,
 ) -> Result[MultipartIndex, String] {
   let saved : MultipartIndexState = match snapshot.decode_state() {
     Ok(saved) => saved
@@ -60,5 +59,6 @@ pub async fn MultipartIndex::load_snapshot_parts(
     Ok(index) => index
     Err(message) => return Err(message)
   }
-  Ok({ name: saved.name, revision: saved.revision, index, })
+  let name : String = context.identity(0)
+  Ok({ name, revision: saved.revision, index, })
 }

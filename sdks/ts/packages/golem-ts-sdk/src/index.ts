@@ -28,7 +28,6 @@ import { encodeMultipart, decodeMultipart, extractBoundary } from './internal/mu
 import { normalizeContentType, SnapshotError, validatePartName } from './snapshot';
 import type { SnapshotPart } from './snapshot';
 import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
-import { decodeConstructorParameters, encodeConstructorParameters } from './internal/snapshotState';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
@@ -252,9 +251,7 @@ export type {
 export type { CollectedToolInvocation, StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
-let initializedAgent:
-  | { agent: ResolvedAgent; principal: Principal; constructorParameters: SchemaValueTree }
-  | undefined;
+let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;
 
 interface GolemAgentGuest {
   initialize(agentTypeName: string, input: SchemaValueTree): Promise<void>;
@@ -281,7 +278,7 @@ interface SaveSnapshotGuest {
 }
 
 interface LoadSnapshotGuest {
-  load(snapshot: Snapshot): Promise<void>;
+  load(snapshot: Snapshot, constructor: SchemaValueTree): Promise<void>;
 }
 
 async function initialize(agentTypeName: string, input: SchemaValueTree): Promise<void> {
@@ -309,7 +306,7 @@ async function initialize(agentTypeName: string, input: SchemaValueTree): Promis
   const initiateResult = await initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
-    initializedAgent = { agent: initiateResult.val, principal, constructorParameters: input };
+    initializedAgent = { agent: initiateResult.val, principal };
   } else {
     throw initiateResult.val;
   }
@@ -866,13 +863,11 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   const transport = await initializedAgent.agent.saveSnapshot();
   const principal = initializedAgent.principal;
   const serializedPrincipal = serializePrincipal(principal);
-  const constructorParameters = encodeConstructorParameters(initializedAgent.constructorParameters);
 
   if (transport.kind === 'multipart') {
     const envelope = {
       version: 1,
       principal: serializedPrincipal,
-      constructorParameters,
       state: transport.state,
       ...(transport.fileDatabases === undefined ? {} : { fileDatabases: transport.fileDatabases }),
     };
@@ -894,7 +889,6 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     const envelope = {
       version: 1,
       principal: serializedPrincipal,
-      constructorParameters,
       state,
       fileDatabases: transport.fileDatabases,
     };
@@ -903,24 +897,26 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
       mimeType: 'application/json',
     };
   } else {
-    // Binary snapshot: version-3 binary envelope with a JSON header of the principal and the
-    // constructor parameters
-    const headerJson = JSON.stringify({ principal: serializedPrincipal, constructorParameters });
-    const headerBytes = new TextEncoder().encode(headerJson);
+    // Binary snapshot: version-2 binary envelope with principal
+    const principalJson = JSON.stringify(serializedPrincipal);
+    const principalBytes = new TextEncoder().encode(principalJson);
 
-    const totalLength = 1 + 4 + headerBytes.length + transport.data.length;
+    const totalLength = 1 + 4 + principalBytes.length + transport.data.length;
     const fullSnapshot = new Uint8Array(totalLength);
     const view = new DataView(fullSnapshot.buffer);
-    view.setUint8(0, 3); // version
-    view.setUint32(1, headerBytes.length, false); // big-endian
-    fullSnapshot.set(headerBytes, 5);
-    fullSnapshot.set(transport.data, 5 + headerBytes.length);
+    view.setUint8(0, 2); // version
+    view.setUint32(1, principalBytes.length, false); // big-endian
+    fullSnapshot.set(principalBytes, 5);
+    fullSnapshot.set(transport.data, 5 + principalBytes.length);
 
     return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
   }
 }
 
-async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promise<void> {
+async function load(
+  snapshot: { payload: Uint8Array; mimeType: string },
+  agentParameters: SchemaValueTree,
+): Promise<void> {
   const bytes = snapshot.payload;
 
   if (initializedAgent) {
@@ -940,7 +936,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
-  let agentParameters: SchemaValueTree;
   let databases: SnapshotDatabases | undefined = { inMemory: [], fileDatabases: {} };
   const userParts = new Map<string, SnapshotPart>();
 
@@ -982,9 +977,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     if (!Object.hasOwn(envelope, 'principal')) {
       throw `${description} missing 'principal' field`;
     }
-    if (!Object.hasOwn(envelope, 'constructorParameters')) {
-      throw `${description} missing 'constructorParameters' field`;
-    }
     if (!Object.hasOwn(envelope, 'state')) {
       throw `${description} missing 'state' field`;
     }
@@ -1006,7 +998,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       throw new SnapshotError('state part must be application/json');
     const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part', true);
     principal = deserializePrincipal(envelope.principal, true);
-    agentParameters = decodeConstructorParameters(envelope.constructorParameters);
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'multipart/mixed';
@@ -1032,7 +1023,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
     principal = deserializePrincipal(envelope.principal);
-    agentParameters = decodeConstructorParameters(envelope.constructorParameters);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
     databases = decodeSnapshotDatabases([], envelope, 'JSON snapshot');
@@ -1044,21 +1034,20 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const version = view.getUint8(0);
 
-    if (version === 3) {
+    if (version === 1) {
+      agentSnapshot = bytes.slice(1);
+      principal = { tag: 'anonymous' };
+    } else if (version === 2) {
       if (bytes.byteLength < 5) {
-        throw `Version 3 snapshot too short for header length`;
+        throw `Version 2 snapshot too short for principal length`;
       }
-      const headerLen = view.getUint32(1, false); // big-endian
-      if (headerLen > bytes.byteLength - 5) {
-        throw `Version 3 snapshot too short for header data`;
+      const principalLen = view.getUint32(1, false); // big-endian
+      if (principalLen > bytes.byteLength - 5) {
+        throw `Version 2 snapshot too short for principal data`;
       }
-      const header = JSON.parse(new TextDecoder().decode(bytes.slice(5, 5 + headerLen)));
-      if (header === null || typeof header !== 'object' || Array.isArray(header)) {
-        throw `Version 3 snapshot header must be a JSON object`;
-      }
-      principal = deserializePrincipal(header.principal);
-      agentParameters = decodeConstructorParameters(header.constructorParameters);
-      agentSnapshot = bytes.slice(5 + headerLen);
+      const principalBytes = bytes.slice(5, 5 + principalLen);
+      principal = deserializePrincipal(JSON.parse(new TextDecoder().decode(principalBytes)));
+      agentSnapshot = bytes.slice(5 + principalLen);
     } else {
       throw `Unsupported snapshot version ${version}`;
     }
@@ -1080,11 +1069,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   );
 
   if (initiateResult.tag === 'ok') {
-    initializedAgent = {
-      agent: initiateResult.val,
-      principal,
-      constructorParameters: agentParameters,
-    };
+    initializedAgent = { agent: initiateResult.val, principal };
   } else {
     // Throwing a String because the load WIT function returns result<_, string>
     let errorString = 'Failed to construct agent';

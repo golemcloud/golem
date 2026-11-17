@@ -37,7 +37,7 @@ import {
   v,
 } from '../src/internal/schema-model';
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
-import { constructorParametersJson, selectSelfAgent } from './selfAgentTestSupport';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const Pending = z.object({ tag: z.literal('pending'), retryAfter: z.number() });
 type Pending = z.infer<typeof Pending>;

@@ -65,7 +65,7 @@ test "generated tool invocation and snapshot hooks" {
           b"{\"version\":1,\"principal\":{\"tag\":\"anonymous\"},\"state\":{\"value\":18}}",
         )
         assert_true(
-          @loadSnapshot.load(snapshot, group)
+          @loadSnapshot.load(snapshot, empty, group)
           is Err("Agent instance is already initialized"),
         )
       } else {
@@ -85,7 +85,7 @@ test "generated tool invocation and snapshot hooks" {
         let snapshot = @saveSnapshot.save(group)
         assert_eq(snapshot.payload.length(), 0)
         assert_true(
-          @loadSnapshot.load(snapshot, group)
+          @loadSnapshot.load(snapshot, empty, group)
           is Err("Component defines no agents"),
         )
       }

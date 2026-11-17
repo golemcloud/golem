@@ -21,10 +21,7 @@ import (
 	"fmt"
 	"reflect"
 
-	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
-	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 )
 
 // Snapshotting: the host can ask the guest to serialize the running agent's
@@ -44,42 +41,35 @@ const (
 	snapshotJSONMIME = "application/json"
 )
 
-// The agent's principal and constructor parameters travel with its state, since
-// a restore has no initialize call to supply them and the agent ID does not
-// encode the parameters. The constructor parameters are their schema-native
-// wire form. A JSON snapshot is
-// {"version":1,"principal":…,"constructor":…,"state":…}; a raw one is a version
-// byte (2), the principal's length as a big-endian uint32, the principal, the
-// constructor's length as a big-endian uint32, the constructor, then the
-// Snapshotter's bytes.
+// The agent's principal travels with its state, since a restore has no
+// initialize call to supply it. The layout is the
+// Rust SDK's: a JSON snapshot is {"version":1,"principal":…,"state":…}; a raw one
+// is a version byte (2), the principal's length as a big-endian uint32, the
+// principal, then the Snapshotter's bytes.
 const (
 	snapshotJSONVersion = 1
 	snapshotRawVersion  = 2
 )
 
 type jsonSnapshot struct {
-	Version     int             `json:"version"`
-	Principal   json.RawMessage `json:"principal"`
-	Constructor json.RawMessage `json:"constructor"`
-	State       json.RawMessage `json:"state"`
+	Version   int             `json:"version"`
+	Principal json.RawMessage `json:"principal"`
+	State     json.RawMessage `json:"state"`
 }
 
-// saveState serializes an agent instance's state, principal and constructor
-// parameters into a host snapshot. constructor is the parameters' wire JSON.
-func saveState(state any, principal Principal, constructor json.RawMessage) (host.Snapshot, error) {
+// saveState serializes an agent instance's state and principal into a host
+// snapshot.
+func saveState(state any, principal Principal) (host.Snapshot, error) {
 	p, err := marshalPrincipal(principal)
 	if err != nil {
 		return host.Snapshot{}, err
-	}
-	if !json.Valid(constructor) {
-		return host.Snapshot{}, errors.New("golem: the snapshot's constructor parameters are not valid JSON")
 	}
 	if mp, ok := state.(MultipartSnapshotter); ok {
 		parts, err := mp.SaveParts()
 		if err != nil {
 			return host.Snapshot{}, err
 		}
-		payload, mime, err := encodeMultipart(parts, p, constructor)
+		payload, mime, err := encodeMultipart(parts, p)
 		if err != nil {
 			return host.Snapshot{}, err
 		}
@@ -90,12 +80,10 @@ func saveState(state any, principal Principal, constructor json.RawMessage) (hos
 		if err != nil {
 			return host.Snapshot{}, err
 		}
-		out := make([]byte, 0, 9+len(p)+len(constructor)+len(payload))
+		out := make([]byte, 0, 5+len(p)+len(payload))
 		out = append(out, snapshotRawVersion)
 		out = binary.BigEndian.AppendUint32(out, uint32(len(p)))
 		out = append(out, p...)
-		out = binary.BigEndian.AppendUint32(out, uint32(len(constructor)))
-		out = append(out, constructor...)
 		out = append(out, payload...)
 		return host.Snapshot{Payload: out, MimeType: snapshotRawMIME}, nil
 	}
@@ -103,101 +91,52 @@ func saveState(state any, principal Principal, constructor json.RawMessage) (hos
 	if err != nil {
 		return host.Snapshot{}, err
 	}
-	payload, err := json.Marshal(jsonSnapshot{Version: snapshotJSONVersion, Principal: p, Constructor: constructor, State: s})
+	payload, err := json.Marshal(jsonSnapshot{Version: snapshotJSONVersion, Principal: p, State: s})
 	if err != nil {
 		return host.Snapshot{}, err
 	}
 	return host.Snapshot{Payload: payload, MimeType: snapshotJSONMIME}, nil
 }
 
-// snapshotConstructor renders constructor parameters in the wire form that a
-// snapshot keeps. A capability — a secret, a quota token, a permission card or
-// a stream — is valid only in the invocation that received it, so parameters
-// that hold one cannot be kept.
-func snapshotConstructor(tree types.SchemaValueTree) (json.RawMessage, error) {
-	for _, n := range tree.ValueNodes {
-		switch n.Tag() {
-		case types.SchemaValueNodeSecretValue, types.SchemaValueNodeQuotaTokenHandle,
-			types.SchemaValueNodePermissionCardHandle, types.SchemaValueNodeStreamValue:
-			return nil, errors.New("golem: constructor parameters that hold a capability cannot be kept in a snapshot")
-		}
-	}
-	v, err := witschema.ValueToCore(tree)
-	if err != nil {
-		return nil, err
-	}
-	return core.MarshalWireValue(v)
-}
-
-// restoredConstructor reads constructor parameters that [snapshotConstructor]
-// rendered.
-func restoredConstructor(data json.RawMessage) (types.SchemaValueTree, error) {
-	v, err := core.UnmarshalWireValue(data)
-	if err != nil {
-		return types.SchemaValueTree{}, fmt.Errorf("golem: the snapshot's constructor parameters: %w", err)
-	}
-	return witschema.ValueToWit(v)
-}
-
-// savedState is a snapshot without its principal and constructor: the payload [loadState]
+// savedState is a snapshot without its principal: the payload [loadState]
 // reads, or the decoded parts of a multipart snapshot.
 type savedState struct {
 	Payload   []byte
 	multipart *MultipartSnapshot
 }
 
-// splitSnapshot separates a snapshot into the agent's principal, the wire JSON
-// of its constructor parameters and the state [loadState] reads.
-func splitSnapshot(snap host.Snapshot) (Principal, json.RawMessage, savedState, error) {
+// splitSnapshot separates a snapshot into the agent's principal and the state
+// [loadState] reads.
+func splitSnapshot(snap host.Snapshot) (Principal, savedState, error) {
 	if _, ok := extractBoundary(snap.MimeType); ok {
-		principal, constructor, parts, err := decodeMultipart(snap.Payload, snap.MimeType)
+		principal, parts, err := decodeMultipart(snap.Payload, snap.MimeType)
 		if err != nil {
-			return nil, nil, savedState{}, err
+			return nil, savedState{}, err
 		}
 		p, err := unmarshalPrincipal(principal)
-		return p, constructor, savedState{multipart: &parts}, err
+		return p, savedState{multipart: &parts}, err
 	}
 	if snap.MimeType == snapshotJSONMIME {
 		var js jsonSnapshot
 		if err := json.Unmarshal(snap.Payload, &js); err != nil {
-			return nil, nil, savedState{}, fmt.Errorf("golem: decoding the snapshot: %w", err)
+			return nil, savedState{}, fmt.Errorf("golem: decoding the snapshot: %w", err)
 		}
 		if js.Version != snapshotJSONVersion {
-			return nil, nil, savedState{}, fmt.Errorf("golem: unsupported JSON snapshot version %d", js.Version)
-		}
-		if js.Constructor == nil {
-			return nil, nil, savedState{}, errors.New("golem: the snapshot has no constructor parameters")
+			return nil, savedState{}, fmt.Errorf("golem: unsupported JSON snapshot version %d", js.Version)
 		}
 		p, err := unmarshalPrincipal(js.Principal)
-		return p, js.Constructor, savedState{Payload: js.State}, err
+		return p, savedState{Payload: js.State}, err
 	}
 	b := snap.Payload
-	if len(b) < 1 || b[0] != snapshotRawVersion {
-		return nil, nil, savedState{}, errors.New("golem: not a snapshot this SDK wrote")
+	if len(b) < 5 || b[0] != snapshotRawVersion {
+		return nil, savedState{}, errors.New("golem: not a snapshot this SDK wrote")
 	}
-	b = b[1:]
-	field := func(what string) ([]byte, error) {
-		if len(b) < 4 {
-			return nil, fmt.Errorf("golem: snapshot too short for its %s", what)
-		}
-		n := binary.BigEndian.Uint32(b[:4])
-		if uint64(len(b)-4) < uint64(n) {
-			return nil, fmt.Errorf("golem: snapshot too short for its %s", what)
-		}
-		out := b[4 : 4+n]
-		b = b[4+n:]
-		return out, nil
+	n := binary.BigEndian.Uint32(b[1:5])
+	if uint64(len(b)-5) < uint64(n) {
+		return nil, savedState{}, errors.New("golem: snapshot too short for its principal")
 	}
-	principal, err := field("principal")
-	if err != nil {
-		return nil, nil, savedState{}, err
-	}
-	constructor, err := field("constructor parameters")
-	if err != nil {
-		return nil, nil, savedState{}, err
-	}
-	p, err := unmarshalPrincipal(principal)
-	return p, constructor, savedState{Payload: b}, err
+	p, err := unmarshalPrincipal(b[5 : 5+n])
+	return p, savedState{Payload: b[5+n:]}, err
 }
 
 // restoreState rebuilds an agent's state from a snapshot without running its

@@ -65,7 +65,7 @@ final class AgentDefinition[Instance](
   val mode: AgentMode = AgentMode.Durable,
   val snapshotHandlers: Option[SnapshotHandlers[Instance]] = None,
   private[autowire] val restoreInstance: Option[
-    (SnapshotData, AgentId, Principal) => js.Promise[RestoredInstance[Instance]]
+    (SnapshotData, AgentId, JsSchemaValueTree, Principal) => js.Promise[RestoredInstance[Instance]]
   ] = None
 ) {
 
@@ -94,15 +94,20 @@ final class AgentDefinition[Instance](
   def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
     constructor.initialize(input, principal)
 
-  /** Restores a fresh instance in a type-erased runtime dispatch context. */
+  /**
+   * Restores a fresh instance in a type-erased runtime dispatch context.
+   * `constructorInput` is the constructor payload the agent was initialized
+   * with.
+   */
   def restoreAny(
     bytes: SnapshotData,
     agentId: AgentId,
+    constructorInput: JsSchemaValueTree,
     principal: Principal
   ): js.Promise[RestoredInstance[Any]] =
     restoreInstance match {
       case Some(restore) =>
-        restore(bytes, agentId, principal).asInstanceOf[js.Promise[RestoredInstance[Any]]]
+        restore(bytes, agentId, constructorInput, principal).asInstanceOf[js.Promise[RestoredInstance[Any]]]
       case None => js.Promise.reject(new IllegalStateException(s"Agent '$typeName' has no snapshot handlers"))
     }
 

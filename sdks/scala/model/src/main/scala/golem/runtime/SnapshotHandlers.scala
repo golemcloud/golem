@@ -24,14 +24,17 @@ import scala.concurrent.Future
 /**
  * Information available while constructing a fresh instance from a snapshot.
  *
- * The agent ID does not hold the constructor parameters, so a snapshot that
- * needs them to rebuild the instance stores them in its own state.
+ * `identityFields` are the agent's decoded constructor parameters, in
+ * declaration order.
  */
 final case class SnapshotRestoreContext(
+  identityFields: Vector[Any],
   agentId: AgentId,
   restoredPrincipal: Principal,
   private val freshConfig: Option[Config[_]]
 ) {
+  def identity[A](index: Int): A = identityFields(index).asInstanceOf[A]
+
   def config[A]: Config[A] = freshConfig match {
     case Some(value) => value.asInstanceOf[Config[A]]
     case None        => throw new IllegalStateException("This agent does not declare configuration")

@@ -150,7 +150,7 @@ export async function checkFixture(path, capabilities) {
     );
     assert.throws(() => agent.getDefinition(), errorTag("invalid-agent-id"));
     await assert.rejects(
-      linked.loadSnapshot.load(snapshot),
+      linked.loadSnapshot.load(snapshot, record("string-value", "three")),
       (e) => e === "No agents registered",
     );
   } else {
@@ -171,7 +171,7 @@ export async function checkFixture(path, capabilities) {
       errorTag("custom-error"),
     );
     await assert.rejects(
-      linked.loadSnapshot.load(snapshot),
+      linked.loadSnapshot.load(snapshot, record("string-value", "three")),
       errorTag("custom-error"),
     );
   }

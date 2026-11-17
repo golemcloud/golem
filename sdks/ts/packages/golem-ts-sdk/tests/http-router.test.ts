@@ -33,7 +33,7 @@ import { getAllAgentTypes, getAgentType } from '../src/reflection';
 import * as http from '../src/http';
 import { webRequest, webResponse, withRawHeaders } from '../src/httpRouterWeb';
 import { createServer, Server, ServerResponse, nodeHttpHandler } from '../src/nodeHttp';
-import { constructorParametersJson, selectSelfAgent } from './selfAgentTestSupport';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const corpus = JSON.parse(
   readFileSync(

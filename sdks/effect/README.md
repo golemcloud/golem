@@ -294,9 +294,8 @@ Config is never stored in snapshots. Restoration reads current host values.
 Snapshotting agents initialize runtime state with `init(id)`. The implementation's snapshot
 strategy restores that state before `methods(state)` constructs handlers. Custom restoration
 receives a `SnapshotRestorationContext` containing `id`, `principal`, the typed `agentId`, and
-current `config`; it must not perform fresh-instance initialization effects. Every snapshot
-envelope stores the constructor input (`constructorParameters`) next to the state, because the
-agent ID does not contain it.
+current `config`; it must not perform fresh-instance initialization effects. `id` is the
+constructor input that the host passes to `load-snapshot`, decoded as `initialize` decodes it.
 
 ```ts
 import { Effect, Ref, Schema } from "effect"

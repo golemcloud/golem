@@ -98,12 +98,40 @@ pub(all) struct ConstructedAgent {
 
 ///|
 /// Information available while constructing a fresh agent from a snapshot.
-/// The agent ID does not carry the constructor parameters, so an agent that
-/// needs them after a restoration keeps them in its snapshot.
+/// `identity_fields` holds the constructor parameters that the host passes
+/// to `load`, in the form that `initialize` received them.
 pub(all) struct SnapshotRestoreContext {
   agent_id : @schema.AgentId
   agent_type : String
+  identity_fields : WireInput
   principal : @common.Principal
+}
+
+///|
+/// Decodes the constructor parameter at `index`. A restoration that does not
+/// decode a constructor parameter holding a resource fails.
+pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
+  self : SnapshotRestoreContext,
+  index : Int32,
+) -> T raise @common.AgentError {
+  decode_wire_param(self.identity_fields, index, "\{self.agent_type}::new")
+}
+
+///|
+/// Decodes the constructor parameters that `load` receives against the
+/// constructor schema of the registered agent type, as `initialize` decodes
+/// its input. The capabilities in `input` are dropped on failure.
+pub fn decode_snapshot_constructor(
+  agent_type : String,
+  input : @types.SchemaValueTree,
+) -> WireInput raise @common.AgentError {
+  guard get_registered_agent(agent_type) is Some(registered_agent) else {
+    @model.drop_wit_capabilities(input)
+    raise @common.AgentError::InvalidType("Agent type not found: \{agent_type}")
+  }
+  let @common.InputSchema::Parameters(fields) = registered_agent.agent_type.constructor_.input_schema
+  let arity = fields.filter(field => field.source is UserSupplied).length()
+  decode_wire_input(input, arity, "\{agent_type}::new")
 }
 
 ///|
@@ -203,6 +231,7 @@ pub async fn restore_and_set_instance(
   snapshot : SnapshotData,
   context : SnapshotRestoreContext,
 ) -> Result[Unit, String] {
+  defer context.identity_fields.abort()
   match get_registered_agent(agent_type) {
     None => Err("Agent type not found: \{agent_type}")
     Some(registered_agent) =>
@@ -213,6 +242,10 @@ pub async fn restore_and_set_instance(
           let restored = match load_snapshot(snapshot, context) {
             Ok(restored) => restored
             Err(error) => return Err(error)
+          }
+          context.identity_fields.finish() catch {
+            error =>
+              return Err("Invalid constructor parameters: \{repr(error)}")
           }
           finish_restoration(registered_agent, principal, Ok(restored))
         }

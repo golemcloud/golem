@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	loadExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_api_load_snapshot"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
 // snapCustomState — A state that controls its own serialization — the only way to capture
@@ -38,7 +38,7 @@ func (s *snapCustomState) Load(b []byte) error   { s.count = int64(b[0]); return
 // state into dst, returning the principal it carried.
 func restore(t *testing.T, dst any, snap host.Snapshot) Principal {
 	t.Helper()
-	principal, _, state, err := splitSnapshot(snap)
+	principal, state, err := splitSnapshot(snap)
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
@@ -48,13 +48,11 @@ func restore(t *testing.T, dst any, snap host.Snapshot) Principal {
 	return principal
 }
 
-var snapConstructor = json.RawMessage(`{"kind":"record","value":[]}`)
-
 var snapPrincipal = OidcPrincipal{Sub: "u-1", Issuer: "https://id.example", Email: Some("a@example.com"), Claims: "{}"}
 
 func TestSnapshotViaSnapshotter(t *testing.T) {
 	src := &snapCustomState{count: 42}
-	snap, err := saveState(src, snapPrincipal, snapConstructor)
+	snap, err := saveState(src, snapPrincipal)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -76,7 +74,7 @@ func TestSnapshotReflectiveDefaultCoversExportedFields(t *testing.T) {
 		Region string
 	}
 	src := &State{Total: 7, Region: "eu"}
-	snap, err := saveState(src, snapPrincipal, snapConstructor)
+	snap, err := saveState(src, snapPrincipal)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -96,11 +94,11 @@ func TestSnapshotReflectiveDefaultCoversExportedFields(t *testing.T) {
 // to reflection and are NOT captured.
 func TestSnapshotReflectiveDefaultDropsUnexportedFields(t *testing.T) {
 	src := &struct{ count int64 }{count: 99}
-	snap, err := saveState(src, snapPrincipal, snapConstructor)
+	snap, err := saveState(src, snapPrincipal)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	_, _, state, err := splitSnapshot(snap)
+	_, state, err := splitSnapshot(snap)
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
@@ -172,7 +170,7 @@ func TestLoadWithoutReadableAgentTypeNamesTheCardGrant(t *testing.T) {
 	active = nil
 	t.Cleanup(func() { selfEnv, active = prevEnv, prevActive })
 
-	res := loadExports.Load(host.Snapshot{MimeType: "application/json"})
+	res := loadExports.Load(host.Snapshot{MimeType: "application/json"}, params())
 	want := "GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE"
 	if !res.IsErr() || res.Err() != want {
 		t.Fatalf("load = %+v, want the error %q", res, want)
@@ -207,11 +205,11 @@ func TestRestoreSkipsTheConstructor(t *testing.T) {
 		impl.Handle(def.Method[Unit, int64]("count"), func(ctx *Context[rState], _ Unit) int64 { return ctx.State.Count })
 		noDefErrs(t, d)
 
-		snap, err := saveState(&rState{Count: 7, greeting: "lost"}, snapPrincipal, snapConstructor)
+		snap, err := saveState(&rState{Count: 7, greeting: "lost"}, snapPrincipal)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, _, state, err := splitSnapshot(snap)
+		_, state, err := splitSnapshot(snap)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,6 +229,66 @@ func TestRestoreSkipsTheConstructor(t *testing.T) {
 	})
 }
 
+// TestLoadSnapshotRestoresWithTheHostsConstructorParameters — the load-snapshot
+// export decodes the constructor parameters the host passes, as initialize
+// does, and the restore hook reads them through InitContext.ID; the snapshot
+// itself does not carry them.
+func TestLoadSnapshotRestoresWithTheHostsConstructorParameters(t *testing.T) {
+	prevEnv, prevDefs, prevActive := selfEnv, defs, active
+	t.Cleanup(func() { selfEnv, defs, active = prevEnv, prevDefs, prevActive })
+	selfEnv = func(name string) string {
+		switch name {
+		case agentTypeEnvVar:
+			return "R"
+		case agentIDEnvVar:
+			return "00000007-0000-8000-8000-000000000004"
+		}
+		return ""
+	}
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[restoreID, NoConfig](d, Spec{Name: "R"})
+		constructed := 0
+		impl := implementInto[restoreID, rState, NoConfig](d, def, simpleNewState[restoreID, rState](func(restoreID) *rState {
+			constructed++
+			return &rState{}
+		}), false)
+		impl.OnRestore(func(ic *InitContext[restoreID, rState, NoConfig], s *rState) error {
+			s.greeting = "hello " + ic.ID().Name
+			return nil
+		})
+		impl.Handle(def.Method[Unit, int64]("count"), func(ctx *Context[rState], _ Unit) int64 { return ctx.State.Count })
+		noDefErrs(t, d)
+		defs, active = d, nil
+
+		snap, err := saveState(&rState{Count: 7, greeting: "hello ada"}, snapPrincipal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := loadExports.Load(snap, params(types.MakeSchemaValueNodeStringValue("grace")))
+		if res.IsErr() {
+			t.Fatalf("load: %s", res.Err())
+		}
+		if constructed != 0 {
+			t.Errorf("the constructor ran %d times on load", constructed)
+		}
+		s := active.state.(*rState)
+		if s.Count != 7 || s.greeting != "hello grace" {
+			t.Errorf("restored state = %+v", *s)
+		}
+		if !reflect.DeepEqual(active.principal, snapPrincipal) {
+			t.Errorf("restored principal = %#v", active.principal)
+		}
+
+		active = nil
+		if res := loadExports.Load(snap, params(types.MakeSchemaValueNodeS32Value(3))); res.IsOk() {
+			t.Error("load accepted constructor parameters that do not match the agent's constructor")
+		}
+		if active != nil {
+			t.Error("a failed load left an active instance")
+		}
+	})
+}
+
 // TestRestoreHookErrorFailsTheRestore — an OnRestore error is the restore's.
 func TestRestoreHookErrorFailsTheRestore(t *testing.T) {
 	withDefs(t, func(d *definitions) {
@@ -241,8 +299,8 @@ func TestRestoreHookErrorFailsTheRestore(t *testing.T) {
 		impl.OnRestore(func(*InitContext[restoreID, rState, NoConfig], *rState) error {
 			return errors.New("dependency gone")
 		})
-		snap, _ := saveState(&rState{}, snapPrincipal, snapConstructor)
-		_, _, state, _ := splitSnapshot(snap)
+		snap, _ := saveState(&rState{}, snapPrincipal)
+		_, state, _ := splitSnapshot(snap)
 		_, err := restoreState(d.agents["R"], reflect.ValueOf(restoreID{}), snapPrincipal, state)
 		if err == nil || !strings.Contains(err.Error(), "dependency gone") {
 			t.Fatalf("err = %v", err)

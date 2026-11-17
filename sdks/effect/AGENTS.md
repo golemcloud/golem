@@ -70,8 +70,9 @@ QuickJS-backed WASI Preview 3 components.
   and value-only binding in `DynamicClient`. Parse ID text through `AgentId.parse` once; pass the
   typed `AgentId` to typed, reflected, and dynamic binding. Narrow reflected `mode` before
   selecting a lifecycle factory; ephemeral clients expose their ID only in invocation metadata.
-- Snapshots carry the constructor input next to the state (`constructorParameters`), because the
-  agent ID no longer encodes it; restoration reads the agent type from `GOLEM_AGENT_TYPE`.
+- Snapshot envelopes hold only the principal and the state. Restoration reads the agent type from
+  `GOLEM_AGENT_TYPE` and decodes the constructor input from the `constructor` parameter of
+  `load-snapshot`, as `initialize` decodes its input.
 
 The CLI accepts middleware metadata and attachment. Runtime traversal and invocation gates remain
 separate concerns and must be tested independently.

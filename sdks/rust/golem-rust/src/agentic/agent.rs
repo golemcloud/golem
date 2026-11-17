@@ -216,6 +216,9 @@ pub enum SnapshotData {
 pub struct SnapshotRestoreContext {
     pub principal: Principal,
     pub agent_type: String,
+    /// The agent's constructor parameters, in the form `initialize` received them when the
+    /// agent was created.
+    pub parameters: wire::SchemaValueTree,
     pub agent_id: crate::AgentId,
 }
 

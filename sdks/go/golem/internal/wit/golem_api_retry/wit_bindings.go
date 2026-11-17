@@ -498,7 +498,7 @@ func GetRetryPolicies() []NamedRetryPolicy {
 	result0 := make([]NamedRetryPolicy, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(7*4))
-		result := wasm_lift_1_t207(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t208(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -525,7 +525,7 @@ func GetRetryPolicyByName(name string) witTypes.Option[NamedRetryPolicy] {
 
 		option = witTypes.None[NamedRetryPolicy]()
 	case 1:
-		result := wasm_lift_1_t207(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t208(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		option = witTypes.Some[NamedRetryPolicy](result)
 	default:
@@ -557,7 +557,7 @@ func ResolveRetryPolicy(verb string, nounUri string, properties []witTypes.Tuple
 		pinner.Pin(utf81)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).F0)))
 		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf81)))
-		wasm_lower_1_t184(pinner, (element).F1, unsafe.Add(unsafe.Pointer(base), (2*4)))
+		wasm_lower_1_t185(pinner, (element).F1, unsafe.Add(unsafe.Pointer(base), (2*4)))
 
 	}
 
@@ -571,7 +571,7 @@ func ResolveRetryPolicy(verb string, nounUri string, properties []witTypes.Tuple
 
 			option = witTypes.None[RetryPolicy]()
 		case 1:
-			result2 := wasm_lift_1_t206(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))
+			result2 := wasm_lift_1_t207(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))
 
 			option = witTypes.Some[RetryPolicy](result2)
 		default:
@@ -615,7 +615,7 @@ func NextRetryDelay(policy witTypes.Option[RetryPolicy], state []uint8, elapsed 
 		result := witRuntime.Allocate(pinner, uintptr(length*32), 8)
 		for index, element := range slice {
 			base := unsafe.Add(result, index*32)
-			wasm_lower_1_t204(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+			wasm_lower_1_t205(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 		}
 
@@ -640,7 +640,7 @@ func NextRetryDelay(policy witTypes.Option[RetryPolicy], state []uint8, elapsed 
 		pinner.Pin(utf83)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).F0)))
 		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf83)))
-		wasm_lower_1_t184(pinner, (element).F1, unsafe.Add(unsafe.Pointer(base), (2*4)))
+		wasm_lower_1_t185(pinner, (element).F1, unsafe.Add(unsafe.Pointer(base), (2*4)))
 
 	}
 
@@ -648,7 +648,7 @@ func NextRetryDelay(policy witTypes.Option[RetryPolicy], state []uint8, elapsed 
 	var result8 witTypes.Result[RetryDecision, string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result7 := wasm_lift_1_t209(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result7 := wasm_lift_1_t210(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result8 = witTypes.Ok[RetryDecision, string](result7)
 	case 1:
@@ -677,7 +677,7 @@ func SetRetryPolicy(policy NamedRetryPolicy) {
 	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t191(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t192(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -686,7 +686,7 @@ func SetRetryPolicy(policy NamedRetryPolicy) {
 	result1 := witRuntime.Allocate(pinner, uintptr(length2*32), 8)
 	for index, element := range slice0 {
 		base := unsafe.Add(result1, index*32)
-		wasm_lower_1_t204(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t205(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -708,16 +708,16 @@ func RemoveRetryPolicy(name string) {
 }
 
 //go:noinline
-func wasm_lift_1_t207(src unsafe.Pointer) NamedRetryPolicy {
+func wasm_lift_1_t208(src unsafe.Pointer) NamedRetryPolicy {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t193(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
-	result1 := wasm_lift_1_t206(unsafe.Add(unsafe.Pointer(src), (5 * 4)))
+	result := wasm_lift_1_t194(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
+	result1 := wasm_lift_1_t207(unsafe.Add(unsafe.Pointer(src), (5 * 4)))
 
 	return NamedRetryPolicy{Name: value0, Priority: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))), Predicate: result, Policy: result1}
 }
 
 //go:noinline
-func wasm_lower_1_t184(pinner *runtime.Pinner, value PredicateValue, dst unsafe.Pointer) {
+func wasm_lower_1_t185(pinner *runtime.Pinner, value PredicateValue, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case PredicateValueText:
@@ -751,11 +751,11 @@ func wasm_lower_1_t184(pinner *runtime.Pinner, value PredicateValue, dst unsafe.
 }
 
 //go:noinline
-func wasm_lift_1_t206(src unsafe.Pointer) RetryPolicy {
+func wasm_lift_1_t207(src unsafe.Pointer) RetryPolicy {
 	result0 := make([]PolicyNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*32)
-		result := wasm_lift_1_t204(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t205(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -764,7 +764,7 @@ func wasm_lift_1_t206(src unsafe.Pointer) RetryPolicy {
 }
 
 //go:noinline
-func wasm_lower_1_t204(pinner *runtime.Pinner, value PolicyNode, dst unsafe.Pointer) {
+func wasm_lower_1_t205(pinner *runtime.Pinner, value PolicyNode, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case PolicyNodePeriodic:
@@ -775,12 +775,12 @@ func wasm_lower_1_t204(pinner *runtime.Pinner, value PolicyNode, dst unsafe.Poin
 	case PolicyNodeExponential:
 		payload := value.Exponential()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t195(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t196(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PolicyNodeFibonacci:
 		payload := value.Fibonacci()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
-		wasm_lower_1_t196(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t197(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PolicyNodeImmediate:
 
@@ -793,32 +793,32 @@ func wasm_lower_1_t204(pinner *runtime.Pinner, value PolicyNode, dst unsafe.Poin
 	case PolicyNodeCountBox:
 		payload := value.CountBox()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
-		wasm_lower_1_t197(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t198(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PolicyNodeTimeBox:
 		payload := value.TimeBox()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(6))
-		wasm_lower_1_t198(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t199(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PolicyNodeClampDelay:
 		payload := value.ClampDelay()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
-		wasm_lower_1_t199(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t200(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PolicyNodeAddDelay:
 		payload := value.AddDelay()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
-		wasm_lower_1_t200(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t201(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PolicyNodeJitter:
 		payload := value.Jitter()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
-		wasm_lower_1_t201(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t202(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PolicyNodeFilteredOn:
 		payload := value.FilteredOn()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(10))
-		wasm_lower_1_t202(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t203(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PolicyNodeAndThen:
 		payload := value.AndThen()
@@ -845,7 +845,7 @@ func wasm_lower_1_t204(pinner *runtime.Pinner, value PolicyNode, dst unsafe.Poin
 }
 
 //go:noinline
-func wasm_lift_1_t209(src unsafe.Pointer) RetryDecision {
+func wasm_lift_1_t210(src unsafe.Pointer) RetryDecision {
 	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	var option witTypes.Option[uint64]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
@@ -863,38 +863,38 @@ func wasm_lift_1_t209(src unsafe.Pointer) RetryDecision {
 }
 
 //go:noinline
-func wasm_lower_1_t191(pinner *runtime.Pinner, value PredicateNode, dst unsafe.Pointer) {
+func wasm_lower_1_t192(pinner *runtime.Pinner, value PredicateNode, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case PredicateNodePropEq:
 		payload := value.PropEq()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
-		wasm_lower_1_t186(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropNeq:
 		payload := value.PropNeq()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t186(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropGt:
 		payload := value.PropGt()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
-		wasm_lower_1_t186(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropGte:
 		payload := value.PropGte()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
-		wasm_lower_1_t186(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropLt:
 		payload := value.PropLt()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
-		wasm_lower_1_t186(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropLte:
 		payload := value.PropLte()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
-		wasm_lower_1_t186(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropExists:
 		payload := value.PropExists()
@@ -907,22 +907,22 @@ func wasm_lower_1_t191(pinner *runtime.Pinner, value PredicateNode, dst unsafe.P
 	case PredicateNodePropIn:
 		payload := value.PropIn()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
-		wasm_lower_1_t188(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t189(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropMatches:
 		payload := value.PropMatches()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
-		wasm_lower_1_t189(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t190(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropStartsWith:
 		payload := value.PropStartsWith()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
-		wasm_lower_1_t189(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t190(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePropContains:
 		payload := value.PropContains()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(10))
-		wasm_lower_1_t189(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t190(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case PredicateNodePredAnd:
 		payload := value.PredAnd()
@@ -956,11 +956,11 @@ func wasm_lower_1_t191(pinner *runtime.Pinner, value PredicateNode, dst unsafe.P
 }
 
 //go:noinline
-func wasm_lift_1_t193(src unsafe.Pointer) RetryPredicate {
+func wasm_lift_1_t194(src unsafe.Pointer) RetryPredicate {
 	result0 := make([]PredicateNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(16+4*4))
-		result := wasm_lift_1_t191(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t192(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -969,7 +969,7 @@ func wasm_lift_1_t193(src unsafe.Pointer) RetryPredicate {
 }
 
 //go:noinline
-func wasm_lift_1_t204(src unsafe.Pointer) PolicyNode {
+func wasm_lift_1_t205(src unsafe.Pointer) PolicyNode {
 	var variant PolicyNode
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -977,12 +977,12 @@ func wasm_lift_1_t204(src unsafe.Pointer) PolicyNode {
 		variant = MakePolicyNodePeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))))
 
 	case 1:
-		result := wasm_lift_1_t195(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t196(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePolicyNodeExponential(result)
 
 	case 2:
-		result0 := wasm_lift_1_t196(unsafe.Add(unsafe.Pointer(src), 8))
+		result0 := wasm_lift_1_t197(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePolicyNodeFibonacci(result0)
 
@@ -995,32 +995,32 @@ func wasm_lift_1_t204(src unsafe.Pointer) PolicyNode {
 		variant = MakePolicyNodeNever()
 
 	case 5:
-		result1 := wasm_lift_1_t197(unsafe.Add(unsafe.Pointer(src), 8))
+		result1 := wasm_lift_1_t198(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePolicyNodeCountBox(result1)
 
 	case 6:
-		result2 := wasm_lift_1_t198(unsafe.Add(unsafe.Pointer(src), 8))
+		result2 := wasm_lift_1_t199(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePolicyNodeTimeBox(result2)
 
 	case 7:
-		result3 := wasm_lift_1_t199(unsafe.Add(unsafe.Pointer(src), 8))
+		result3 := wasm_lift_1_t200(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePolicyNodeClampDelay(result3)
 
 	case 8:
-		result4 := wasm_lift_1_t200(unsafe.Add(unsafe.Pointer(src), 8))
+		result4 := wasm_lift_1_t201(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePolicyNodeAddDelay(result4)
 
 	case 9:
-		result5 := wasm_lift_1_t201(unsafe.Add(unsafe.Pointer(src), 8))
+		result5 := wasm_lift_1_t202(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePolicyNodeJitter(result5)
 
 	case 10:
-		result6 := wasm_lift_1_t202(unsafe.Add(unsafe.Pointer(src), 8))
+		result6 := wasm_lift_1_t203(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePolicyNodeFilteredOn(result6)
 
@@ -1044,35 +1044,35 @@ func wasm_lift_1_t204(src unsafe.Pointer) PolicyNode {
 }
 
 //go:noinline
-func wasm_lower_1_t195(pinner *runtime.Pinner, value ExponentialConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t196(pinner *runtime.Pinner, value ExponentialConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).BaseDelay)
 	*(*float64)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Factor
 
 }
 
 //go:noinline
-func wasm_lower_1_t196(pinner *runtime.Pinner, value FibonacciConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t197(pinner *runtime.Pinner, value FibonacciConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).First)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).Second)
 
 }
 
 //go:noinline
-func wasm_lower_1_t197(pinner *runtime.Pinner, value CountBoxConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t198(pinner *runtime.Pinner, value CountBoxConfig, dst unsafe.Pointer) {
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = int32((value).MaxRetries)
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 4)) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t198(pinner *runtime.Pinner, value TimeBoxConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t199(pinner *runtime.Pinner, value TimeBoxConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).Limit)
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t199(pinner *runtime.Pinner, value ClampConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t200(pinner *runtime.Pinner, value ClampConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).MinDelay)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).MaxDelay)
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 16)) = (value).Inner
@@ -1080,38 +1080,38 @@ func wasm_lower_1_t199(pinner *runtime.Pinner, value ClampConfig, dst unsafe.Poi
 }
 
 //go:noinline
-func wasm_lower_1_t200(pinner *runtime.Pinner, value AddDelayConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t201(pinner *runtime.Pinner, value AddDelayConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).Delay)
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t201(pinner *runtime.Pinner, value JitterConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t202(pinner *runtime.Pinner, value JitterConfig, dst unsafe.Pointer) {
 	*(*float64)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Factor
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t202(pinner *runtime.Pinner, value FilteredConfig, dst unsafe.Pointer) {
-	wasm_lower_1_t193(pinner, (value).Predicate, unsafe.Add(unsafe.Pointer(dst), 0))
+func wasm_lower_1_t203(pinner *runtime.Pinner, value FilteredConfig, dst unsafe.Pointer) {
+	wasm_lower_1_t194(pinner, (value).Predicate, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t186(pinner *runtime.Pinner, value PropertyComparison, dst unsafe.Pointer) {
+func wasm_lower_1_t187(pinner *runtime.Pinner, value PropertyComparison, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).PropertyName))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).PropertyName)))
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
-	wasm_lower_1_t184(pinner, (value).Value, unsafe.Add(unsafe.Pointer(dst), (2*4)))
+	wasm_lower_1_t185(pinner, (value).Value, unsafe.Add(unsafe.Pointer(dst), (2*4)))
 
 }
 
 //go:noinline
-func wasm_lower_1_t188(pinner *runtime.Pinner, value PropertySetCheck, dst unsafe.Pointer) {
+func wasm_lower_1_t189(pinner *runtime.Pinner, value PropertySetCheck, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).PropertyName))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).PropertyName)))
@@ -1121,7 +1121,7 @@ func wasm_lower_1_t188(pinner *runtime.Pinner, value PropertySetCheck, dst unsaf
 	result := witRuntime.Allocate(pinner, uintptr(length*(8+2*4)), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(8+2*4))
-		wasm_lower_1_t184(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t185(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -1131,7 +1131,7 @@ func wasm_lower_1_t188(pinner *runtime.Pinner, value PropertySetCheck, dst unsaf
 }
 
 //go:noinline
-func wasm_lower_1_t189(pinner *runtime.Pinner, value PropertyPattern, dst unsafe.Pointer) {
+func wasm_lower_1_t190(pinner *runtime.Pinner, value PropertyPattern, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).PropertyName))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).PropertyName)))
@@ -1144,36 +1144,36 @@ func wasm_lower_1_t189(pinner *runtime.Pinner, value PropertyPattern, dst unsafe
 }
 
 //go:noinline
-func wasm_lift_1_t191(src unsafe.Pointer) PredicateNode {
+func wasm_lift_1_t192(src unsafe.Pointer) PredicateNode {
 	var variant PredicateNode
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t186(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t187(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropEq(result)
 
 	case 1:
-		result0 := wasm_lift_1_t186(unsafe.Add(unsafe.Pointer(src), 8))
+		result0 := wasm_lift_1_t187(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropNeq(result0)
 
 	case 2:
-		result1 := wasm_lift_1_t186(unsafe.Add(unsafe.Pointer(src), 8))
+		result1 := wasm_lift_1_t187(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropGt(result1)
 
 	case 3:
-		result2 := wasm_lift_1_t186(unsafe.Add(unsafe.Pointer(src), 8))
+		result2 := wasm_lift_1_t187(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropGte(result2)
 
 	case 4:
-		result3 := wasm_lift_1_t186(unsafe.Add(unsafe.Pointer(src), 8))
+		result3 := wasm_lift_1_t187(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropLt(result3)
 
 	case 5:
-		result4 := wasm_lift_1_t186(unsafe.Add(unsafe.Pointer(src), 8))
+		result4 := wasm_lift_1_t187(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropLte(result4)
 
@@ -1183,22 +1183,22 @@ func wasm_lift_1_t191(src unsafe.Pointer) PredicateNode {
 		variant = MakePredicateNodePropExists(value5)
 
 	case 7:
-		result6 := wasm_lift_1_t188(unsafe.Add(unsafe.Pointer(src), 8))
+		result6 := wasm_lift_1_t189(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropIn(result6)
 
 	case 8:
-		result7 := wasm_lift_1_t189(unsafe.Add(unsafe.Pointer(src), 8))
+		result7 := wasm_lift_1_t190(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropMatches(result7)
 
 	case 9:
-		result8 := wasm_lift_1_t189(unsafe.Add(unsafe.Pointer(src), 8))
+		result8 := wasm_lift_1_t190(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropStartsWith(result8)
 
 	case 10:
-		result9 := wasm_lift_1_t189(unsafe.Add(unsafe.Pointer(src), 8))
+		result9 := wasm_lift_1_t190(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePredicateNodePropContains(result9)
 
@@ -1230,62 +1230,62 @@ func wasm_lift_1_t191(src unsafe.Pointer) PredicateNode {
 }
 
 //go:noinline
-func wasm_lift_1_t195(src unsafe.Pointer) ExponentialConfig {
+func wasm_lift_1_t196(src unsafe.Pointer) ExponentialConfig {
 
 	return ExponentialConfig{BaseDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), Factor: *(*float64)(unsafe.Add(unsafe.Pointer(src), 8))}
 }
 
 //go:noinline
-func wasm_lift_1_t196(src unsafe.Pointer) FibonacciConfig {
+func wasm_lift_1_t197(src unsafe.Pointer) FibonacciConfig {
 
 	return FibonacciConfig{First: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), Second: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))}
 }
 
 //go:noinline
-func wasm_lift_1_t197(src unsafe.Pointer) CountBoxConfig {
+func wasm_lift_1_t198(src unsafe.Pointer) CountBoxConfig {
 
 	return CountBoxConfig{MaxRetries: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 0))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(src), 4))}
 }
 
 //go:noinline
-func wasm_lift_1_t198(src unsafe.Pointer) TimeBoxConfig {
+func wasm_lift_1_t199(src unsafe.Pointer) TimeBoxConfig {
 
 	return TimeBoxConfig{Limit: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(src), 8))}
 }
 
 //go:noinline
-func wasm_lift_1_t199(src unsafe.Pointer) ClampConfig {
+func wasm_lift_1_t200(src unsafe.Pointer) ClampConfig {
 
 	return ClampConfig{MinDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), MaxDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(src), 16))}
 }
 
 //go:noinline
-func wasm_lift_1_t200(src unsafe.Pointer) AddDelayConfig {
+func wasm_lift_1_t201(src unsafe.Pointer) AddDelayConfig {
 
 	return AddDelayConfig{Delay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(src), 8))}
 }
 
 //go:noinline
-func wasm_lift_1_t201(src unsafe.Pointer) JitterConfig {
+func wasm_lift_1_t202(src unsafe.Pointer) JitterConfig {
 
 	return JitterConfig{Factor: *(*float64)(unsafe.Add(unsafe.Pointer(src), 0)), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(src), 8))}
 }
 
 //go:noinline
-func wasm_lift_1_t202(src unsafe.Pointer) FilteredConfig {
-	result := wasm_lift_1_t193(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t203(src unsafe.Pointer) FilteredConfig {
+	result := wasm_lift_1_t194(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return FilteredConfig{Predicate: result, Inner: *(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))}
 }
 
 //go:noinline
-func wasm_lower_1_t193(pinner *runtime.Pinner, value RetryPredicate, dst unsafe.Pointer) {
+func wasm_lower_1_t194(pinner *runtime.Pinner, value RetryPredicate, dst unsafe.Pointer) {
 	slice := (value).Nodes
 	length := uint32(len(slice))
 	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t191(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t192(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -1295,20 +1295,20 @@ func wasm_lower_1_t193(pinner *runtime.Pinner, value RetryPredicate, dst unsafe.
 }
 
 //go:noinline
-func wasm_lift_1_t186(src unsafe.Pointer) PropertyComparison {
+func wasm_lift_1_t187(src unsafe.Pointer) PropertyComparison {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t184(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+	result := wasm_lift_1_t185(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 
 	return PropertyComparison{PropertyName: value0, Value: result}
 }
 
 //go:noinline
-func wasm_lift_1_t188(src unsafe.Pointer) PropertySetCheck {
+func wasm_lift_1_t189(src unsafe.Pointer) PropertySetCheck {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	result1 := make([]PredicateValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(8+2*4))
-		result := wasm_lift_1_t184(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t185(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result1 = append(result1, result)
 	}
@@ -1317,7 +1317,7 @@ func wasm_lift_1_t188(src unsafe.Pointer) PropertySetCheck {
 }
 
 //go:noinline
-func wasm_lift_1_t189(src unsafe.Pointer) PropertyPattern {
+func wasm_lift_1_t190(src unsafe.Pointer) PropertyPattern {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 
@@ -1325,7 +1325,7 @@ func wasm_lift_1_t189(src unsafe.Pointer) PropertyPattern {
 }
 
 //go:noinline
-func wasm_lift_1_t184(src unsafe.Pointer) PredicateValue {
+func wasm_lift_1_t185(src unsafe.Pointer) PredicateValue {
 	var variant PredicateValue
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

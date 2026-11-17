@@ -151,7 +151,7 @@ describe("snapshot + sqlite databases", () => {
     await __resetAgents()
     __setEnvironment([["GOLEM_AGENT_TYPE", "SqliteCounterTest"]])
 
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire(xWv))
     expect(restoreCalled).not.toBeNull()
     expect(new TextDecoder().decode(restoreCalled!.bytes)).toBe("SQLITE-DB#1")
   })
@@ -186,19 +186,17 @@ describe("snapshot + sqlite databases", () => {
     // the multipart body. Simpler: build via encodeMultipartJsonEnvelope
     // directly (re-importing for the test).
     const { encodeMultipartJsonEnvelope } = await import("../src/internal/snapshotEnvelope.js")
-    const tampered = encodeMultipartJsonEnvelope(
-      { principal: { tag: "anonymous" }, constructorParameters: wire(xWv) },
-      { note: "zoe" },
-      [
-        { name: "counters", bytes: new Uint8Array([1]) },
-        { name: "bogus", bytes: new Uint8Array([2]) },
-      ],
-    )
+    const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [
+      { name: "counters", bytes: new Uint8Array([1]) },
+      { name: "bogus", bytes: new Uint8Array([2]) },
+    ])
 
     await __resetAgents()
     __setEnvironment([["GOLEM_AGENT_TYPE", "SqliteCounterTest"]])
     void snap
-    await expect(dispatchLoadSnapshot(tampered)).rejects.toThrow(/SnapshotDatabaseUnknownPartError/)
+    await expect(dispatchLoadSnapshot(tampered, wire(xWv))).rejects.toThrow(
+      /SnapshotDatabaseUnknownPartError/,
+    )
   })
 
   it("rejects a missing 'db:<name>' part on load", async () => {
@@ -207,13 +205,11 @@ describe("snapshot + sqlite databases", () => {
     __setIsAutocommitDatabaseSyncForTest(() => true)
     __setRestoreDatabaseSyncForTest(() => {})
     const { encodeMultipartJsonEnvelope } = await import("../src/internal/snapshotEnvelope.js")
-    const tampered = encodeMultipartJsonEnvelope(
-      { principal: { tag: "anonymous" }, constructorParameters: wire(xWv) },
-      { note: "zoe" },
-      [],
-    )
+    const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [])
     __setEnvironment([["GOLEM_AGENT_TYPE", "SqliteCounterTest"]])
-    await expect(dispatchLoadSnapshot(tampered)).rejects.toThrow(/SnapshotDatabaseMissingPartError/)
+    await expect(dispatchLoadSnapshot(tampered, wire(xWv))).rejects.toThrow(
+      /SnapshotDatabaseMissingPartError/,
+    )
   })
 })
 
@@ -278,7 +274,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
       files: Record<string, string> = {},
     ) =>
       encodeMultipartJsonEnvelope(
-        { principal: oidcZoe, constructorParameters: wire() },
+        oidcZoe,
         { note: "saved" },
         images,
         mode === "multipart" ? parts : new Map(),
@@ -351,7 +347,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         await __resetAgents()
         serialized.length = 0
         agent.select()
-        await dispatchLoadSnapshot(snapshot)
+        await dispatchLoadSnapshot(snapshot, wire())
         expect(agent.restored).toHaveBeenCalledWith(oidcZoe)
         expect(hydrated).toEqual(handles.filter((db) => db.location() === null))
         expect(warmed).toEqual(handles)
@@ -394,10 +390,10 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         ...raw.slice(1),
       ])
       await expect(
-        dispatchLoadSnapshot({
-          payload: encoded.data,
-          mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
-        }),
+        dispatchLoadSnapshot(
+          { payload: encoded.data, mimeType: `multipart/mixed; boundary=${encoded.boundary}` },
+          wire(),
+        ),
       ).rejects.toBeDefined()
     }
     expect(agent.restored).not.toHaveBeenCalled()
@@ -411,7 +407,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
     agent.select()
     vi.mocked(existsSync).mockReturnValue(false)
     await expect(
-      dispatchLoadSnapshot(agent.envelope([], { file: "/data/app.db" })),
+      dispatchLoadSnapshot(agent.envelope([], { file: "/data/app.db" }), wire()),
     ).rejects.toBeDefined()
     expect(agent.restored).not.toHaveBeenCalled()
   })
@@ -459,7 +455,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         })
       agent.select()
       await expect(
-        dispatchLoadSnapshot(agent.envelope([{ name: "mem", bytes: userBytes }])),
+        dispatchLoadSnapshot(agent.envelope([{ name: "mem", bytes: userBytes }]), wire()),
       ).rejects.toBeDefined()
       expect(handle!.isOpen).toBe(false)
       expect(agent.methods).not.toHaveBeenCalled()
@@ -516,6 +512,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
     await expect(
       dispatchLoadSnapshot(
         agent.envelope([{ name: "mem", bytes: userBytes }], { file: "/data/app.db" }),
+        wire(),
       ),
     ).rejects.toBeDefined()
     expect(hydrated).not.toHaveBeenCalled()
@@ -561,7 +558,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         expect(serialized).toHaveBeenCalledTimes(shouldRead ? 1 : 0)
       })
       agent.select()
-      await dispatchLoadSnapshot(agent.envelope([], { file: "/data/app.db" }))
+      await dispatchLoadSnapshot(agent.envelope([], { file: "/data/app.db" }), wire())
     },
   )
 
@@ -571,7 +568,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
     )
     agent.select()
     const snapshot = agent.envelope([], Object.fromEntries([["__proto__", "/data/app.db"]]))
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire())
     const decoded = decodeEnvelope(await dispatchSaveSnapshot())
     if (decoded.kind !== "multipart") throw new Error("expected multipart")
     expect(Object.entries(decoded.fileDatabases!)).toEqual([["__proto__", "/data/app.db"]])
@@ -582,6 +579,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
           [{ name: "__proto__", bytes: userBytes }],
           Object.fromEntries([["__proto__", "/data/app.db"]]),
         ),
+        wire(),
       ),
     ).rejects.toBeDefined()
   })

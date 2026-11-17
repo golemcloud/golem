@@ -953,11 +953,6 @@ interface ActiveAgent {
   /** Principal supplied to `initialize` / embedded in the loaded snapshot. */
   readonly principal: AgentCommon.Principal
   /**
-   * Constructor parameters supplied to `initialize` / embedded in the loaded snapshot. Snapshots
-   * keep them, because an agent ID does not hold them.
-   */
-  readonly constructorParameters: CoreTypes.SchemaValueTree
-  /**
    * Captured per-instance snapshot binding when the agent declared a
    * `snapshot` field; `null` otherwise. Read by `dispatchSaveSnapshot`
    * and written-through by `dispatchLoadSnapshot`.
@@ -1115,15 +1110,7 @@ export const dispatchInitialize = async (
     principal,
   )
 
-  activeAgent = {
-    name: agentTypeName,
-    scope,
-    handlers,
-    principal,
-    constructorParameters: input,
-    snapshot,
-    state,
-  }
+  activeAgent = { name: agentTypeName, scope, handlers, principal, snapshot, state }
 }
 
 /**
@@ -1358,7 +1345,7 @@ const encodeAutoSnapshot = async (
   )
   const encodedState = encodeSnapshotState(encoded)
   if (snap.kind === "auto" && snap.declaredDatabases.length === 0) {
-    return encodeJsonEnvelope(agent, encodedState)
+    return encodeJsonEnvelope(agent.principal, encodedState)
   }
   const sqliteExt = snap.declaredDatabases.length > 0 ? resolveSqliteHostExtSync() : undefined
   const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
@@ -1374,7 +1361,7 @@ const encodeAutoSnapshot = async (
     else fileDatabases.push([dbName, location])
   }
   return encodeMultipartJsonEnvelope(
-    agent,
+    agent.principal,
     encodedState,
     dbParts,
     bundle?.parts,
@@ -1386,7 +1373,7 @@ const encodeAutoSnapshot = async (
  * Implementation of `golem:api/save-snapshot.save`. Reads the active
  * agent's bound snapshot state, encodes it according to the active
  * variant (auto → JSON envelope or multipart/mixed when SQLite databases
- * are declared; custom → binary v3 envelope), and returns the resulting
+ * are declared; custom → binary v2 envelope), and returns the resulting
  * `Snapshot` to the host.
  *
  * @since 1.5.0
@@ -1408,7 +1395,7 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
     return encodeAutoSnapshot(agent, compiled, snap)
   }
   const bytes = await saveSnapshotState(agent, compiled)
-  return encodeBinaryEnvelope(agent, bytes as Uint8Array)
+  return encodeBinaryEnvelope(agent.principal, bytes as Uint8Array)
 }
 
 /**
@@ -1434,8 +1421,9 @@ const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): P
  * agent from a snapshot. We:
  *
  * 1. Read the agent's type name from `GOLEM_AGENT_TYPE`.
- * 2. Decode the envelope to recover principal, constructor parameters and
- *    user-state bytes.
+ * 2. Decode the envelope to recover principal + user-state bytes, and
+ *    decode `constructor` against the constructor schema, as `initialize`
+ *    decodes its input.
  * 3. Decode state or run the strategy's restore effect, skipping `init`.
  * 4. Restore SQLite images and construct the shared methods with that state.
  * 5. Mark the agent active so subsequent `invoke`s see the restored
@@ -1444,7 +1432,10 @@ const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): P
  * @since 1.5.0
  * @category runtime hooks
  */
-export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<void> => {
+export const dispatchLoadSnapshot = async (
+  snapshot: ApiHost.Snapshot,
+  constructor: CoreTypes.SchemaValueTree,
+): Promise<void> => {
   if (activeAgent !== null) {
     throw new Error(`agent already initialized in this container: ${activeAgent.name}`)
   }
@@ -1594,7 +1585,7 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   }
 
   // Restore resources and database images before constructing shared methods.
-  const constructorInput = await decodeConstructorInput(compiled, decoded.constructorParameters)
+  const constructorInput = await decodeConstructorInput(compiled, constructor)
   const {
     scope,
     handlers,
@@ -1609,7 +1600,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     scope,
     handlers,
     principal,
-    constructorParameters: decoded.constructorParameters,
     snapshot: bound,
     state,
   }

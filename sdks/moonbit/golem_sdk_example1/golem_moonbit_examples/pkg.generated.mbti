@@ -70,7 +70,7 @@ pub fn wasmExportInvokeGolemToolGuest(Int32) -> Int32
 
 pub fn wasmExportInvokeToolMiddleware(Int32) -> Int32
 
-pub fn wasmExportLoad(Int32, Int32, Int32, Int32) -> Int32
+pub fn wasmExportLoad(Int32, Int32, Int32, Int32, Int32, Int32, Int32) -> Int32
 
 pub fn wasmExportSave() -> Int32
 

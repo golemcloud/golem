@@ -342,7 +342,8 @@ object AutoRegisterCodegen {
       else
         """js.Promise.resolve(js.Dynamic.literal(payload = new scala.scalajs.js.typedarray.Uint8Array(0), mimeType = "application/octet-stream"))"""
     val load =
-      if (agents) "golem.runtime.guest.Guest.LoadSnapshot.load(snapshot.asInstanceOf[golem.host.js.JsSnapshot])"
+      if (agents)
+        "golem.runtime.guest.Guest.LoadSnapshot.load(snapshot.asInstanceOf[golem.host.js.JsSnapshot], constructorInput.asInstanceOf[golem.host.js.schema.JsSchemaValueTree])"
       else """js.Promise.reject("No agents registered")"""
 
     parseMeta[Source](s"""
@@ -359,7 +360,7 @@ object AutoRegisterCodegen {
       @JSExportTopLevel("saveSnapshot")
       val saveSnapshot: js.Dynamic = js.Dynamic.literal(save = (() => $save))
       @JSExportTopLevel("loadSnapshot")
-      val loadSnapshot: js.Dynamic = js.Dynamic.literal(load = ((snapshot: js.Dynamic) => $load))
+      val loadSnapshot: js.Dynamic = js.Dynamic.literal(load = ((snapshot: js.Dynamic, constructorInput: js.Dynamic) => $load))
     """).stats
   }
 

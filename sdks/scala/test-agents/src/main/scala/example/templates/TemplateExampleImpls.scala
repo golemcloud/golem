@@ -100,7 +100,7 @@ object SnapshotCounterImpl {
     bytes: Array[Byte],
     context: golem.runtime.SnapshotRestoreContext
   ): Future[SnapshotCounterImpl] = Future.successful {
-    val instance = new SnapshotCounterImpl(context.agentId.toString)
+    val instance = new SnapshotCounterImpl(context.identity[String](0))
     instance.value = decodeU32(bytes)
     instance
   }
@@ -136,7 +136,7 @@ object AutoSnapshotCounterImpl {
     state: SnapshotCounterState,
     context: golem.runtime.SnapshotRestoreContext
   ): Future[AutoSnapshotCounterImpl] = Future.successful {
-    val instance = new AutoSnapshotCounterImpl(context.agentId.toString)
+    val instance = new AutoSnapshotCounterImpl(context.identity[String](0))
     instance.state = state
     instance
   }

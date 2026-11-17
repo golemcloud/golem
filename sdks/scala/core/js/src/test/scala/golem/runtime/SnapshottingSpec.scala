@@ -22,6 +22,7 @@ import golem.host.js.{JsAgentId, JsSnapshot, PrincipalConverter}
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import golem.runtime.autowire.{AgentDefinition, AgentImplementation, SchemaPayload}
 import golem.runtime.guest.Guest
+import golem.schema.{FromSchema, IntoSchema}
 import zio._
 import zio.test._
 import zio.blocks.schema.Schema
@@ -80,7 +81,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
           ((bytes(1) & 0xff) << 16) |
           ((bytes(2) & 0xff) << 8) |
           (bytes(3) & 0xff)
-        val instance = new CustomSnapshotAgentImpl(s"restored:${context.agentId}")
+        val instance = new CustomSnapshotAgentImpl(s"restored:${context.identity[String](0)}")
         instance.restoredContext = context
         instance.restoreValue(value)
         instance
@@ -89,6 +90,29 @@ object SnapshottingSpec extends ZIOSpecDefault {
 
   private lazy val customDefn: AgentDefinition[CustomSnapshotAgent] =
     AgentImplementation.registerClass[CustomSnapshotAgent, CustomSnapshotAgentImpl]
+
+  @agentDefinition("pair-snapshot-agent", snapshotting = "enabled")
+  trait PairSnapshotAgent extends BaseAgent {
+    class Id(val label: String, val count: Int)
+  }
+
+  @agentImplementation()
+  final class PairSnapshotAgentImpl(label: String, count: Int) extends PairSnapshotAgent {
+    def saveSnapshot(): Future[Array[Byte]] = Future.successful(Array.emptyByteArray)
+  }
+
+  object PairSnapshotAgentImpl {
+    var restoredContext: Option[SnapshotRestoreContext] = None
+
+    def loadSnapshot(bytes: Array[Byte], context: SnapshotRestoreContext): Future[PairSnapshotAgentImpl] =
+      Future.successful {
+        restoredContext = Some(context)
+        new PairSnapshotAgentImpl(context.identity[String](0), context.identity[Int](1))
+      }
+  }
+
+  private lazy val pairDefn: AgentDefinition[PairSnapshotAgent] =
+    AgentImplementation.registerClass[PairSnapshotAgent, PairSnapshotAgentImpl]
 
   @agentDefinition("config-snapshot-agent", snapshotting = "enabled")
   trait ConfigSnapshotAgent extends BaseAgent with AgentConfig[RestoreConfig] {
@@ -151,10 +175,13 @@ object SnapshottingSpec extends ZIOSpecDefault {
   }
 
   private val restoreContext =
-    SnapshotRestoreContext(testAgentId, Principal.Anonymous, None)
+    SnapshotRestoreContext(Vector("identity"), testAgentId, Principal.Anonymous, None)
 
   private lazy val autoDefn: AgentDefinition[AutoSnapshotAgent] =
     AgentImplementation.registerClass[AutoSnapshotAgent, AutoSnapshotAgentImpl]
+
+  private def paramCodec[A](name: String)(implicit into: IntoSchema[A], from: FromSchema[A]): ParamCodec =
+    ParamCodec(name, into.asInstanceOf[IntoSchema[Any]], from.asInstanceOf[FromSchema[Any]])
 
   private def toUint8Array(bytes: Array[Byte]): Uint8Array = {
     val result = new Uint8Array(bytes.length)
@@ -272,9 +299,10 @@ object SnapshottingSpec extends ZIOSpecDefault {
           } yield assertTrue(v == 42, resaved.bytes.toSeq == payload.bytes.toSeq)
         }
       },
-      test("restore receives the agent ID and the restored principal") {
+      test("restore receives identity, agent ID, and restored principal") {
         ZIO.fromFuture { implicit ec =>
           val context = SnapshotRestoreContext(
+            Vector("identity"),
             testAgentId,
             Principal.GolemUser(new java.util.UUID(3L, 4L)),
             None
@@ -284,6 +312,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
             .map { restored =>
               val received = restored.asInstanceOf[CustomSnapshotAgentImpl].restoredContext
               assertTrue(
+                received.identity[String](0) == "identity",
                 received.agentId == testAgentId,
                 received.restoredPrincipal == context.restoredPrincipal
               )
@@ -301,6 +330,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
                           customDefn.restoreAny(
                             SnapshotPayload(Array[Byte](0, 0, 0, 42), "application/octet-stream"),
                             testAgentId,
+                            identity,
                             Principal.Anonymous
                           )
                         )
@@ -310,11 +340,13 @@ object SnapshottingSpec extends ZIOSpecDefault {
             freshCount == 1,
             CustomSnapshotAgentImpl.normalInitializationCount == 0,
             restoredValue == 42,
+            received.identity[String](0) == "fresh",
             received.agentId == testAgentId
           )
         }
       },
       test("erased restoration supplies fresh config and activates none when restoration fails") {
+        val identity = SchemaPayload.encode[Unit](())(InputRecordCodec.unit)
         ZIO.fromFuture { implicit ec =>
           ConfigHolder.clear()
           for {
@@ -322,6 +354,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
                           configDefn.restoreAny(
                             SnapshotPayload(Array.emptyByteArray, "application/octet-stream"),
                             testAgentId,
+                            identity,
                             Principal.Anonymous
                           )
                         )
@@ -331,6 +364,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
                           configDefn.restoreAny(
                             SnapshotPayload(Array[Byte](1), "application/octet-stream"),
                             testAgentId,
+                            identity,
                             Principal.Anonymous
                           )
                         )
@@ -347,7 +381,8 @@ object SnapshottingSpec extends ZIOSpecDefault {
     ),
     suite("Guest restoration lifecycle")(
       test("binary restoration skips normal initialization and installs principal and state") {
-        val principal = Principal.GolemUser(new java.util.UUID(5L, 6L))
+        val constructor = SchemaPayload.encode[String]("loaded-name")(InputRecordCodec.single[String]("name"))
+        val principal   = Principal.GolemUser(new java.util.UUID(5L, 6L))
         ZIO.fromFuture { implicit ec =>
           val _ = customDefn
           Guest.resetForTesting()
@@ -359,7 +394,8 @@ object SnapshottingSpec extends ZIOSpecDefault {
                      JsSnapshot(
                        toUint8Array(binaryEnvelope(principal, Array[Byte](0, 0, 0, 42))),
                        "application/octet-stream"
-                     )
+                     ),
+                     constructor
                    )
                  )
             saved  <- FutureInterop.fromPromise(Guest.SaveSnapshot.save())
@@ -377,7 +413,8 @@ object SnapshottingSpec extends ZIOSpecDefault {
         }
       },
       test("JSON restoration dispatches the generated state factory through Guest") {
-        val principal = Principal.Agent(golem.AgentId(new java.util.UUID(7L, 8L)))
+        val constructor = SchemaPayload.encode[Unit](())(InputRecordCodec.unit)
+        val principal   = Principal.Agent(golem.AgentId(new java.util.UUID(7L, 8L)))
         ZIO.fromFuture { implicit ec =>
           val _ = autoDefn
           Guest.resetForTesting()
@@ -388,7 +425,8 @@ object SnapshottingSpec extends ZIOSpecDefault {
                      JsSnapshot(
                        toUint8Array(jsonEnvelope(principal, """{"counter":7,"label":"loaded"}""")),
                        "application/json"
-                     )
+                     ),
+                     constructor
                    )
                  )
             saved  <- FutureInterop.fromPromise(Guest.SaveSnapshot.save())
@@ -407,7 +445,8 @@ object SnapshottingSpec extends ZIOSpecDefault {
         }
       },
       test("failed restoration installs no runtime state and a later restoration can succeed") {
-        val principal = Principal.GolemUser(new java.util.UUID(9L, 10L))
+        val constructor = SchemaPayload.encode[Unit](())(InputRecordCodec.unit)
+        val principal   = Principal.GolemUser(new java.util.UUID(9L, 10L))
         ZIO.fromFuture { implicit ec =>
           val _ = configDefn
           Guest.resetForTesting()
@@ -419,7 +458,8 @@ object SnapshottingSpec extends ZIOSpecDefault {
                        JsSnapshot(
                          toUint8Array(binaryEnvelope(principal, Array[Byte](1))),
                          "application/octet-stream"
-                       )
+                       ),
+                       constructor
                      )
                    )
                    .failed
@@ -431,7 +471,8 @@ object SnapshottingSpec extends ZIOSpecDefault {
                      JsSnapshot(
                        toUint8Array(binaryEnvelope(principal, Array.emptyByteArray)),
                        "application/octet-stream"
-                     )
+                     ),
+                     constructor
                    )
                  )
             successfulState    = Guest.stateForTesting
@@ -443,6 +484,69 @@ object SnapshottingSpec extends ZIOSpecDefault {
             savedAfterFailure.payload.length == 0,
             successfulState == (true, Some(principal)),
             configAfterSuccess
+          )
+        }
+      },
+      test("restoration hands every constructor parameter of the load call to the restore factory") {
+        val constructor = SchemaPayload.encode[Vector[Any]](Vector("pair-label", 37))(
+          InputRecordCodec.fromParams(
+            List(paramCodec[String]("label"), paramCodec[Int]("count"))
+          )
+        )
+        ZIO.fromFuture { implicit ec =>
+          val _ = pairDefn
+          Guest.resetForTesting()
+          PairSnapshotAgentImpl.restoredContext = None
+          installTestHost("pair-snapshot-agent")
+          for {
+            _ <- FutureInterop.fromPromise(
+                   Guest.LoadSnapshot.load(
+                     JsSnapshot(
+                       toUint8Array(binaryEnvelope(Principal.Anonymous, Array.emptyByteArray)),
+                       "application/octet-stream"
+                     ),
+                     constructor
+                   )
+                 )
+            received = PairSnapshotAgentImpl.restoredContext
+            _        = Guest.resetForTesting()
+          } yield assertTrue(
+            received.map(_.identityFields) == Some(Vector("pair-label", 37)),
+            received.map(_.identity[String](0)) == Some("pair-label"),
+            received.map(_.identity[Int](1)) == Some(37),
+            received.map(_.agentId) == Some(testAgentId)
+          )
+        }
+      },
+      test("restoration rejects a constructor tree that does not match the constructor schema") {
+        val constructor = SchemaPayload.encode[String]("pair-label")(InputRecordCodec.single[String]("label"))
+        ZIO.fromFuture { implicit ec =>
+          val _ = pairDefn
+          Guest.resetForTesting()
+          PairSnapshotAgentImpl.restoredContext = None
+          installTestHost("pair-snapshot-agent")
+          for {
+            error <- FutureInterop
+                       .fromPromise(
+                         Guest.LoadSnapshot.load(
+                           JsSnapshot(
+                             toUint8Array(binaryEnvelope(Principal.Anonymous, Array.emptyByteArray)),
+                             "application/octet-stream"
+                           ),
+                           constructor
+                         )
+                       )
+                       .failed
+            runtimeState = Guest.stateForTesting
+            _            = Guest.resetForTesting()
+          } yield assertTrue(
+            PairSnapshotAgentImpl.restoredContext.isEmpty,
+            runtimeState == (false, None),
+            error match {
+              case js.JavaScriptException(value) =>
+                value.asInstanceOf[js.Dynamic].tag.asInstanceOf[String] == "invalid-input"
+              case _ => false
+            }
           )
         }
       }

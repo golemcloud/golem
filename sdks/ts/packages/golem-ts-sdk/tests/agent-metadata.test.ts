@@ -21,7 +21,7 @@ import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-model';
 import { golemTool010Guest, guest, tool } from '../src';
 import { s } from '../src/schema/markers';
-import { constructorParametersJson, selectSelfAgent } from './selfAgentTestSupport';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
@@ -409,10 +409,13 @@ describe('agent metadata (Phase 3)', () => {
     selectSelfAgent('SnapshotDeferredInvalid');
 
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array([1]),
-        mimeType: 'application/octet-stream',
-      }),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: new Uint8Array([1]),
+          mimeType: 'application/octet-stream',
+        },
+        emptyInput,
+      ),
     ).rejects.toContain('implement() was called more than once');
   });
 
@@ -437,10 +440,13 @@ describe('agent metadata (Phase 3)', () => {
     selectSelfAgent('MalformedSnapshotDeferredInvalid');
 
     const rejection = await isolatedGuest.loadSnapshot
-      .load({
-        payload: new TextEncoder().encode('{'),
-        mimeType: 'application/json',
-      })
+      .load(
+        {
+          payload: new TextEncoder().encode('{'),
+          mimeType: 'application/json',
+        },
+        emptyInput,
+      )
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -490,41 +496,88 @@ describe('agent metadata (Phase 3)', () => {
     selectSelfAgent('AtomicSnapshotRestore');
     const envelope = (state: object) => ({
       payload: new TextEncoder().encode(
-        JSON.stringify({
-          version: 1,
-          principal: { tag: 'anonymous' },
-          constructorParameters: constructorParametersJson(idValue),
-          state,
-          fileDatabases: {},
-        }),
+        JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state, fileDatabases: {} }),
       ),
       mimeType: 'application/json',
     });
 
-    await expect(isolatedGuest.loadSnapshot.load(envelope({ fail: true }))).rejects.toContain(
-      'rejected snapshot',
-    );
+    const constructorInput = schemaValueToWit(idValue);
+    await expect(
+      isolatedGuest.loadSnapshot.load(envelope({ fail: true }), constructorInput),
+    ).rejects.toContain('rejected snapshot');
     await expect(isolatedGuest.saveSnapshot.save()).rejects.toThrow('agent is not initialized');
     expect(initializeCalls).toBe(0);
     expect(restoreCalls).toBe(1);
 
-    await isolatedGuest.loadSnapshot.load(envelope({ count: 9 }));
+    await isolatedGuest.loadSnapshot.load(envelope({ count: 9 }), constructorInput);
     const saved = await isolatedGuest.saveSnapshot.save();
-    expect(saved.payload[0]).toBe(3);
-    const headerLength = new DataView(
+    const principalLength = new DataView(
       saved.payload.buffer,
       saved.payload.byteOffset,
       saved.payload.byteLength,
     ).getUint32(1, false);
-    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(5, 5 + headerLength)))).toEqual({
-      principal: { tag: 'anonymous' },
-      constructorParameters: constructorParametersJson(idValue),
-    });
-    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(5 + headerLength)))).toEqual({
+    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(5 + principalLength)))).toEqual({
       count: 9,
     });
     expect(initializeCalls).toBe(0);
     expect(restoreCalls).toBe(2);
+  });
+
+  it('hands the constructor parameters of load to the restoration factory', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, isolatedGuest] = await Promise.all([
+      import('../src/defineAgent'),
+      import('../src'),
+    ]);
+
+    const restoredIds: unknown[] = [];
+    isolatedDefineAgent({
+      name: 'RestoreParameters',
+      id: { region: z.string(), tenant: z.string() },
+      methods: {},
+    }).implement({
+      init: ({ id }) => ({ region: `init:${id.region}`, tenant: `init:${id.tenant}` }),
+      methods: {},
+      snapshot: {
+        save() {
+          return new TextEncoder().encode(
+            JSON.stringify({ region: this.region, tenant: this.tenant }),
+          );
+        },
+        load(bytes, ctx) {
+          restoredIds.push(ctx.id);
+          const saved = JSON.parse(new TextDecoder().decode(bytes));
+          return { region: ctx.id.region, tenant: `${ctx.id.tenant}:${saved.tenant}` };
+        },
+      },
+    });
+    selectSelfAgent('RestoreParameters');
+
+    const principalBytes = new TextEncoder().encode(JSON.stringify({ tag: 'anonymous' }));
+    const data = new TextEncoder().encode(JSON.stringify({ region: 'stored', tenant: 'stored' }));
+    const payload = new Uint8Array(5 + principalBytes.length + data.length);
+    payload[0] = 2;
+    new DataView(payload.buffer).setUint32(1, principalBytes.length, false);
+    payload.set(principalBytes, 5);
+    payload.set(data, 5 + principalBytes.length);
+    const snapshot = { payload, mimeType: 'application/octet-stream' };
+
+    await expect(
+      isolatedGuest.loadSnapshot.load(snapshot, schemaValueToWit(v.record([v.string('eu-west')]))),
+    ).rejects.toBeDefined();
+    await expect(isolatedGuest.saveSnapshot.save()).rejects.toThrow('agent is not initialized');
+    expect(restoredIds).toEqual([]);
+
+    await isolatedGuest.loadSnapshot.load(
+      snapshot,
+      schemaValueToWit(v.record([v.string('eu-west'), v.string('acme')])),
+    );
+    expect(restoredIds).toEqual([{ region: 'eu-west', tenant: 'acme' }]);
+    const saved = await isolatedGuest.saveSnapshot.save();
+    expect(saved.payload[0]).toBe(2);
+    expect(
+      JSON.parse(new TextDecoder().decode(saved.payload.slice(5 + principalBytes.length))),
+    ).toEqual({ region: 'eu-west', tenant: 'acme:stored' });
   });
 
   it('strictly validates JSON, multipart, and binary snapshot envelopes', async () => {
@@ -549,104 +602,80 @@ describe('agent metadata (Phase 3)', () => {
         load: () => ({}),
       },
     });
-    const constructorParameters = constructorParametersJson(v.record([]));
+    const emptyInput = schemaValueToWit(v.record([]));
     selectSelfAgent('StrictSnapshotEnvelope');
 
     const jsonSnapshot = (envelope: object) => ({
       payload: new TextEncoder().encode(JSON.stringify(envelope)),
       mimeType: 'application/json',
     });
-    const anonymous = { tag: 'anonymous' };
     const invalidJsonEnvelopes: Array<[object, string]> = [
-      [{ principal: anonymous, constructorParameters, state: {} }, "missing 'version' field"],
-      [{ version: 2, principal: anonymous, constructorParameters, state: {} }, 'version must be 1'],
-      [{ version: 1, constructorParameters, state: {} }, "missing 'principal' field"],
-      [{ version: 1, principal: anonymous, state: {} }, "missing 'constructorParameters' field"],
-      [{ version: 1, principal: anonymous, constructorParameters }, "missing 'state' field"],
+      [{ principal: { tag: 'anonymous' }, state: {} }, "missing 'version' field"],
+      [{ version: 2, principal: { tag: 'anonymous' }, state: {} }, 'version must be 1'],
+      [{ version: 1, state: {} }, "missing 'principal' field"],
+      [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
+      [{ version: 1, principal: { tag: 'anonymous' }, state: {} }, "missing 'fileDatabases' field"],
       [
-        { version: 1, principal: anonymous, constructorParameters, state: {} },
-        "missing 'fileDatabases' field",
-      ],
-      [
-        {
-          version: 1,
-          principal: anonymous,
-          constructorParameters,
-          state: {},
-          fileDatabases: { db: 1 },
-        },
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: { db: 1 } },
         "'fileDatabases' must map field names to locations",
       ],
       [
-        {
-          version: 1,
-          principal: anonymous,
-          constructorParameters,
-          state: {},
-          fileDatabases: ['db'],
-        },
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: ['db'] },
         "'fileDatabases' must map field names to locations",
       ],
     ];
     for (const [envelope, message] of invalidJsonEnvelopes) {
-      await expect(isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope))).rejects.toContain(
-        message,
-      );
+      await expect(
+        isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope), emptyInput),
+      ).rejects.toContain(message);
     }
-    await expect(
-      isolatedGuest.loadSnapshot.load(
-        jsonSnapshot({
-          version: 1,
-          principal: anonymous,
-          constructorParameters: { root: 0 },
-          state: {},
-          fileDatabases: {},
-        }),
-      ),
-    ).rejects.toThrow('invalid snapshot constructor parameters');
 
     const multipart = encodeMultipart([
       {
         name: 'state',
         contentType: 'application/json',
         body: new TextEncoder().encode(
-          JSON.stringify({ principal: { tag: 'anonymous' }, constructorParameters, state: {} }),
+          JSON.stringify({ principal: { tag: 'anonymous' }, state: {} }),
         ),
       },
     ]);
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: multipart.data,
-        mimeType: `multipart/mixed; boundary=${multipart.boundary}`,
-      }),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: multipart.data,
+          mimeType: `multipart/mixed; boundary=${multipart.boundary}`,
+        },
+        emptyInput,
+      ),
     ).rejects.toContain("multipart state part missing 'version' field");
 
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array(),
-        mimeType: 'application/octet-stream',
-      }),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: new Uint8Array(),
+          mimeType: 'application/octet-stream',
+        },
+        emptyInput,
+      ),
     ).rejects.toContain('Snapshot is empty');
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array([3, 0, 0, 0]),
-        mimeType: 'application/octet-stream',
-      }),
-    ).rejects.toContain('too short for header length');
-    await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array([3, 0, 0, 0, 2, 123]),
-        mimeType: 'application/octet-stream',
-      }),
-    ).rejects.toContain('too short for header data');
-    for (const version of [1, 2]) {
-      await expect(
-        isolatedGuest.loadSnapshot.load({
-          payload: new Uint8Array([version, 0, 0, 0, 0]),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: new Uint8Array([2, 0, 0, 0]),
           mimeType: 'application/octet-stream',
-        }),
-      ).rejects.toContain(`Unsupported snapshot version ${version}`);
-    }
+        },
+        emptyInput,
+      ),
+    ).rejects.toContain('too short for principal length');
+    await expect(
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: new Uint8Array([2, 0, 0, 0, 2, 123]),
+          mimeType: 'application/octet-stream',
+        },
+        emptyInput,
+      ),
+    ).rejects.toContain('too short for principal data');
   });
 
   it('attributes deferred implementation failures to the agent definition name', async () => {

@@ -7,7 +7,7 @@ import {
   dispatchSaveSnapshot,
 } from "../src/Agent.js"
 import { method } from "../src/Method.js"
-import { guest } from "../src/internal/guest.js"
+import { guest, loadSnapshot } from "../src/internal/guest.js"
 import * as Snapshot from "../src/Snapshot.js"
 import { defineConfig } from "../src/Config.js"
 import {
@@ -33,7 +33,6 @@ import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const anonymous = { tag: "anonymous" } as const
 const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
-const header = (constructorParameters = wire()) => ({ principal: anonymous, constructorParameters })
 const read = <A>(value: NonNullable<Awaited<ReturnType<typeof guest.invoke>>>): A => {
   const decoded = schemaValueFromWit(value)
   if (decoded.tag !== "string" && decoded.tag !== "f64") {
@@ -107,9 +106,14 @@ const AutoSnapshotCounter = AutoSnapshotCounterSpec.implement({
 // Custom-snapshot agent
 // ---------------------------------------------------------------------------
 
-const customStore = {
+const customStore: {
+  saveCalls: number
+  loadCalls: number
+  restoredId: Readonly<{ name: string }> | undefined
+} = {
   saveCalls: 0,
   loadCalls: 0,
+  restoredId: undefined,
 }
 
 const CustomSnapshotAgent = defineAgent({
@@ -136,9 +140,10 @@ const CustomSnapshotAgent = defineAgent({
         const s = yield* Ref.get(ref)
         return new TextEncoder().encode(JSON.stringify(s))
       }),
-    restore: (bytes) =>
+    restore: (bytes, { id }) =>
       Effect.gen(function* () {
         customStore.loadCalls++
+        customStore.restoredId = id
         const decoded: { count: number; owner: string } = JSON.parse(
           new TextDecoder().decode(bytes),
         )
@@ -239,6 +244,7 @@ describe("snapshotting", () => {
     await __resetAgents()
     customStore.saveCalls = 0
     customStore.loadCalls = 0
+    customStore.restoredId = undefined
     configCustomStore.saveCalls = 0
     configCustomStore.loadCalls = 0
     configCustomStore.lastBytes = null
@@ -391,7 +397,7 @@ describe("snapshotting", () => {
       expect(persisted.state.transformed).toBe("7")
       await __resetAgents()
       __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "PromiseSnapshot"]])
-      await dispatchLoadSnapshot(snapshot)
+      await dispatchLoadSnapshot(snapshot, wire())
       await withCaller(anonymous, () => guest.invoke("check", wire()))
     },
   )
@@ -420,7 +426,7 @@ describe("snapshotting", () => {
   ])("auto: rejects malformed snapshot state tag %j", async (...tag) => {
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "DirectSnapshotAgent"]])
     await expect(
-      dispatchLoadSnapshot(encodeJsonEnvelope(header(), { $golemSnapshot: tag })),
+      dispatchLoadSnapshot(encodeJsonEnvelope(anonymous, { $golemSnapshot: tag }), wire()),
     ).rejects.toThrow(SnapshotEnvelopeError)
   })
 
@@ -470,7 +476,7 @@ describe("snapshotting", () => {
 
       __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
 
-      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot, wire(aliceWv)))
 
       const out = yield* Effect.promise(() =>
         withCaller(oidcBob, () => guest.invoke("value", wire())),
@@ -493,7 +499,7 @@ describe("snapshotting", () => {
 
     await __resetAgents()
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "DirectSnapshotAgent"]])
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire())
 
     expect(directInitCalls).toBe(1)
     const out = await withCaller(anonymous, () => guest.invoke("value", wire()))
@@ -506,8 +512,8 @@ describe("snapshotting", () => {
 
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
 
-    const wrong = encodeBinaryEnvelope(header(wire(aliceWv)), new Uint8Array([1, 2, 3]))
-    await expect(dispatchLoadSnapshot(wrong)).rejects.toThrow(SnapshotEnvelopeError)
+    const wrong = encodeBinaryEnvelope(anonymous, new Uint8Array([1, 2, 3]))
+    await expect(dispatchLoadSnapshot(wrong, wire(aliceWv))).rejects.toThrow(SnapshotEnvelopeError)
   })
 
   it("auto: load rejects record state that does not match the private snapshot schema", async () => {
@@ -516,12 +522,12 @@ describe("snapshotting", () => {
 
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
 
-    const malformed = encodeJsonEnvelope(header(wire(aliceWv)), {
+    const malformed = encodeJsonEnvelope(anonymous, {
       count: 1,
       owner: "alice",
       groups: { broken: { values: ["not-a-number"] } },
     })
-    await expect(dispatchLoadSnapshot(malformed)).rejects.toThrow()
+    await expect(dispatchLoadSnapshot(malformed, wire(aliceWv))).rejects.toThrow()
   })
 
   // -------------------------------------------------------------------------
@@ -548,7 +554,7 @@ describe("snapshotting", () => {
       yield* Effect.promise(() => __resetAgents())
       __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
 
-      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot, wire(carolWv)))
       expect(customStore.loadCalls).toBe(1)
 
       const out = yield* Effect.promise(() =>
@@ -558,6 +564,38 @@ describe("snapshotting", () => {
       expect(value).toBe(6)
     }),
   )
+
+  it.effect("custom: restore receives the constructor input passed to the load export", () =>
+    Effect.gen(function* () {
+      const stringCodec = yield* toWitCodec(Schema.String)
+      const carolWv = yield* Schema.encodeEffect(stringCodec.codec)("carol")
+      const daveWv = yield* Schema.encodeEffect(stringCodec.codec)("dave")
+
+      yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.initialize("CustomSnapshotAgent", wire(carolWv))),
+      )
+      const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
+
+      yield* Effect.promise(() => __resetAgents())
+      __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
+      yield* Effect.promise(() => loadSnapshot.load(snapshot, wire(daveWv)))
+
+      expect(customStore.loadCalls).toBe(1)
+      expect(customStore.restoredId).toEqual({ name: "dave" })
+    }),
+  )
+
+  it("custom: load rejects a constructor input that does not match the constructor schema", async () => {
+    const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
+    const carolWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("carol"))
+    await withCaller(oidcBob, () => guest.initialize("CustomSnapshotAgent", wire(carolWv)))
+    const snapshot = await dispatchSaveSnapshot()
+
+    await __resetAgents()
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
+    await expect(loadSnapshot.load(snapshot, wire())).rejects.toBeDefined()
+    expect(customStore.loadCalls).toBe(0)
+  })
 
   it.effect("custom: save/load handlers can read the agent's config service", () =>
     Effect.gen(function* () {
@@ -588,7 +626,7 @@ describe("snapshotting", () => {
         throw new Error(`unexpected config path: ${path.join(".")}`)
       })
 
-      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot, wire(danWv)))
       expect(configCustomStore.loadCalls).toBe(1)
 
       const out = yield* Effect.promise(() =>
@@ -616,7 +654,9 @@ describe("snapshotting", () => {
     const prefixB = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("B"))
     __setGetConfigValueForTest(() => schemaValueToWit(prefixB))
 
-    await expect(dispatchLoadSnapshot(snapshot)).rejects.toThrow(/does not match config prefix/)
+    await expect(dispatchLoadSnapshot(snapshot, wire(danWv))).rejects.toThrow(
+      /does not match config prefix/,
+    )
   })
 
   it("custom: load rejects an envelope whose mime type is JSON", async () => {
@@ -625,8 +665,8 @@ describe("snapshotting", () => {
 
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
 
-    const wrong = encodeJsonEnvelope(header(wire(carolWv)), { count: 0, owner: "carol" })
-    await expect(dispatchLoadSnapshot(wrong)).rejects.toThrow(SnapshotEnvelopeError)
+    const wrong = encodeJsonEnvelope(anonymous, { count: 0, owner: "carol" })
+    await expect(dispatchLoadSnapshot(wrong, wire(carolWv))).rejects.toThrow(SnapshotEnvelopeError)
   })
 
   // -------------------------------------------------------------------------
@@ -652,14 +692,14 @@ describe("snapshotting", () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
     await withCaller(oidcBob, () => guest.initialize("AutoSnapshotCounter", wire(aliceWv)))
-    const fake = encodeJsonEnvelope(header(), { count: 0, owner: "alice" })
-    await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(/already initialized/)
+    const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "alice" })
+    await expect(dispatchLoadSnapshot(fake, wire(aliceWv))).rejects.toThrow(/already initialized/)
   })
 
   it("load fails with the missing card grant when GOLEM_AGENT_TYPE is not readable", async () => {
     __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "00000001-0000-8000-8000-000000000001"]])
-    const fake = encodeJsonEnvelope(header(), { count: 0, owner: "x" })
-    await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(
+    const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "x" })
+    await expect(dispatchLoadSnapshot(fake, wire())).rejects.toThrow(
       new Error(
         "load-snapshot: GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE",
       ),
@@ -669,20 +709,20 @@ describe("snapshotting", () => {
   it("load rejects malformed multipart/mixed envelopes (no body)", async () => {
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
     await expect(
-      dispatchLoadSnapshot({
-        payload: new Uint8Array(0),
-        mimeType: "multipart/mixed; boundary=abc",
-      }),
+      dispatchLoadSnapshot(
+        {
+          payload: new Uint8Array(0),
+          mimeType: "multipart/mixed; boundary=abc",
+        },
+        wire(),
+      ),
     ).rejects.toThrow(SnapshotEnvelopeError)
   })
 
   it("load rejects multipart/mixed without a boundary parameter", async () => {
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
     await expect(
-      dispatchLoadSnapshot({
-        payload: new Uint8Array(0),
-        mimeType: "multipart/mixed",
-      }),
+      dispatchLoadSnapshot({ payload: new Uint8Array(0), mimeType: "multipart/mixed" }, wire()),
     ).rejects.toThrow(UnsupportedSnapshotFormatError)
   })
 
@@ -708,7 +748,7 @@ describe("snapshotting", () => {
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CleanupOnRestoreFailure"]])
 
     await expect(
-      dispatchLoadSnapshot(encodeBinaryEnvelope(header(), new Uint8Array([1]))),
+      dispatchLoadSnapshot(encodeBinaryEnvelope(anonymous, new Uint8Array([1])), wire()),
     ).rejects.toBeTruthy()
     expect(cleaned).toBe(true)
   })

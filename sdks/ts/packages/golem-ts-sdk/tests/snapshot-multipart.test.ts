@@ -4,10 +4,9 @@ import { Snapshot, SnapshotError } from '../src/snapshot';
 import { encodeMultipart, decodeMultipart, extractBoundary } from '../src/internal/multipart';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
-import { constructorParametersJson, selectSelfAgent } from './selfAgentTestSupport';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const input = schemaValueToWit(v.record([]));
-const constructorParameters = constructorParametersJson(input);
 const bytes: Uint8Array = new Uint8Array([0, 255, 13, 10]);
 const principal = {
   tag: 'oidc',
@@ -23,9 +22,7 @@ const wireSnapshot = (
     {
       name: 'state',
       contentType: 'application/json',
-      body: new TextEncoder().encode(
-        JSON.stringify({ version: 1, principal, constructorParameters, state, ...metadata }),
-      ),
+      body: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state, ...metadata })),
     },
     ...extras,
   ]);
@@ -133,7 +130,7 @@ describe('explicit multipart snapshots', () => {
         );
         vi.resetModules();
         const restored = await register();
-        await restored.loadSnapshot.load(saved);
+        await restored.loadSnapshot.load(saved, input);
         expect(initCalls).toBe(1);
         await expect(restored.golemAgent200Guest.invoke('check', input)).resolves.toBeUndefined();
         const resaved = await restored.saveSnapshot.save();
@@ -186,6 +183,7 @@ describe('explicit multipart snapshots', () => {
     await expect(
       sdk.loadSnapshot.load(
         wireSnapshot({ value: { $golemSnapshot: tag } }, [], { fileDatabases: {} }),
+        input,
       ),
     ).rejects.toContain('invalid snapshot state');
     await expect(sdk.saveSnapshot.save()).rejects.toThrow(/not initialized/);
@@ -243,6 +241,7 @@ describe('explicit multipart snapshots', () => {
         { name: 'part:__proto__', contentType: 'text/plain', body: new Uint8Array() },
         { name: 'part:state', contentType: 'application/json', body: new Uint8Array([1]) },
       ]),
+      input,
     );
     expect(initCalls).toBe(0);
     expect(loads).toBe(1);
@@ -252,7 +251,6 @@ describe('explicit multipart snapshots', () => {
     expect(JSON.parse(new TextDecoder().decode(parts[0].body))).toMatchObject({
       version: 1,
       principal,
-      constructorParameters,
       state: { revision: '17' },
     });
     expect(JSON.parse(new TextDecoder().decode(parts[0].body))).not.toHaveProperty('fileDatabases');
@@ -278,7 +276,7 @@ describe('explicit multipart snapshots', () => {
         snapshot: { save: async () => ({ state: null, parts: new Map() }), load: async () => ({}) },
       });
     selectSelfAgent('NullParts');
-    await sdk.loadSnapshot.load(wireSnapshot(null));
+    await sdk.loadSnapshot.load(wireSnapshot(null), input);
     const saved = await sdk.saveSnapshot.save();
     expect(saved.mimeType).toMatch(/^multipart\/mixed;/);
     const parts = decodeMultipart(saved.payload, extractBoundary(saved.mimeType)!);
@@ -313,9 +311,7 @@ describe('explicit multipart snapshots', () => {
     selectSelfAgent('FailureParts');
     for (const snapshot of [
       {
-        payload: new TextEncoder().encode(
-          JSON.stringify({ version: 1, principal, constructorParameters, state: null }),
-        ),
+        payload: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state: null })),
         mimeType: 'application/json',
       },
       wireSnapshot(null, [{ name: 'db:main', contentType: 'application/x-sqlite3', body: bytes }]),
@@ -331,12 +327,12 @@ describe('explicit multipart snapshots', () => {
         { name: 'part:a', contentType: 'text/plain; charset=utf-8', body: bytes },
       ]),
     ])
-      await expect(sdk.loadSnapshot.load(snapshot)).rejects.toBeDefined();
+      await expect(sdk.loadSnapshot.load(snapshot, input)).rejects.toBeDefined();
     expect(loads).toBe(0);
-    await expect(sdk.loadSnapshot.load(wireSnapshot(null))).rejects.toContain('load failed');
+    await expect(sdk.loadSnapshot.load(wireSnapshot(null), input)).rejects.toContain('load failed');
     await expect(sdk.saveSnapshot.save()).rejects.toThrow(/not initialized/);
     fail = false;
-    await sdk.loadSnapshot.load(wireSnapshot(null));
+    await sdk.loadSnapshot.load(wireSnapshot(null), input);
     expect(loads).toBe(2);
   });
 
@@ -371,7 +367,10 @@ describe('explicit multipart snapshots', () => {
         { name: 'state', contentType: 'application/json', body },
       ]);
       await expect(
-        sdk.loadSnapshot.load({ payload: data, mimeType: `multipart/mixed; boundary=${boundary}` }),
+        sdk.loadSnapshot.load(
+          { payload: data, mimeType: `multipart/mixed; boundary=${boundary}` },
+          input,
+        ),
       ).rejects.toBeDefined();
     }
     expect(load).not.toHaveBeenCalled();
@@ -394,6 +393,7 @@ describe('explicit multipart snapshots', () => {
         wireSnapshot({ count: 3 }, [
           { name: 'part:index', contentType: 'application/octet-stream', body: bytes },
         ]),
+        input,
       ),
     ).rejects.toContain('cannot restore user parts');
   });
@@ -409,7 +409,7 @@ describe('explicit multipart snapshots', () => {
       })
       .implement({ init: () => ({ count: 0 }), methods: {} });
     selectSelfAgent('TypedInventoryParts');
-    await expect(sdk.loadSnapshot.load(wireSnapshot({ count: 3 }))).rejects.toContain(
+    await expect(sdk.loadSnapshot.load(wireSnapshot({ count: 3 }), input)).rejects.toContain(
       "missing 'fileDatabases'",
     );
     await expect(
@@ -417,9 +417,10 @@ describe('explicit multipart snapshots', () => {
         wireSnapshot({ count: 3 }, [
           { name: 'db:main', contentType: 'application/x-sqlite3', body: bytes },
         ]),
+        input,
       ),
     ).rejects.toBeDefined();
-    await sdk.loadSnapshot.load(wireSnapshot({ count: 3 }, [], { fileDatabases: {} }));
+    await sdk.loadSnapshot.load(wireSnapshot({ count: 3 }, [], { fileDatabases: {} }), input);
     const saved = await sdk.saveSnapshot.save();
     expect(JSON.parse(new TextDecoder().decode(saved.payload)).state).toEqual({ count: 3 });
   });
@@ -445,7 +446,7 @@ describe('explicit multipart snapshots', () => {
         },
       });
     selectSelfAgent('SaveValidationParts');
-    await sdk.loadSnapshot.load(wireSnapshot(null));
+    await sdk.loadSnapshot.load(wireSnapshot(null), input);
     for (const invalid of [undefined, NaN, Infinity, new Uint8Array(), { x: undefined }]) {
       state = invalid;
       await expect(sdk.saveSnapshot.save()).rejects.toBeDefined();
@@ -478,7 +479,7 @@ describe('explicit multipart snapshots', () => {
       snapshot: { save: () => ({ state: null, parts: new Map() }) },
     } as never);
     selectSelfAgent('IncompleteParts');
-    await expect(sdk.loadSnapshot.load(wireSnapshot(null))).rejects.toContain(
+    await expect(sdk.loadSnapshot.load(wireSnapshot(null), input)).rejects.toContain(
       'snapshot.save and snapshot.load',
     );
     sdk.defineAgent({
@@ -488,7 +489,9 @@ describe('explicit multipart snapshots', () => {
       snapshotting: { state: z.null(), multipart: { state: z.null() } },
     } as never);
     selectSelfAgent('ConflictingParts');
-    await expect(sdk.loadSnapshot.load(wireSnapshot(null))).rejects.toContain('mutually exclusive');
+    await expect(sdk.loadSnapshot.load(wireSnapshot(null), input)).rejects.toContain(
+      'mutually exclusive',
+    );
     for (const [i, multipart] of [
       undefined,
       {},
@@ -505,7 +508,7 @@ describe('explicit multipart snapshots', () => {
           snapshot: { save: () => bytes, load: () => ({}) },
         } as never);
       selectSelfAgent(name);
-      await expect(sdk.loadSnapshot.load(wireSnapshot(null))).rejects.toContain(
+      await expect(sdk.loadSnapshot.load(wireSnapshot(null), input)).rejects.toContain(
         'Standard Schema state validator',
       );
     }
@@ -543,7 +546,7 @@ describe('explicit multipart snapshots', () => {
         },
       });
     selectSelfAgent('MutatingParts');
-    await sdk.loadSnapshot.load(wireSnapshot({ revision: '17' }));
+    await sdk.loadSnapshot.load(wireSnapshot({ revision: '17' }), input);
     for (let i = 0; i < 2; i++) {
       const saved = await sdk.saveSnapshot.save();
       const parts = decodeMultipart(saved.payload, extractBoundary(saved.mimeType)!);
@@ -597,13 +600,14 @@ describe('explicit multipart snapshots', () => {
         {
           name: 'state',
           contentType: 'application/json',
-          body: new TextEncoder().encode(
-            JSON.stringify({ version: 1, principal, constructorParameters, state: null }),
-          ),
+          body: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state: null })),
         },
       ]);
       await expect(
-        sdk.loadSnapshot.load({ payload: data, mimeType: `multipart/mixed; boundary=${boundary}` }),
+        sdk.loadSnapshot.load(
+          { payload: data, mimeType: `multipart/mixed; boundary=${boundary}` },
+          input,
+        ),
       ).rejects.toBeDefined();
       expect(load).not.toHaveBeenCalled();
       await expect(sdk.saveSnapshot.save()).rejects.toThrow(/not initialized/);
@@ -656,7 +660,7 @@ describe('explicit multipart snapshots', () => {
         expect(parts[1].name).toBe(`db:${fieldName}`);
         vi.resetModules();
         const restored = await register();
-        await restored.loadSnapshot.load(snapshot);
+        await restored.loadSnapshot.load(snapshot, input);
         expect(restore).toHaveBeenCalledTimes(1);
         expect(restore.mock.calls[0][1]).toEqual(bytes);
         const resaved = await restored.saveSnapshot.save();

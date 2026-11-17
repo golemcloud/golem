@@ -15,7 +15,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
-import { constructorParametersJson, selectSelfAgent } from './selfAgentTestSupport';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const input = schemaValueToWit(v.record([]));
 const oidc = (sub: string) =>

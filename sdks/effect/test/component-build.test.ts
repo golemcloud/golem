@@ -193,7 +193,7 @@ describe("capability-sensitive component exports", () => {
       const snapshot = await runtime.saveSnapshot.save()
       __setEnvironment([["GOLEM_AGENT_TYPE", "RuntimeMetadata"]])
       const restored = instantiate()
-      await restored.loadSnapshot.load(snapshot)
+      await restored.loadSnapshot.load(snapshot, input)
       expect(
         schemaValueFromWit(
           await withCaller(principal, () =>
@@ -515,7 +515,7 @@ describe("capability-sensitive component exports", () => {
         const snapshot = await runtime.saveSnapshot.save()
         __setEnvironment([["GOLEM_AGENT_TYPE", "CapabilityCounter"]])
         const restored = instantiate()
-        await restored.loadSnapshot.load(snapshot)
+        await restored.loadSnapshot.load(snapshot, input)
         expect(
           schemaValueFromWit(
             await withCaller(

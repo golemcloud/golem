@@ -168,8 +168,7 @@ func beginAgent(agentType string, input types.SchemaValueTree, principal Princip
 	if err := decodeParams(input, e.idFields, idVal, principal); err != nil {
 		return fail(common.MakeAgentErrorInvalidInput(err.Error()))
 	}
-	ctor, ctorErr := snapshotConstructor(input)
-	inst := &instance{def: e, principal: principal, constructor: ctor, constructorErr: ctorErr}
+	inst := &instance{def: e, principal: principal}
 	active = inst
 	return inst, idVal, witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
 }
@@ -245,22 +244,19 @@ func init() {
 		if active == nil {
 			panic(fmt.Errorf("golem: save-snapshot before initialize"))
 		}
-		if active.constructorErr != nil {
-			panic(fmt.Errorf("golem: snapshot save failed: %w", active.constructorErr))
-		}
-		snap, err := saveState(active.state, active.principal, active.constructor)
+		snap, err := saveState(active.state, active.principal)
 		if err != nil {
 			panic(fmt.Errorf("golem: snapshot save failed: %w", err))
 		}
 		return snap
 	}
 
-	loadExports.Exports.Load = func(snap apihost.Snapshot) witTypes.Result[witTypes.Unit, string] {
+	loadExports.Exports.Load = func(snap apihost.Snapshot, constructor types.SchemaValueTree) witTypes.Result[witTypes.Unit, string] {
 		// Snapshot recovery runs on a FRESH instance: the host does not call
 		// initialize first, it hands us the snapshot and expects the agent to
 		// come back on its own, without its constructor running again. The
-		// agent type comes from GOLEM_AGENT_TYPE, and the constructor parameters
-		// from the snapshot, which is exactly what initialize needs.
+		// agent type comes from GOLEM_AGENT_TYPE, and the host passes the
+		// constructor parameters that initialize received.
 		if active != nil {
 			return witTypes.Err[witTypes.Unit]("agent already initialized")
 		}
@@ -268,15 +264,11 @@ func init() {
 		if agentType == "" {
 			return witTypes.Err[witTypes.Unit](envVarNotReadable(agentTypeEnvVar))
 		}
-		principal, ctorJSON, state, err := splitSnapshot(snap)
+		principal, state, err := splitSnapshot(snap)
 		if err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
-		ctorParams, err := restoredConstructor(ctorJSON)
-		if err != nil {
-			return witTypes.Err[witTypes.Unit](err.Error())
-		}
-		if err := restoreAgent(agentType, ctorParams, principal, state); err != nil {
+		if err := restoreAgent(agentType, constructor, principal, state); err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
 		return witTypes.Ok[witTypes.Unit, string](witTypes.Unit{})

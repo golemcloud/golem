@@ -124,7 +124,6 @@ const sqlite = defineAgent({
 const setLoad = (name: string) => {
   __setEnvironment([["GOLEM_AGENT_TYPE", name]])
 }
-const header = { principal, constructorParameters: wire }
 
 describe("explicit multipart snapshots", () => {
   beforeEach(async () => {
@@ -172,7 +171,7 @@ describe("explicit multipart snapshots", () => {
     expect(decoded.parts.get("index")).toEqual({ bytes, contentType: "application/octet-stream" })
     await __resetAgents()
     setLoad("MultipartIndex")
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire)
     expect(initCalls).toBe(1)
     expect(restoreCalls).toBe(1)
     expect(methodsCalls).toBe(2)
@@ -233,7 +232,7 @@ describe("explicit multipart snapshots", () => {
     expect(decoded.state).toBeDefined()
     await __resetAgents()
     setLoad("MultipartPromise")
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire)
     await withCaller(principal, () => guest.invoke("check", wire))
   })
 
@@ -245,7 +244,7 @@ describe("explicit multipart snapshots", () => {
     expect(decoded).toMatchObject({ kind: "multipart", state: null, parts: new Map() })
     await __resetAgents()
     setLoad("MultipartNull")
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire)
   })
 
   it("failed restoration installs no active instance or methods", async () => {
@@ -255,18 +254,18 @@ describe("explicit multipart snapshots", () => {
     setLoad("MultipartIndex")
     methodsCalls = 0
     failRestore = true
-    await expect(dispatchLoadSnapshot(snapshot)).rejects.toThrow(/restore failed/)
+    await expect(dispatchLoadSnapshot(snapshot, wire)).rejects.toThrow(/restore failed/)
     expect(methodsCalls).toBe(0)
     await expect(dispatchSaveSnapshot()).rejects.toThrow(/not initialized/)
     failRestore = false
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire)
   })
 
   it("validates the declared DB inventory before restoration, then hydrates before methods", async () => {
     setLoad("MultipartSqlite")
     const parts = new Map([["index", { bytes, contentType: "application/octet-stream" }]])
     await expect(
-      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(header, null, [], parts)),
+      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(principal, null, [], parts), wire),
     ).rejects.toThrow(/SnapshotDatabaseMissingPartError/)
     expect(dbRestoreCalls).toBe(0)
     __setRestoreDatabaseSync((_db, image) => {
@@ -274,7 +273,8 @@ describe("explicit multipart snapshots", () => {
       dbHydrated = true
     })
     await dispatchLoadSnapshot(
-      encodeMultipartJsonEnvelope(header, null, [{ name: "main", bytes }], parts),
+      encodeMultipartJsonEnvelope(principal, null, [{ name: "main", bytes }], parts),
+      wire,
     )
     expect(dbRestoreCalls).toBe(1)
     expect(dbHydrated).toBe(true)
@@ -283,13 +283,19 @@ describe("explicit multipart snapshots", () => {
   it("rejects nonmultipart and reserved DBs before user restoration", async () => {
     setLoad("MultipartNull")
     await expect(
-      dispatchLoadSnapshot({
-        payload: new TextEncoder().encode("{}"),
-        mimeType: "application/json",
-      }),
+      dispatchLoadSnapshot(
+        {
+          payload: new TextEncoder().encode("{}"),
+          mimeType: "application/json",
+        },
+        wire,
+      ),
     ).rejects.toBeDefined()
     await expect(
-      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(header, null, [{ name: "other", bytes }])),
+      dispatchLoadSnapshot(
+        encodeMultipartJsonEnvelope(principal, null, [{ name: "other", bytes }]),
+        wire,
+      ),
     ).rejects.toThrow(/SnapshotDatabaseUnknownPartError/)
   })
 
@@ -313,10 +319,7 @@ describe("explicit multipart snapshots", () => {
 
   it("rejects duplicate JSON metadata, version spellings, namespaces, names, MIME parameters and invalid UTF-8", () => {
     const enc = new TextEncoder()
-    const envelope =
-      '{"version":1,"principal":{"tag":"anonymous"},' +
-      '"constructorParameters":{"root":0,"valueNodes":[{"tag":"record-value","val":[]}]},' +
-      '"state":null}'
+    const envelope = '{"version":1,"principal":{"tag":"anonymous"},"state":null}'
     const wrap = (
       state: Uint8Array,
       extras: Array<{ name: string; contentType: string; body: Uint8Array }> = [],

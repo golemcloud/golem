@@ -102,21 +102,6 @@ const stateArb: fc.Arbitrary<typeof StateSchema.Type> = fc.record({
   }),
 })
 
-/** Constructor parameters: a record of string and u64 leaves. */
-const constructorParametersArb = fc
-  .array(fc.oneof(fc.string(), fc.bigInt({ min: 0n, max: (1n << 64n) - 1n })), { maxLength: 4 })
-  .map((leaves) => ({
-    root: 0,
-    valueNodes: [
-      { tag: "record-value" as const, val: leaves.map((_, i) => i + 1) },
-      ...leaves.map((leaf) =>
-        typeof leaf === "string"
-          ? { tag: "string-value" as const, val: leaf }
-          : { tag: "u64-value" as const, val: leaf },
-      ),
-    ],
-  }))
-
 const dbPartArb = fc.record({
   name: fc.stringMatching(/^[a-zA-Z_][a-zA-Z0-9_]*$/),
   bytes: fc.uint8Array({ maxLength: 256 }),
@@ -129,17 +114,16 @@ const dbPartArb = fc.record({
 describe("snapshot-envelope properties", () => {
   prop(
     "JSON envelope round-trips arbitrary principal + arbitrary state",
-    { principal: principalArb, constructorParameters: constructorParametersArb, state: stateArb },
-    ({ principal, constructorParameters, state }) => {
+    { principal: principalArb, state: stateArb },
+    ({ principal, state }) => {
       expect(Schema.is(StateSchema)(state)).toBe(true)
-      const env = encodeJsonEnvelope({ principal, constructorParameters }, state)
+      const env = encodeJsonEnvelope(principal, state)
       expect(env.mimeType).toBe("application/json")
       const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("json")
       if (decoded.kind !== "json") throw new Error("expected json envelope")
       // Principal round-trips through serialise + deserialise.
       expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
-      expect(decoded.constructorParameters).toEqual(constructorParameters)
       // State round-trips through JSON exactly (the schema only contains
       // JSON-safe leaves).
       expect(decoded.state).toEqual(state)
@@ -148,19 +132,14 @@ describe("snapshot-envelope properties", () => {
 
   prop(
     "binary envelope round-trips arbitrary principal + arbitrary user payload",
-    {
-      principal: principalArb,
-      constructorParameters: constructorParametersArb,
-      userPayload: fc.uint8Array({ maxLength: 1024 }),
-    },
-    ({ principal, constructorParameters, userPayload }) => {
-      const env = encodeBinaryEnvelope({ principal, constructorParameters }, userPayload)
+    { principal: principalArb, userPayload: fc.uint8Array({ maxLength: 1024 }) },
+    ({ principal, userPayload }) => {
+      const env = encodeBinaryEnvelope(principal, userPayload)
       expect(env.mimeType).toBe("application/octet-stream")
       const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("binary")
       if (decoded.kind !== "binary") throw new Error("expected binary envelope")
       expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
-      expect(decoded.constructorParameters).toEqual(constructorParameters)
       expect(Array.from(decoded.userPayload)).toEqual(Array.from(userPayload))
     },
   )
@@ -169,7 +148,6 @@ describe("snapshot-envelope properties", () => {
     "multipart envelope round-trips arbitrary principal + state + DB parts",
     {
       principal: principalArb,
-      constructorParameters: constructorParametersArb,
       state: stateArb,
       // De-duplicate DB names to avoid the multipart decoder's
       // duplicate-name check (an unrelated, well-tested invariant).
@@ -185,18 +163,13 @@ describe("snapshot-envelope properties", () => {
           })),
         ),
     },
-    ({ principal, constructorParameters, state, databases }) => {
-      const env = encodeMultipartJsonEnvelope(
-        { principal, constructorParameters },
-        state,
-        databases,
-      )
+    ({ principal, state, databases }) => {
+      const env = encodeMultipartJsonEnvelope(principal, state, databases)
       expect(env.mimeType.startsWith("multipart/mixed")).toBe(true)
       const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("multipart")
       if (decoded.kind !== "multipart") throw new Error("expected multipart envelope")
       expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
-      expect(decoded.constructorParameters).toEqual(constructorParameters)
       expect(decoded.state).toEqual(state)
       // Order is preserved by `encodeMultipartJsonEnvelope` (state first,
       // then DBs in input order); decoder strips the state part and

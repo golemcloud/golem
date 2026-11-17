@@ -21,6 +21,8 @@ pub async fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, Strin
 
 pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int32, String) -> T raise @common.AgentError
 
+pub fn decode_snapshot_constructor(String, @types.SchemaValueTree) -> WireInput raise @common.AgentError
+
 pub fn decode_wire_input(@types.SchemaValueTree, Int32, String) -> WireInput raise @common.AgentError
 
 pub fn[T : @schema.FromWire] decode_wire_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
@@ -181,8 +183,10 @@ pub fn SnapshotPart::to_repr(Self) -> @debug.Repr
 pub(all) struct SnapshotRestoreContext {
   agent_id : @schema.AgentId
   agent_type : String
+  identity_fields : WireInput
   principal : @common.Principal
 }
+pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(Self, Int32) -> T raise @common.AgentError
 
 pub struct WireInput {
   reader : @schema.WireReader

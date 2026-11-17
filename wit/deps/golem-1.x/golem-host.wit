@@ -269,11 +269,15 @@ interface save-snapshot {
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
 /// when the new component incompatible with the old one.
 interface load-snapshot {
+    use golem:core/types@2.0.0.{schema-value-tree};
     use host.{snapshot};
 
     /// Tries to load a user-defined snapshot, setting up the agent's state based on it.
     /// The function can return with a failure to indicate that the update is not possible.
-    load: async func(snapshot: snapshot) -> result<_, string>;
+    ///
+    /// `constructor` is a value tree whose root encodes the agent's constructor parameter
+    /// list, in the same form `initialize` received it when the agent was created.
+    load: async func(snapshot: snapshot, %constructor: schema-value-tree) -> result<_, string>;
 }
 
 world golem-host {

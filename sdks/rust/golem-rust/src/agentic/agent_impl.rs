@@ -160,6 +160,7 @@ fn current_restore_identity() -> Result<RestoreIdentity, String> {
 
 async fn load_agent_snapshot(
     snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
+    constructor: crate::schema::wit::wire::SchemaValueTree,
     identity: impl FnOnce() -> Result<RestoreIdentity, String>,
 ) -> Result<(), String> {
     let (principal, agent_snapshot) = decode_snapshot(snapshot)?;
@@ -168,6 +169,7 @@ async fn load_agent_snapshot(
     let context = crate::agentic::SnapshotRestoreContext {
         principal: principal.clone(),
         agent_type: identity.agent_type,
+        parameters: constructor,
         agent_id: identity.agent_id,
     };
     let resolved = with_agent_initiator(
@@ -188,7 +190,7 @@ pub fn install_agent_exports() {
         invoke: |name, input| Box::pin(AgentRuntime::invoke(name, input)),
         get_definition: AgentRuntime::get_definition,
         discover: AgentRuntime::discover_agent_types,
-        load: |snapshot| Box::pin(AgentRuntime::load(snapshot)),
+        load: |snapshot, constructor| Box::pin(AgentRuntime::load(snapshot, constructor)),
         save: || Box::pin(AgentRuntime::save()),
     });
     #[cfg(target_arch = "wasm32")]
@@ -270,6 +272,7 @@ impl LoadSnapshotGuest for AgentRuntime {
     #[allow(clippy::await_holding_refcell_ref)]
     async fn load(
         snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
+        constructor: crate::schema::wit::wire::SchemaValueTree,
     ) -> Result<(), String> {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
@@ -280,7 +283,7 @@ impl LoadSnapshotGuest for AgentRuntime {
             return Err("Agent is already initialized".to_string());
         }
 
-        load_agent_snapshot(snapshot, current_restore_identity).await
+        load_agent_snapshot(snapshot, constructor, current_restore_identity).await
     }
 }
 
@@ -349,6 +352,7 @@ mod tests {
     use crate::golem_agentic::exports::golem::agent::guest::AgentType;
     use crate::golem_agentic::golem::agent::common::{AgentError, Principal};
     use crate::load_snapshot;
+    use crate::schema::wit::wire::{SchemaValueNode, SchemaValueTree};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
@@ -357,6 +361,7 @@ mod tests {
 
     struct TestAgent {
         snapshot: Vec<u8>,
+        constructor: (String, u32),
     }
 
     #[async_trait::async_trait(?Send)]
@@ -379,7 +384,10 @@ mod tests {
         }
 
         async fn save_snapshot_base(&self) -> Result<SnapshotData, String> {
-            Ok(SnapshotData::Bytes(self.snapshot.clone()))
+            let (name, count) = &self.constructor;
+            let mut saved = self.snapshot.clone();
+            saved.extend_from_slice(format!("|{name}|{count}").as_bytes());
+            Ok(SnapshotData::Bytes(saved))
         }
     }
 
@@ -411,10 +419,31 @@ mod tests {
             {
                 return Err("unexpected restore context".to_string());
             }
+            let mut parameters = crate::agentic::DirectAgentInput::new(context.parameters)
+                .map_err(|e| e.to_string())?;
+            let constructor = (
+                parameters.take::<String>().map_err(|e| e.to_string())?,
+                parameters.take::<u32>().map_err(|e| e.to_string())?,
+            );
+            parameters.finish().map_err(|e| e.to_string())?;
             if snapshot == b"fail" {
                 return Err("restore failed".to_string());
             }
-            Ok(ResolvedAgent::new(Box::new(TestAgent { snapshot })))
+            Ok(ResolvedAgent::new(Box::new(TestAgent {
+                snapshot,
+                constructor,
+            })))
+        }
+    }
+
+    fn constructor_tree(name: &str, count: u32) -> SchemaValueTree {
+        SchemaValueTree {
+            value_nodes: vec![
+                SchemaValueNode::RecordValue(vec![2, 1]),
+                SchemaValueNode::U32Value(count),
+                SchemaValueNode::StringValue(name.to_string()),
+            ],
+            root: 0,
         }
     }
 
@@ -639,7 +668,7 @@ mod tests {
                 mime_type: "multipart/mixed; boundary=b".to_string(),
             };
             assert!(
-                load_agent_snapshot(snapshot, || {
+                load_agent_snapshot(snapshot, constructor_tree("from-load", 7), || {
                     panic!("malformed metadata must fail before identity resolution")
                 })
                 .await
@@ -650,19 +679,43 @@ mod tests {
             assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), 0);
             assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
         }
-        let failure = load_agent_snapshot(binary_snapshot(b"fail"), test_identity).await;
+        let failure = load_agent_snapshot(
+            binary_snapshot(b"fail"),
+            constructor_tree("from-load", 7),
+            test_identity,
+        )
+        .await;
         assert_eq!(failure.unwrap_err(), "restore failed");
         assert!(get_principal().is_none());
         assert!(get_resolved_agent().is_none());
         assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
 
-        load_agent_snapshot(binary_snapshot(b"restored"), test_identity)
-            .await
-            .unwrap();
+        let mismatched = SchemaValueTree {
+            value_nodes: vec![
+                SchemaValueNode::RecordValue(vec![1]),
+                SchemaValueNode::StringValue("from-load".to_string()),
+            ],
+            root: 0,
+        };
+        assert!(
+            load_agent_snapshot(binary_snapshot(b"restored"), mismatched, test_identity)
+                .await
+                .is_err()
+        );
+        assert!(get_principal().is_none());
+        assert!(get_resolved_agent().is_none());
+
+        load_agent_snapshot(
+            binary_snapshot(b"restored"),
+            constructor_tree("from-load", 7),
+            test_identity,
+        )
+        .await
+        .unwrap();
         assert!(matches!(get_principal(), Some(Principal::Anonymous)));
         assert!(get_resolved_agent().is_some());
         assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
-        assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), 3);
 
         let saved = with_agent_instance_async(|agent| async move {
             agent.agent.borrow().save_snapshot_base().await.unwrap()
@@ -671,7 +724,7 @@ mod tests {
         let SnapshotData::Bytes(saved) = saved else {
             panic!("expected bytes");
         };
-        assert_eq!(saved, b"restored");
+        assert_eq!(saved, b"restored|from-load|7");
 
         *get_state().agent_instance.borrow_mut() = Default::default();
     }

@@ -112,24 +112,17 @@ export type SerializedPrincipal = typeof SerializedPrincipal.Type
 const Envelope = Schema.Struct({
   version: Schema.Literal(1),
   principal: SerializedPrincipal,
-  constructorParameters: Schema.Unknown,
   state: Schema.Unknown,
   fileDatabases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 })
 
-/** Header of the binary envelope (version 3): the principal and the constructor parameters. */
-const BinaryHeader = Schema.Struct({
-  principal: SerializedPrincipal,
-  constructorParameters: Schema.Unknown,
-})
-
 const EnvelopeFromString = Schema.fromJsonString(Envelope)
-const BinaryHeaderFromString = Schema.fromJsonString(BinaryHeader)
+const PrincipalFromString = Schema.fromJsonString(SerializedPrincipal)
 
 const encodeEnvelope = Schema.encodeUnknownSync(EnvelopeFromString)
 const decodeEnvelopeFromString = Schema.decodeUnknownSync(EnvelopeFromString)
-const encodeBinaryHeader = Schema.encodeUnknownSync(BinaryHeaderFromString)
-const decodeBinaryHeaderFromString = Schema.decodeUnknownSync(BinaryHeaderFromString)
+const encodePrincipal = Schema.encodeUnknownSync(PrincipalFromString)
+const decodePrincipalFromString = Schema.decodeUnknownSync(PrincipalFromString)
 
 const encoder = new TextEncoder()
 const strictDecoder = strictTextDecoder()
@@ -140,97 +133,6 @@ const decodeUtf8 = (bytes: Uint8Array, ctx: string): string => {
   } catch (err) {
     throw new SnapshotEnvelopeError(`${ctx}: payload is not valid UTF-8: ${String(err)}`)
   }
-}
-
-// ---------------------------------------------------------------------------
-// Constructor parameters: value tree ↔ JSON
-// ---------------------------------------------------------------------------
-
-/**
- * What every envelope carries besides the state: the principal and the constructor parameters
- * of the agent. Loading a snapshot reads the constructor parameters from here, because an agent
- * ID does not hold them.
- */
-export interface SnapshotHeader {
-  readonly principal: AgentCommon.Principal
-  readonly constructorParameters: CoreTypes.SchemaValueTree
-}
-
-const capabilityNodeTags: ReadonlySet<string> = new Set([
-  "secret-value",
-  "quota-token-handle",
-  "permission-card-handle",
-  "stream-value",
-])
-const decimal = /^(?:0|-?[1-9][0-9]*)$/
-
-const encodeTreeValue = (value: unknown): unknown => {
-  if (typeof value === "bigint") return { $bigint: value.toString() }
-  if (value instanceof Uint8Array) return { $bytes: Array.from(value) }
-  if (Array.isArray(value)) return value.map(encodeTreeValue)
-  if (value === null || typeof value !== "object") return value
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, item]) => item !== undefined)
-      .map(([key, item]) => [key, encodeTreeValue(item)]),
-  )
-}
-
-const decodeTreeValue = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(decodeTreeValue)
-  if (value === null || typeof value !== "object") return value
-  const entries = Object.entries(value)
-  if (entries.length === 1) {
-    const [key, item] = entries[0]!
-    if (key === "$bigint") {
-      if (typeof item !== "string" || decimal.exec(item)?.[0] !== item)
-        throw new SnapshotEnvelopeError("invalid snapshot constructor parameters integer")
-      return BigInt(item)
-    }
-    if (key === "$bytes") {
-      if (
-        !Array.isArray(item) ||
-        item.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
-      )
-        throw new SnapshotEnvelopeError("invalid snapshot constructor parameters bytes")
-      return Uint8Array.from(item as number[])
-    }
-  }
-  return Object.fromEntries(entries.map(([key, item]) => [key, decodeTreeValue(item)]))
-}
-
-/**
- * Encode constructor parameters into the JSON form that envelopes keep. Parameters with a
- * secret, quota token, permission card or stream cannot be kept in a snapshot.
- */
-export const encodeConstructorParameters = (tree: CoreTypes.SchemaValueTree): unknown => {
-  for (const node of tree.valueNodes) {
-    if (capabilityNodeTags.has(node.tag))
-      throw new SnapshotEnvelopeError(
-        `constructor parameters with a ${node.tag} node cannot be kept in a snapshot`,
-      )
-  }
-  return encodeTreeValue(tree)
-}
-
-/** Decode constructor parameters that {@link encodeConstructorParameters} encoded. */
-export const decodeConstructorParameters = (value: unknown): CoreTypes.SchemaValueTree => {
-  const tree = decodeTreeValue(value) as CoreTypes.SchemaValueTree
-  if (
-    tree === null ||
-    typeof tree !== "object" ||
-    !Array.isArray(tree.valueNodes) ||
-    !Number.isInteger(tree.root) ||
-    tree.valueNodes.some(
-      (node) =>
-        node === null ||
-        typeof node !== "object" ||
-        typeof node.tag !== "string" ||
-        capabilityNodeTags.has(node.tag),
-    )
-  )
-    throw new SnapshotEnvelopeError("invalid snapshot constructor parameters")
-  return tree
 }
 
 // ---------------------------------------------------------------------------
@@ -324,11 +226,13 @@ export const deserializePrincipal = (p: SerializedPrincipal): AgentCommon.Princi
  * Accepts a runtime `Principal` (with bigint UUIDs) and serializes it
  * via {@link serializePrincipal} before writing.
  */
-export const encodeJsonEnvelope = (header: SnapshotHeader, state: unknown): ApiHost.Snapshot => {
+export const encodeJsonEnvelope = (
+  principal: AgentCommon.Principal,
+  state: unknown,
+): ApiHost.Snapshot => {
   const json = encodeEnvelope({
     version: 1,
-    principal: serializePrincipal(header.principal),
-    constructorParameters: encodeConstructorParameters(header.constructorParameters),
+    principal: serializePrincipal(principal),
     state,
   })
   return {
@@ -338,38 +242,36 @@ export const encodeJsonEnvelope = (header: SnapshotHeader, state: unknown): ApiH
 }
 
 /**
- * Encode an `application/octet-stream` envelope (binary v3). The user's
- * raw `payload` bytes are appended verbatim after a JSON header that holds
- * the serialized principal and the constructor parameters.
+ * Encode an `application/octet-stream` envelope (binary v2). The user's
+ * raw `payload` bytes are appended verbatim after the principal header.
+ * Accepts a runtime `Principal` (with bigint UUIDs) and serializes it
+ * via {@link serializePrincipal} before writing.
  */
 export const encodeBinaryEnvelope = (
-  header: SnapshotHeader,
+  principal: AgentCommon.Principal,
   userPayload: Uint8Array,
 ): ApiHost.Snapshot => {
-  const headerJson = encodeBinaryHeader({
-    principal: serializePrincipal(header.principal),
-    constructorParameters: encodeConstructorParameters(header.constructorParameters),
-  })
-  const headerBytes = encoder.encode(headerJson)
-  const total = 1 + 4 + headerBytes.length + userPayload.length
+  const principalJson = encodePrincipal(serializePrincipal(principal))
+  const principalBytes = encoder.encode(principalJson)
+  const total = 1 + 4 + principalBytes.length + userPayload.length
   const out = new Uint8Array(total)
   const view = new DataView(out.buffer)
-  view.setUint8(0, 3)
-  view.setUint32(1, headerBytes.length, false) // big-endian
-  out.set(headerBytes, 5)
-  out.set(userPayload, 5 + headerBytes.length)
+  view.setUint8(0, 2)
+  view.setUint32(1, principalBytes.length, false) // big-endian
+  out.set(principalBytes, 5)
+  out.set(userPayload, 5 + principalBytes.length)
   return { payload: out, mimeType: BINARY_MIME }
 }
 
 /**
  * Encode a SQLite-aware `multipart/mixed` envelope. The `state` part
- * carries `{ version: 1, principal, constructorParameters, state, fileDatabases? }` as JSON; each entry in
+ * carries `{ version: 1, principal, state, fileDatabases? }` as JSON; each entry in
  * `databases` becomes a `db:<name>` part with `application/x-sqlite3`
  * content-type. File-backed database contents belong to filesystem snapshots;
  * only their logical names and locations belong in `fileDatabases`.
  */
 export const encodeMultipartJsonEnvelope = (
-  header: SnapshotHeader,
+  principal: AgentCommon.Principal,
   state: unknown,
   databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>,
   userParts: ReadonlyMap<string, SnapshotPart> = new Map(),
@@ -383,8 +285,7 @@ export const encodeMultipartJsonEnvelope = (
     )
   const stateJson = encodeEnvelope({
     version: 1,
-    principal: serializePrincipal(header.principal),
-    constructorParameters: encodeConstructorParameters(header.constructorParameters),
+    principal: serializePrincipal(principal),
     state,
     ...(fileDatabases === undefined ? {} : { fileDatabases }),
   })
@@ -420,8 +321,9 @@ export const encodeMultipartJsonEnvelope = (
  * principal (UUIDs back to bigints); `state` is whatever JSON shape the
  * user's `Schema.encodeUnknown` produced when the snapshot was saved.
  */
-export interface DecodedJsonEnvelope extends SnapshotHeader {
+export interface DecodedJsonEnvelope {
   readonly kind: "json"
+  readonly principal: AgentCommon.Principal
   readonly state: unknown
 }
 
@@ -429,8 +331,9 @@ export interface DecodedJsonEnvelope extends SnapshotHeader {
  * Decoded binary envelope. The `userPayload` is the raw byte slice the
  * user's `save` Effect originally returned.
  */
-export interface DecodedBinaryEnvelope extends SnapshotHeader {
+export interface DecodedBinaryEnvelope {
   readonly kind: "binary"
+  readonly principal: AgentCommon.Principal
   readonly userPayload: Uint8Array
 }
 
@@ -442,8 +345,9 @@ export interface DecodedBinaryEnvelope extends SnapshotHeader {
  * stripped); each `databases` entry carries an in-memory/temp SQLite image.
  * File-backed databases carry locations only, never contents.
  */
-export interface DecodedMultipartEnvelope extends SnapshotHeader {
+export interface DecodedMultipartEnvelope {
   readonly kind: "multipart"
+  readonly principal: AgentCommon.Principal
   readonly state: unknown
   readonly databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>
   readonly fileDatabases: Readonly<Record<string, string>> | undefined
@@ -506,7 +410,6 @@ const decodeJsonEnvelope = (payload: Uint8Array): DecodedJsonEnvelope => {
   return {
     kind: "json",
     principal: deserializePrincipal(env.principal),
-    constructorParameters: decodeConstructorParameters(env.constructorParameters),
     state: env.state,
   }
 }
@@ -589,7 +492,6 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
   return {
     kind: "multipart",
     principal,
-    constructorParameters: decodeConstructorParameters(env.constructorParameters),
     state: env.state,
     databases,
     fileDatabases: env.fileDatabases,
@@ -602,32 +504,31 @@ const decodeBinaryEnvelope = (payload: Uint8Array): DecodedBinaryEnvelope => {
     throw new SnapshotEnvelopeError(`binary envelope: payload is empty`)
   }
   const version = payload[0]!
-  if (version === 3) {
+  if (version === 2) {
     if (payload.length < 5) {
-      throw new SnapshotEnvelopeError(`binary envelope (v3): truncated header`)
+      throw new SnapshotEnvelopeError(`binary envelope (v2): truncated header`)
     }
     const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
-    const headerLen = view.getUint32(1, false)
-    if (payload.length < 5 + headerLen) {
+    const principalLen = view.getUint32(1, false)
+    if (payload.length < 5 + principalLen) {
       throw new SnapshotEnvelopeError(
-        `binary envelope (v3): declared header length ${headerLen} exceeds payload size ${payload.length - 5}`,
+        `binary envelope (v2): declared principal length ${principalLen} exceeds payload size ${payload.length - 5}`,
       )
     }
-    const headerBytes = payload.slice(5, 5 + headerLen)
-    const headerText = decodeUtf8(headerBytes, "binary envelope (v3): header segment")
-    let header: typeof BinaryHeader.Type
+    const principalBytes = payload.slice(5, 5 + principalLen)
+    const principalText = decodeUtf8(principalBytes, "binary envelope (v2): principal segment")
+    let serialized: SerializedPrincipal
     try {
-      header = decodeBinaryHeaderFromString(headerText)
+      serialized = decodePrincipalFromString(principalText)
     } catch (err) {
       throw new SnapshotEnvelopeError(
-        `binary envelope (v3): header segment is not a valid header: ${String((err as Error).message ?? err)}`,
+        `binary envelope (v2): principal segment is not a valid principal: ${String((err as Error).message ?? err)}`,
       )
     }
     return {
       kind: "binary",
-      principal: deserializePrincipal(header.principal),
-      constructorParameters: decodeConstructorParameters(header.constructorParameters),
-      userPayload: payload.slice(5 + headerLen),
+      principal: deserializePrincipal(serialized),
+      userPayload: payload.slice(5 + principalLen),
     }
   }
   throw new SnapshotEnvelopeError(`binary envelope: unsupported version byte ${version}`)

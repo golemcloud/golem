@@ -479,7 +479,7 @@ object Guest {
     }
 
   object LoadSnapshot {
-    def load(snapshot: JsSnapshot): js.Promise[Unit] =
+    def load(snapshot: JsSnapshot, constructorInput: JsSchemaValueTree): js.Promise[Unit] =
       if (!js.isUndefined(resolved)) {
         js.Promise.reject(customError("Agent is already initialized in this container"))
       } else {
@@ -497,7 +497,7 @@ object Guest {
                 FutureInterop.toPromise(
                   FutureInterop
                     .fromPromise(
-                      defn.restoreAny(agentState, agentId, principal)
+                      defn.restoreAny(agentState, agentId, constructorInput, principal)
                     )
                     .map { restored =>
                       val newResolved = Resolved(defn, restored.instance)

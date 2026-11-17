@@ -901,11 +901,11 @@ fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<(AgentId, WorkerExecut
         .chain()
         .find_map(|cause| match cause.downcast_ref::<WorkerExecutorError>() {
             Some(error @ WorkerExecutorError::OplogFailed { agent_id, .. }) => {
-                Some((agent_id.clone(), error.clone()))
+                Some((*agent_id, error.clone()))
             }
             _ => cause
                 .downcast_ref::<UnreadableOplog>()
-                .map(|error| (error.agent_id.clone(), error.clone().into())),
+                .map(|error| (error.agent_id, error.clone().into())),
         })
 }
 
@@ -1258,11 +1258,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
-        PreparedCall::LoadSnapshot { snapshot } => {
+        PreparedCall::LoadSnapshot { snapshot, input } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {
-                guest.call_load(accessor, snapshot).await
+                guest.call_load(accessor, snapshot, input).await
             })
             .await;
             let consumed_fuel =
@@ -1906,6 +1906,7 @@ enum LoweredCall {
     SaveSnapshot,
     LoadSnapshot {
         snapshot: golem_api_1_x::host::Snapshot,
+        input: SchemaValue,
     },
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
@@ -1947,6 +1948,7 @@ enum PreparedCall {
     SaveSnapshot,
     LoadSnapshot {
         snapshot: golem_api_1_x::host::Snapshot,
+        input: core_wire::SchemaValueTree,
     },
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
@@ -2040,7 +2042,15 @@ fn materialize_call<Ctx: WorkerCtx>(
             }
         }
         LoweredCall::SaveSnapshot => PreparedCall::SaveSnapshot,
-        LoweredCall::LoadSnapshot { snapshot } => PreparedCall::LoadSnapshot { snapshot },
+        LoweredCall::LoadSnapshot { snapshot, input } => {
+            let input =
+                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to encode load-snapshot constructor input: {e}"
+                    ))
+                })?;
+            PreparedCall::LoadSnapshot { snapshot, input }
+        }
         LoweredCall::ProcessOplogEntries {
             account_info,
             config,
@@ -2185,13 +2195,21 @@ pub fn lower_invocation(
             read_only_method: None,
             call: LoweredCall::SaveSnapshot,
         }),
-        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
-            display_name: "load-snapshot".to_string(),
-            read_only_method: Some("load-snapshot".to_string()),
-            call: LoweredCall::LoadSnapshot {
-                snapshot: snapshot.into(),
-            },
-        }),
+        AgentInvocation::LoadSnapshot { snapshot, .. } => {
+            let agent_id = agent_id.ok_or_else(|| {
+                WorkerExecutorError::invalid_request(
+                    "load-snapshot needs an agent with constructor parameters".to_string(),
+                )
+            })?;
+            Ok(LoweredInvocation {
+                display_name: "load-snapshot".to_string(),
+                read_only_method: Some("load-snapshot".to_string()),
+                call: LoweredCall::LoadSnapshot {
+                    snapshot: snapshot.into(),
+                    input: agent_id.parameters.value().clone(),
+                },
+            })
+        }
         AgentInvocation::ProcessOplogEntries {
             account_id,
             config,
@@ -2200,7 +2218,7 @@ pub fn lower_invocation(
             entries,
             ..
         } => {
-            let agent_id: core_wire::AgentId = metadata.agent_id.clone().into();
+            let agent_id: core_wire::AgentId = metadata.agent_id.into();
             let account_info = oplog_processor_exports::AccountInfo {
                 account_id: account_id.into(),
             };
@@ -2815,23 +2833,48 @@ mod tests {
         assert!(lowered.read_only_method.is_none());
     }
 
-    #[test]
-    fn load_snapshot_uses_read_only_strictness() {
-        let lowered = lower_invocation(
-            AgentInvocation::LoadSnapshot {
-                idempotency_key: InvocationId(Uuid::from_u128(2)),
-                snapshot: RawSnapshotData {
-                    data: vec![1, 2, 3],
-                    mime_type: "application/octet-stream".to_string(),
-                },
+    fn load_snapshot_invocation() -> AgentInvocation {
+        AgentInvocation::LoadSnapshot {
+            idempotency_key: InvocationId(Uuid::from_u128(2)),
+            snapshot: RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
             },
-            &metadata(),
-            Some(&agent_id()),
-        )
-        .expect("snapshot load should lower");
+        }
+    }
+
+    #[test]
+    fn load_snapshot_uses_read_only_strictness_and_passes_the_agents_constructor_input() {
+        let constructor_input = SchemaValue::Record {
+            fields: vec![SchemaValue::String("restored-key".to_string())],
+        };
+        let agent_id = ParsedAgentKey::new(
+            AgentTypeName(AGENT_TYPE.to_string()),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                constructor_input.clone(),
+            ),
+        );
+        let lowered = lower_invocation(load_snapshot_invocation(), &metadata(), Some(&agent_id))
+            .expect("snapshot load should lower");
 
         assert_eq!(lowered.display_name, "load-snapshot");
         assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
+        let LoweredCall::LoadSnapshot { input, .. } = lowered.call else {
+            panic!("snapshot load must lower to a load-snapshot call");
+        };
+        assert_eq!(input, constructor_input);
+    }
+
+    #[test]
+    fn load_snapshot_without_an_agent_key_is_rejected() {
+        let Err(err) = lower_invocation(load_snapshot_invocation(), &metadata(), None) else {
+            panic!("an owner without constructor parameters cannot load a snapshot");
+        };
+        assert!(
+            err.to_string().contains("load-snapshot needs an agent"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -3260,7 +3303,7 @@ mod tests {
     fn an_unreadable_oplog_of_another_agent_fails_only_the_call() {
         let other = AgentId::from_parts(7, 3);
         let unreadable = |error| UnreadableOplog {
-            agent_id: other.clone(),
+            agent_id: other,
             error,
         };
         let corrupt = unreadable(crate::services::oplog::OplogReadError::Gap {

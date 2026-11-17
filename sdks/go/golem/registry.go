@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"encoding/json"
 	"reflect"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
@@ -74,10 +73,6 @@ type instance struct {
 	state any
 	// principal is the one the agent was initialized with.
 	principal Principal
-	// constructor is the wire JSON of the constructor parameters, which a
-	// snapshot keeps; constructorErr is why they cannot be kept.
-	constructor    json.RawMessage
-	constructorErr error
 	// config is the agent's materialized config (its Cfg value), cached for the
 	// worker's life on first read. Its local fields are read from the host once;
 	// its secret fields are lazy handles that re-read on Secret.Get(). nil until

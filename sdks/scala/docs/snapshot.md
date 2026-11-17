@@ -104,7 +104,7 @@ object AutoSnapshotCounterImpl {
     state: CounterState,
     context: SnapshotRestoreContext
   ): Future[AutoSnapshotCounterImpl] = Future.successful {
-    val instance = new AutoSnapshotCounterImpl(context.agentId.toString)
+    val instance = new AutoSnapshotCounterImpl(context.identity[String](0))
     instance.state = state
     instance
   }
@@ -156,7 +156,7 @@ object SnapshotCounterImpl {
     bytes: Array[Byte],
     context: SnapshotRestoreContext
   ): Future[SnapshotCounterImpl] = Future.successful {
-    val instance = new SnapshotCounterImpl(context.agentId.toString)
+    val instance = new SnapshotCounterImpl(context.identity[String](0))
     instance.value =
       ((bytes(0) & 0xff) << 24) |
         ((bytes(1) & 0xff) << 16) |
@@ -209,8 +209,8 @@ inline/blob-spill threshold is not a snapshot size cap. See the
 initialization: the implementation's companion factory receives the snapshot and a `SnapshotRestoreContext`, and it
 must return the complete fresh instance. The SDK installs that instance only after the returned `Future` succeeds.
 
-`SnapshotRestoreContext` provides the typed agent ID, the restored principal, and fresh configuration. The agent ID
-does not hold the constructor parameters, so a snapshot that needs them stores them in its own state. Snapshot loading runs in read-only mode and writes nothing to the oplog. It may decode data, perform
+`SnapshotRestoreContext` provides typed identity fields, the typed agent ID, the restored principal, and fresh
+configuration. Snapshot loading runs in read-only mode and writes nothing to the oplog. It may decode data, perform
 local computation, read configuration, and use other permitted reads. Mutating host operations and outgoing HTTP or
 agent RPC calls are rejected before they take effect.
 

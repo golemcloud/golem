@@ -1173,7 +1173,10 @@ describe('component exports', () => {
           val: 'missing',
         });
         await expect(
-          exports.loadSnapshot.load({ payload: new Uint8Array(), mimeType: 'application/json' }),
+          exports.loadSnapshot.load(
+            { payload: new Uint8Array(), mimeType: 'application/json' },
+            unit,
+          ),
         ).rejects.toBe('This component does not define agents');
       } else {
         await exports.guest.initialize('Counter', unit);
@@ -1186,12 +1189,11 @@ describe('component exports', () => {
         expect(JSON.parse(new TextDecoder().decode(snapshot.payload))).toEqual({
           version: 1,
           principal: { tag: 'anonymous' },
-          constructorParameters: unit,
           state: { count: 18 },
           fileDatabases: {},
         });
         const restored = await instantiate(output.code);
-        await restored.loadSnapshot.load(snapshot);
+        await restored.loadSnapshot.load(snapshot, unit);
         expect(await restored.saveSnapshot.save()).toEqual(snapshot);
       }
       const input = wireValue(z.object({ name: z.string() }), { name: 'Ada' });

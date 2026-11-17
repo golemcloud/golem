@@ -2060,9 +2060,11 @@ mod tests {
     trait CustomSnapshotAgent {
         fn new(data: String) -> Self;
         fn get_data(&self) -> String;
+        fn get_constructor(&self) -> String;
     }
 
     struct CustomSnapshotAgentImpl {
+        constructor: String,
         data: String,
     }
 
@@ -2070,18 +2072,29 @@ mod tests {
     impl CustomSnapshotAgent for CustomSnapshotAgentImpl {
         fn new(data: String) -> Self {
             CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
-            Self { data }
+            Self {
+                constructor: data.clone(),
+                data,
+            }
         }
         fn get_data(&self) -> String {
             self.data.clone()
         }
+        fn get_constructor(&self) -> String {
+            self.constructor.clone()
+        }
 
         async fn load_snapshot(
             bytes: Vec<u8>,
-            _context: golem_rust::agentic::SnapshotRestoreContext,
+            context: golem_rust::agentic::SnapshotRestoreContext,
         ) -> Result<Self, String> {
             CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
+            let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+                .map_err(|e| e.to_string())?;
+            let constructor = parameters.take::<String>().map_err(|e| e.to_string())?;
+            parameters.finish().map_err(|e| e.to_string())?;
             Ok(Self {
+                constructor,
                 data: String::from_utf8(bytes).map_err(|e| e.to_string())?,
             })
         }
@@ -2144,6 +2157,7 @@ mod tests {
         let context = SnapshotRestoreContext {
             principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
+            parameters: wire_input(vec![SchemaValue::String("created".to_string())]),
             agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
         let restored = with_agent_initiator(
@@ -2198,8 +2212,10 @@ mod tests {
             BaseAgent, SnapshotRestoreContext, get_principal, get_resolved_agent,
             with_agent_initiator,
         };
+        use golem_rust::schema::wit::direct;
 
         let agent = CustomSnapshotAgentImpl {
+            constructor: "hello".to_string(),
             data: "hello-world".to_string(),
         };
 
@@ -2218,6 +2234,7 @@ mod tests {
         let context = || SnapshotRestoreContext {
             principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
+            parameters: wire_input(vec![SchemaValue::String("original".to_string())]),
             agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
 
@@ -2260,6 +2277,23 @@ mod tests {
             panic!("expected bytes");
         };
         assert_eq!(saved, b"new-data");
+
+        #[derive(IntoWire)]
+        struct NoArguments {}
+        let constructor = restored
+            .agent
+            .borrow_mut()
+            .invoke(
+                "get_constructor".to_string(),
+                direct::encode(&NoArguments {}).unwrap(),
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            direct::decode::<String>(constructor.value.unwrap()).unwrap(),
+            "original"
+        );
     }
 
     #[test]
@@ -3449,6 +3483,7 @@ mod tests {
         let context = || SnapshotRestoreContext {
             principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
+            parameters: wire_input(vec![SchemaValue::U32(0)]),
             agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
         for wrong in [
