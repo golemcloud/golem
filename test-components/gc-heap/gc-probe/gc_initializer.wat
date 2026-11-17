@@ -8,8 +8,9 @@
     (export "now" (func (result $datetime)))))
   (core module $abi (memory (export "memory") 1))
   (core instance $abi (instantiate $abi))
+  (alias core export $abi "memory" (core memory $abi_memory))
   (core func $now (canon lower (func $clock "now")))
-  (core func $wall_now (canon lower (func $wall "now") (memory (core memory $abi "memory"))))
+  (core func $wall_now (canon lower (func $wall "now") (memory $abi_memory)))
   (core module $initializer
     (import "host" "now" (func $now (result i64)))
     (import "host" "wall-now" (func $wall_now (param i32)))

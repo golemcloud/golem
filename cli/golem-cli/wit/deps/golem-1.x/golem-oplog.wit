@@ -286,6 +286,13 @@ interface oplog {
         component-revision: u64,
     }
 
+    record agent-invocation-failed-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        error: string,
+        start-index: oplog-index,
+    }
+
     enum oplog-error-kind {
         invocation,
         recovery
@@ -889,6 +896,13 @@ interface oplog {
         component-revision: u64,
     }
 
+    record raw-agent-invocation-failed-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        error: worker-error,
+        start-index: oplog-index,
+    }
+
     record raw-error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
@@ -1024,6 +1038,7 @@ interface oplog {
         agent-invocation-started(raw-agent-invocation-started-parameters),
         /// The agent has completed an invocation
         agent-invocation-finished(raw-agent-invocation-finished-parameters),
+        agent-invocation-failed(raw-agent-invocation-failed-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed
@@ -1137,6 +1152,7 @@ interface oplog {
         agent-invocation-started(agent-invocation-started-parameters),
         /// The agent has completed an invocation
         agent-invocation-finished(agent-invocation-finished-parameters),
+        agent-invocation-failed(agent-invocation-failed-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed

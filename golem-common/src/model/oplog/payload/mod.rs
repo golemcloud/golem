@@ -389,6 +389,9 @@ oplog_payload! {
         P3SocketsConnect {
             remote_address: SerializableP3IpSocketAddress
         },
+        P3SocketsBind {
+            local_address: SerializableP3IpSocketAddress
+        },
         GolemToolInvoke {
             tool_name: String,
             command_path: Vec<String>,
@@ -765,6 +768,13 @@ oplog_payload! {
         P3SocketsConnect {
             result: Result<(), SerializableP3SocketErrorCode>
         },
+        P3SocketsTcpConnect {
+            result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableP3SocketErrorCode>,
+            closed: bool,
+        },
+        P3SocketsBind {
+            result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
+        },
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
         },
@@ -1064,7 +1074,8 @@ pub mod host_functions {
         (WasiConfigGetAll => "wasi:config/store", "get-all", ConfigGetAll, ConfigGetAllResponse),
         (P3FilesystemTypesDescriptorWriteViaStream => "filesystem::types::descriptor", "write-via-stream", NoInput, P3FileSystemWriteAdmission, denied = denied::filesystem::p3_write_admission),
         (P3FilesystemTypesDescriptorAppendViaStream => "filesystem::types::descriptor", "append-via-stream", NoInput, P3FileSystemWriteAdmission, denied = denied::filesystem::p3_write_admission),
-        (P3SocketsTypesTcpSocketConnect => "sockets::types::tcp-socket", "connect", P3SocketsConnect, P3SocketsConnect, denied = denied::sockets::p3_connect),
+        (P3SocketsTypesTcpSocketConnect => "sockets::types::tcp-socket", "connect", P3SocketsConnect, P3SocketsTcpConnect, denied = denied::sockets::p3_tcp_connect),
+        (P3SocketsTypesTcpSocketBind => "sockets::types::tcp-socket", "bind", P3SocketsBind, P3SocketsBind),
         (P3SocketsTypesUdpSocketConnect => "sockets::types::udp-socket", "connect", P3SocketsConnect, P3SocketsConnect, denied = denied::sockets::p3_connect),
         (GolemToolRpcInvokeAndAwait => "golem::tool::host::tool-rpc", "invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemToolRpcInvoke => "golem::tool::host::tool-rpc", "invoke", GolemToolInvoke, GolemToolUnitOrFailure),

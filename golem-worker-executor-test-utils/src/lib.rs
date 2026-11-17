@@ -2652,7 +2652,7 @@ impl TestContext {
 
     /// Waits until the workers of every shut-down executor previously started on this context
     /// stopped executing. Executors that are still running are left alone.
-    async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
+    pub async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
         let previous = self.executor_invocation_loops.lock().unwrap().clone();
         let mut drained = Vec::new();
         for loops in &previous {
@@ -3759,6 +3759,16 @@ impl InvocationHooks for TestWorkerCtx {
     ) -> InvocationFailureDecision {
         self.durable_ctx
             .on_invocation_failure(full_function_name, trap_type)
+            .await
+    }
+
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx
+            .record_agent_method_failure(full_function_name, error)
             .await
     }
 
@@ -6781,6 +6791,7 @@ impl Oplog for TestOplog {
             }
             result => result?,
         };
+        self.pause_at_test_append(&ordered.entry, true).await?;
         self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
@@ -6838,6 +6849,7 @@ impl Oplog for TestOplog {
             }
             result => result?,
         };
+        self.pause_at_test_append(&ordered.entry, true).await?;
         self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);

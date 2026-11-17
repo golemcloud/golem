@@ -320,6 +320,36 @@ fn projection_uses_the_cli_parser_and_finishes_help_before_input() {
 }
 
 #[test]
+fn a_bound_tool_that_declares_an_error_with_exit_code_zero_is_refused() {
+    let zero = |name: &str| ErrorCase {
+        name: name.into(),
+        doc: Doc::default(),
+        kind: ErrorKind::RuntimeError,
+        exit_code: 0,
+        payload: None,
+    };
+    let mut tool = fixture();
+    tool.commands.nodes[0].body.as_mut().unwrap().errors = vec![zero("first"), zero("second")];
+    let error = Catalog::new(BTreeMap::from([("exit-probe".into(), tool)]))
+        .err()
+        .expect("a declared error with exit code 0 refuses the catalog");
+    let refusal = |case: &str| {
+        format!(
+            "error case \"{case}\" in command \"fixture\" has exit code 0, which means success; \
+             a declared error needs an exit code from 1 to 255"
+        )
+    };
+    assert_eq!(
+        error,
+        format!(
+            "invalid tool \"exit-probe\": {}; {}",
+            refusal("first"),
+            refusal("second")
+        )
+    );
+}
+
+#[test]
 fn tool_failures_map_to_shell_statuses_and_messages() {
     use golem_rust::schema::wit::wire::{CustomToolError, ToolError, ToolRpcError};
     let declared: BTreeMap<String, u8> = [("quota".to_string(), 42)].into();

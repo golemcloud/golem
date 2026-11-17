@@ -140,6 +140,13 @@ before (value) {}
         .try_into()
         .map_err(|e: String| e)?,
     } }
+    AgentInvocationFailed { record (params) {
+        timestamp: timestamp_from_datetime(params.timestamp),
+        entity_parent_start_index: None,
+        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+        error: params.error.into(),
+        start_index: golem_common::model::OplogIndex::from_u64(params.start_index),
+    } }
     Suspend { record (ts) {
         timestamp: timestamp_from_datetime(ts.timestamp),
     } }
@@ -627,6 +634,12 @@ before (value) {}
         method_name: method_name,
         consumed_fuel: consumed_fuel,
         component_revision: component_revision.get(),
+    } }
+    AgentInvocationFailed { record (entity_parent_start_index) => RawAgentInvocationFailedParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        error: error.into(),
+        start_index: start_index.into(),
     } }
     Suspend { override (M::Suspend { timestamp }) => Ok(Self::Suspend(timestamp.into())) }
     Error { record (entity_parent_start_index) => RawErrorParameters {

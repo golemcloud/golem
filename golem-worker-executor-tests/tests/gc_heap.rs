@@ -176,7 +176,7 @@ fn constructor_key(entries: &[PublicOplogEntryWithIndex]) -> InvocationId {
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
                 PublicAgentInvocation::AgentInitialization(invocation) => {
-                    Some(invocation.invocation_id.clone())
+                    Some(invocation.invocation_id)
                 }
                 _ => None,
             },
@@ -214,11 +214,8 @@ fn assert_settled_history(entries: &[PublicOplogEntryWithIndex], expected: &[Inv
                     }
                     other => panic!("unexpected invocation: {other:?}"),
                 };
-                assert!(
-                    active.replace(key.clone()).is_none(),
-                    "overlapping invocations"
-                );
-                *starts.entry(key.clone()).or_insert(0) += 1;
+                assert!(active.replace(*key).is_none(), "overlapping invocations");
+                *starts.entry(*key).or_insert(0) += 1;
             }
             PublicOplogEntry::AgentInvocationFinished(_) => {
                 // Finished has no key; it terminates the preceding active invocation.

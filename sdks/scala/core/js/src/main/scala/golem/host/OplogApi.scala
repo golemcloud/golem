@@ -193,6 +193,13 @@ object OplogApi {
     consumedFuel: Long
   )
 
+  final case class AgentInvocationFailedParameters(
+    timestamp: ContextApi.DateTime,
+    invocationId: UUID,
+    error: String,
+    startIndex: OplogIndex
+  )
+
   sealed trait OplogErrorKind extends Product with Serializable
   object OplogErrorKind {
     case object Invocation extends OplogErrorKind
@@ -403,6 +410,9 @@ object OplogApi {
     final case class AgentInvocationFinished(params: AgentInvocationFinishedParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class AgentInvocationFailed(params: AgentInvocationFailedParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
     final case class Suspend(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
@@ -558,6 +568,16 @@ object OplogApi {
         case "agent-invocation-finished" | "exported-function-completed" =>
           AgentInvocationFinished(
             parseAgentInvocationFinishedParameters(v.asInstanceOf[JsAgentInvocationFinishedParameters])
+          )
+        case "agent-invocation-failed" =>
+          val p = v.asInstanceOf[JsAgentInvocationFailedParameters]
+          AgentInvocationFailed(
+            AgentInvocationFailedParameters(
+              timestamp = parseDateTime(p.timestamp),
+              invocationId = JsUuid.toUuid(p.invocationId),
+              error = p.error,
+              startIndex = BigInt(p.startIndex.toString)
+            )
           )
         case "suspend"            => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "error"              => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))

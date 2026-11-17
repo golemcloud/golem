@@ -6494,6 +6494,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -6554,6 +6555,7 @@ components:
           Cancelled: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
+          AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -6666,6 +6668,18 @@ components:
             - ActivatePlugin
             example: ActivatePlugin
       - $ref: '#/components/schemas/r#ActivatePluginParams'
+    PublicOplogEntry_r#AgentInvocationFailedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AgentInvocationFailed
+            example: AgentInvocationFailed
+      - $ref: '#/components/schemas/r#AgentInvocationFailedParams'
     PublicOplogEntry_r#AgentInvocationFinishedParams:
       allOf:
       - type: object
@@ -10156,6 +10170,26 @@ components:
           format: date-time
         plugin:
           $ref: '#/components/schemas/PluginInstallationDescription'
+    r#AgentInvocationFailedParams:
+      type: object
+      title: r#AgentInvocationFailedParams
+      required:
+      - timestamp
+      - invocationId
+      - error
+      - startIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        error:
+          type: string
+        startIndex:
+          type: integer
+          format: uint64
     r#AgentInvocationFinishedParams:
       type: object
       title: r#AgentInvocationFinishedParams

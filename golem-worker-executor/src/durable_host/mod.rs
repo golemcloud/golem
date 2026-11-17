@@ -736,11 +736,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         direction: TcpSocketStreamDirection,
     ) -> bool {
         self.state
-            .tcp_taken_streams
+            .socket_entries
             .get(&socket_rep)
             .map(|taken| match direction {
-                TcpSocketStreamDirection::Send => taken.send,
-                TcpSocketStreamDirection::Receive => taken.receive,
+                TcpSocketStreamDirection::Send => taken.send_taken,
+                TcpSocketStreamDirection::Receive => taken.receive_taken,
             })
             .unwrap_or(false)
     }
@@ -751,18 +751,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         socket_rep: u32,
         direction: TcpSocketStreamDirection,
     ) {
-        let taken = self.state.tcp_taken_streams.entry(socket_rep).or_default();
+        let taken = self
+            .state
+            .socket_entries
+            .get_mut(&socket_rep)
+            .expect("TCP socket entry");
         match direction {
-            TcpSocketStreamDirection::Send => taken.send = true,
-            TcpSocketStreamDirection::Receive => taken.receive = true,
+            TcpSocketStreamDirection::Send => taken.send_taken = true,
+            TcpSocketStreamDirection::Receive => taken.receive_taken = true,
         }
-    }
-
-    /// Drops the shadow taken-state for a TCP socket resource. Called from the
-    /// socket `drop` so a later resource-table rep reuse cannot inherit stale
-    /// taken flags.
-    pub(crate) fn forget_tcp_taken_streams(&mut self, socket_rep: u32) {
-        self.state.tcp_taken_streams.remove(&socket_rep);
     }
 
     fn io_ctx(&mut self) -> &mut IoCtx {
@@ -1090,15 +1087,6 @@ pub(crate) enum TcpSocketStreamDirection {
     Receive,
 }
 
-/// Tracks which of a TCP socket's one-shot `send`/`receive` streams have been
-/// acquired by the durable wrappers. Mirrors the wasmtime native per-socket
-/// taken flags so replay can rehydrate them deterministically.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct TcpTakenStreams {
-    send: bool,
-    receive: bool,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct WebSocketConnectionState {
     pub url: String,
@@ -1196,14 +1184,7 @@ struct PrivateDurableWorkerState {
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
     p2_timer_deadlines: HashMap<u32, std::time::Instant>,
 
-    /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
-    /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
-    /// from the oplog instead of invoking the native host call, so the native
-    /// "taken" state is not advanced on replay. This map records which directions
-    /// were acquired so a post-replay second call returns `InvalidState` exactly as
-    /// uninterrupted execution would. Reconstructed on replay from the durable
-    /// acquire calls and cleared when the socket resource is dropped.
-    tcp_taken_streams: HashMap<u32, TcpTakenStreams>,
+    socket_entries: sockets::SocketEntries,
 
     snapshotting_mode: bool,
 

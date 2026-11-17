@@ -1195,6 +1195,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     if self.owner_retirement_requested.is_cancelled() {
                         return Err(self.retirement_error());
                     }
+                    if status.status == AgentStatus::Failed
+                        && status.last_error_kind == Some(OplogErrorKind::Recovery)
+                    {
+                        let mut startup_events = self.events().subscribe();
+                        if let Some(start_attempt) = self.pending_startup_attempt() {
+                            // Wait for this recovery, not for already queued methods to finish.
+                            drop(instance_guard);
+                            startup_events
+                                .wait_for(|event| match event {
+                                    Event::WorkerLoaded {
+                                        agent_id,
+                                        start_attempt: completed_attempt,
+                                        result,
+                                    } if *agent_id == self.agent_id()
+                                        && *completed_attempt == start_attempt =>
+                                    {
+                                        Some(result.clone())
+                                    }
+                                    _ => None,
+                                })
+                                .await
+                                .map_err(|error| {
+                                    WorkerExecutorError::unknown(format!(
+                                        "Failed to receive worker startup result: {error}"
+                                    ))
+                                })??;
+                            continue;
+                        }
+                    }
                     if !self
                         .state_actor
                         .append_invocation_if_version(

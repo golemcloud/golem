@@ -16,9 +16,10 @@
 
 package golem.runtime
 
-import golem.runtime.autowire.{AgentImplementation, MethodBinding, SchemaPayload}
+import golem.runtime.autowire.{AgentDefinition, AgentImplementation, AgentRegistry, MethodBinding, SchemaPayload}
 import golem.runtime.{InputRecordCodec, ParamCodec}
 import golem.runtime.Sum
+import golem.runtime.guest.Guest
 import golem.{BaseAgent, Principal}
 import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplementation}
 import golem.FutureInterop
@@ -103,6 +104,8 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
     def asyncVoid(in: String): Future[Unit]
     def echoLong(in: Long): Future[Long]
     def echoDouble(in: Double): Future[Double]
+    def fail(): Int
+    def failAsync(): Future[Int]
   }
 
   @agentImplementation()
@@ -120,6 +123,8 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
     override def asyncVoid(in: String): Future[Unit]                        = Future.successful(())
     override def echoLong(in: Long): Future[Long]                           = Future.successful(in)
     override def echoDouble(in: Double): Future[Double]                     = Future.successful(in)
+    override def fail(): Int                                                = throw new IllegalStateException("synchronous method error")
+    override def failAsync(): Future[Int]                                   = Future.failed(new IllegalStateException("asynchronous method error"))
   }
 
   private lazy val broadDefn = AgentImplementation.registerClass[BroadAgent, BroadAgentImpl]
@@ -165,6 +170,97 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
   // ---------------------------------------------------------------------------
 
   def spec = suite("AgentEndToEndSpec")(
+    test("Guest returns synchronous and asynchronous method exceptions as agent errors") {
+      ZIO.fromFuture { implicit ec =>
+        val _         = broadDefn
+        val guest     = Guest.golemAgent200Guest
+        val input     = SchemaPayload.encode[Unit](())(InputRecordCodec.unit).asInstanceOf[js.Dynamic]
+        val principal = js.Dynamic.literal(tag = "anonymous")
+        Guest.resetForTesting()
+        def invoke(method: String): Future[js.Any] =
+          FutureInterop.fromPromise(guest.invoke(method, input, principal).asInstanceOf[js.Promise[js.Any]])
+        def diagnostic(error: Throwable): (String, Option[String]) = error match {
+          case js.JavaScriptException(value) =>
+            val error = value.asInstanceOf[js.Dynamic]
+            (
+              error.tag.asInstanceOf[String],
+              SchemaPayload.decode[String](error.`val`.value.asInstanceOf[JsSchemaValueTree]).toOption
+            )
+          case other => throw other
+        }
+        for {
+          _ <- FutureInterop.fromPromise(
+                 guest.initialize("E2eBroad", input, principal).asInstanceOf[js.Promise[Unit]]
+               )
+          sync  <- invoke("fail").failed
+          async <- invoke("failAsync").failed
+          echo  <-
+            FutureInterop.fromPromise(
+              guest.invoke("echo", singleInput("after failure"), principal).asInstanceOf[js.Promise[JsSchemaValueTree]]
+            )
+        } yield {
+          val syncError  = diagnostic(sync)
+          val asyncError = diagnostic(async)
+          Guest.resetForTesting()
+          assertTrue(
+            syncError._1 == "custom-error",
+            syncError._2.exists(_.contains("synchronous method error")),
+            asyncError._1 == "custom-error",
+            asyncError._2.exists(_.contains("asynchronous method error")),
+            SchemaPayload.decode[String](echo) == Right("hello after failure")
+          )
+        }
+      }
+    },
+    test("Guest does not normalize an output codec exception as a method failure") {
+      val brokenEncoder = new IntoSchema[String] {
+        def graph                                            = implicitly[IntoSchema[String]].graph
+        def toValue(value: String): golem.schema.SchemaValue = throw new IllegalStateException("encoder failed")
+      }
+      val method = MethodBinding.async[BroadAgent, String, String](
+        binding("echo", broadDefn).metadata,
+        InputRecordCodec.single[String]("in"),
+        OutputCodec.single[String](brokenEncoder, implicitly[FromSchema[String]])
+      )((_, value, _) => Future.successful(value))
+      AgentRegistry.register(
+        new AgentDefinition[BroadAgent](
+          "BrokenEncoder",
+          broadDefn.descriptor,
+          broadDefn.constructor,
+          List(method)
+        )
+      )
+      ZIO.fromFuture { implicit ec =>
+        Guest.resetForTesting()
+        val guest     = Guest.golemAgent200Guest
+        val principal = js.Dynamic.literal(tag = "anonymous")
+        for {
+          _ <- FutureInterop.fromPromise(
+                 guest
+                   .initialize(
+                     "BrokenEncoder",
+                     SchemaPayload.encode[Unit](())(InputRecordCodec.unit),
+                     principal
+                   )
+                   .asInstanceOf[js.Promise[Unit]]
+               )
+          error <- FutureInterop
+                     .fromPromise(
+                       guest
+                         .invoke(
+                           "echo",
+                           singleInput("valid handler output"),
+                           principal
+                         )
+                         .asInstanceOf[js.Promise[js.Any]]
+                     )
+                     .failed
+        } yield {
+          Guest.resetForTesting()
+          assertTrue(error.isInstanceOf[IllegalStateException], error.getMessage == "encoder failed")
+        }
+      }
+    },
     test("generated structural protocol is independent of ambient custom codecs") {
       val descriptor = customWireDefn.descriptor
       val root       = descriptor.methods.head.parameters.head.schema
@@ -285,5 +381,5 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
         FutureInterop.fromPromise(b.invoke(broadImpl, singleInput[String]("ignored"), testPrincipal))
       }.map(raw => assertTrue(raw.isEmpty))
     }
-  )
+  ) @@ TestAspect.sequential
 }

@@ -135,6 +135,10 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 entity_parent_start_index,
                 ..
             }
+            | OplogEntry::AgentInvocationFailed {
+                entity_parent_start_index,
+                ..
+            }
             | OplogEntry::Jump {
                 entity_parent_start_index,
                 ..
