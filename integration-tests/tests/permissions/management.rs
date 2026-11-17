@@ -1395,12 +1395,12 @@ impl Seed {
         }
     }
 
-    /// Waits until the owner reads `STARTED` in the target's files.
-    async fn wait_until_the_script_runs(&self) -> anyhow::Result<()> {
+    /// Waits until the owner reads `marker` in the target's files.
+    async fn wait_until_the_script_runs(&self, marker: &str) -> anyhow::Result<()> {
         let worker = worker_client(&self.owner).await;
         for _ in 0..30 {
             if worker
-                .get_file_content(&self.component.id.0, self.agent_name(), STARTED)
+                .get_file_content(&self.component.id.0, self.agent_name(), marker)
                 .await
                 .is_ok()
             {
@@ -1409,6 +1409,22 @@ impl Seed {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         anyhow::bail!("the script did not start")
+    }
+
+    /// Waits until the owner's lookup of the tool invocation under `key`
+    /// answers: with its result, or with its end by the cancellation.
+    async fn wait_until_the_command_ends(&self, key: &str) -> anyhow::Result<()> {
+        let request = tool_request(self, true, NativeToolInvocationMode::Lookup, key)?;
+        let lookup = async {
+            agent_client(&self.owner)
+                .await
+                .invoke_tool(Some(key), &request)
+                .await
+        };
+        match tokio::time::timeout(Duration::from_secs(60), lookup).await {
+            Ok(_) => Ok(()),
+            Err(_) => anyhow::bail!("the stopped command did not end"),
+        }
     }
 
     async fn wait_until_only_the_scheduled_invocations_are_pending(&self) -> anyhow::Result<()> {
@@ -2085,28 +2101,26 @@ async fn cancel(seed: &Seed, idempotency_key: &str) -> anyhow::Result<Outcome> {
 enum Stop {
     /// Nothing: the command runs `SCRIPT` to its result.
     None,
-    /// The user stops `LONG_SCRIPT` while it runs, and the CLI cancels the
-    /// accepted invocation while the session is open.
+    /// The user stops a script that runs longer than the CLI's wait while it
+    /// runs, and the CLI cancels the accepted invocation while the session
+    /// is open.
     Cancel,
     /// As `Cancel`, and the session ends without the result, so the CLI
-    /// looks it up: `STOPPED_SCRIPT` finishes within the CLI's wait.
+    /// looks it up: the script finishes within the CLI's wait.
     CancelAndLookUp,
-    /// As `CancelAndLookUp`, but `LONG_SCRIPT` has no result within the wait,
+    /// As `CancelAndLookUp`, but the script has no result within the wait,
     /// so the outcome is unknown and the CLI reads the agent's state to
     /// report it.
     OutcomeUnknown,
 }
 
-/// The file that a stopped command's script writes when it runs, which
-/// the owner reads through the agent's files: `bash` runs in the agent's
-/// file system.
-const STARTED: &str = "/management-started";
-/// The script of a command that the user stops after it starts, and that
-/// finishes within the CLI's wait for its result.
-const STOPPED_SCRIPT: &str = "touch /management-started && sleep 2";
-/// The script of a command that the user stops after it starts, and that
-/// has no result within the CLI's wait.
-const LONG_SCRIPT: &str = "touch /management-started && sleep 600";
+/// The script of a stopped command: it writes `marker` when it runs, and
+/// then runs for `seconds`. The owner reads the marker through the agent's
+/// files, because `bash` runs in the agent's file system. Each command has
+/// its own marker, so that a command of an earlier run cannot pass for it.
+fn stopped_script(marker: &str, seconds: u32) -> String {
+    format!("touch {marker} && sleep {seconds}")
+}
 /// How long the CLI waits for the result of a stopped command
 /// (`CANCEL_WAIT` of `golem ssh`).
 const RESULT_WAIT: Duration = Duration::from_secs(5);
@@ -2136,16 +2150,19 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
                 Step::Request(outcome) | Step::Prepare(outcome) => outcome,
             });
     }
-    let script = match stop {
-        Stop::None => SCRIPT,
-        Stop::CancelAndLookUp => STOPPED_SCRIPT,
-        Stop::Cancel | Stop::OutcomeUnknown => LONG_SCRIPT,
-    };
     let key = uuid::Uuid::new_v4().to_string();
+    let marker = format!("/management-started-{key}");
+    // A stopped command that finishes within the wait finishes well inside
+    // it; one that has no result outlasts it.
+    let script = match stop {
+        Stop::None => SCRIPT.to_string(),
+        Stop::CancelAndLookUp => stopped_script(&marker, 2),
+        Stop::Cancel | Stop::OutcomeUnknown => stopped_script(&marker, 15),
+    };
     let starting = seed.at(trace.outcomes.len());
     let mut live = open_session(
         &starting.caller,
-        tool_start(&starting, hosted_target(&starting), &key, script)?,
+        tool_start(&starting, hosted_target(&starting), &key, &script)?,
     )
     .await?;
     let (started, accepted) = receive(&mut live, stop == Stop::None).await?;
@@ -2156,41 +2173,46 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
     let accepted = accepted
         .expect("an accepted start has its key")
         .idempotency_key;
-    seed.wait_until_the_script_runs().await?;
-    let cancelling = seed.at(trace.outcomes.len());
-    let cancelled = cancel(
-        &cancelling,
-        &cancelling.addressed(trace.outcomes.len(), &accepted),
-    )
-    .await?;
-    trace.push(Step::Request(cancelled));
-    if trace.stopped || stop == Stop::Cancel {
-        return Ok(trace);
-    }
-    let looking_up = seed.at(trace.outcomes.len());
-    let addressed = looking_up.addressed(trace.outcomes.len(), &accepted);
-    let looked_up = match tokio::time::timeout(
-        RESULT_WAIT,
-        invoke_tool(
-            &looking_up,
-            true,
-            NativeToolInvocationMode::Lookup,
-            &addressed,
-        ),
-    )
-    .await
-    {
-        Ok(outcome) => outcome?,
-        Err(_) => Outcome::Allowed(NO_RESULT.to_string()),
-    };
-    let found = matches!(&looked_up, Outcome::Allowed(result) if result != NO_RESULT);
-    // Without a result, also after a denied lookup, the CLI reports an
-    // unknown outcome with the agent's state.
-    trace.outcomes.push(looked_up);
-    if !found {
-        trace.push(metadata(&seed.at(trace.outcomes.len())).await?);
+    seed.wait_until_the_script_runs(&marker).await?;
+    'stop: {
+        let cancelling = seed.at(trace.outcomes.len());
+        let cancelled = cancel(
+            &cancelling,
+            &cancelling.addressed(trace.outcomes.len(), &accepted),
+        )
+        .await?;
+        trace.push(Step::Request(cancelled));
+        if trace.stopped || stop == Stop::Cancel {
+            break 'stop;
+        }
+        let looking_up = seed.at(trace.outcomes.len());
+        let addressed = looking_up.addressed(trace.outcomes.len(), &accepted);
+        let looked_up = match tokio::time::timeout(
+            RESULT_WAIT,
+            invoke_tool(
+                &looking_up,
+                true,
+                NativeToolInvocationMode::Lookup,
+                &addressed,
+            ),
+        )
+        .await
+        {
+            Ok(outcome) => outcome?,
+            Err(_) => Outcome::Allowed(NO_RESULT.to_string()),
+        };
+        let found = matches!(&looked_up, Outcome::Allowed(result) if result != NO_RESULT);
+        // Without a result, also after a denied lookup, the CLI reports an
+        // unknown outcome with the agent's state.
+        trace.outcomes.push(looked_up);
+        if !found {
+            trace.push(metadata(&seed.at(trace.outcomes.len())).await?);
+        }
     }
     drop(live);
+    // The next run on the same agent, such as the unknown-target
+    // comparison, starts only after this command has ended.
+    seed.wait_until_the_command_ends(&accepted).await?;
     Ok(trace)
 }
 
@@ -3281,21 +3303,38 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
 }
 
 /// `view`, `oplog : read` and `tool : view` neither control nor invoke, also
-/// through REST calls that no client preflight guards. These grants allow
-/// every read that a mode makes before its operation, so that the operation
-/// itself is what is denied.
+/// through REST calls that no client preflight guards. Each tested variant
+/// makes only reads that these grants allow before its operation, so that
+/// the operation itself is what is denied. A variant that also needs another
+/// grant before its operation is not tested here: the stream variants of
+/// `agent invoke` open the output connection first, and whether a connection
+/// without `invocation : read` is refused is open (`EXPOSED_OUTPUT`). Each
+/// mode has a variant without it that makes the same operation.
 #[test]
 #[timeout("30m")]
 #[ignore = "pending: the 2.0 card model (GOL-1270, GOL-1271, GOL-1272, GOL-1276, GOL-1288, GOL-1289) and 2.0 grant installation (GOL-1275, GOL-1297), all Aditya Salunkhe"]
 async fn management_read_grants_cannot_control_or_invoke(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let read_grants = [VIEW, OPLOG_READ.0, TOOL_VIEW.0];
     for (path, mode) in CONTROLS_AND_STARTS {
         let case = case_of(path, mode);
+        let mut tested = 0;
         for adapter in adapters(path, mode) {
+            let operation = operation_position(case, adapter);
+            let needs_another_grant = adapter.makes[..operation].iter().any(|index| {
+                case.requests[*index]
+                    .grants
+                    .iter()
+                    .any(|(grant, _)| !read_grants.contains(grant))
+            });
+            if needs_another_grant {
+                continue;
+            }
+            tested += 1;
             let seed = Seed::new(deps, case.fixture).await?;
             seed.put_in(case.precondition).await?;
-            give(&seed, &[VIEW, OPLOG_READ.0, TOOL_VIEW.0]).await?;
+            give(&seed, &read_grants).await?;
             let before = seed.observe().await?;
             let trace = (adapter.run)(&seed).await?;
             let operation = operation_position(case, adapter);
@@ -3314,6 +3353,11 @@ async fn management_read_grants_cannot_control_or_invoke(
                 adapter.variant
             );
         }
+        assert!(
+            tested > 0,
+            "`{}` mode `{mode}` has no variant whose operation the read grants reach",
+            path.join(" ")
+        );
     }
     Ok(())
 }
