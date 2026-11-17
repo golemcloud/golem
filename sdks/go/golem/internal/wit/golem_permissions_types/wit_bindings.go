@@ -349,8 +349,9 @@ func Id(c *golem_core_types.PermissionCard) golem_core_types.CardId {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 16, 8))
 	wasm_import_id((c).Handle(), returnArea)
-	result := golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8)))}}
-	return result
+	result := wasm_lift_1_t12(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
 
 }
 
@@ -363,15 +364,16 @@ func Parents(c *golem_core_types.PermissionCard) []golem_core_types.CardId {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (2 * 4), 4))
 	wasm_import_parents((c).Handle(), returnArea)
-	result := make([]golem_core_types.CardId, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
+	result0 := make([]golem_core_types.CardId, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*16)
+		result := wasm_lift_1_t12(unsafe.Add(unsafe.Pointer(base), 0))
 
-		result = append(result, golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))}})
+		result0 = append(result0, result)
 	}
 
-	result0 := result
-	return result0
+	result1 := result0
+	return result1
 
 }
 
@@ -390,12 +392,32 @@ func ExpiresAt(c *golem_core_types.PermissionCard) witTypes.Option[Timestamp] {
 
 		option = witTypes.None[Timestamp]()
 	case 1:
+		result := wasm_lift_1_t944(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		option = witTypes.Some[Timestamp](Timestamp{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 16)))})
+		option = witTypes.Some[Timestamp](result)
 	default:
 		panic("unreachable")
 	}
-	result := option
-	return result
+	result0 := option
+	return result0
 
+}
+
+//go:noinline
+func wasm_lift_1_t12(src unsafe.Pointer) golem_core_types.CardId {
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return golem_core_types.CardId{Uuid: result}
+}
+
+//go:noinline
+func wasm_lift_1_t944(src unsafe.Pointer) Timestamp {
+
+	return Timestamp{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(src), 0)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))}
+}
+
+//go:noinline
+func wasm_lift_1_t4(src unsafe.Pointer) golem_core_types.Uuid {
+
+	return golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))}
 }

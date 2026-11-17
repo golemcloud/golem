@@ -19,7 +19,7 @@ use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::UnreadableOplog;
-use crate::services::oplog::{Oplog, OplogService};
+use crate::services::oplog::{Oplog, OplogService, ScanPage};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::snapshot_selection::names_in_use;
 use crate::worker::status::{
@@ -392,6 +392,24 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
         assert_eq!(
             status.pending_durable_stream_cancellations,
             HashMap::from([((expected.source.clone(), expected.epoch), vec![expected])]),
+        );
+    }
+}
+
+#[test]
+fn memory_reconciliation_replaces_the_baseline_before_subsequent_growth() {
+    for reconciled in [24, 97] {
+        let entries = BTreeMap::from([
+            (OplogIndex::from_u64(2), OplogEntry::grow_memory(13)),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::memory_size_reconciled(reconciled),
+            ),
+            (OplogIndex::from_u64(4), OplogEntry::grow_memory(9)),
+        ]);
+        assert_eq!(
+            calculate_total_linear_memory_size(64, &DeletedRegions::new(), &entries),
+            reconciled + 9
         );
     }
 }
@@ -1606,6 +1624,81 @@ async fn invocation_results() {
         .build();
 
     run_test_case(test_case).await;
+}
+
+#[test]
+async fn invocation_local_failure_finishes_only_its_key_and_keeps_the_agent_idle() {
+    let failed = InvocationId(Uuid::new_v4());
+    let following = InvocationId(Uuid::new_v4());
+    let test_case = TestCase::builder(0)
+        .agent_invocation_started("fail", vec![], failed)
+        .add(
+            OplogEntry::agent_invocation_failed(
+                None,
+                failed,
+                AgentError::InternalError("method gave up".into()),
+                OplogIndex::INITIAL,
+            ),
+            move |mut status| {
+                status.invocation_results.insert(
+                    failed,
+                    InvocationResultPosition {
+                        terminal: status.oplog_idx,
+                        request: status.current_invocation_started_at.take(),
+                    },
+                );
+                status.current_idempotency_key = None;
+                status.status = AgentStatus::Idle;
+                status
+            },
+        )
+        .agent_invocation_started("following", vec![], following)
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            following,
+            ComponentRevision::INITIAL,
+        )
+        .build();
+    run_test_case(test_case).await;
+}
+
+#[test]
+fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_state() {
+    let anchor = OplogIndex::from_u64(13);
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(29),
+        OplogEntry::agent_invocation_failed(
+            None,
+            InvocationId(Uuid::new_v4()),
+            AgentError::InternalError("method gave up".into()),
+            anchor,
+        ),
+    )]);
+    for recovery in [false, true] {
+        let (status, kind, retries, _) = calculate_latest_worker_status(
+            AgentStatus::Retrying,
+            Some(if recovery {
+                OplogErrorKind::Recovery
+            } else {
+                OplogErrorKind::Invocation
+            }),
+            HashMap::from([(anchor, RetryPolicyState::Counter(2))]),
+            None,
+            &RetryConfig::default(),
+            &DeletedRegions::default(),
+            &DeletedRegions::default(),
+            &entries,
+        );
+        if recovery {
+            assert_eq!(status, AgentStatus::Retrying);
+            assert_eq!(kind, Some(OplogErrorKind::Recovery));
+            assert_eq!(retries.get(&anchor), Some(&RetryPolicyState::Counter(2)));
+        } else {
+            assert_eq!(status, AgentStatus::Idle);
+            assert_eq!(kind, None);
+            assert!(retries.is_empty());
+        }
+    }
 }
 
 #[test]
@@ -5661,7 +5754,7 @@ impl OplogService for TestCase {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         unreachable!()
     }
 

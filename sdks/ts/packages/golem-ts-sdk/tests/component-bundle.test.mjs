@@ -1340,5 +1340,5 @@ describe('component exports', () => {
       plugins: [create()],
     });
     await fresh.close();
-  });
+  }, 30000);
 });

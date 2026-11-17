@@ -44,6 +44,17 @@ trait WireImplementationMethod[Instance] {
 
 final case class WireAgentInputError(message: String) extends RuntimeException(message)
 
+private[golem] final class AgentMethodFailure(cause: Throwable) extends RuntimeException(cause)
+
+private[golem] object AgentMethodFailure {
+  def capture[A](body: => Future[A])(implicit ec: ExecutionContext): Future[A] = {
+    val invoked =
+      try body
+      catch { case NonFatal(error) => Future.failed(error) }
+    invoked.recoverWith { case NonFatal(error) => Future.failed(new AgentMethodFailure(error)) }
+  }
+}
+
 object WireImplementationMethod {
   def apply[Instance, In, Out](methodName: String, input: ConcreteCodec[In], output: Option[ConcreteCodec[Out]])(
     handler: (Instance, In, InvocationContext) => Future[Out]
@@ -57,7 +68,8 @@ object WireImplementationMethod {
       val decoded =
         try input.decode(value)
         catch { case NonFatal(error) => throw WireAgentInputError(String.valueOf(error.getMessage)) }
-      handler(instance, decoded, context)
+      AgentMethodFailure
+        .capture(handler(instance, decoded, context))(using ExecutionContext.parasitic)
         .map(value => output.map(_.encodeValue(value)))(using ExecutionContext.parasitic)
     }
   }

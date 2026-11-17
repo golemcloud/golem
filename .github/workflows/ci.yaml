@@ -1388,13 +1388,18 @@ jobs:
             sdks/go/*/go.sum
             test-components/**/go.sum
 
-      # cargo-make drives the WIT dep sync and the go-bindgen-fixup step that the
-      # bindings regeneration runs. componentize-go itself is a pinned `go tool`
-      # (go.mod), so no wasm-tools / WASI SDK are needed here.
+      # cargo-make drives the WIT sync, pinned generator and binding fixups.
+      # Generation does not require wasm-tools or the WASI SDK.
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
           install-cargo-make: 'true'
+
+      - name: Check Go bindings generator
+        run: |
+          cargo fmt --manifest-path dev-tools/go-bindgen/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path dev-tools/go-bindgen/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path dev-tools/go-bindgen/Cargo.toml
 
       # Regenerate the committed WIT bindings (syncs wit/deps first via the task's
       # `wit` dependency) and fail if they drift from what's checked in — mirrors
@@ -1693,8 +1698,10 @@ jobs:
         run: ./scripts/regen-bindings.sh
         working-directory: sdks/moonbit/golem_sdk
 
+      # MoonBit fixtures embed and encode their components; the Rust gc-heap fixture parses and
+      # composes a WAT component.
       - name: Install wasm-tools
-        if: matrix.chunk.needs-moonbit
+        if: matrix.chunk.needs-moonbit || startsWith(matrix.chunk.name, 'rust-')
         run: cargo binstall --force --locked wasm-tools@1.248.0
 
       - name: Restore built TS SDK

@@ -1,4 +1,18 @@
-use super::identity::parse_agent_id;
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::identity::{golem_env_var_not_readable, parse_agent_id};
 use crate::agentic::{
     InvocationContext, agent_registry, get_resolved_agent, register_initialized_agent,
 };
@@ -13,6 +27,13 @@ use crate::{
 
 /// The binary snapshot version that 2.0 writes: a tag byte, then the agent's own state.
 const BINARY_SNAPSHOT_VERSION: u8 = 3;
+
+/// Reads the ID of the running agent from `GOLEM_AGENT_ID`. It panics with the card grant that the
+/// agent needs when the variable is not readable.
+fn agent_id_from_env() -> String {
+    std::env::var("GOLEM_AGENT_ID")
+        .unwrap_or_else(|_| panic!("{}", golem_env_var_not_readable("GOLEM_AGENT_ID")))
+}
 
 #[derive(serde::Deserialize)]
 struct JsonSnapshotEnvelope<'a> {
@@ -207,8 +228,7 @@ impl Guest for AgentRuntime {
     ) -> Result<Option<crate::schema::wit::wire::SchemaValueTree>, AgentError> {
         let context = InvocationContext::current();
         {
-            let agent_id = std::env::var("GOLEM_AGENT_ID")
-                .expect("GOLEM_AGENT_ID environment variable must be set");
+            let agent_id = agent_id_from_env();
             parse_agent_id(&agent_id).map_err(|e| AgentError::InvalidInput(e.to_string()))?;
         }
 
@@ -250,8 +270,7 @@ impl LoadSnapshotGuest for AgentRuntime {
             return Err("Agent is already initialized".to_string());
         }
 
-        let id = std::env::var("GOLEM_AGENT_ID")
-            .expect("GOLEM_AGENT_ID environment variable must be set");
+        let id = agent_id_from_env();
 
         load_agent_snapshot(snapshot, &id, parse_restore_identity).await
     }
@@ -304,8 +323,8 @@ impl SaveSnapshotGuest for AgentRuntime {
 #[cfg(test)]
 mod tests {
     use super::{
-        BINARY_SNAPSHOT_VERSION, ParsedRestoreIdentity, decode_snapshot, encode_json_snapshot,
-        load_agent_snapshot,
+        BINARY_SNAPSHOT_VERSION, ParsedRestoreIdentity, agent_id_from_env, decode_snapshot,
+        encode_json_snapshot, golem_env_var_not_readable, load_agent_snapshot,
     };
     use crate::agentic::{
         AgentInitiator, AgentInvocationResult, BaseAgent, InvocationContext, ResolvedAgent,
@@ -434,6 +453,22 @@ mod tests {
     }
 
     const ANONYMOUS_1_6: &str = r#"{"tag":"anonymous"}"#;
+
+    #[test]
+    #[should_panic(
+        expected = "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
+    )]
+    fn unreadable_agent_id_names_the_card_grant() {
+        agent_id_from_env();
+    }
+
+    #[test]
+    fn unreadable_component_id_names_its_own_card_grant() {
+        assert_eq!(
+            golem_env_var_not_readable("GOLEM_COMPONENT_ID"),
+            "GOLEM_COMPONENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_COMPONENT_ID"
+        );
+    }
 
     #[test]
     fn snapshot_envelopes_decode_before_restoration() {

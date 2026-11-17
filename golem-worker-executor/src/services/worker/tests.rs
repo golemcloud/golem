@@ -16,7 +16,9 @@ use golem_common::model::InvocationId;
 
 use super::*;
 use crate::model::ExecutionStatus;
+use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::Oplog;
+use crate::services::oplog::ScanPage;
 use crate::services::oplog::UnreadableOplog;
 use crate::services::shard::ShardServiceDefault;
 use crate::storage::keyvalue::KeyValueStorageError;
@@ -230,7 +232,7 @@ impl OplogService for IndexTestOplogService {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         unreachable!()
     }
 
@@ -2165,6 +2167,10 @@ struct FakeOplogService {
     fail_delete_once: AtomicBool,
     hide_identity_after_delete_attempt: bool,
     delete_attempts: AtomicUsize,
+    /// The storage batches that `scan_for_component` answers with, in order.
+    scan_batches: std::sync::Mutex<VecDeque<ScanPage>>,
+    /// The key counts that `scan_for_component` was asked for, in order.
+    scan_requests: std::sync::Mutex<Vec<u64>>,
 }
 
 #[async_trait]
@@ -2328,9 +2334,15 @@ impl OplogService for FakeOplogService {
         _component_id: &ComponentId,
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
-        _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
-        unreachable!()
+        count: u64,
+    ) -> Result<ScanPage, WorkerExecutorError> {
+        self.scan_requests.lock().unwrap().push(count);
+        Ok(self
+            .scan_batches
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("the scan asked for more batches than the storage has"))
     }
 
     async fn upload_raw_payload(
@@ -3039,4 +3051,119 @@ async fn recovery_scan_reports_an_unreadable_index() {
 
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+}
+
+/// Lists the agents of a component over scripted storage batches with `budget` and an agent scan
+/// batch size of `batch_size`. Returns the cursor of the listing and the key counts it asked the
+/// storage for.
+async fn list_agents_over_batches(
+    budget: ScanBudget,
+    batch_size: u64,
+    batches: Vec<ScanPage>,
+) -> (Option<ScanCursor>, Vec<u64>) {
+    use crate::services::worker_enumeration::{
+        DefaultWorkerEnumerationService, WorkerEnumerationService,
+    };
+
+    let oplog_service = Arc::new(FakeOplogService {
+        scan_batches: std::sync::Mutex::new(batches.into()),
+        ..Default::default()
+    });
+    let mut config = GolemConfig::default();
+    config.limits.scan_budget = budget;
+    config.limits.agent_scan_batch_size = std::num::NonZeroU64::new(batch_size).unwrap();
+    let enumeration = DefaultWorkerEnumerationService::new(
+        Arc::new(test_worker_service(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            oplog_service.clone(),
+        )),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(config),
+    );
+    let (cursor, agents) = enumeration
+        .get(
+            &EnvironmentId::new(),
+            &ComponentId(Uuid::new_v4()),
+            None,
+            ScanCursor::default(),
+            i64::MAX as u64,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(agents.is_empty());
+    let requests = oplog_service.scan_requests.lock().unwrap().clone();
+    (cursor, requests)
+}
+
+/// The batches list no agent: the multi-layer oplog service drops the keys of agents that a lower
+/// layer also has, as it does for an archived agent with a primary tail, and still counts them as
+/// examined. The listing charges the examined keys, not the listed agents.
+#[test]
+async fn agent_listing_charges_examined_keys_and_stops_after_the_batch_that_spends_the_budget() {
+    let budget = keys_budget(3, std::time::Duration::from_secs(600));
+
+    // Two examined keys leave one key of the budget, so the listing asks for one more key and
+    // stops after it. A listing that charged the listed agents would ask for three keys again.
+    let (cursor, requests) = list_agents_over_batches(
+        budget,
+        100,
+        vec![batch("1", 2), batch("2", 1), batch("3", 1)],
+    )
+    .await;
+    assert_eq!(requests, vec![3, 1]);
+    assert_eq!(cursor, Some(ScanCursor::new("2".to_string())));
+
+    // The storage answers the request for three keys with five, as Redis `SCAN COUNT` can. The
+    // listing keeps the whole batch and stops after it, and leaves the next batch to the next call.
+    let (cursor, requests) =
+        list_agents_over_batches(budget, 100, vec![batch("1", 5), batch("2", 1)]).await;
+    assert_eq!(requests, vec![3]);
+    assert_eq!(cursor, Some(ScanCursor::new("1".to_string())));
+}
+
+/// A listing asks the storage for at most the configured agent scan batch size at a time, and for
+/// the rest of the key budget once less than that remains. It also stops after the first batch when
+/// its time budget is spent, although its key budget is not.
+#[test]
+async fn agent_listing_asks_for_batches_of_at_most_the_batch_size_and_stops_at_its_time_budget() {
+    let (cursor, requests) = list_agents_over_batches(
+        keys_budget(100, std::time::Duration::from_secs(600)),
+        40,
+        vec![
+            batch("1", 40),
+            batch("2", 40),
+            batch("3", 20),
+            batch("4", 1),
+        ],
+    )
+    .await;
+    assert_eq!(requests, vec![40, 40, 20]);
+    assert_eq!(cursor, Some(ScanCursor::new("3".to_string())));
+
+    let (cursor, requests) = list_agents_over_batches(
+        keys_budget(250, std::time::Duration::ZERO),
+        40,
+        vec![batch("1", 1), batch("2", 1), batch("3", 1)],
+    )
+    .await;
+    assert_eq!(requests, vec![40]);
+    assert_eq!(cursor, Some(ScanCursor::new("1".to_string())));
+}
+
+fn keys_budget(entries: u64, time: std::time::Duration) -> ScanBudget {
+    ScanBudget {
+        entries: std::num::NonZeroU64::new(entries).unwrap(),
+        time,
+    }
+}
+
+/// A storage batch that lists no agent, examined `examined_keys` keys and ends at `cursor`.
+fn batch(cursor: &str, examined_keys: u64) -> ScanPage {
+    ScanPage {
+        cursor: ScanCursor::new(cursor.to_string()),
+        agent_ids: vec![],
+        examined_keys,
+    }
 }

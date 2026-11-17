@@ -1453,6 +1453,22 @@ fn p3_random_host_payload_pairs_roundtrip() {
 
 #[test]
 fn p3_tcp_socket_host_payload_pairs_roundtrip() {
+    let local = SerializableP3IpSocketAddress {
+        address: SerializableIpAddress::IPv4 {
+            address: [127, 0, 0, 1],
+        },
+        port: 32123,
+        flow_info: None,
+        scope_id: None,
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketBind>(
+        super::HostRequestP3SocketsBind {
+            local_address: local.clone(),
+        },
+        super::HostResponseP3SocketsBind {
+            result: Ok(local.clone()),
+        },
+    );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketConnect>(
         HostRequestP3SocketsConnect {
             remote_address: SerializableP3IpSocketAddress {
@@ -1464,8 +1480,24 @@ fn p3_tcp_socket_host_payload_pairs_roundtrip() {
                 scope_id: None,
             },
         },
-        HostResponseP3SocketsConnect {
-            result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        super::HostResponseP3SocketsTcpConnect {
+            result: Ok((
+                local.clone(),
+                SerializableP3IpSocketAddress {
+                    port: 443,
+                    ..local.clone()
+                },
+            )),
+            closed: false,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketConnect>(
+        HostRequestP3SocketsConnect {
+            remote_address: local,
+        },
+        super::HostResponseP3SocketsTcpConnect {
+            result: Err(SerializableP3SocketErrorCode::ConnectionRefused),
+            closed: true,
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSend>(
@@ -2779,6 +2811,7 @@ fn durable_oplog_read_payload_pairs_roundtrip() {
             result: Err("permission denied".to_string()),
             next_oplog_index: OplogIndex::from_u64(41),
             current_component_revision: revision,
+            last_oplog_index: None,
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiSearchOplogNext>(
@@ -2793,6 +2826,7 @@ fn durable_oplog_read_payload_pairs_roundtrip() {
             result: Ok(Some(vec![1, 2, 3])),
             next_oplog_index: OplogIndex::from_u64(99),
             current_component_revision: revision,
+            last_oplog_index: Some(OplogIndex::from_u64(250)),
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiEnrichOplogEntries>(

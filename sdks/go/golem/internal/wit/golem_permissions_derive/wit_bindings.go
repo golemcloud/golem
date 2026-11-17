@@ -60,225 +60,73 @@ func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []gol
 	result := witRuntime.Allocate(pinner, uintptr(length*(10*4)), 4)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(10*4))
-		utf8 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf8)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
-		utf80 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf80)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf80)))
-		utf81 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf81)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf81)))
-		utf82 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf82)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf82)))
-		utf83 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf83)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf83)))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice9 := lowerNegativeToAdd
-	length11 := uint32(len(slice9))
-	result10 := witRuntime.Allocate(pinner, uintptr(length11*(10*4)), 4)
-	for index, element := range slice9 {
-		base := unsafe.Add(result10, index*(10*4))
-		utf84 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf84)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf84)))
-		utf85 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf85)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf85)))
-		utf86 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf86)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf86)))
-		utf87 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf87)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf87)))
-		utf88 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf88)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf88)))
+	slice0 := lowerNegativeToAdd
+	length2 := uint32(len(slice0))
+	result1 := witRuntime.Allocate(pinner, uintptr(length2*(10*4)), 4)
+	for index, element := range slice0 {
+		base := unsafe.Add(result1, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice17 := upperPositiveToRetain
-	length19 := uint32(len(slice17))
-	result18 := witRuntime.Allocate(pinner, uintptr(length19*(10*4)), 4)
-	for index, element := range slice17 {
-		base := unsafe.Add(result18, index*(10*4))
-		utf812 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf812)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf812)))
-		utf813 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf813)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf813)))
-		utf814 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf814)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf814)))
-		utf815 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf815)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf815)))
-		utf816 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf816)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf816)))
+	slice3 := upperPositiveToRetain
+	length5 := uint32(len(slice3))
+	result4 := witRuntime.Allocate(pinner, uintptr(length5*(10*4)), 4)
+	for index, element := range slice3 {
+		base := unsafe.Add(result4, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice25 := upperNegativeToAdd
-	length27 := uint32(len(slice25))
-	result26 := witRuntime.Allocate(pinner, uintptr(length27*(10*4)), 4)
-	for index, element := range slice25 {
-		base := unsafe.Add(result26, index*(10*4))
-		utf820 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf820)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf820)))
-		utf821 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf821)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf821)))
-		utf822 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf822)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf822)))
-		utf823 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf823)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf823)))
-		utf824 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf824)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf824)))
+	slice6 := upperNegativeToAdd
+	length8 := uint32(len(slice6))
+	result7 := witRuntime.Allocate(pinner, uintptr(length8*(10*4)), 4)
+	for index, element := range slice6 {
+		base := unsafe.Add(result7, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
 	var option int32
-	var option29 uintptr
-	var option30 uint32
+	var option9 uintptr
+	var option10 uint32
 	switch lifespan.Tag() {
 	case witTypes.OptionNone:
 
 		option = int32(0)
-		option29 = 0
-		option30 = 0
+		option9 = 0
+		option10 = 0
 	case witTypes.OptionSome:
 		payload := lifespan.Some()
-		utf828 := unsafe.Pointer(unsafe.StringData((payload).Iso8601))
-		pinner.Pin(utf828)
+		utf8 := unsafe.Pointer(unsafe.StringData((payload).Iso8601))
+		pinner.Pin(utf8)
 
 		option = int32(1)
-		option29 = uintptr(utf828)
-		option30 = uint32(len((payload).Iso8601))
+		option9 = uintptr(utf8)
+		option10 = uint32(len((payload).Iso8601))
 	default:
 		panic("unreachable")
 	}
-	wasm_import_derive((parent).Handle(), uintptr(result), length, uintptr(result10), length11, uintptr(result18), length19, uintptr(result26), length27, option, option29, option30, returnArea)
-	var result43 witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError]
+	wasm_import_derive((parent).Handle(), uintptr(result), length, uintptr(result1), length2, uintptr(result4), length5, uintptr(result7), length8, option, option9, option10, returnArea)
+	var result13 witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		var variant golem_permissions_types.PersistentCard
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result11 := wasm_lift_1_t954(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = golem_permissions_types.MakePersistentCardConcrete(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 1*4)))))))
-
-		case 1:
-
-			variant = golem_permissions_types.MakePersistentCardTemplate(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 1*4)))))))
-
-		default:
-			panic("unreachable")
-		}
-
-		result43 = witTypes.Ok[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](variant)
+		result13 = witTypes.Ok[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](result11)
 	case 1:
-		var variant42 golem_permissions_types.PermissionError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result12 := wasm_lift_1_t952(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant42 = golem_permissions_types.MakePermissionErrorNotPermitted(value)
-
-		case 1:
-			value31 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorLowerBoundTooBroad(value31)
-
-		case 2:
-			value32 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorUpperBoundTooBroad(value32)
-
-		case 3:
-			value33 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorWalletMultiSourceRequired(value33)
-
-		case 4:
-			value34 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorCardRevoked(value34)
-
-		case 5:
-			value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorCardExpired(value35)
-
-		case 6:
-			value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInstallRecipientMismatch(value36)
-
-		case 7:
-			value37 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorUnknownResourceClass(value37)
-
-		case 8:
-			value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInvalidPattern(value38)
-
-		case 9:
-			value39 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInvalidVerb(value39)
-
-		case 10:
-			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInvalidOwner(value40)
-
-		case 11:
-			value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInvalidRecipient(value41)
-
-		default:
-			panic("unreachable")
-		}
-
-		result43 = witTypes.Err[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](variant42)
+		result13 = witTypes.Err[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](result12)
 	default:
 		panic("unreachable")
 	}
-	result44 := result43
-	return result44
+	result14 := result13
+	return result14
 
 }
 
@@ -295,225 +143,73 @@ func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowe
 	result := witRuntime.Allocate(pinner, uintptr(length*(10*4)), 4)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(10*4))
-		utf8 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf8)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
-		utf80 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf80)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf80)))
-		utf81 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf81)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf81)))
-		utf82 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf82)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf82)))
-		utf83 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf83)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf83)))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice9 := lowerNegative
-	length11 := uint32(len(slice9))
-	result10 := witRuntime.Allocate(pinner, uintptr(length11*(10*4)), 4)
-	for index, element := range slice9 {
-		base := unsafe.Add(result10, index*(10*4))
-		utf84 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf84)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf84)))
-		utf85 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf85)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf85)))
-		utf86 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf86)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf86)))
-		utf87 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf87)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf87)))
-		utf88 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf88)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf88)))
+	slice0 := lowerNegative
+	length2 := uint32(len(slice0))
+	result1 := witRuntime.Allocate(pinner, uintptr(length2*(10*4)), 4)
+	for index, element := range slice0 {
+		base := unsafe.Add(result1, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice17 := upperPositive
-	length19 := uint32(len(slice17))
-	result18 := witRuntime.Allocate(pinner, uintptr(length19*(10*4)), 4)
-	for index, element := range slice17 {
-		base := unsafe.Add(result18, index*(10*4))
-		utf812 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf812)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf812)))
-		utf813 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf813)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf813)))
-		utf814 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf814)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf814)))
-		utf815 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf815)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf815)))
-		utf816 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf816)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf816)))
+	slice3 := upperPositive
+	length5 := uint32(len(slice3))
+	result4 := witRuntime.Allocate(pinner, uintptr(length5*(10*4)), 4)
+	for index, element := range slice3 {
+		base := unsafe.Add(result4, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice25 := upperNegative
-	length27 := uint32(len(slice25))
-	result26 := witRuntime.Allocate(pinner, uintptr(length27*(10*4)), 4)
-	for index, element := range slice25 {
-		base := unsafe.Add(result26, index*(10*4))
-		utf820 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf820)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf820)))
-		utf821 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf821)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf821)))
-		utf822 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf822)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf822)))
-		utf823 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf823)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf823)))
-		utf824 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf824)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf824)))
+	slice6 := upperNegative
+	length8 := uint32(len(slice6))
+	result7 := witRuntime.Allocate(pinner, uintptr(length8*(10*4)), 4)
+	for index, element := range slice6 {
+		base := unsafe.Add(result7, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
 	var option int32
-	var option29 uintptr
-	var option30 uint32
+	var option9 uintptr
+	var option10 uint32
 	switch lifespan.Tag() {
 	case witTypes.OptionNone:
 
 		option = int32(0)
-		option29 = 0
-		option30 = 0
+		option9 = 0
+		option10 = 0
 	case witTypes.OptionSome:
 		payload := lifespan.Some()
-		utf828 := unsafe.Pointer(unsafe.StringData((payload).Iso8601))
-		pinner.Pin(utf828)
+		utf8 := unsafe.Pointer(unsafe.StringData((payload).Iso8601))
+		pinner.Pin(utf8)
 
 		option = int32(1)
-		option29 = uintptr(utf828)
-		option30 = uint32(len((payload).Iso8601))
+		option9 = uintptr(utf8)
+		option10 = uint32(len((payload).Iso8601))
 	default:
 		panic("unreachable")
 	}
-	wasm_import_derive_from_wallet(uintptr(result), length, uintptr(result10), length11, uintptr(result18), length19, uintptr(result26), length27, option, option29, option30, returnArea)
-	var result43 witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError]
+	wasm_import_derive_from_wallet(uintptr(result), length, uintptr(result1), length2, uintptr(result4), length5, uintptr(result7), length8, option, option9, option10, returnArea)
+	var result13 witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		var variant golem_permissions_types.PersistentCard
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result11 := wasm_lift_1_t954(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = golem_permissions_types.MakePersistentCardConcrete(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 1*4)))))))
-
-		case 1:
-
-			variant = golem_permissions_types.MakePersistentCardTemplate(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 1*4)))))))
-
-		default:
-			panic("unreachable")
-		}
-
-		result43 = witTypes.Ok[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](variant)
+		result13 = witTypes.Ok[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](result11)
 	case 1:
-		var variant42 golem_permissions_types.PermissionError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result12 := wasm_lift_1_t952(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant42 = golem_permissions_types.MakePermissionErrorNotPermitted(value)
-
-		case 1:
-			value31 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorLowerBoundTooBroad(value31)
-
-		case 2:
-			value32 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorUpperBoundTooBroad(value32)
-
-		case 3:
-			value33 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorWalletMultiSourceRequired(value33)
-
-		case 4:
-			value34 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorCardRevoked(value34)
-
-		case 5:
-			value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorCardExpired(value35)
-
-		case 6:
-			value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInstallRecipientMismatch(value36)
-
-		case 7:
-			value37 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorUnknownResourceClass(value37)
-
-		case 8:
-			value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInvalidPattern(value38)
-
-		case 9:
-			value39 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInvalidVerb(value39)
-
-		case 10:
-			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInvalidOwner(value40)
-
-		case 11:
-			value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant42 = golem_permissions_types.MakePermissionErrorInvalidRecipient(value41)
-
-		default:
-			panic("unreachable")
-		}
-
-		result43 = witTypes.Err[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](variant42)
+		result13 = witTypes.Err[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](result12)
 	default:
 		panic("unreachable")
 	}
-	result44 := result43
-	return result44
+	result14 := result13
+	return result14
 
 }
 
@@ -534,196 +230,171 @@ func DeriveScope(parents []*golem_core_types.PermissionCard, lowerPositive []gol
 
 	}
 
-	slice4 := lowerPositive
-	length6 := uint32(len(slice4))
-	result5 := witRuntime.Allocate(pinner, uintptr(length6*(10*4)), 4)
-	for index, element := range slice4 {
-		base := unsafe.Add(result5, index*(10*4))
-		utf8 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf8)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
-		utf80 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf80)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf80)))
-		utf81 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf81)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf81)))
-		utf82 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf82)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf82)))
-		utf83 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf83)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf83)))
+	slice0 := lowerPositive
+	length2 := uint32(len(slice0))
+	result1 := witRuntime.Allocate(pinner, uintptr(length2*(10*4)), 4)
+	for index, element := range slice0 {
+		base := unsafe.Add(result1, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice12 := lowerNegative
-	length14 := uint32(len(slice12))
-	result13 := witRuntime.Allocate(pinner, uintptr(length14*(10*4)), 4)
-	for index, element := range slice12 {
-		base := unsafe.Add(result13, index*(10*4))
-		utf87 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf87)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf87)))
-		utf88 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf88)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf88)))
-		utf89 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf89)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf89)))
-		utf810 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf810)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf810)))
-		utf811 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf811)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf811)))
+	slice3 := lowerNegative
+	length5 := uint32(len(slice3))
+	result4 := witRuntime.Allocate(pinner, uintptr(length5*(10*4)), 4)
+	for index, element := range slice3 {
+		base := unsafe.Add(result4, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice20 := upperPositive
-	length22 := uint32(len(slice20))
-	result21 := witRuntime.Allocate(pinner, uintptr(length22*(10*4)), 4)
-	for index, element := range slice20 {
-		base := unsafe.Add(result21, index*(10*4))
-		utf815 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf815)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf815)))
-		utf816 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf816)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf816)))
-		utf817 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf817)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf817)))
-		utf818 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf818)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf818)))
-		utf819 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf819)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf819)))
+	slice6 := upperPositive
+	length8 := uint32(len(slice6))
+	result7 := witRuntime.Allocate(pinner, uintptr(length8*(10*4)), 4)
+	for index, element := range slice6 {
+		base := unsafe.Add(result7, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	slice28 := upperNegative
-	length30 := uint32(len(slice28))
-	result29 := witRuntime.Allocate(pinner, uintptr(length30*(10*4)), 4)
-	for index, element := range slice28 {
-		base := unsafe.Add(result29, index*(10*4))
-		utf823 := unsafe.Pointer(unsafe.StringData((element).Class))
-		pinner.Pin(utf823)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Class)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf823)))
-		utf824 := unsafe.Pointer(unsafe.StringData((element).Owner))
-		pinner.Pin(utf824)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Owner)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf824)))
-		utf825 := unsafe.Pointer(unsafe.StringData((element).Recipient))
-		pinner.Pin(utf825)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).Recipient)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf825)))
-		utf826 := unsafe.Pointer(unsafe.StringData((element).Verb))
-		pinner.Pin(utf826)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uint32(len((element).Verb)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(utf826)))
-		utf827 := unsafe.Pointer(unsafe.StringData((element).ResourceId))
-		pinner.Pin(utf827)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(uint32(len((element).ResourceId)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(utf827)))
+	slice9 := upperNegative
+	length11 := uint32(len(slice9))
+	result10 := witRuntime.Allocate(pinner, uintptr(length11*(10*4)), 4)
+	for index, element := range slice9 {
+		base := unsafe.Add(result10, index*(10*4))
+		wasm_lower_1_t947(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	wasm_import_derive_scope(uintptr(result), length, uintptr(result5), length6, uintptr(result13), length14, uintptr(result21), length22, uintptr(result29), length30, returnArea)
-	var result42 witTypes.Result[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError]
+	wasm_import_derive_scope(uintptr(result), length, uintptr(result1), length2, uintptr(result4), length5, uintptr(result7), length8, uintptr(result10), length11, returnArea)
+	var result13 witTypes.Result[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result42 = witTypes.Ok[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result13 = witTypes.Ok[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		var variant golem_permissions_types.PermissionError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result12 := wasm_lift_1_t952(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = golem_permissions_types.MakePermissionErrorNotPermitted(value)
-
-		case 1:
-			value31 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorLowerBoundTooBroad(value31)
-
-		case 2:
-			value32 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorUpperBoundTooBroad(value32)
-
-		case 3:
-			value33 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorWalletMultiSourceRequired(value33)
-
-		case 4:
-			value34 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorCardRevoked(value34)
-
-		case 5:
-			value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorCardExpired(value35)
-
-		case 6:
-			value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInstallRecipientMismatch(value36)
-
-		case 7:
-			value37 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorUnknownResourceClass(value37)
-
-		case 8:
-			value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidPattern(value38)
-
-		case 9:
-			value39 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidVerb(value39)
-
-		case 10:
-			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidOwner(value40)
-
-		case 11:
-			value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidRecipient(value41)
-
-		default:
-			panic("unreachable")
-		}
-
-		result42 = witTypes.Err[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](variant)
+		result13 = witTypes.Err[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](result12)
 	default:
 		panic("unreachable")
 	}
-	result43 := result42
-	return result43
+	result14 := result13
+	return result14
 
+}
+
+//go:noinline
+func wasm_lower_1_t947(pinner *runtime.Pinner, value golem_permissions_types.PatternGrant, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Class))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Class)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+	utf80 := unsafe.Pointer(unsafe.StringData((value).Owner))
+	pinner.Pin(utf80)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uint32(len((value).Owner)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uintptr(uintptr(utf80)))
+	utf81 := unsafe.Pointer(unsafe.StringData((value).Recipient))
+	pinner.Pin(utf81)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (5 * 4))) = uint32(uint32(len((value).Recipient)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uintptr(uintptr(utf81)))
+	utf82 := unsafe.Pointer(unsafe.StringData((value).Verb))
+	pinner.Pin(utf82)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (7 * 4))) = uint32(uint32(len((value).Verb)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (6 * 4))) = uint32(uintptr(uintptr(utf82)))
+	utf83 := unsafe.Pointer(unsafe.StringData((value).ResourceId))
+	pinner.Pin(utf83)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (9 * 4))) = uint32(uint32(len((value).ResourceId)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 * 4))) = uint32(uintptr(uintptr(utf83)))
+
+}
+
+//go:noinline
+func wasm_lift_1_t954(src unsafe.Pointer) golem_permissions_types.PersistentCard {
+	var variant golem_permissions_types.PersistentCard
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = golem_permissions_types.MakePersistentCardConcrete(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 4))))))
+
+	case 1:
+
+		variant = golem_permissions_types.MakePersistentCardTemplate(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 4))))))
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t952(src unsafe.Pointer) golem_permissions_types.PermissionError {
+	var variant golem_permissions_types.PermissionError
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorNotPermitted(value0)
+
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorLowerBoundTooBroad(value1)
+
+	case 2:
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorUpperBoundTooBroad(value2)
+
+	case 3:
+		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorWalletMultiSourceRequired(value3)
+
+	case 4:
+		value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorCardRevoked(value4)
+
+	case 5:
+		value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorCardExpired(value5)
+
+	case 6:
+		value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorInstallRecipientMismatch(value6)
+
+	case 7:
+		value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorUnknownResourceClass(value7)
+
+	case 8:
+		value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorInvalidPattern(value8)
+
+	case 9:
+		value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorInvalidVerb(value9)
+
+	case 10:
+		value10 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorInvalidOwner(value10)
+
+	case 11:
+		value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_permissions_types.MakePermissionErrorInvalidRecipient(value11)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
 }

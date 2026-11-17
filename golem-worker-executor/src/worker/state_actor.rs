@@ -234,7 +234,7 @@ enum StatusJob {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-        done: oneshot::Sender<Result<bool, OplogError>>,
+        done: oneshot::Sender<Result<bool, WorkerExecutorError>>,
     },
     /// Folds the entries that the oplog committed by itself, on its commit threshold, into the
     /// published status. Commits nothing. The oplog queues it through its auto-commit listener.
@@ -283,6 +283,17 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     GrowMemory {
         worker: Arc<Worker<Ctx>>,
         growth: Arc<PendingMemoryGrowth>,
+    },
+    ReconcileMemory {
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
+    },
+    FinalizeInstantiationMemory {
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        delta: u64,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     OrderedOplogEntry {
         worker: Arc<Worker<Ctx>>,
@@ -532,6 +543,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 ) {
                                     return Ok(false);
                                 }
+                                // Acquiring the worker does not reserve admission: its constructor
+                                // may have failed since acquisition. Check health in this serialized
+                                // append job, after deduplication and before accepting new work.
+                                Worker::<Ctx>::ensure_not_failed(
+                                    &state.deps,
+                                    &state.owned_agent_id,
+                                    state.agent_mode,
+                                    &status,
+                                )
+                                .await?;
                                 drop(status);
                                 // Returned rather than reported as a moved version: the caller
                                 // retries on `false`, and a fenced oplog refuses every retry.
@@ -539,7 +560,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     if let OplogError::Fenced(fence) = &error {
                                         state.retire_fenced_agent(fence.clone());
                                     }
-                                    return Err(error);
+                                    return Err(error.into());
                                 }
                                 // The entry is only buffered until this commit, which is where a
                                 // takeover is found. The key has not reached the status, so nothing
@@ -649,6 +670,35 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     }
                     LifecycleJob::GrowMemory { worker, growth } => {
                         worker.persist_pending_memory_growth(growth).await;
+                    }
+                    LifecycleJob::ReconcileMemory {
+                        worker,
+                        bytes,
+                        done,
+                    } => {
+                        let result = worker
+                            .add_and_commit_oplog(OplogEntry::memory_size_reconciled(bytes))
+                            .await
+                            .map(|_| ())
+                            .map_err(WorkerExecutorError::from);
+                        let _ = done.send(result);
+                    }
+                    LifecycleJob::FinalizeInstantiationMemory {
+                        worker,
+                        bytes,
+                        delta,
+                        done,
+                    } => {
+                        let result = worker
+                            .add_and_commit_oplog(OplogEntry::grow_memory(delta))
+                            .await
+                            .map(|_| {
+                                worker
+                                    .startup_linear_memory_bytes
+                                    .store(bytes, Ordering::Release);
+                            })
+                            .map_err(WorkerExecutorError::from);
+                        let _ = done.send(result);
                     }
                     LifecycleJob::OrderedOplogEntry {
                         worker,
@@ -858,7 +908,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-    ) -> Result<bool, OplogError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
@@ -958,6 +1008,48 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 self.owned_agent_id
             );
         }
+    }
+
+    pub fn reconcile_memory(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+    ) -> oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let (done, result) = oneshot::channel();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::ReconcileMemory {
+                worker,
+                bytes,
+                done,
+            })
+            .is_err()
+        {
+            panic!("worker lifecycle actor stopped during memory reconciliation");
+        }
+        result
+    }
+
+    pub fn finalize_instantiation_memory(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        delta: u64,
+    ) -> oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let (done, result) = oneshot::channel();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::FinalizeInstantiationMemory {
+                worker,
+                bytes,
+                delta,
+                done,
+            })
+            .is_err()
+        {
+            panic!("worker lifecycle actor stopped during instantiation finalization");
+        }
+        result
     }
 
     pub fn memory_limit_exceeded(&self, worker: Arc<Worker<Ctx>>, memory: LinearMemoryTracker) {

@@ -32,6 +32,8 @@ const (
 	AgentInvocationStarted = oplogwit.PublicOplogEntryAgentInvocationStarted
 	// The agent has completed an invocation
 	AgentInvocationFinished = oplogwit.PublicOplogEntryAgentInvocationFinished
+	// A method failed without failing the agent.
+	AgentInvocationFailed = oplogwit.PublicOplogEntryAgentInvocationFailed
 	// Agent suspended
 	Suspend = oplogwit.PublicOplogEntrySuspend
 	// Agent failed
@@ -56,8 +58,10 @@ const (
 	SuccessfulUpdate = oplogwit.PublicOplogEntrySuccessfulUpdate
 	// An update failed to be applied
 	FailedUpdate = oplogwit.PublicOplogEntryFailedUpdate
-	// Increased total linear memory size
+	// Increased allocated linear memory and GC heap capacity
 	GrowMemory = oplogwit.PublicOplogEntryGrowMemory
+	// Replaced the reload requirement with the reconstructed allocation
+	MemorySizeReconciled = oplogwit.PublicOplogEntryMemorySizeReconciled
 	// Created a resource instance
 	CreateResource = oplogwit.PublicOplogEntryCreateResource
 	// Dropped a resource instance

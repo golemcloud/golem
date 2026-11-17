@@ -222,6 +222,23 @@ oplog_entry! {
             component_revision: ComponentRevision,
         }
     },
+    /// A method returned an error, completing only this invocation.
+    AgentInvocationFailed {
+        hint: false
+        wit_raw_type: "raw-agent-invocation-failed-parameters"
+        wit_public_type: "agent-invocation-failed-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            invocation_id: InvocationId,
+            error: AgentError,
+            start_index: OplogIndex,
+        }
+        public {
+            invocation_id: InvocationId,
+            error: String,
+            start_index: OplogIndex,
+        }
+    },
     /// Worker suspended
     Suspend {
         hint: true
@@ -376,7 +393,7 @@ oplog_entry! {
             update_attempt_index: Option<OplogIndex>,
         }
     },
-    /// Increased total linear memory size
+    /// Increased allocated linear memory and GC heap capacity
     GrowMemory {
         hint: true
         wit_raw_type: "grow-memory-parameters"
@@ -386,6 +403,18 @@ oplog_entry! {
         }
         public {
             delta: u64
+        }
+    },
+    /// Replaced the reload requirement with the allocation reconstructed by the primary Store
+    MemorySizeReconciled {
+        hint: true
+        wit_raw_type: "memory-size-reconciled-parameters"
+        wit_public_type: "memory-size-reconciled-parameters"
+        raw {
+            bytes: u64
+        }
+        public {
+            bytes: u64
         }
     },
     /// Created a resource instance

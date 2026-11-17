@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::sockets::policy::SocketPolicy;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -268,7 +269,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stderr,
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             suspend_threshold,
-            config.agent_sockets.enabled,
+            config
+                .agent_sockets
+                .enabled
+                .then(|| SocketPolicy::new(&config)),
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let wasi_http = WasiHttpCtx::new();
@@ -576,7 +580,7 @@ impl PrivateDurableWorkerState {
             open_tcp_input_streams: HashSet::new(),
             open_tcp_output_streams: HashSet::new(),
             p2_timer_deadlines: HashMap::new(),
-            tcp_taken_streams: HashMap::new(),
+            socket_entries: sockets::SocketEntries::default(),
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,

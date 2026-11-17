@@ -101,7 +101,8 @@ pub async fn launch_golem_services(
         "Golem server is starting, requests are answered with 503 Service Unavailable until it is ready"
     );
 
-    let started_components = start_components(config, &startup_progress, &mut join_set).await?;
+    let started_components =
+        start_components(config, &startup_progress, router_port, &mut join_set).await?;
 
     if accounts_with_well_known_token(config).is_empty()
         && revoke_well_known_token(&started_components.registry_service.endpoint).await?
@@ -149,6 +150,7 @@ async fn write_startup_ports_file(path: &Path, ports: &StartupPorts) -> anyhow::
 async fn start_components(
     config: &GolemServerConfig,
     startup_progress: &StartupProgress,
+    router_port: u16,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
     let component_compilation_service_config = config.component_compilation_service.clone();
@@ -178,8 +180,26 @@ async fn start_components(
     )
     .await?;
 
+    // Agent sockets never reach a port of this process.
+    let refused_ports = vec![
+        router_port,
+        component_compilation_service.grpc_port,
+        component_compilation_service.http_port,
+        registry_service.grpc_port,
+        shard_manager.grpc_port,
+        shard_manager.http_port,
+        worker_service.grpc_port,
+        worker_service.custom_request_port,
+        worker_service.mcp_port,
+    ];
     let worker_executor = run_worker_executor(
-        worker_executor_config(config, &shard_manager, &registry_service, &worker_service),
+        worker_executor_config(
+            config,
+            &shard_manager,
+            &registry_service,
+            &worker_service,
+            refused_ports,
+        ),
         join_set,
     )
     .await?;
@@ -239,8 +259,10 @@ fn worker_executor_config(
     shard_manager: &golem_shard_manager::RunDetails,
     registry_service: &golem_registry_service::SingleExecutableRunDetails,
     worker_service: &golem_worker_service::TrafficReadyEndpoints,
+    refused_ports: Vec<u16>,
 ) -> WorkerExecutorConfig {
     let mut config = config.worker_executor.clone();
+    config.agent_sockets.refused_ports.extend(refused_ports);
     config.shard_manager.host = INTERNAL_HOST.to_string();
     config.shard_manager.port = shard_manager.grpc_port;
     config.registry_service.host = INTERNAL_HOST.to_string();

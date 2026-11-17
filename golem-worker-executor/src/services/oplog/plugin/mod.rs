@@ -20,7 +20,7 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogLifecycleGuard,
     OplogRefusal, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
-    ReservedRawStartBuilder, StagePublication, UnreadableOplog,
+    ReservedRawStartBuilder, ScanPage, StagePublication, UnreadableOplog,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;

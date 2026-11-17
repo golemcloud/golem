@@ -309,6 +309,12 @@ declare module 'golem:api/oplog@1.5.0' {
     pinnedCardIds: CardId[];
     scopeCardId?: CardId;
   };
+  export type AgentInvocationFailedParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    error: string;
+    startIndex: OplogIndex;
+  };
   export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
     timestamp: Datetime;
@@ -547,6 +553,10 @@ declare module 'golem:api/oplog@1.5.0' {
   export type GrowMemoryParameters = {
     timestamp: Datetime;
     delta: bigint;
+  };
+  export type MemorySizeReconciledParameters = {
+    timestamp: Datetime;
+    bytes: bigint;
   };
   export type AgentResourceId = bigint;
   export type CreateResourceParameters = {
@@ -961,6 +971,12 @@ declare module 'golem:api/oplog@1.5.0' {
     consumedFuel: bigint;
     componentRevision: bigint;
   };
+  export type RawAgentInvocationFailedParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    error: WorkerError;
+    startIndex: OplogIndex;
+  };
   export type RawErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;
@@ -1111,6 +1127,10 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'agent-invocation-finished'
     val: RawAgentInvocationFinishedParameters
   } |
+  {
+    tag: 'agent-invocation-failed'
+    val: RawAgentInvocationFailedParameters
+  } |
   /** Agent suspended */
   {
     tag: 'suspend'
@@ -1173,6 +1193,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'grow-memory'
     val: GrowMemoryParameters
+  } |
+  {
+    tag: 'memory-size-reconciled'
+    val: MemorySizeReconciledParameters
   } |
   /** Created a resource instance */
   {
@@ -1386,6 +1410,10 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'agent-invocation-finished'
     val: AgentInvocationFinishedParameters
   } |
+  {
+    tag: 'agent-invocation-failed'
+    val: AgentInvocationFailedParameters
+  } |
   /** Agent suspended */
   {
     tag: 'suspend'
@@ -1448,6 +1476,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'grow-memory'
     val: GrowMemoryParameters
+  } |
+  {
+    tag: 'memory-size-reconciled'
+    val: MemorySizeReconciledParameters
   } |
   /** Created a resource instance */
   {

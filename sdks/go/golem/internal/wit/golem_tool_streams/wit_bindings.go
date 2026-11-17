@@ -198,71 +198,20 @@ func (self *ToolOutputWriter) Write(bytes []uint8) witTypes.Result[witTypes.Unit
 	pinner.Pin(data)
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_tool_output_writer_write((self).Handle(), uintptr(data), uint32(len(bytes)), returnArea)))
-	var result witTypes.Result[witTypes.Unit, StreamWriteError]
+	var result0 witTypes.Result[witTypes.Unit, StreamWriteError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
+		result0 = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
 	case 1:
-		var variant1 StreamWriteError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			var variant0 ByteStreamCloseCause
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
+		result := wasm_lift_1_t672(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-				variant0 = MakeByteStreamCloseCauseFinished()
-
-			case 1:
-				var variant ByteStreamFailure
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))) {
-				case 0:
-
-					variant = MakeByteStreamFailureCancelled()
-
-				case 1:
-
-					variant = MakeByteStreamFailureAbandoned()
-
-				case 2:
-
-					variant = MakeByteStreamFailureResourceExhausted()
-
-				case 3:
-					value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
-
-					variant = MakeByteStreamFailureFailed(value)
-
-				default:
-					panic("unreachable")
-				}
-
-				variant0 = MakeByteStreamCloseCauseFailed(variant)
-
-			case 2:
-
-				variant0 = MakeByteStreamCloseCauseConsumerCancelled()
-
-			default:
-				panic("unreachable")
-			}
-
-			variant1 = MakeStreamWriteErrorClosed(variant0)
-
-		case 1:
-
-			variant1 = MakeStreamWriteErrorConcurrentOperation()
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, StreamWriteError](variant1)
+		result0 = witTypes.Err[witTypes.Unit, StreamWriteError](result)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result0
 
 }
 
@@ -276,71 +225,20 @@ func (self *ToolOutputWriter) Finish() witTypes.Result[witTypes.Unit, StreamWrit
 	returnArea := uintptr(witRuntime.Allocate(pinner, (6 * 4), 4))
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_tool_output_writer_finish((self).Handle(), returnArea)))
-	var result witTypes.Result[witTypes.Unit, StreamWriteError]
+	var result0 witTypes.Result[witTypes.Unit, StreamWriteError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
+		result0 = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
 	case 1:
-		var variant1 StreamWriteError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			var variant0 ByteStreamCloseCause
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
+		result := wasm_lift_1_t672(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-				variant0 = MakeByteStreamCloseCauseFinished()
-
-			case 1:
-				var variant ByteStreamFailure
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))) {
-				case 0:
-
-					variant = MakeByteStreamFailureCancelled()
-
-				case 1:
-
-					variant = MakeByteStreamFailureAbandoned()
-
-				case 2:
-
-					variant = MakeByteStreamFailureResourceExhausted()
-
-				case 3:
-					value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
-
-					variant = MakeByteStreamFailureFailed(value)
-
-				default:
-					panic("unreachable")
-				}
-
-				variant0 = MakeByteStreamCloseCauseFailed(variant)
-
-			case 2:
-
-				variant0 = MakeByteStreamCloseCauseConsumerCancelled()
-
-			default:
-				panic("unreachable")
-			}
-
-			variant1 = MakeStreamWriteErrorClosed(variant0)
-
-		case 1:
-
-			variant1 = MakeStreamWriteErrorConcurrentOperation()
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, StreamWriteError](variant1)
+		result0 = witTypes.Err[witTypes.Unit, StreamWriteError](result)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result0
 
 }
 
@@ -388,70 +286,91 @@ func (self *ToolOutputWriter) Fail(reason ByteStreamFailure) witTypes.Result[wit
 	}
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_tool_output_writer_fail((self).Handle(), variant, variant0, variant1, returnArea)))
-	var result witTypes.Result[witTypes.Unit, StreamWriteError]
+	var result2 witTypes.Result[witTypes.Unit, StreamWriteError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
+		result2 = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
 	case 1:
-		var variant4 StreamWriteError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			var variant3 ByteStreamCloseCause
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
+		result := wasm_lift_1_t672(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-				variant3 = MakeByteStreamCloseCauseFinished()
-
-			case 1:
-				var variant2 ByteStreamFailure
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))) {
-				case 0:
-
-					variant2 = MakeByteStreamFailureCancelled()
-
-				case 1:
-
-					variant2 = MakeByteStreamFailureAbandoned()
-
-				case 2:
-
-					variant2 = MakeByteStreamFailureResourceExhausted()
-
-				case 3:
-					value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
-
-					variant2 = MakeByteStreamFailureFailed(value)
-
-				default:
-					panic("unreachable")
-				}
-
-				variant3 = MakeByteStreamCloseCauseFailed(variant2)
-
-			case 2:
-
-				variant3 = MakeByteStreamCloseCauseConsumerCancelled()
-
-			default:
-				panic("unreachable")
-			}
-
-			variant4 = MakeStreamWriteErrorClosed(variant3)
-
-		case 1:
-
-			variant4 = MakeStreamWriteErrorConcurrentOperation()
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, StreamWriteError](variant4)
+		result2 = witTypes.Err[witTypes.Unit, StreamWriteError](result)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result2
 
+}
+
+//go:noinline
+func wasm_lift_1_t672(src unsafe.Pointer) StreamWriteError {
+	var variant StreamWriteError
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		result := wasm_lift_1_t671(unsafe.Add(unsafe.Pointer(src), 4))
+
+		variant = MakeStreamWriteErrorClosed(result)
+
+	case 1:
+
+		variant = MakeStreamWriteErrorConcurrentOperation()
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t671(src unsafe.Pointer) ByteStreamCloseCause {
+	var variant ByteStreamCloseCause
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeByteStreamCloseCauseFinished()
+
+	case 1:
+		result := wasm_lift_1_t668(unsafe.Add(unsafe.Pointer(src), 4))
+
+		variant = MakeByteStreamCloseCauseFailed(result)
+
+	case 2:
+
+		variant = MakeByteStreamCloseCauseConsumerCancelled()
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t668(src unsafe.Pointer) ByteStreamFailure {
+	var variant ByteStreamFailure
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeByteStreamFailureCancelled()
+
+	case 1:
+
+		variant = MakeByteStreamFailureAbandoned()
+
+	case 2:
+
+		variant = MakeByteStreamFailureResourceExhausted()
+
+	case 3:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeByteStreamFailureFailed(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
 }

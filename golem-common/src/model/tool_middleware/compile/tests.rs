@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    compile_discovered_tool_middleware_chain, compile_tool_middleware_chains,
-    effective_installations, synthesize_effective_definition,
+    CompiledToolMiddlewareChains, compile_discovered_tool_middleware_chain,
+    compile_tool_middleware_chains, effective_installations, synthesize_effective_definition,
 };
 use crate::model::agent::AgentTypeName;
 use crate::model::agent_secret::CanonicalAgentSecretPath;
@@ -396,18 +396,13 @@ fn different_ref_ids_with_equivalent_recursive_schemas_are_accepted() {
     synthesize_effective_definition(&presented, None, &next).unwrap();
 }
 
-#[test]
-fn registry_is_validated_without_bindings() {
-    let invalid = Tool {
-        version: "1.0.0".to_string(),
-        requires_filesystem: false,
-        commands: CommandTree { nodes: Vec::new() },
-        schema: SchemaGraph::empty(),
-    };
+/// Compiles a registry that holds only `definition`, registered by a component, with no
+/// bindings and no middleware.
+fn compile_registry_of(definition: Tool) -> CompiledToolMiddlewareChains {
     let registered = ToolRegistration {
         deployment_revision: DeploymentRevision::INITIAL,
         release_id: None,
-        definition: invalid,
+        definition,
         provision: Default::default(),
         source: ToolSource::Component {
             component_id: Default::default(),
@@ -421,7 +416,7 @@ fn registry_is_validated_without_bindings() {
         metadata_digest: Default::default(),
     };
 
-    let compiled = compile_tool_middleware_chains(
+    compile_tool_middleware_chains(
         DeploymentRevision::INITIAL,
         &[registered],
         &[],
@@ -431,7 +426,19 @@ fn registry_is_validated_without_bindings() {
         &Default::default(),
         &Default::default(),
         ToolCompatibilityMode::StructuralSubtype,
-    );
+    )
+}
+
+#[test]
+fn registry_is_validated_without_bindings() {
+    let invalid = Tool {
+        version: "1.0.0".to_string(),
+        requires_filesystem: false,
+        commands: CommandTree { nodes: Vec::new() },
+        schema: SchemaGraph::empty(),
+    };
+
+    let compiled = compile_registry_of(invalid);
 
     assert!(!compiled.errors.is_empty());
     assert!(
@@ -439,6 +446,34 @@ fn registry_is_validated_without_bindings() {
             .errors
             .iter()
             .all(|error| { error.agent_type_name.is_none() && error.tool_name.is_none() })
+    );
+}
+
+#[test]
+fn registered_error_case_with_exit_code_zero_is_reported_with_the_tool_name() {
+    let mut definition = simple_tool("exit-probe");
+    let mut failure = empty_error("failed-with-zero");
+    failure.exit_code = 0;
+    definition
+        .commands
+        .nodes
+        .push(command("fail-zero", vec![failure]));
+    definition.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+
+    let compiled = compile_registry_of(definition);
+
+    let messages = compiled
+        .errors
+        .iter()
+        .map(|error| error.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages,
+        vec![
+            "invalid registered tool descriptor `exit-probe`: error case \"failed-with-zero\" in \
+             command \"fail-zero\" has exit code 0, which means success; a declared error needs \
+             an exit code from 1 to 255"
+        ]
     );
 }
 

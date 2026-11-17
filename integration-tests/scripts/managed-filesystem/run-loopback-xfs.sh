@@ -636,10 +636,13 @@ run_selected_test() {
 
   if [[ ${reuse_test_binaries} == 1 ]]; then
     local target_args=()
+    if [[ -n ${GOLEM_MANAGED_XFS_BINARIES_METADATA:-} ]]; then
+      target_args=(--binaries-metadata "${GOLEM_MANAGED_XFS_BINARIES_METADATA}")
+    fi
     if [[ ${target} == integration ]]; then
-      target_args=(--package golem-worker-executor-tests --test integration)
+      target_args+=(--package golem-worker-executor-tests --test integration)
     else
-      target_args=(--package golem-worker-executor --lib)
+      target_args+=(--package golem-worker-executor --lib)
     fi
     run_and_verify_privileged_test "${result_file}" "${filter}" \
       timeout --kill-after=30s 5m \

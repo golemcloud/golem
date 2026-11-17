@@ -221,6 +221,7 @@ where
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
             | OplogEntry::RecoverySucceeded { .. }
@@ -232,6 +233,7 @@ where
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }

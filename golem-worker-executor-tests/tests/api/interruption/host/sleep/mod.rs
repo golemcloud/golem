@@ -232,8 +232,14 @@ pub(super) async fn pending_sleep(
         // Wait out the real recorded deadline with no Store. Restarting a fresh duration on
         // reconstruction would miss the five-second completion bound below by a wide margin.
         if durable {
-            let remaining = original.deadline.saturating_sub(history::unix_nanos());
-            tokio::time::sleep(Duration::from_nanos(remaining) + Duration::from_millis(200)).await;
+            // Recheck the wall clock after each monotonic wait in case the clocks diverge.
+            loop {
+                let remaining = original.deadline.saturating_sub(history::unix_nanos());
+                tokio::time::sleep(Duration::from_nanos(remaining) + Duration::from_millis(200)).await;
+                if history::unix_nanos() >= original.deadline {
+                    break;
+                }
+            }
             ensure!(history::unix_nanos() >= original.deadline);
             ensure!(!invocation.is_finished());
         } else {

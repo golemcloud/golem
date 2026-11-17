@@ -17,7 +17,8 @@ use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
     OplogCloseCompletion, OplogError, OplogLifecycleGuard, OplogService, OrderedOplogStart,
-    RawOplogPayloadDownloadError, ReservedRawStartBuilder, StagePublication, UnreadableOplog,
+    RawOplogPayloadDownloadError, ReservedRawStartBuilder, ScanPage, StagePublication,
+    UnreadableOplog,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -674,7 +675,7 @@ impl OplogService for RateLimitedOplogService {
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         self.inner
             .scan_for_component(environment_id, component_id, modes, cursor, count)
             .await
