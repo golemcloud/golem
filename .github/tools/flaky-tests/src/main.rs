@@ -98,7 +98,7 @@ struct ArtifactWork {
 
 struct Args {
     repo: String,
-    workflow: String,
+    workflows: Vec<String>,
     days: u64,
     run_ids: Vec<u64>,
     limit: usize,
@@ -266,7 +266,7 @@ fn other_error(message: String) -> AnyError {
 
 fn parse_args() -> Result<Args> {
     let mut repo = env::var("GITHUB_REPOSITORY").ok();
-    let mut workflow = "ci.yaml".to_string();
+    let mut workflows = Vec::new();
     let mut days = 30;
     let mut run_ids = Vec::new();
     let mut limit = 100;
@@ -282,7 +282,7 @@ fn parse_args() -> Result<Args> {
         };
         match argument.as_str() {
             "--repo" => repo = Some(value(&mut arguments)?),
-            "--workflow" => workflow = value(&mut arguments)?,
+            "--workflow" => workflows.push(value(&mut arguments)?),
             "--days" => days = value(&mut arguments)?.parse()?,
             "--run-id" => run_ids.push(value(&mut arguments)?.parse()?),
             "--limit" => limit = value(&mut arguments)?.parse()?,
@@ -295,6 +295,9 @@ fn parse_args() -> Result<Args> {
     if days == 0 {
         return Err(other_error("--days must be at least 1".to_string()));
     }
+    if workflows.is_empty() {
+        workflows = vec!["ci.yaml".to_string(), "main-validation.yaml".to_string()];
+    }
     if env::var_os("GH_TOKEN").is_none() && env::var_os("GITHUB_TOKEN").is_none() {
         return Err(other_error(
             "GH_TOKEN or GITHUB_TOKEN is required".to_string(),
@@ -302,7 +305,7 @@ fn parse_args() -> Result<Args> {
     }
     Ok(Args {
         repo: repo.ok_or_else(|| other_error("--repo is required".to_string()))?,
-        workflow,
+        workflows,
         days,
         run_ids,
         limit,
@@ -325,29 +328,28 @@ fn collect_runs<G: GitHubApi>(github: &G, args: &Args, now: u64) -> Result<Vec<W
     let first_day = cutoff / 86_400;
     let last_day = now / 86_400;
     let mut runs = HashMap::new();
-    for day in first_day..=last_day {
-        let date = format_date(day as i64);
-        let endpoint = format!(
-            "/repos/{}/actions/workflows/{}/runs",
-            args.repo, args.workflow
-        );
-        for page in 1.. {
-            let response: WorkflowRuns = github.read_json(
-                &endpoint,
-                &[
-                    ("created", format!("{date}T00:00:00Z..{date}T23:59:59Z")),
-                    ("per_page", "100".to_string()),
-                    ("page", page.to_string()),
-                ],
-            )?;
-            let count = response.workflow_runs.len();
-            for run in response.workflow_runs {
-                if run.created_at >= format_timestamp(cutoff) {
-                    runs.insert(run.id, run);
+    for workflow in &args.workflows {
+        for day in first_day..=last_day {
+            let date = format_date(day as i64);
+            let endpoint = format!("/repos/{}/actions/workflows/{}/runs", args.repo, workflow);
+            for page in 1.. {
+                let response: WorkflowRuns = github.read_json(
+                    &endpoint,
+                    &[
+                        ("created", format!("{date}T00:00:00Z..{date}T23:59:59Z")),
+                        ("per_page", "100".to_string()),
+                        ("page", page.to_string()),
+                    ],
+                )?;
+                let count = response.workflow_runs.len();
+                for run in response.workflow_runs {
+                    if run.created_at >= format_timestamp(cutoff) {
+                        runs.insert(run.id, run);
+                    }
                 }
-            }
-            if count < 100 {
-                break;
+                if count < 100 {
+                    break;
+                }
             }
         }
     }
@@ -363,22 +365,28 @@ fn collect_artifacts<G: GitHubApi>(github: &G, runs: &[WorkflowRun]) -> Result<V
     let mut work = Vec::new();
     let endpoint = format!("/repos/{}/actions/artifacts", github.repo());
     for attempt in 1..=max_attempt {
-        let name = consolidated_artifact_name(attempt);
-        let artifacts = github.paginated(
-            &endpoint,
-            |value| Ok(serde_json::from_value::<Artifacts>(value)?.artifacts),
-            &[("name", name.clone())],
-        )?;
-        for artifact in artifacts {
-            if artifact.expired || artifact.name != name {
-                continue;
-            }
-            if let Some(run) = runs_by_id.get(&artifact.workflow_run.id) {
-                work.push(ArtifactWork {
-                    run: (*run).clone(),
-                    artifact,
-                    attempt,
-                });
+        // Only collect the published reports, not the raw Linux evidence containing
+        // the same CTRF files.
+        for name in [
+            consolidated_artifact_name(attempt),
+            format!("main-validation-test-report-attempt{attempt}"),
+        ] {
+            let artifacts = github.paginated(
+                &endpoint,
+                |value| Ok(serde_json::from_value::<Artifacts>(value)?.artifacts),
+                &[("name", name.clone())],
+            )?;
+            for artifact in artifacts {
+                if artifact.expired || artifact.name != name {
+                    continue;
+                }
+                if let Some(run) = runs_by_id.get(&artifact.workflow_run.id) {
+                    work.push(ArtifactWork {
+                        run: (*run).clone(),
+                        artifact,
+                        attempt,
+                    });
+                }
             }
         }
         eprintln!(
@@ -665,8 +673,10 @@ fn generate_report<G: GitHubApi>(
     now: u64,
 ) -> Result<(String, Option<Issue>)> {
     eprintln!(
-        "Discovering CI runs (repository={}, workflow={}, window_days={})",
-        args.repo, args.workflow, args.days
+        "Discovering CI runs (repository={}, workflows={}, window_days={})",
+        args.repo,
+        args.workflows.join(","),
+        args.days
     );
     let runs = collect_runs(github, args, now)?;
     eprintln!("Discovered CI runs (runs={})", runs.len());
@@ -761,6 +771,7 @@ mod tests {
         label_exists: bool,
         pinned: bool,
         job_responses: HashMap<String, Vec<Value>>,
+        main_validation: bool,
     }
 
     impl FakeGitHub {
@@ -787,6 +798,7 @@ mod tests {
                 label_exists,
                 pinned,
                 job_responses: HashMap::new(),
+                main_validation: false,
             }
         }
 
@@ -823,6 +835,17 @@ mod tests {
                 return Ok(serde_json::to_vec(value)?);
             }
             let value = match endpoint {
+                "/repos/test/repo/actions/workflows/ci.yaml/runs"
+                | "/repos/test/repo/actions/workflows/main-validation.yaml/runs" => {
+                    let id = if endpoint.contains("/ci.yaml/") { 1 } else { 2 };
+                    json!({"workflow_runs": [{
+                        "id": id,
+                        "run_attempt": if id == 1 { 2 } else { 1 },
+                        "created_at": "2026-09-03T10:00:00Z",
+                        "head_branch": "main",
+                        "html_url": format!("https://example.test/runs/{id}")
+                    }]})
+                }
                 "/repos/test/repo/actions/runs/1" => json!({
                     "id": 1,
                     "run_attempt": 2,
@@ -839,21 +862,48 @@ mod tests {
                     let (id, created_at) = match name {
                         "ci-test-reports-attempt1" => (11, "2026-09-03T10:30:00Z"),
                         "ci-test-reports-attempt2" => (12, "2026-09-03T11:30:00Z"),
+                        "main-validation-test-report-attempt1" if self.main_validation => {
+                            (21, "2026-09-03T12:30:00Z")
+                        }
+                        "main-validation-test-report-attempt1"
+                        | "main-validation-test-report-attempt2" => {
+                            return Ok(serde_json::to_vec(&json!({"artifacts": []}))?);
+                        }
                         _ => return Err(other_error(format!("unexpected artifact name {name}"))),
                     };
-                    json!({"artifacts": [{
+                    let mut artifacts = vec![json!({
                         "id": id,
                         "name": name,
                         "created_at": created_at,
                         "expired": false,
-                        "workflow_run": {"id": 1}
-                    }]})
+                        "workflow_run": {"id": if id == 21 { 2 } else { 1 }}
+                    })];
+                    if self.main_validation {
+                        artifacts.push(json!({
+                            "id": 22,
+                            "name": "main-validation-linux-2",
+                            "created_at": created_at,
+                            "workflow_run": {"id": 2}
+                        }));
+                    }
+                    json!({"artifacts": artifacts})
                 }
                 "/repos/test/repo/actions/artifacts/11/zip" => {
                     return Ok(self.first_archive.clone());
                 }
                 "/repos/test/repo/actions/artifacts/12/zip" => {
                     return Ok(self.second_archive.clone());
+                }
+                "/repos/test/repo/actions/artifacts/21/zip" => {
+                    return Ok(report_archive(
+                        "main-validation-test-report-attempt1",
+                        json!([{"name": "suite::main-validation", "status": "failed",
+                            "extra": {"testR": {"attempts": [
+                                {"attempt": 1, "status": "failed"},
+                                {"attempt": 2, "status": "passed"}
+                            ]}}
+                        }]),
+                    ));
                 }
                 "/repos/test/repo/actions/runs/1/attempts/1/jobs"
                 | "/repos/test/repo/actions/runs/1/attempts/2/jobs" => json!({"jobs": [{
@@ -916,7 +966,7 @@ mod tests {
     fn test_args(update_issue: bool) -> Args {
         Args {
             repo: "test/repo".to_string(),
-            workflow: "ci.yaml".to_string(),
+            workflows: vec!["ci.yaml".to_string(), "main-validation.yaml".to_string()],
             days: 30,
             run_ids: vec![1],
             limit: 100,
@@ -1082,6 +1132,45 @@ mod tests {
     }
 
     #[test]
+    fn collects_old_ci_and_main_validation_reports_without_raw_evidence() {
+        let mut github = FakeGitHub::new(false, false, false);
+        github.main_validation = true;
+        let mut args = test_args(false);
+        args.run_ids.clear();
+        args.days = 1;
+        let runs = collect_runs(&github, &args, 1_788_480_000).unwrap();
+        assert_eq!(runs.len(), 2);
+        let work = collect_artifacts(&github, &runs).unwrap();
+        assert_eq!(work.len(), 3);
+        assert_eq!(work.iter().filter(|work| work.run.id == 1).count(), 2);
+        assert!(
+            work.iter()
+                .any(|work| work.artifact.name == "main-validation-test-report-attempt1")
+        );
+        let observations = download_reports(&github, work).unwrap();
+        assert_eq!(observations.len(), 5);
+        let candidates = aggregate(observations);
+        let recovered = candidates
+            .iter()
+            .find(|test| test.name == "suite::main-validation")
+            .unwrap();
+        assert_eq!(recovered.retries, 1);
+        assert_eq!(recovered.failures, 0);
+        assert_eq!(recovered.score(), 3);
+        assert!(
+            candidates
+                .iter()
+                .any(|test| test.name == "suite::flip" && test.flips == 1)
+        );
+
+        // A single explicit workflow restricts discovery; repeated days are deduplicated.
+        args.workflows = vec!["ci.yaml".into()];
+        let runs = collect_runs(&github, &args, 1_788_480_000).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, 1);
+    }
+
+    #[test]
     fn exercises_collection_aggregation_and_issue_creation_without_processes() {
         let github = FakeGitHub::new(false, false, false);
 
@@ -1100,7 +1189,7 @@ mod tests {
                 .iter()
                 .filter(|endpoint| endpoint.as_str() == "/repos/test/repo/actions/artifacts")
                 .count(),
-            2
+            4
         );
         assert_eq!(
             upsert_issue(&github, existing, &body).unwrap(),
