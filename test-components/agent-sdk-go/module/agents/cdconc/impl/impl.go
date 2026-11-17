@@ -109,6 +109,21 @@ func drawAfterBody() string {
 	return remembered
 }
 
+// pollTimer waits for a timer by polling its channel. No goroutine blocks on the
+// channel, so the timer is in no heap, and the loop reads no clock itself.
+func pollTimer() {
+	t := time.NewTimer(5 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			return
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
 // sleepThenGet yields the results of two host calls, sleeping on a Go timer
 // before each.
 func sleepThenGet(prefix string) iter.Seq[string] {
@@ -377,6 +392,15 @@ func init() {
 			return get("/echo?v=b")
 		})
 		time.Sleep(10 * time.Millisecond)
+		return b + "," + get("/echo?v=r")
+	})
+
+	agent.Handle(cdconc.PollTimer, func(_ *golem.Context[state], _ golem.Unit) string {
+		b := op("op", func() string {
+			pollTimer()
+			return get("/echo?v=b")
+		})
+		pollTimer()
 		return b + "," + get("/echo?v=r")
 	})
 

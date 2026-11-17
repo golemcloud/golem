@@ -1028,3 +1028,49 @@ async fn go_pull_iterator_consumed_inside_custom_body(
     assert_replays_cleanly(&outcome);
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn go_polled_timer_channel_fires_without_clock_reads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let outcome = run(
+        deps,
+        last_unique_id,
+        agent_sdk_go,
+        "poll-timer",
+        "poll-timer",
+        data_value!(),
+    )
+    .await?;
+    report("poll-timer", &outcome);
+    assert_eq!(outcome.live.as_deref(), Ok("b,r"));
+    let ops = owned_sends(&outcome.calls, "cdconc::op");
+    assert_eq!(ops.len(), 1);
+    assert_eq!(ops[0].1, vec!["echo:b".to_string()]);
+    assert_eq!(root_sends(&outcome.calls), vec!["echo:r".to_string()]);
+    let op = ops[0].0.index;
+    let body_send = outcome
+        .calls
+        .iter()
+        .find(|c| c.function == "http::client::send" && c.owner == Some(op))
+        .map(|c| c.index)
+        .unwrap();
+    let body_clock_owners: Vec<_> = outcome
+        .calls
+        .iter()
+        .filter(|c| c.function == "monotonic_clock::now" && c.index > op && c.index < body_send)
+        .map(|c| c.owner)
+        .collect();
+    assert!(!body_clock_owners.is_empty());
+    assert!(
+        body_clock_owners.iter().all(|o| *o == Some(op)),
+        "the body's polls read the clock inside the operation: {body_clock_owners:?}"
+    );
+    assert_replays_cleanly(&outcome);
+    Ok(())
+}

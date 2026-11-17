@@ -32,6 +32,7 @@ var (
 	SiblingTimers       = Agent.Method[golem.Unit, string]("sibling-timers", golem.Description("Two sibling bodies sleep on Go timers; the second is due first"))
 	AfterFuncInBody     = Agent.Method[golem.Unit, string]("after-func-in-body", golem.Description("A body waits for a time.AfterFunc callback that makes a host call"))
 	TimerOutlivesBody   = Agent.Method[golem.Unit, string]("timer-outlives-body", golem.Description("A body returns with Go timers still pending, then the root sleeps and makes a host call"))
+	PollTimer           = Agent.Method[golem.Unit, string]("poll-timer", golem.Description("A body, then the root, polls a timer channel with select and default until it fires, without reading the clock"))
 	PullInBody          = Agent.Method[golem.Unit, string]("pull-in-body", golem.Description("Bodies consume iter.Pull iterators, created before the body and inside it, that sleep and make host calls"))
 	Echo                = Agent.Method[golem.Unit, string]("echo", golem.Description("A plain root host call"))
 )
