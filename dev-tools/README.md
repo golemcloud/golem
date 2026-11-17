@@ -27,6 +27,20 @@ Concretely:
 If a tool ever genuinely needs a dependency, reconsider whether it belongs here or in the
 main workspace.
 
+## Go bindings generator
+
+`go-bindgen/` is an independent Cargo workspace, excluded from this std-only workspace.
+It pins the Go backend and core from `golemcloud/wit-bindgen` at one immutable revision.
+The driver enables package-private memory conversion helpers without upgrading
+`componentize-go`, the Go compiler or the Go bindings runtime.
+
+Run `cargo make generate-sdk-go-bindings` to regenerate the SDK bindings, apply the
+existing fixups, format the output and compile it for WebAssembly. The driver replaces
+only the generated output directory; hand-written `internal/exports` stays separate.
+Run its checks separately with `--manifest-path dev-tools/go-bindgen/Cargo.toml`:
+`cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
+The Go CI job runs these checks because `dev-tools-tests` does not cover this workspace.
+
 ## Tools
 
 - **`go-bindgen-fixup`** — post-processes the generated Go SDK bindings (`sdks/go/internal/wit`)
