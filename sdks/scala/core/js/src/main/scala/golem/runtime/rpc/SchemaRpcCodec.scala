@@ -28,7 +28,7 @@ import scala.collection.immutable.ListMap
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 
 /**
  * The `golem:agent/host@2.0.0` RPC-boundary codec: encodes the parameter-list

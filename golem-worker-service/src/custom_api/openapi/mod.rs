@@ -58,9 +58,7 @@ impl OpenApiKey {
                 RichRouteBehaviour::CallAgent(call) => {
                     fingerprint.update(format!("\0call:{call:?}").as_bytes());
                 }
-                RichRouteBehaviour::HttpRouter(provider)
-                    if provider.openapi_provider_method.is_some() =>
-                {
+                RichRouteBehaviour::Mount(provider) if provider.openapi_provider.is_some() => {
                     fingerprint.update(format!("\0provider:{provider:?}").as_bytes());
                 }
                 _ => {}

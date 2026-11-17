@@ -769,7 +769,6 @@ mod tests {
         initial_permission_allows_agent_id_read, representative_agent_names,
         resolve_initial_permission, show_exported_agent_constructors,
     };
-    use golem_common::model::Empty;
     use golem_common::model::account::AccountEmail;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::application::ApplicationName;
@@ -787,6 +786,7 @@ mod tests {
     use golem_common::schema::{
         AgentConstructorSchema, AgentTypeKind, AgentTypeSchema, InputSchema, SchemaGraph,
     };
+    use golem_schema::Empty;
     use test_r::test;
 
     fn manifest_card() -> ParsedInitialPermissionCard {

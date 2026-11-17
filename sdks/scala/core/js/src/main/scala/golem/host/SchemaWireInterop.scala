@@ -25,7 +25,7 @@ import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.typedarray.Uint8Array
 import scala.concurrent.{Future, Promise}
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.util.{Failure, Success, Try}
 import golem.FutureInterop
 import zio.blocks.async.*

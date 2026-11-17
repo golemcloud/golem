@@ -1,0 +1,37 @@
+manifestVersion: 2.0.0
+
+app: fault-matrix-scala
+
+componentTemplates:
+  scala-test-component:
+    guestLanguage: scala
+    presets:
+      release:
+        default: true
+        build:
+        - command: sbt -batch -no-colors -Dsbt.supershell=false "golemBuildComponent golem-it:fault-matrix-scala .golem/scala.js"
+          sources:
+          - src
+          - build.sbt
+          - project
+          targets:
+          - .golem/scala.js
+        - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+          module: .golem/scala.js
+          into: "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.preinitialized.wasm"
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.preinitialized.wasm" "{{ appRootDir }}/../golem_it_fault_matrix_scala.wasm"
+
+components:
+  golem-it:fault-matrix-scala:
+    dir: .
+    templates: scala-test-component
+
+environments:
+  local:
+    server: local
+    componentPresets: release

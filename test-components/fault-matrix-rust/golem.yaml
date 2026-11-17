@@ -1,0 +1,24 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
+
+manifestVersion: 2.0.0
+
+app: fault-matrix-rust
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:fault-matrix-rust:
+    dir: "."
+    templates: rust, rust-test-component
+
+environments:
+  local:
+    server: local
+    componentPresets: release
+  cloud:
+    server: cloud
+    componentPresets: release

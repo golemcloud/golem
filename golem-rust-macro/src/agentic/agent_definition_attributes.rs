@@ -252,7 +252,7 @@ pub fn parse_agent_definition_attributes(
         })?;
         let parsed = golem_schema::http::FileMapping::compile(&mount.value(), "/mount")
             .map_err(|_| Error::new_spanned(mount, "router mount must be a literal absolute path, without captures, query, wildcard, or trailing slash"))?;
-        if !matches!(parsed, golem_schema::http::FileMapping::Exact { .. }) {
+        if !matches!(parsed, golem_schema::http::FileMapping::Exact(_)) {
             return Err(Error::new_spanned(
                 mount,
                 "router mount cannot contain a wildcard",
@@ -561,7 +561,7 @@ fn parse_file_response_headers(expr: &Expr) -> Result<Vec<TokenStream>, Error> {
             let name = values.next().unwrap()?;
             let value = values.next().unwrap()?;
             Ok(quote! {
-                golem_rust::golem_agentic::golem::agent::common::FileResponseHeader {
+                golem_rust::golem_schema::http::wit::wire::FileResponseHeader {
                     name: #name.to_string(), value: #value.to_string(),
                 }
             })
@@ -575,6 +575,7 @@ fn compile_exposure_mount(mount: &syn::LitStr, variables: bool) -> Result<TokenS
         .strip_prefix('/')
         .ok_or_else(|| Error::new_spanned(mount, "mount must be an absolute path"))?;
     let common = quote! { golem_rust::golem_agentic::golem::agent::common };
+    let http = quote! { golem_rust::golem_schema::http::wit::wire };
     let segments = path.split('/').filter(|_| !path.is_empty()).map(|segment| {
         if variables && let Some(name) = segment.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
             if name.is_empty() || name.contains(['{', '}', '*']) {
@@ -588,14 +589,14 @@ fn compile_exposure_mount(mount: &syn::LitStr, variables: bool) -> Result<TokenS
             if let Some(system) = system {
                 return Ok(quote! { #common::PathSegment::SystemVariable(#common::SystemVariable::#system) });
             }
-            return Ok(quote! { #common::PathSegment::PathVariable(#common::PathVariable { variable_name: #name.to_string() }) });
+            return Ok(quote! { #common::PathSegment::Segment(#http::PathSegment::PathVariable(#http::PathVariable { variable_name: #name.to_string() })) });
         }
         let parsed = golem_schema::http::FileMapping::compile(&format!("/{segment}"), "/mount")
             .map_err(|_| Error::new_spanned(mount, "mount contains an unsafe or non-literal path segment"))?;
         match parsed {
-            golem_schema::http::FileMapping::Exact { public_path, .. } if public_path.len() == 1 => {
-                let segment = &public_path[0];
-                Ok(quote! { #common::PathSegment::Literal(#segment.to_string()) })
+            golem_schema::http::FileMapping::Exact(mapping) if mapping.public_path.len() == 1 => {
+                let segment = &mapping.public_path[0];
+                Ok(quote! { #common::PathSegment::Segment(#http::PathSegment::Literal(#segment.to_string())) })
             },
             _ => Err(Error::new_spanned(mount, "mount cannot contain empty segments or wildcards")),
         }
@@ -623,15 +624,15 @@ fn parse_file_mappings(expr: &Expr) -> Result<Vec<TokenStream>, Error> {
         let mapping = golem_schema::http::FileMapping::compile(&strings[0], &strings[1])
             .map_err(|error| Error::new_spanned(entry, format!("invalid file mapping ({error}); use an absolute source and canonical target, with terminal /* and /$1 for subtrees")))?;
         if !seen.insert(mapping.clone()) { return Err(Error::new_spanned(entry, "duplicate compiled source + target mapping; remove this pair")); }
-        let common = quote! { golem_rust::golem_agentic::golem::agent::common };
+        let http = quote! { golem_rust::golem_schema::http::wit::wire };
         Ok(match mapping {
-            golem_schema::http::FileMapping::Exact { public_path, file_path } => quote! {
-                #common::FileMapping::Exact(#common::ExactFileMapping {
+            golem_schema::http::FileMapping::Exact(golem_schema::http::ExactFileMapping { public_path, file_path }) => quote! {
+                #http::FileMapping::Exact(#http::ExactFileMapping {
                     public_path: vec![#(#public_path.to_string()),*], file_path: #file_path.to_string(),
                 })
             },
-            golem_schema::http::FileMapping::Subtree { public_prefix, filesystem_root } => quote! {
-                #common::FileMapping::Subtree(#common::SubtreeFileMapping {
+            golem_schema::http::FileMapping::Subtree(golem_schema::http::SubtreeFileMapping { public_prefix, filesystem_root }) => quote! {
+                #http::FileMapping::Subtree(#http::SubtreeFileMapping {
                     public_prefix: vec![#(#public_prefix.to_string()),*], filesystem_root: #filesystem_root.to_string(),
                 })
             },
@@ -813,8 +814,8 @@ mod tests {
                     .iter()
                     .map(|v| v.as_str().unwrap());
                 let target = expected[variant][target_key].as_str().unwrap();
-                let expected = quote! { golem_rust::golem_agentic::golem::agent::common::FileMapping::#variant_ident(
-                    golem_rust::golem_agentic::golem::agent::common::#record_ident {
+                let expected = quote! { golem_rust::golem_schema::http::wit::wire::FileMapping::#variant_ident(
+                    golem_rust::golem_schema::http::wit::wire::#record_ident {
                         #segments_ident: vec![#(#segments.to_string()),*], #target_ident: #target.to_string(),
                     }
                 ) };

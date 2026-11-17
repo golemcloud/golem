@@ -75,6 +75,7 @@ import {
 import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../Config.js"
 import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
+import { withCustomScopes } from "./customScope.js"
 import { mergeGraphDefs } from "./schema-model/builder.js"
 import type { SchemaGraph } from "./schema-model/model.js"
 import { GraphEncoder } from "./schema-model/wit.js"
@@ -130,7 +131,9 @@ const userRuntime = ManagedRuntime.make(userRuntimeLayer)
  * `TracingHost` service.
  */
 const runUserPromise = <A, E, R>(eff: Effect.Effect<A, E, R>): Promise<A> =>
-  userRuntime.runPromise(GolemTracing.withInvocationParent(eff) as Effect.Effect<A, E, never>)
+  userRuntime.runPromise(
+    withCustomScopes(GolemTracing.withInvocationParent(eff)) as Effect.Effect<A, E, never>,
+  )
 
 type AnyMethodSpec = MethodSpec<any, any, any>
 
