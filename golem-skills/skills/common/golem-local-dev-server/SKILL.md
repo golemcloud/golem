@@ -250,6 +250,7 @@ This removes the data directory that `golem server run` uses with the same confi
 
 - **Cleanup deletes all state**: Both `golem server clean` and `golem server run --clean` delete all existing agents, deployed components, and data from the resolved directory. Never run either command without explicitly asking the user for confirmation first. In a non-interactive workflow, pass `--yes` only after the user approves the exact target path.
 - **The server runs in the foreground**: It blocks the terminal. Run it in a separate terminal or background process before deploying or invoking agents.
+- **Stop the server with Ctrl+C or SIGTERM**: Press Ctrl+C in the terminal that runs the server, or send SIGTERM to the server process with `kill <PID>`. The server logs `Received shutdown signal, stopping Golem server` and exits with status 0.
 - **Deploy after starting**: Components must be deployed with `golem deploy` after the server is running before agents can be invoked.
 - **File limits**: On startup the server automatically attempts to increase the OS file descriptor limit to 1,000,000 for better performance.
 
@@ -334,5 +335,12 @@ To keep the server running while inspecting logs from another terminal:
 
 ```shell
 golem -vvv server run > /tmp/golem-server.log 2>&1 &
+SERVER_PID=$!
 tail -f /tmp/golem-server.log | grep -E "HTTP status retry|Semantic trap retry"
+```
+
+To stop the background server, send SIGTERM to its process:
+
+```shell
+kill "$SERVER_PID"
 ```
