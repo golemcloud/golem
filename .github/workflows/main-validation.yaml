@@ -173,7 +173,7 @@ jobs:
   apfs:
     needs: select
     if: needs.select.outputs.selected == 'true'
-    runs-on: macos-15
+    runs-on: blacksmith-6vcpu-macos-latest
     timeout-minutes: 90
     permissions:
       contents: read
@@ -185,6 +185,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-shared-key: main-validation-apfs
+          cache-save-if: 'true'
       - name: Execute same-source native APFS coverage
         env:
           MAIN_VALIDATION_REPORT_DIR: ${{ runner.temp }}/main-validation-apfs
