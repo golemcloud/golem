@@ -21,8 +21,8 @@ use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
     DeferredCallReplayOutcome, DemandDelivery, DemandDeliveryMode, DurableCallSession,
-    DurableDemandItem, DurableDemandStream, InvocationIdSource,NotCancellable, ScopeReplayRecovery,
-    access_invocation_id, closed_demand, deliver_demand, demand_channel,
+    DurableDemandItem, DurableDemandStream, InvocationIdSource, NotCancellable,
+    ScopeReplayRecovery, access_invocation_id, closed_demand, deliver_demand, demand_channel,
     reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
