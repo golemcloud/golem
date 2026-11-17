@@ -3331,11 +3331,15 @@ the addresses that a lookup of `db.test` returned, also internal ones. A wildcar
 reaches only public addresses that are not this host's own (`this_host`) through a link (D28), and a denial still matches linked hostnames.
 The index holds at most 1024 links (`MAX_RESOLVED_NAME_LINKS`) and evicts the least recently
 linked one. Only lookups that replay returns again link: lookups in snapshotting mode and the
-physical calls of a custom durable invocation do not. Replay fills the index again from the
-recorded lookups. A snapshot recovery skips the history before the snapshot, so
-`rebuild_resolved_names` scans it for completed lookups of the primary Store, leaves out entity
-bodies, observational calls and the regions that no replay runs (deleted, jumped and failed update
-attempts), and merges the result under the links that the Store already has. The lookup itself is
+physical calls of a custom durable invocation do not. A P2 lookup links when its call returns, a
+P3 lookup when its completion reaches the guest (its `CompletionDelivered` marker); a discarded
+P3 completion links nothing. Replay fills the index again from the recorded lookups. A snapshot
+recovery skips the history before the snapshot, so `rebuild_resolved_names` scans it twice: once
+for the regions that no replay runs (deleted, jumped and failed update attempts), then for the
+completed lookups of the primary Store, which go into the bounded index at their link point. It
+leaves out entity bodies and observational calls, and keeps only open lookups and scopes. The
+links of a core initializer whose bootstrap range lies in the scanned history are already in the
+result; only an initializer after the snapshot, such as an update target's, adds newer links. The lookup itself is
 checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
 a port needs a portless grant for the lookup too.
 
