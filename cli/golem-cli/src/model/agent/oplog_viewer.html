@@ -262,6 +262,7 @@ const KINDS = {
   Jump: ['JUMP', 'lifecycle', 1], Interrupted: ['INTERRUPTED', 'lifecycle', 1],
   Exited: ['EXITED', 'lifecycle', 1], Restart: ['RESTART', 'lifecycle', 1], Resumed: ['RESUMED', 'lifecycle', 1],
   Revert: ['REVERT', 'lifecycle', 1], GrowMemory: ['GROW MEMORY', 'lifecycle', 1],
+  MemorySizeReconciled: ['MEMORY SIZE RECONCILED', 'lifecycle', 1],
   BeginRemoteTransaction: ['BEGIN REMOTE TRANSACTION', 'region', 1], PreCommitRemoteTransaction: ['PRE COMMIT', 'region', 1],
   PreRollbackRemoteTransaction: ['PRE ROLLBACK', 'region', 1], CommittedRemoteTransaction: ['COMMITTED', 'region', 1],
   RolledBackRemoteTransaction: ['ROLLED BACK', 'region', 1],
@@ -772,6 +773,7 @@ function summary(e) {
     case 'SuccessfulUpdate': return [span('ok', 'now at revision ' + p.targetRevision), span('val', ` · ${bytesText(p.newComponentSize)}` + (p.snapshotAssistedDetails ? ` · snapshot assisted from #${idxOf(p.snapshotAssistedDetails.snapshotIndex)}` : ''))];
     case 'FailedUpdate': return [span('err', 'update to revision ' + p.targetRevision + ' failed'), span('val', p.details ? ': ' + (EXPORT ? fieldText(p.details, 150) : trunc(p.details, 150)) : '')];
     case 'GrowMemory': return [span('val', '+' + bytesText(p.delta))];
+    case 'MemorySizeReconciled': return [span('val', 'allocated ' + bytesText(p.bytes))];
     case 'CreateResource': case 'DropResource': return [span('fn', p.name || ''), span('val', ` · id ${fieldText(p.id)} · owner ${fieldText(p.owner)}`)];
     case 'Log': return [span('val', `[${p.level}] `), span(p.level === 'Stderr' ? 'err' : '', EXPORT ? fieldText(p.message, 300) : trunc(String(p.message || '').replace(/\n+$/, ''), 300)), p.context ? span('val', ' · ' + fieldText(p.context)) : null];
     case 'ActivatePlugin': case 'DeactivatePlugin': if (isReportNode(p.plugin)) return [span('fn', 'plugin'), span('val', ' ' + fieldText(p.plugin))]; return [span('fn', p.plugin.pluginName), span('val', ` v${p.plugin.pluginVersion} · priority ${idxOf(p.plugin.pluginPriority)}`)];

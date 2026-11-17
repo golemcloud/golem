@@ -471,10 +471,26 @@ filesystem creation. A live limit update uses the same resolver and the existing
 on failure. Unlimited policy remains available on unmanaged storage; Registry's finite policy is a
 deployment requirement, not permission for an unsupported backend to omit enforcement.
 
-A live invocation still holds its allocated linear memory and filesystem stock while waiting for
+A live invocation still holds its allocated linear memory, GC heap capacity and filesystem stock while waiting for
 host I/O. Its live allocations accrue byte-time during these permit-held waits even when no Wasm
-executes. The memory meter measures allocated linear-memory bytes, not the configured maximum.
+executes. The memory meter measures allocated linear-memory bytes plus GC heap capacity, not the configured maximum.
 The parked guest itself burns no fuel.
+
+Primary reconstruction consumes its saved memory reservation across all linear-memory and GC heap allocations, including repeated growth during core initialization. Growth beyond the reservation needs physical admission before allocation. Live publication releases unused reservation but preserves capacity for prepared growth; a failed growth releases that excess capacity.
+
+The tracker's `shrink_retained_reservation` shares mechanics, not policy. Publication shrinks only after reconciliation, to allocation or pending growth, then enforces quota before clearing replay flags. Growth failure first rolls back provisional bytes and the failed grant; eligible shrinkage retains the replay floor. Both paths release private guards before callbacks while holding the transition gate, and enforce quota even if no capacity was released. Preparation remains separate: reconciliation invokes quota callbacks before merging pending grants, then InstanceHost shrinks only if the grant was tracked before reconciliation. Keep that captured decision: merging may adopt a controller, and shrinking an inert grant changes its byte count. Shrinking never acquires capacity; pending grants also contribute to reserved bytes.
+
+`LinearMemoryTracker` defines the accounted total for one Store as allocated linear-memory bytes plus GC heap capacity, not reachable objects or process RSS. Retained linear-memory accounting names use this combined quantity; individual Wasmtime linear memories remain distinct. Initial allocations can contribute provisional bytes before success, so the total is not always a fresh physical measurement. Construction starts allocation and its inactive meter at zero. The saved baseline and prepaid reservation are separate inputs; quota protection starts at the reservation before any allocation. Pass replay and historical admission independently: primary reconstruction replays with current admission, while completed and incomplete entity replay use historical admission. Live entities use neither. Test fixtures that model allocated memory must report that allocation through growth or reconciliation, preserving the intended phase and clock.
+
+`LinearMemoryTracker` keeps transition-owned flags, provisional allocations, pending grants and growth-refusal state in `TrackerState`. Allocation reconciliation and replay are independent facts: live publication can precede enumeration, and accounting can start during replay. Mutations lock the shared transition gate, then private state, then the retained grant. State-only readers never acquire the gate. Release private state and grant guards before enqueue/limit callbacks or owner activation; retain the gate across baseline enqueue and accounting activation. Async reservation acquisition releases synchronous guards before awaiting admission and rechecks the required bytes before installation. Cancellation drops partial grants and permits a later activation retry. Atomic allocation, quota and billing observations remain separate; the gate still synchronizes metering and identifies Worker receipts.
+
+The Wasmtime fork preserves limiter `Err` as an immediate trap. Golem returns `Ok(false)` for quota/capacity refusal of growth of a nonempty GC heap, allowing collection and retry; linear memory and the first nonempty GC allocation still return typed errors. Refusal rolls back provisional admission itself: Wasmtime calls no growth-failure callback after `Ok(false)`. The production Auto collector currently selects Copying. This policy does not classify Null collector `AllocationTooLarge` failures as GC OOM, and explicit host heap-growth errors are distinct from guest allocation failures.
+
+The per-Store tracker retains a refusal until another admission attempt, ordinary growth failure, committed growth, instantiation or invocation entry. Terminal `GcHeapOutOfMemory<()>` uses it to distinguish `ExceededMemoryLimit` from `OutOfMemory`; absent a refusal, it is `OutOfMemory`. A guest GC allocation trap exits the component event loop before root completion or settlement, preserving the reason until classification. Primary exports, tool/middleware bodies and core instantiation retain typed memory failures. Collection reclaims objects without reducing allocated capacity. Heap doubling and collector headroom can still reject an allocation whose live bytes are below the plan limit; the limit applies to capacity.
+
+At the replay tail, the tracker synchronously enqueues `MemorySizeReconciled { bytes }` if allocation differs from the saved baseline, and enables subsequent `GrowMemory` recording under the same transition lock. The lifecycle actor orders the absolute reset before later deltas, including growth during reconstruction settlement. `Worker` owns the commit receipts through `MemoryAccounting` in `worker/residency.rs`, keyed by weak references to each tracker's transition identity. Publication and snapshot resets join that tracker's previous receipt before starting another cutover. Cancellation preserves the receipt and a failed commit remains authoritative for that tracker; a replacement Store does not inherit it. Receipt ownership retains no tracker or memory grants, and the next reconciliation prunes expired identities. A fresh, already-live primary enables growth recording when finalization enqueues its initial delta and awaits its commit before exposing the instance. Successful snapshot-only recovery and manual snapshot loading reset the baseline after the load, even when the cursor was already live. Snapshot recovery with a replay suffix waits for the normal replay-tail boundary. Both entries are replay-skippable accounting hints, not assertions that GC capacity must match on replay. Completed entity replay retains historical admission; an incomplete entity acquires its own live reservation before continuation.
+
+If accounting starts inside a core initializer, the tracker captures its baseline even when the sample equals the saved baseline and needs no hint. Initializer growth remains unrecorded until enumeration. Final reconciliation records allocation above that sample whether primary live publication has happened or is still pending. Without an accounting sample, replay reconciliation emits no delta and live reconciliation uses the saved startup value. Primary finalization joins the generation's preceding accounting receipt, ends reconciliation once, and enqueues its residual through the lifecycle actor under the tracker transition lock. It retains the final commit receipt before awaiting; retries and forced resets join that receipt rather than repeating the delta, and failed receipts remain authoritative. The actor updates the startup requirement after committing even if the initiating caller was cancelled. Finalization never waits for live publication or native disposal, and entities do not enqueue primary memory hints.
 
 Reconstruction keeps physical admission, the concurrent-agent permit, allocation observations,
 per-agent limits and cleanup ownership. Materialization and replay do not start customer byte-time.
@@ -2570,6 +2586,8 @@ record. A record with a name on an executor without filesystem snapshots gives `
 
 ### Bootstrap blocks
 
+Snapshot-assisted recovery refreshes the replay target only while the primary cursor is not live. Once Live is published, new accounting hints belong to live history; extending that cursor would reopen a completed wallet prefix and force a restart. A successful snapshot-only load can therefore record `MemorySizeReconciled` without changing the replay target. Recovery from an older snapshot can reach the same allocation through its replay suffix without emitting that hint; compare guest calls and recovered state separately from these accounting entries.
+
 The core initializer of a component runs during `instantiate`, before `prepare_instance` loads
 any snapshot, and its durable calls (clock reads, random seeds, the environment) shape the state
 that the snapshot then restores into. The entries of those calls are the *bootstrap block* of the
@@ -3543,7 +3561,11 @@ cursor (`OwnerExecution`, `worker/instance/mod.rs`).
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
 - `worker/invocation.rs::permanent_tool_guest_trap` isolates only its fixed Wasm
-  instruction-trap allowlist. The tool terminal has `body_execution: Trapped` and
+  instruction-trap allowlist and uncaught Wasm exceptions. Agent and tool classification share
+  `model::deterministic_guest_trap`, including GC cast failures, array bounds failures and
+  oversized allocations. Agent stack overflow keeps its separate classification; tool host-call
+  markers take precedence over the predicate. GC heap OOM remains a resource failure.
+  The tool terminal has `body_execution: Trapped` and
   `RemoteInternalError`. Typed quotas, policy exhaustion, `WorkerOutOfMemory`, infrastructure
   and lifecycle failures retain owner recovery even when the retry decision is exhausted.
   Physical Wasmtime Store destruction retains the original `Ctx` for cleanup. Supervisors

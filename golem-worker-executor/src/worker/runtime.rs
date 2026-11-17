@@ -190,6 +190,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             admitted_startup_bytes,
             self.agent_mode(),
             replaying,
+            replaying,
             Arc::clone(&self.resource_entry),
             retained_memory_grant,
             self.config().effective_resource_usage_metering().memory,
@@ -791,14 +792,14 @@ impl RunningWorker {
         created.observe_release(&parent.release_scope());
         let retained_memory_grant = parent.linear_memory_grant();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
-        // The tracker starts in replay mode so the admitted startup reservation stays protected
-        // and prepays the growth replayed from the oplog; `DurableWorkerCtx::create` switches it
-        // to live once the replay state is known to be live.
+        // Allocation starts at zero; the admission grant separately prepays reconstruction.
+        // `DurableWorkerCtx::create` switches fresh instances to live once replay state is known.
         let linear_memory = LinearMemoryTracker::new_with_metering(
             parent.startup_linear_memory_bytes(),
             admitted_startup_bytes,
             parent.agent_mode(),
             true,
+            false,
             Arc::clone(&parent.resource_entry),
             retained_memory_grant,
             parent.config().effective_resource_usage_metering().memory,

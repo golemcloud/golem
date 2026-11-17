@@ -353,6 +353,30 @@ pub enum TrapType {
     },
 }
 
+pub(crate) fn deterministic_guest_trap(root_cause: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(
+        root_cause.downcast_ref::<Trap>(),
+        Some(
+            Trap::StackOverflow
+                | Trap::UnreachableCodeReached
+                | Trap::MemoryOutOfBounds
+                | Trap::TableOutOfBounds
+                | Trap::IndirectCallToNull
+                | Trap::BadSignature
+                | Trap::IntegerOverflow
+                | Trap::IntegerDivisionByZero
+                | Trap::BadConversionToInteger
+                | Trap::HeapMisaligned
+                | Trap::NullReference
+                | Trap::AtomicWaitNonSharedMemory
+                | Trap::UncaughtException
+                | Trap::CastFailure
+                | Trap::ArrayOutOfBounds
+                | Trap::AllocationTooLarge
+        )
+    ) || root_cause.is::<wasmtime::ThrownException>()
+}
+
 impl TrapType {
     pub fn from_worker_executor_error<Ctx: WorkerCtx>(
         error: WorkerExecutorError,
@@ -416,19 +440,20 @@ impl TrapType {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
                     Some(&Trap::StackOverflow) => make_error(AgentError::StackOverflow),
-                    Some(
-                        &Trap::UnreachableCodeReached
-                        | &Trap::MemoryOutOfBounds
-                        | &Trap::TableOutOfBounds
-                        | &Trap::IndirectCallToNull
-                        | &Trap::BadSignature
-                        | &Trap::IntegerOverflow
-                        | &Trap::IntegerDivisionByZero
-                        | &Trap::BadConversionToInteger
-                        | &Trap::HeapMisaligned
-                        | &Trap::NullReference
-                        | &Trap::AtomicWaitNonSharedMemory,
-                    ) => make_error(AgentError::DeterministicTrap(format!("{error:#}"))),
+                    _ if deterministic_guest_trap(error.root_cause()) => {
+                        make_error(AgentError::DeterministicTrap(format!("{error:#}")))
+                    }
+                    _ if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>() => {
+                        use crate::services::linear_memory::MemoryGrowthFailure;
+                        make_error(match error.downcast_ref::<MemoryGrowthFailure>() {
+                            Some(MemoryGrowthFailure::ExceededMemoryLimit) => {
+                                AgentError::ExceededMemoryLimit
+                            }
+                            Some(MemoryGrowthFailure::OutOfMemory) | None => {
+                                AgentError::OutOfMemory
+                            }
+                        })
+                    }
                     _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
                         Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => {
                             make_error(AgentError::OutOfMemory)
@@ -1224,6 +1249,73 @@ mod tests {
             crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::fixed_decision_for_trap_type(&trap),
             Some(RetryDecision::None)
         );
+    }
+
+    #[test]
+    fn uncaught_guest_exceptions_and_gc_traps_are_deterministic() {
+        let engine = wasmtime::Engine::new(
+            &golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache(),
+        )
+        .unwrap();
+        for (wat, expected) in [
+            (
+                r#"(module
+                (tag $thrown (param i32))
+                (func (export "run") (throw $thrown (i32.const 7))))"#,
+                None,
+            ),
+            (
+                r#"(module (type $s (struct))
+                    (func (export "run")
+                        (drop (ref.cast (ref $s) (ref.i31 (i32.const 1))))))"#,
+                Some(Trap::CastFailure),
+            ),
+            (
+                r#"(module (type $a (array (mut i32)))
+                    (func (export "run")
+                        (drop (array.get $a (array.new_default $a (i32.const 1)) (i32.const 1)))))"#,
+                Some(Trap::ArrayOutOfBounds),
+            ),
+            (
+                r#"(module (type $a (array (mut i64)))
+                    (func (export "run")
+                        (drop (array.new_default $a (i32.const -1)))))"#,
+                Some(Trap::AllocationTooLarge),
+            ),
+        ] {
+            let module = wasmtime::Module::new(&engine, wat).unwrap();
+            let mut store = wasmtime::Store::new(&engine, ());
+            store.set_fuel(u64::MAX).unwrap();
+            store.set_epoch_deadline(u64::MAX);
+            let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
+            let error = instance
+                .get_typed_func::<(), ()>(&mut store, "run")
+                .unwrap()
+                .call(&mut store, ())
+                .unwrap_err();
+            if let Some(expected) = expected {
+                assert_eq!(error.downcast_ref::<Trap>(), Some(&expected));
+            }
+            assert!(
+                crate::worker::invocation::permanent_tool_guest_trap(&error).is_some(),
+                "guest failure must be permanent at a tool boundary: {error:#}"
+            );
+
+            let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+                &anyhow::Error::from(error),
+                OplogIndex::from_u64(11),
+                AgentMode::Durable,
+            );
+            assert!(matches!(&trap, TrapType::Error {
+            error: AgentError::DeterministicTrap(_),
+            retry_from,
+            ..
+        } if *retry_from == OplogIndex::from_u64(11)));
+            assert_eq!(
+            crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::fixed_decision_for_trap_type(&trap),
+            Some(RetryDecision::None)
+        );
+        }
     }
 
     #[test]
