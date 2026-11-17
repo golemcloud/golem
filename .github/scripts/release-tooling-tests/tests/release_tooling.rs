@@ -25,6 +25,78 @@ fn copy_makefiles(repo: &Path) {
 }
 
 #[test]
+fn release_preparation_requires_the_selected_preflight_and_never_publishes_after_a_failed_gate() {
+    let workflow: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(workspace_path().join(".github/workflows/prepare-golem-release.yaml"))
+            .unwrap(),
+    )
+    .unwrap();
+    let jobs = &workflow["jobs"];
+    let conditions = ["preflight", "release-prerequisites", "publish-builtins"]
+        .map(|job| jobs[job]["if"].as_str().unwrap());
+    let states = ["success", "failure", "cancelled", "skipped"];
+    let mut cases = Vec::new();
+    for mode in ["false", "true", "", "invalid"] {
+        for validate in states {
+            for preflight in states {
+                for prerequisites in states {
+                    for cancelled in [false, true] {
+                        let validated = validate == "success";
+                        let publish = !cancelled
+                            && validated
+                            && match mode {
+                                "false" => preflight == "success" && prerequisites == "skipped",
+                                "true" => prerequisites == "success" && preflight == "skipped",
+                                _ => false,
+                            };
+                        cases.push(json!({
+                            "needs": {
+                                "validate": {"result": validate, "outputs": {"use-main-validation": mode}},
+                                "preflight": {"result": preflight},
+                                "release-prerequisites": {"result": prerequisites}
+                            },
+                            "cancelled": cancelled,
+                            "expected": [validated && mode == "false", validated && mode == "true", publish]
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    // These predicates use JavaScript's boolean/string operators. Model Actions'
+    // implicit success() guard too: a skipped dependency otherwise blocks a job.
+    let output = Command::new("node")
+        .args([
+            "--input-type=module",
+            "-e",
+            r#"
+import assert from 'node:assert/strict';
+const [conditions, cases] = JSON.parse(process.argv[1]);
+for (const value of cases) {
+    const results = conditions.map((condition, index) => {
+        const expression = condition.replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, '$1');
+        const code = expression.replace(/\.([A-Za-z_][A-Za-z0-9_-]*)/g, "['$1']");
+        const needs = index === 2 ? value.needs : {validate: value.needs.validate};
+        const explicitStatus = /\b(always|success|failure|cancelled)\s*\(/.test(expression);
+        return (explicitStatus || Object.values(needs).every(job => job.result === 'success')) &&
+            Boolean(Function('needs', 'cancelled', `return (${code});`)(needs, () => value.cancelled));
+    });
+    assert.deepEqual(results, value.expected, JSON.stringify(value));
+}
+"#,
+            &serde_json::to_string(&(conditions, cases)).unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn draft_notes_start_at_the_previous_stable_golem_release() {
     let fixture = TempDir::new().unwrap();
     let repo = fixture.path().join("source");
