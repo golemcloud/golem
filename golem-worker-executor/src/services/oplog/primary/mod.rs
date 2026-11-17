@@ -27,9 +27,9 @@ use crate::services::oplog::{
     AutoCommitListener, CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder,
     OpenOplogs, Oplog, OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError,
     OplogFence, OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
-    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, StagePublication,
-    decode_scan_cursor, next_scan_cursor, record_epoch_verdict, record_owning_epoch,
-    refuse_if_fenced, retry_scan_storage_op,
+    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, ScanPage,
+    StagePublication, decode_scan_cursor, next_scan_cursor, record_epoch_verdict,
+    record_owning_epoch, refuse_if_fenced, retry_scan_storage_op,
 };
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::storage::indexed::{

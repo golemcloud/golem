@@ -26,10 +26,12 @@ python3 builtin-tools/bash/conformance/conformance.py record --prefix '<text>'
 ```
 
 `live` compares with the oracle directly and `stale` re-runs it to find goldens that no longer
-match. Each case gets a fresh filesystem and a 15-second timeout; cases run in parallel, one per
-CPU by default (`--jobs N`). `--case '<name>'` selects one case and `--prefix '<text>'` every case
-whose name starts with it; repeat either to select more. `--report FILE` writes the failures as
-JSON. The matrix needs Wasmtime with WASI 0.3/component-model async support.
+match. The harness compiles the shell once with Wasmtime before it runs any cases, with a separate
+120-second compilation timeout. Each case gets a fresh filesystem and a 15-second execution
+timeout; cases run in parallel, one per CPU by default (`--jobs N`). `--case '<name>'` selects one
+case and `--prefix '<text>'` every case whose name starts with it; repeat either to select more.
+`--report FILE` writes the failures as JSON. The matrix needs Wasmtime with WASI
+0.3/component-model async support.
 
 `record` runs the oracle **twice** per case by default, each run in its own fresh container, and
 refuses to write a golden the two runs disagree on -- printing which case and which field (status,

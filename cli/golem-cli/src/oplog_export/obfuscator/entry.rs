@@ -1047,6 +1047,10 @@ impl Walker<'_, '_> {
                 timestamp: _,
                 delta,
             }) => Fields::new().add("delta", number(*delta)).build(),
+            PublicOplogEntry::MemorySizeReconciled(MemorySizeReconciledParams {
+                timestamp: _,
+                bytes,
+            }) => Fields::new().add("bytes", number(*bytes)).build(),
             PublicOplogEntry::CreateResource(CreateResourceParams {
                 timestamp: _,
                 id,
