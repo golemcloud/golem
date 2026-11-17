@@ -566,6 +566,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsTypesTcpSocketConnect => {
             pair::<host_functions::P3SocketsTypesTcpSocketConnect>(Bare::Neither)
         }
+        HostFunctionName::P3SocketsTypesTcpSocketBind => {
+            pair::<host_functions::P3SocketsTypesTcpSocketBind>(Bare::Neither)
+        }
         HostFunctionName::P3SocketsTypesUdpSocketConnect => {
             pair::<host_functions::P3SocketsTypesUdpSocketConnect>(Bare::Neither)
         }

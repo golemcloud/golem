@@ -86,9 +86,18 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
-something from the right column to survive a restart is wrong. Sockets and other OS resources are
-recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect or explicitly handle loss. Replayed websocket handles use their connect-time
+something from the right column to survive a restart is wrong. Native resources are not preserved.
+P3 TCP bind records the selected local address; connect records both endpoints. The per-Store
+`SocketEntries` table in `durable_host/sockets/mod.rs` reconstructs these addresses and the stream-taken
+flags without binding or connecting natively during replay. A replayed successful connect is `Lost`:
+recorded acquisitions still replay, but a new live send or receive acquisition returns `connection-broken`,
+even if that direction was already taken. Address getters use the entry; guest-set option getters use
+cached effective values. A successful setter invalidates its option cache; the next async getter reads
+and caches the native effective value, including OS rounding and buffer limits. Unset option getters
+still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
+socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
+than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
+reconnects as described below. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
 one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
