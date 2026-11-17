@@ -619,7 +619,7 @@ fn validate_delegation_surface_derivation(
 }
 
 fn derivation_error(error: CardAlgebraError) -> PermissionShareError {
-    PermissionShareError::GrantNotDelegable(format!("{error:?}"))
+    PermissionShareError::GrantNotDelegable(error.to_string())
 }
 
 fn invalid_grant(grant: &str, err: CardParseError) -> PermissionShareError {
