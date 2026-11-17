@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	loadExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_api_load_snapshot"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 )
@@ -156,6 +157,22 @@ func TestSnapshotPolicyMapsToWit(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// TestLoadWithoutReadableAgentIDNamesTheCardGrant — a snapshot load on an
+// instance that cannot read GOLEM_AGENT_ID fails with an error that names the
+// card grant the agent needs.
+func TestLoadWithoutReadableAgentIDNamesTheCardGrant(t *testing.T) {
+	prevID, prevActive := selfAgentID, active
+	selfAgentID = func() string { return "" }
+	active = nil
+	t.Cleanup(func() { selfAgentID, active = prevID, prevActive })
+
+	res := loadExports.Load(host.Snapshot{MimeType: "application/json"})
+	want := "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
+	if !res.IsErr() || res.Err() != want {
+		t.Fatalf("load = %+v, want the error %q", res, want)
 	}
 }
 
