@@ -1273,15 +1273,30 @@ async function api(path, params) {
 }
 function fetchPage(params) {
   const cursor = params.cursor;
-  return api('api/oplog', { from: params.from, cursorIndex: cursor ? idxOf(cursor.nextOplogIndex) : null, cursorRevision: cursor ? cursor.currentComponentRevision : null, count: state.live.pageSize, query: params.query });
+  return api('api/oplog', { from: params.from, cursorIndex: cursor ? idxOf(cursor.nextOplogIndex) : null, cursorRevision: cursor ? cursor.currentComponentRevision : null, cursorQueryHash: cursor ? cursor.queryHash : null, count: state.live.pageSize, query: params.query });
+}
+// A page has a cursor while the oplog has entries after it. A search page can be empty and still
+// have a cursor, when the server spent its scan budget before a match, so this follows the cursor
+// until a page has entries that `keep` accepts or the cursor ends. The coverage it returns covers
+// every page it read.
+async function fetchEntries(params, keep) {
+  let page = await fetchPage(params);
+  let coverage = page.coverage || null;
+  let entries = pageEntries(page).filter(keep);
+  while (!entries.length && page.next) {
+    page = await fetchPage({ ...params, cursor: page.next });
+    coverage = mergeCoverage(coverage, page.coverage);
+    entries = pageEntries(page).filter(keep);
+  }
+  return { page, entries, coverage };
 }
 function setLoading(on) { state.live.loading = on; renderLiveBar(); }
-// The API hands out a cursor until a page comes back empty; the agent's last oplog index tells
-// earlier whether the loaded window already reached the end.
-function updateHasMore(page, received) {
+// The agent's last oplog index tells earlier than the cursor whether the loaded window already
+// reached the end.
+function updateHasMore(page) {
   const L = state.live; const last = L.meta && L.meta.lastOplogIndex;
   L.next = page.next || null;
-  L.hasMore = !!page.next && received > 0 && !(last && !L.serverQuery && L.hi >= last);
+  L.hasMore = !!page.next && !(last && !L.serverQuery && L.hi >= last);
 }
 function metadataDroppedRegions() {
   const m = state.live && state.live.meta; if (!m) return [];
@@ -1305,11 +1320,10 @@ async function loadWindow(params) {
   try {
     L.serverQuery = params.query ? params.query : null; $('#squery').value = L.serverQuery || '';
     L.from = params.from || null;
-    const page = await fetchPage({ from: L.from, query: L.serverQuery });
-    const entries = pageEntries(page);
-    if (EXPORT) { L.coverage = page.coverage || null; renderExportBanner(state.exportHeader, L.coverage); }
+    const { page, entries, coverage } = await fetchEntries({ from: L.from, query: L.serverQuery }, () => true);
+    if (EXPORT) { L.coverage = coverage; renderExportBanner(state.exportHeader, L.coverage); }
     L.lo = entries.length ? entries[0].index : (L.from || 1); L.hi = entries.length ? entries[entries.length - 1].index : L.lo - 1;
-    updateHasMore(page, entries.length);
+    updateHasMore(page);
     state.openKeys.clear(); state.forceOpen = null;
     setEntries(entries);
     $('#list').scrollTop = 0;
@@ -1320,11 +1334,10 @@ async function loadMore() {
   const L = state.live; if (!L || L.loading || !L.hasMore) return;
   setLoading(true);
   try {
-    const page = await fetchPage({ from: L.from, cursor: L.next, query: L.serverQuery });
-    const entries = pageEntries(page).filter(e => e.index > L.hi);
-    if (EXPORT) { L.coverage = mergeCoverage(L.coverage, page.coverage); renderExportBanner(state.exportHeader, L.coverage); }
+    const { page, entries, coverage } = await fetchEntries({ from: L.from, cursor: L.next, query: L.serverQuery }, e => e.index > L.hi);
+    if (EXPORT) { L.coverage = mergeCoverage(L.coverage, coverage); renderExportBanner(state.exportHeader, L.coverage); }
     if (entries.length) L.hi = entries[entries.length - 1].index;
-    updateHasMore(page, entries.length);
+    updateHasMore(page);
     if (entries.length) setEntries(state.entries.concat(entries), { keepScroll: true }); else renderLiveBar();
   } catch (e) { toast('Loading failed: ' + e.message); }
   finally { setLoading(false); }
@@ -1359,7 +1372,7 @@ async function pollNewEntries() {
     const entries = pageEntries(page).filter(e => e.index > L.hi);
     if (EXPORT && entries.length) { L.coverage = mergeCoverage(L.coverage, page.coverage); renderExportBanner(state.exportHeader, L.coverage); }
     if (entries.length) L.hi = entries[entries.length - 1].index;
-    updateHasMore(page, entries.length);
+    updateHasMore(page);
     if (entries.length) { setEntries(state.entries.concat(entries), { keepScroll: true }); if (L.follow) $('#sentinel').scrollIntoView({ block: 'end' }); }
   } catch (e) { toast('Polling failed: ' + e.message); }
   finally { setLoading(false); }
