@@ -61,11 +61,15 @@ fn error(error: impl std::fmt::Debug) -> String {
     format!("{error:?}")
 }
 
-/// Describes a P2 stream error with the host's description of a failed operation.
+/// Describes a P2 stream error with the first line of the host's description of a failed
+/// operation. The description continues with a host stack trace when the host has backtraces
+/// enabled.
 fn stream_error(error: p2::StreamError) -> String {
     match error {
         p2::StreamError::LastOperationFailed(error) => {
-            format!("last-operation-failed: {}", error.to_debug_string())
+            let description = error.to_debug_string();
+            let first_line = description.lines().next().unwrap_or_default();
+            format!("last-operation-failed: {first_line}")
         }
         p2::StreamError::Closed => "closed".to_string(),
     }
