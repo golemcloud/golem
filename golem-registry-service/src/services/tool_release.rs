@@ -64,6 +64,10 @@ pub enum ToolReleaseError {
     PublicationHostSource(ToolName),
     #[error("Tool release coordinate already exists with different immutable metadata")]
     ImmutableReleaseConflict,
+    #[error(
+        "Tool release coordinate is followed by a grant in a version-checked environment; use a new version"
+    )]
+    StrictFollowingGrantConflict,
     #[error("A de-published tool release must be restored explicitly before publication")]
     DePublishedReleaseRequiresExplicitRestore,
     #[error("Only a published tool release can be de-published")]
@@ -215,7 +219,7 @@ impl ToolReleaseService {
         for candidate in candidates {
             let name =
                 ToolName::try_from(candidate.tool_name.clone()).map_err(anyhow::Error::msg)?;
-            match self
+            let assessment = self
                 .assess_publication(
                     AccountId(candidate.owner_account_id),
                     &name,
@@ -224,19 +228,10 @@ impl ToolReleaseService {
                     candidate.metadata_digest.into(),
                     candidate.immutable,
                 )
-                .await?
-            {
-                PublicationAssessment::NoChange(existing_id) => {
-                    candidate.tool_release_id = existing_id.0;
-                }
-                PublicationAssessment::Publish => changed = true,
-                PublicationAssessment::ImmutableConflict
-                | PublicationAssessment::StrictFollowingGrantConflict => {
-                    return Err(ToolReleaseError::ImmutableReleaseConflict);
-                }
-                PublicationAssessment::DePublishedConflict => {
-                    return Err(ToolReleaseError::DePublishedReleaseRequiresExplicitRestore);
-                }
+                .await?;
+            match existing_release_or_conflict(assessment)? {
+                Some(existing_id) => candidate.tool_release_id = existing_id.0,
+                None => changed = true,
             }
         }
         Ok(changed)
@@ -653,6 +648,24 @@ impl ToolReleaseService {
     }
 }
 
+/// What a deploy does with one publication: it uses the existing release (`Some`), it
+/// publishes a new release (`None`), or it refuses the deploy with the error of the conflict.
+fn existing_release_or_conflict(
+    assessment: PublicationAssessment,
+) -> Result<Option<ToolReleaseId>, ToolReleaseError> {
+    match assessment {
+        PublicationAssessment::NoChange(existing_id) => Ok(Some(existing_id)),
+        PublicationAssessment::Publish => Ok(None),
+        PublicationAssessment::ImmutableConflict => Err(ToolReleaseError::ImmutableReleaseConflict),
+        PublicationAssessment::StrictFollowingGrantConflict => {
+            Err(ToolReleaseError::StrictFollowingGrantConflict)
+        }
+        PublicationAssessment::DePublishedConflict => {
+            Err(ToolReleaseError::DePublishedReleaseRequiresExplicitRestore)
+        }
+    }
+}
+
 fn release_lifecycle(value: i16) -> Result<ReleaseLifecycle, ToolReleaseError> {
     match value {
         TOOL_RELEASE_LIFECYCLE_PUBLISHED => Ok(ReleaseLifecycle::Published),
@@ -703,11 +716,41 @@ fn authorize_account_tool_release_permission(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_user_grantable, is_valid_system_release_source};
+    use super::{
+        PublicationAssessment, ToolReleaseError, existing_release_or_conflict, is_user_grantable,
+        is_valid_system_release_source,
+    };
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::tool::{HostToolId, ToolSource};
-    use golem_common::model::tool_release::{SystemToolAvailability, ToolReleaseOrigin};
+    use golem_common::model::tool_release::{
+        SystemToolAvailability, ToolReleaseId, ToolReleaseOrigin,
+    };
     use test_r::test;
+
+    #[test]
+    fn a_deploy_refuses_each_publication_conflict_with_its_own_error() {
+        let id = ToolReleaseId::new();
+        assert!(matches!(
+            existing_release_or_conflict(PublicationAssessment::NoChange(id)),
+            Ok(Some(existing)) if existing == id
+        ));
+        assert!(matches!(
+            existing_release_or_conflict(PublicationAssessment::Publish),
+            Ok(None)
+        ));
+        assert!(matches!(
+            existing_release_or_conflict(PublicationAssessment::StrictFollowingGrantConflict),
+            Err(ToolReleaseError::StrictFollowingGrantConflict)
+        ));
+        assert!(matches!(
+            existing_release_or_conflict(PublicationAssessment::ImmutableConflict),
+            Err(ToolReleaseError::ImmutableReleaseConflict)
+        ));
+        assert!(matches!(
+            existing_release_or_conflict(PublicationAssessment::DePublishedConflict),
+            Err(ToolReleaseError::DePublishedReleaseRequiresExplicitRestore)
+        ));
+    }
 
     #[test]
     fn user_grants_accept_ordinary_and_grantable_system_releases_only() {
