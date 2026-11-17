@@ -16,7 +16,7 @@ use super::{
     ClassPermissionPattern, PermissionClass, PermissionPattern, PolymorphicClassPermissionPattern,
     PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
 };
-use crate::base_model::address_class::AddressClass;
+use crate::base_model::address_class::{AddressClass, embedded_ipv4};
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EmptyOwnerPattern;
 use serde::{Deserialize, Serialize};
@@ -79,10 +79,12 @@ pub enum NetworkResourcePattern {
     },
     /// The destination of a raw socket connect or outgoing datagram. It is a request, never a
     /// grant: card text never parses to it. A grant whose host has a wildcard matches it only when
-    /// the address is [`AddressClass::Public`]; every other address needs a grant that names it.
+    /// the address is [`AddressClass::Public`] and is not an address of this host
+    /// (`this_host`); every other address needs a grant that names it.
     SocketAddress {
         host: String,
         port: u16,
+        this_host: bool,
     },
 }
 
@@ -105,20 +107,31 @@ impl NetworkResourcePattern {
         }
     }
 
-    pub fn socket_address(ip: IpAddr, port: u16) -> Self {
+    /// A socket destination; `this_host` tells whether `ip` is an address of the executor host.
+    pub fn socket_address(ip: IpAddr, port: u16, this_host: bool) -> Self {
         Self::SocketAddress {
             host: canonical_ip_host(ip),
             port,
+            this_host,
         }
     }
 
     /// Whether this pattern, used as a denial, covers `other`. A denial with a wildcard host also
-    /// covers socket destinations that are not public.
+    /// covers socket destinations that are not public, and a denial of an IPv4 host also covers
+    /// the IPv6 forms that embed it (NAT64, 6to4, IPv4-compatible).
     pub fn denies(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::HostPort { host, ports }, Self::SocketAddress { host: target, port }) => {
-                host_pattern_subsumes(host, target) && ports.subsumes(&PortPattern::Single(*port))
+            (
+                Self::HostPort { host, ports },
+                Self::SocketAddress {
+                    host: target, port, ..
+                },
+            ) => {
+                ports.subsumes(&PortPattern::Single(*port))
+                    && (host_pattern_subsumes(host, target)
+                        || embedded_ipv4_host(target)
+                            .is_some_and(|ipv4| host_pattern_subsumes(host, &ipv4)))
             }
             _ => self.subsumes(other),
         }
@@ -137,10 +150,17 @@ pub fn canonical_ip_host(ip: IpAddr) -> String {
     }
 }
 
-fn wildcard_host_reaches(host: &str) -> bool {
+fn wildcard_host_reaches(host: &str, this_host: bool) -> bool {
     match host.parse::<IpAddr>() {
-        Ok(ip) => AddressClass::of(ip) == AddressClass::Public,
+        Ok(ip) => !this_host && AddressClass::of(ip) == AddressClass::Public,
         Err(_) => true,
+    }
+}
+
+fn embedded_ipv4_host(host: &str) -> Option<String> {
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V6(ip)) => embedded_ipv4(&ip).map(|ipv4| ipv4.to_string()),
+        _ => None,
     }
 }
 
@@ -190,10 +210,22 @@ impl ResourcePattern for NetworkResourcePattern {
                     ports: bp,
                 },
             ) => host_pattern_subsumes(ah, bh) && ap.subsumes(bp),
-            (Self::Any, Self::SocketAddress { host, .. }) => wildcard_host_reaches(host),
+            (
+                Self::Any,
+                Self::SocketAddress {
+                    host, this_host, ..
+                },
+            ) => wildcard_host_reaches(host, *this_host),
             (Self::Any, _) => true,
-            (Self::HostPort { host, ports }, Self::SocketAddress { host: target, port }) => {
-                (!host.contains('*') || wildcard_host_reaches(target))
+            (
+                Self::HostPort { host, ports },
+                Self::SocketAddress {
+                    host: target,
+                    port,
+                    this_host,
+                },
+            ) => {
+                (!host.contains('*') || wildcard_host_reaches(target, *this_host))
                     && host_pattern_subsumes(host, target)
                     && ports.subsumes(&PortPattern::Single(*port))
             }
