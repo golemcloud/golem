@@ -778,13 +778,6 @@ oplog_payload! {
         P3SocketsBind {
             result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
         },
-        P3SocketsTcpConnect {
-            result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableP3SocketErrorCode>,
-            closed: bool,
-        },
-        P3SocketsBind {
-            result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
-        },
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
         },
