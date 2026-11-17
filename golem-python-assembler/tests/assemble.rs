@@ -190,3 +190,41 @@ async fn invalid_entry_modules_fail_before_imports() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+async fn identical_inputs_give_identical_components() -> Result<()> {
+    let prepared = prepared()?;
+    let sdk = python_sdk().join("src");
+    let source = "import json\n\nVALUE = json.dumps({'a': [1, 2]})\n";
+
+    let mut components = Vec::new();
+    // Each build uses a new application directory, and the assembler unpacks
+    // the prepared assets into new directories. The application directories
+    // stay alive until both builds finish, so the second one cannot reuse
+    // the host inode of the first.
+    let mut dirs = Vec::new();
+    for _ in 0..2 {
+        let dir = tempfile::tempdir()?;
+        write_app(dir.path(), "app", source)?;
+        components.push(
+            build(
+                &prepared,
+                &Application {
+                    sdk_dir: &sdk,
+                    source_dir: dir.path(),
+                    entry_modules: &["app"],
+                },
+            )
+            .await?,
+        );
+        dirs.push(dir);
+    }
+    let differing = components[0]
+        .iter()
+        .zip(&components[1])
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(components[0].len(), components[1].len());
+    assert_eq!(differing, 0, "the two builds differ in {differing} bytes");
+    Ok(())
+}

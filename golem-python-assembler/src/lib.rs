@@ -7,6 +7,7 @@
 //! does not process WIT, generate code or compile CPython.
 
 use std::{
+    collections::HashMap,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -15,12 +16,19 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use componentize_py::prepared::{Assembler, Prepared};
 use wasmtime::{
-    Engine, Store,
-    component::{Linker, ResourceTable},
+    Engine, Store, StoreContextMut,
+    component::{Linker, Resource, ResourceTable},
 };
 use wasmtime_wasi::{
     Deterministic, FsPerms, IoCtx, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
-    p2::pipe::MemoryOutputPipe,
+    filesystem::WasiFilesystemView,
+    p2::{
+        FsResult,
+        bindings::filesystem::types::{
+            Descriptor, DescriptorStat, ErrorCode, HostDescriptor, MetadataHashValue, PathFlags,
+        },
+        pipe::MemoryOutputPipe,
+    },
 };
 
 #[cfg(test)]
@@ -62,6 +70,99 @@ struct Host {
     ctx: WasiCtx,
     io: IoCtx,
     table: ResourceTable,
+    metadata_hashes: HashMap<(u64, u64), u64>,
+}
+
+impl Host {
+    /// Replaces a host metadata hash with the order in which the guest first
+    /// saw it. The same object keeps one value and different objects get
+    /// different values, but the values do not depend on host inodes.
+    fn stable_metadata_hash(
+        &mut self,
+        hash: FsResult<MetadataHashValue>,
+    ) -> wasmtime::Result<Result<MetadataHashValue, ErrorCode>> {
+        let hash = match hash {
+            Ok(hash) => hash,
+            Err(error) => return Ok(Err(error.downcast()?)),
+        };
+        let next = self.metadata_hashes.len() as u64 + 1;
+        let lower = *self
+            .metadata_hashes
+            .entry((hash.upper, hash.lower))
+            .or_insert(next);
+        Ok(Ok(MetadataHashValue { upper: 0, lower }))
+    }
+}
+
+/// Removes the host timestamps from a stat result. The application's source
+/// files and the unpacked runtime get new times on every build, and CPython
+/// keeps the times it reads in memory that the component saves.
+fn without_timestamps(
+    stat: FsResult<DescriptorStat>,
+) -> wasmtime::Result<Result<DescriptorStat, ErrorCode>> {
+    match stat {
+        Ok(stat) => Ok(Ok(DescriptorStat {
+            data_access_timestamp: None,
+            data_modification_timestamp: None,
+            status_change_timestamp: None,
+            ..stat
+        })),
+        Err(error) => Ok(Err(error.downcast()?)),
+    }
+}
+
+/// Makes the file metadata that pre-initialization sees independent of the
+/// host: stat results have no timestamps, and metadata hashes, from which the
+/// guest derives inode numbers, do not depend on host inodes. CPython keeps
+/// this metadata in memory that the component saves.
+fn add_host_independent_metadata(linker: &mut Linker<Host>) -> Result<()> {
+    linker.allow_shadowing(true);
+    let mut types = linker.instance("wasi:filesystem/types@0.2.12")?;
+    types.func_wrap_async(
+        "[method]descriptor.metadata-hash",
+        |mut store: StoreContextMut<'_, Host>, (fd,): (Resource<Descriptor>,)| {
+            Box::new(async move {
+                let host = store.data_mut();
+                let hash = HostDescriptor::metadata_hash(&mut host.filesystem(), fd).await;
+                Ok((host.stable_metadata_hash(hash)?,))
+            })
+        },
+    )?;
+    types.func_wrap_async(
+        "[method]descriptor.metadata-hash-at",
+        |mut store: StoreContextMut<'_, Host>,
+         (fd, flags, path): (Resource<Descriptor>, PathFlags, String)| {
+            Box::new(async move {
+                let host = store.data_mut();
+                let hash =
+                    HostDescriptor::metadata_hash_at(&mut host.filesystem(), fd, flags, path).await;
+                Ok((host.stable_metadata_hash(hash)?,))
+            })
+        },
+    )?;
+    types.func_wrap_async(
+        "[method]descriptor.stat",
+        |mut store: StoreContextMut<'_, Host>, (fd,): (Resource<Descriptor>,)| {
+            Box::new(async move {
+                let stat = HostDescriptor::stat(&mut store.data_mut().filesystem(), fd).await;
+                Ok((without_timestamps(stat)?,))
+            })
+        },
+    )?;
+    types.func_wrap_async(
+        "[method]descriptor.stat-at",
+        |mut store: StoreContextMut<'_, Host>,
+         (fd, flags, path): (Resource<Descriptor>, PathFlags, String)| {
+            Box::new(async move {
+                let stat =
+                    HostDescriptor::stat_at(&mut store.data_mut().filesystem(), fd, flags, path)
+                        .await;
+                Ok((without_timestamps(stat)?,))
+            })
+        },
+    )?;
+    linker.allow_shadowing(false);
+    Ok(())
 }
 
 impl WasiView for Host {
@@ -175,6 +276,7 @@ pub async fn build(prepared: &Prepared, app: &Application<'_>) -> Result<Vec<u8>
         Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
     let mut linker = Linker::<Host>::new(&engine);
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    add_host_independent_metadata(&mut linker)?;
     componentize_py::add_trapping_stubs(&mut linker, &plan.stubs)?;
 
     let mut store = Store::new(
@@ -183,6 +285,7 @@ pub async fn build(prepared: &Prepared, app: &Application<'_>) -> Result<Vec<u8>
             ctx,
             io,
             table: ResourceTable::new(),
+            metadata_hashes: HashMap::new(),
         },
     );
     // The shared engine meters fuel and interrupts on epochs; initialization

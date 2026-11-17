@@ -37,5 +37,12 @@ cargo test -p golem-python-assembler
   More output fails the build.
 - The C stack is 96 KiB. Deep recursion in `repr`, `json`, `pickle` and
   `__repr__` raises `RecursionError` at a lower depth than in native CPython.
-- Two builds of the same input can differ in a few bytes. The difference
-  comes from host file metadata that pre-initialization records.
+- During pre-initialization, file timestamps read as the Unix epoch, and
+  inode numbers follow the order in which files are first seen, so that the
+  saved component does not depend on the host. Two builds of the same input in
+  different directories give the same bytes on the same host. Builds on
+  different file systems or hosts are not yet checked: directory listing order
+  and link counts still come from the host.
+- Because directory timestamps do not change during pre-initialization, call
+  `importlib.invalidate_caches()` before importing a module that a module
+  wrote during pre-initialization.
