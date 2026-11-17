@@ -38,6 +38,46 @@ async fn typescript_initial_card_without_identity_read_warns_on_deploy_and_fails
     .await;
 }
 
+#[test]
+#[timeout("20 minutes")]
+async fn component_initial_card_without_identity_read_warns_for_the_agents_that_inherit_it(
+    _tracing: &Tracing,
+) {
+    let mut ctx = TestContext::new();
+    let app_name = "initial-card-component";
+    ctx.start_server().await;
+
+    let output = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(output.success_or_dump());
+    ctx.cd(app_name);
+    let manifest = fs::read_to_string(ctx.cwd_path_join("golem.yaml")).unwrap();
+
+    write_component_card(&ctx, &manifest, &[FILESYSTEM_READ]);
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    assert!(
+        contains(
+            &deploy,
+            &format!("Agent type CounterAgent: {IDENTITY_WARNING}")
+        ),
+        "deploy did not warn about the component card that CounterAgent inherits"
+    );
+
+    write_component_card(
+        &ctx,
+        &manifest,
+        &[FILESYSTEM_READ, AGENT_ID_READ, AGENT_TYPE_READ],
+    );
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    assert!(
+        !contains(&deploy, ANY_IDENTITY_WARNING),
+        "deploy warned about a component card that has the grants"
+    );
+}
+
 async fn initial_card_without_identity_read_warns_on_deploy_and_fails_at_first_call(
     template: &str,
     result_format: &str,
@@ -139,6 +179,30 @@ fn write_counter_agent_card(ctx: &TestContext, manifest: &str, grants: &[&str]) 
         ),
     )
     .unwrap();
+}
+
+/// Writes the card into the component of the generated manifest, after its `templates` line.
+fn write_component_card(ctx: &TestContext, manifest: &str, grants: &[&str]) {
+    let grants = grants
+        .iter()
+        .map(|grant| format!("          - \"{grant}\"\n"))
+        .collect::<String>();
+    let card = format!("    initialCard:\n      lowerBound:\n        positive:\n{grants}");
+    let mut written = String::new();
+    let mut inserted = false;
+    for line in manifest.lines() {
+        written.push_str(line);
+        written.push('\n');
+        if !inserted && line.starts_with("    templates: ") {
+            written.push_str(&card);
+            inserted = true;
+        }
+    }
+    assert!(
+        inserted,
+        "the template manifest has no component templates line"
+    );
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), written).unwrap();
 }
 
 fn contains(output: &Output, text: &str) -> bool {
