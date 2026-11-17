@@ -119,7 +119,7 @@ defineAgent({
         ),
       ),
     remote: ({ value }) =>
-      Remote.client.get({ seed: 3 }).pipe(
+      Remote.client.upsert({ seed: 3 }).pipe(
         Effect.flatMap((remote) => remote.echo({ value })),
         Effect.scoped,
       ),

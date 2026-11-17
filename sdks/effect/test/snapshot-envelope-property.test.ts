@@ -19,22 +19,17 @@ import { prop } from "./property.js"
  * Build a `Principal` (runtime form, with bigint UUIDs) from canonical
  * UUID strings. We hand-roll the arbitrary instead of relying on
  * `Schema.toArbitrary(SerializedPrincipal)` because the JSON shape's
- * `componentId` / `accountId` slots are typed as `Schema.String`, but
+ * `agentId` / `accountId` slots are typed as `Schema.String`, but
  * `deserializePrincipal` round-trips them through `parseUuid` which
  * requires the canonical 8-4-4-4-12 hex form.
  */
 const principalArb: fc.Arbitrary<AgentCommon.Principal> = fc.oneof(
   fc.constant({ tag: "anonymous" } as const satisfies AgentCommon.Principal),
-  fc.record({ componentId: fc.uuid(), agentId: fc.string() }).map(
+  fc.record({ agentId: fc.uuid() }).map(
     (v) =>
       ({
         tag: "agent",
-        val: {
-          agentId: {
-            componentId: { uuid: parseUuid(v.componentId) },
-            agentId: v.agentId,
-          },
-        },
+        val: { agentId: { uuid: parseUuid(v.agentId) } },
       }) satisfies AgentCommon.Principal,
   ),
   fc.record({ accountId: fc.uuid() }).map(
@@ -107,6 +102,21 @@ const stateArb: fc.Arbitrary<typeof StateSchema.Type> = fc.record({
   }),
 })
 
+/** Constructor parameters: a record of string and u64 leaves. */
+const constructorParametersArb = fc
+  .array(fc.oneof(fc.string(), fc.bigInt({ min: 0n, max: (1n << 64n) - 1n })), { maxLength: 4 })
+  .map((leaves) => ({
+    root: 0,
+    valueNodes: [
+      { tag: "record-value" as const, val: leaves.map((_, i) => i + 1) },
+      ...leaves.map((leaf) =>
+        typeof leaf === "string"
+          ? { tag: "string-value" as const, val: leaf }
+          : { tag: "u64-value" as const, val: leaf },
+      ),
+    ],
+  }))
+
 const dbPartArb = fc.record({
   name: fc.stringMatching(/^[a-zA-Z_][a-zA-Z0-9_]*$/),
   bytes: fc.uint8Array({ maxLength: 256 }),
@@ -119,16 +129,17 @@ const dbPartArb = fc.record({
 describe("snapshot-envelope properties", () => {
   prop(
     "JSON envelope round-trips arbitrary principal + arbitrary state",
-    { principal: principalArb, state: stateArb },
-    ({ principal, state }) => {
+    { principal: principalArb, constructorParameters: constructorParametersArb, state: stateArb },
+    ({ principal, constructorParameters, state }) => {
       expect(Schema.is(StateSchema)(state)).toBe(true)
-      const env = encodeJsonEnvelope(principal, state)
+      const env = encodeJsonEnvelope({ principal, constructorParameters }, state)
       expect(env.mimeType).toBe("application/json")
-      const decoded = decodeEnvelope(env, { tag: "anonymous" })
+      const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("json")
       if (decoded.kind !== "json") throw new Error("expected json envelope")
       // Principal round-trips through serialise + deserialise.
       expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
+      expect(decoded.constructorParameters).toEqual(constructorParameters)
       // State round-trips through JSON exactly (the schema only contains
       // JSON-safe leaves).
       expect(decoded.state).toEqual(state)
@@ -137,16 +148,19 @@ describe("snapshot-envelope properties", () => {
 
   prop(
     "binary envelope round-trips arbitrary principal + arbitrary user payload",
-    { principal: principalArb, userPayload: fc.uint8Array({ maxLength: 1024 }) },
-    ({ principal, userPayload }) => {
-      const env = encodeBinaryEnvelope(principal, userPayload)
+    {
+      principal: principalArb,
+      constructorParameters: constructorParametersArb,
+      userPayload: fc.uint8Array({ maxLength: 1024 }),
+    },
+    ({ principal, constructorParameters, userPayload }) => {
+      const env = encodeBinaryEnvelope({ principal, constructorParameters }, userPayload)
       expect(env.mimeType).toBe("application/octet-stream")
-      // The fallback principal here is anonymous; v2 envelopes carry the
-      // principal inline, so the fallback must NOT be observed.
-      const decoded = decodeEnvelope(env, { tag: "anonymous" })
+      const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("binary")
       if (decoded.kind !== "binary") throw new Error("expected binary envelope")
       expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
+      expect(decoded.constructorParameters).toEqual(constructorParameters)
       expect(Array.from(decoded.userPayload)).toEqual(Array.from(userPayload))
     },
   )
@@ -155,6 +169,7 @@ describe("snapshot-envelope properties", () => {
     "multipart envelope round-trips arbitrary principal + state + DB parts",
     {
       principal: principalArb,
+      constructorParameters: constructorParametersArb,
       state: stateArb,
       // De-duplicate DB names to avoid the multipart decoder's
       // duplicate-name check (an unrelated, well-tested invariant).
@@ -170,13 +185,18 @@ describe("snapshot-envelope properties", () => {
           })),
         ),
     },
-    ({ principal, state, databases }) => {
-      const env = encodeMultipartJsonEnvelope(principal, state, databases)
+    ({ principal, constructorParameters, state, databases }) => {
+      const env = encodeMultipartJsonEnvelope(
+        { principal, constructorParameters },
+        state,
+        databases,
+      )
       expect(env.mimeType.startsWith("multipart/mixed")).toBe(true)
-      const decoded = decodeEnvelope(env, { tag: "anonymous" })
+      const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("multipart")
       if (decoded.kind !== "multipart") throw new Error("expected multipart envelope")
       expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
+      expect(decoded.constructorParameters).toEqual(constructorParameters)
       expect(decoded.state).toEqual(state)
       // Order is preserved by `encodeMultipartJsonEnvelope` (state first,
       // then DBs in input order); decoder strips the state part and

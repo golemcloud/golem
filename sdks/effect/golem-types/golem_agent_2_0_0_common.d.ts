@@ -8,7 +8,6 @@ declare module 'golem:agent/common@2.0.0' {
   export type MetadataEnvelope = golemCore200Types.MetadataEnvelope;
   export type AgentId = golemCore200Types.AgentId;
   export type AccountId = golemCore200Types.AccountId;
-  export type ComponentId = golemCore200Types.ComponentId;
   export type HttpRouteMode = golemCore200Http.HttpRouteMode;
   export type DurableStreamRouteOptions = golemCore200Http.DurableStreamRouteOptions;
   export type ConcreteHttpMethod = golemCore200Http.HttpMethod;
@@ -251,11 +250,10 @@ declare module 'golem:agent/common@2.0.0' {
     config: AgentConfigDeclaration[];
   };
   /**
-   * Associates an agent type with a component that implements it
+   * An agent type deployed in the current environment
    */
   export type RegisteredAgentType = {
     agentType: AgentType;
-    implementedBy: ComponentId;
   };
   export type TypedAgentConfigValue = {
     path: string[];

@@ -10,7 +10,6 @@ import { compile } from "../src/WitCodec.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v } from "../src/internal/schema-model/model.js"
 import {
-  __setParseAgentIdImpl,
   __setGetConfigValueImpl,
   __resetGetConfigValueImpl,
   __setRpcResponder,
@@ -192,8 +191,7 @@ describe("capability-sensitive component exports", () => {
         ),
       ).toEqual(v.record([v.string("https://example.test/api"), v.bool(true)]))
       const snapshot = await runtime.saveSnapshot.save()
-      __setEnvironment([["GOLEM_AGENT_ID", `RuntimeMetadata(${JSON.stringify(path)})`]])
-      __setParseAgentIdImpl(() => ["RuntimeMetadata", { value: input }, undefined])
+      __setEnvironment([["GOLEM_AGENT_TYPE", "RuntimeMetadata"]])
       const restored = instantiate()
       await restored.loadSnapshot.load(snapshot)
       expect(
@@ -364,9 +362,11 @@ describe("capability-sensitive component exports", () => {
           ),
         ),
       ).toEqual(v.ok(v.f64(41)))
-      expect(schemaValueFromWit(__getRecordedRpcCalls()[0]!.constructorValue)).toEqual(
-        v.record([v.string("3")]),
-      )
+      const target = __getRecordedRpcCalls()[0]!.target
+      expect(target.kind).toBe("upsert")
+      expect(
+        schemaValueFromWit(target.kind === "upsert" ? target.constructorValue : undefined!),
+      ).toEqual(v.record([v.string("3")]))
     } finally {
       __resetRpc()
     }
@@ -513,8 +513,7 @@ describe("capability-sensitive component exports", () => {
           ),
         ).toEqual(v.f64(17))
         const snapshot = await runtime.saveSnapshot.save()
-        __setEnvironment([["GOLEM_AGENT_ID", "CapabilityCounter(17)"]])
-        __setParseAgentIdImpl(() => ["CapabilityCounter", { value: input }, undefined])
+        __setEnvironment([["GOLEM_AGENT_TYPE", "CapabilityCounter"]])
         const restored = instantiate()
         await restored.loadSnapshot.load(snapshot)
         expect(

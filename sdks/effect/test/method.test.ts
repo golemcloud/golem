@@ -51,10 +51,7 @@ describe("Method", () => {
             {
               tag: "agent",
               val: {
-                agentId: {
-                  componentId: { uuid: { highBits: 1n, lowBits: 2n } },
-                  agentId: "current",
-                },
+                agentId: { uuid: { highBits: 1n, lowBits: 2n } },
               },
             },
           ]

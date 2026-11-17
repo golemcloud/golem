@@ -3,15 +3,14 @@ import { Cause, DateTime, Effect, Exit, Fiber, Layer, Option, Result, Schema, St
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import * as AgentIdentity from "../src/AgentIdentity.js"
+import type { AgentId } from "../src/AgentId.js"
 import { defineAgent } from "../src/Agent.js"
 import { defineAgentClient } from "../src/index.js"
 import * as Client from "../src/Client.js"
 import { defineConfig } from "../src/Config.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
-import { DurabilityModeClient } from "../src/host/DurabilityModeClient.js"
-import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
-import { compileMethodSpec, compileParamBindings, invokeMethod, method } from "../src/Method.js"
+import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
+import { compileMethodSpec, invokeMethod, method } from "../src/Method.js"
 import { PrincipalSchema } from "../src/Principal.js"
 import {
   Option as UnstructuredOption,
@@ -22,22 +21,49 @@ import {
 } from "../src/Unstructured.js"
 import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
-import { hostInvocationMetadata, sdkInvocationMetadata } from "./invocation-metadata.js"
+import {
+  agentIdFor,
+  hostAgentIdFor,
+  hostInvocationMetadata,
+  sdkInvocationMetadata,
+} from "./invocation-metadata.js"
+import { rpcLayer } from "./rpc-fake.js"
 
 const metadata = (suffix: string): AgentHost.InvocationMetadata =>
   hostInvocationMetadata(`agent-${suffix}`)
 const expectedMetadata = (suffix: string) => sdkInvocationMetadata(`agent-${suffix}`)
 
+/** How the host opened a client. */
+type Target =
+  | { readonly kind: "upsert"; readonly constructor: CoreTypes.SchemaValueTree }
+  | { readonly kind: "getById"; readonly agentId: CoreTypes.AgentId }
+  | {
+      readonly kind: "create"
+      readonly constructor: CoreTypes.SchemaValueTree
+      readonly options: AgentHost.CreateOptions
+    }
+
+interface Open {
+  readonly agentType: string
+  readonly target: Target
+}
+
 interface Call {
   readonly kind: "await" | "trigger" | "schedule"
   readonly agentType: string
   readonly method: string
-  readonly constructor: CoreTypes.SchemaValueTree
+  readonly target: Target
   readonly input: CoreTypes.SchemaValueTree
-  readonly phantom: CoreTypes.Uuid | undefined
-  readonly config: ReadonlyArray<AgentCommon.TypedAgentConfigValue>
   readonly scheduledTime?: AgentHost.Datetime
 }
+
+const constructorOf = (target: Target | undefined) =>
+  target !== undefined && target.kind !== "getById" ? target.constructor : undefined
+
+/** The agent ID that `create` issues in the fake host. */
+const createdAgentId = hostAgentIdFor("created")
+/** The agent ID of a client of `upsert` in the fake host. */
+const upsertedAgentId = hostAgentIdFor("upserted")
 
 const makeRuntime = (
   options: {
@@ -45,9 +71,14 @@ const makeRuntime = (
     readonly error?: unknown
     readonly pending?: boolean
     readonly rejected?: boolean
+    /** Fails every client open with this host `rpc-error`. */
+    readonly openError?: AgentHost.RpcError
+    /** The deployed agent type that `getAgentTypeByAgentId` reports. */
+    readonly registered?: { readonly typeName: string; readonly mode?: AgentCommon.AgentMode }
   } = {},
 ) => {
   const calls: Call[] = []
+  const opens: Open[] = []
   const lifecycle = {
     connectionOpen: 0,
     connectionDrop: 0,
@@ -58,13 +89,9 @@ const makeRuntime = (
   }
   const awaitedMetadata = metadata("await")
   let resolvePending: ((value: CoreTypes.SchemaValueTree | undefined) => void) | undefined
-  const connect = (
-    agentType: string,
-    constructor: CoreTypes.SchemaValueTree,
-    phantom: CoreTypes.Uuid | undefined,
-    config: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
-  ): RpcConnection => {
+  const connect = (agentType: string, target: Target): RpcConnection => {
     lifecycle.connectionOpen++
+    opens.push({ agentType, target })
     const record = (
       kind: Call["kind"],
       methodName: string,
@@ -75,13 +102,19 @@ const makeRuntime = (
         kind,
         agentType,
         method: methodName,
-        constructor,
+        target,
         input,
-        phantom,
-        config,
         scheduledTime,
       })
     return {
+      agentId: () =>
+        Promise.resolve(
+          target.kind === "getById"
+            ? target.agentId
+            : target.kind === "create"
+              ? createdAgentId
+              : upsertedAgentId,
+        ),
       invokeAndAwait: () => ({ metadata: metadata("sync"), result: options.response }),
       invoke: (methodName, input) => {
         record("trigger", methodName, input)
@@ -117,24 +150,36 @@ const makeRuntime = (
       drop: () => lifecycle.connectionDrop++,
     }
   }
-  const rpc = Layer.succeed(
-    RpcClient,
-    RpcClient.of({
-      bindSelf: () => Effect.die("unexpected self binding"),
-      connect: (agentType, constructor, phantom, config) =>
-        Effect.succeed(connect(agentType, constructor, phantom, config)),
-    }),
-  )
-  const durability = Layer.succeed(
-    DurabilityModeClient,
-    DurabilityModeClient.of({
-      oplogCommit: () => undefined,
-      generateIdempotencyKey: () => ({ highBits: 1n, lowBits: 2n }),
-    }),
-  )
+  const open = <A>(agentType: string, target: Target, value: (c: RpcConnection) => A) =>
+    options.openError === undefined
+      ? Effect.succeed(value(connect(agentType, target)))
+      : Effect.fail(new RpcHostError(options.openError, `WasmRpc.${target.kind}`))
+  const rpc = rpcLayer({
+    upsert: (agentType, constructor) =>
+      open(agentType, { kind: "upsert", constructor }, (connection) => connection),
+    getById: (agentType, agentId) =>
+      open(agentType, { kind: "getById", agentId }, (connection) => connection),
+    create: (agentType, constructor, createOptions) =>
+      open(agentType, { kind: "create", constructor, options: createOptions }, (connection) => ({
+        connection,
+        agentId: createdAgentId,
+      })),
+  })
+  const host = Layer.succeed(AgentHostClient, {
+    getAgentTypeByAgentId: () =>
+      options.registered === undefined
+        ? undefined
+        : {
+            agentType: {
+              typeName: options.registered.typeName,
+              mode: options.registered.mode ?? "durable",
+            },
+          },
+  } as never)
   return {
-    layer: Layer.mergeAll(rpc, durability),
+    layer: Layer.mergeAll(rpc, host),
     calls,
+    opens,
     lifecycle,
     awaitedMetadata,
     hasPending: () => resolvePending !== undefined,
@@ -176,14 +221,15 @@ const encode = <S extends Schema.Top>(schema: S, value: S["Type"]) =>
 
 describe("Client 1.6 durable lifecycle", () => {
   it.effect(
-    "binds the returned self identity, rejects another type, and releases the resource",
+    "binds the returned self ID, rejects another agent type, and releases the resource",
     () =>
       Effect.gen(function* () {
         for (const typeName of ["Counter", "Other", "host-refusal"]) {
           let drops = 0
           let invoked = false
+          const selfId = hostAgentIdFor("self")
           const layer = Layer.merge(
-            Layer.succeed(RpcClient, {
+            rpcLayer({
               bindSelf: () =>
                 typeName === "host-refusal"
                   ? Effect.fail(
@@ -193,8 +239,9 @@ describe("Client 1.6 durable lifecycle", () => {
                       ),
                     )
                   : Effect.succeed([
-                      "recorded-phantom-id",
+                      selfId,
                       {
+                        agentId: () => Promise.resolve(selfId),
                         invokeAndAwait: () => {
                           throw new Error("unexpected awaited invocation")
                         },
@@ -217,31 +264,26 @@ describe("Client 1.6 durable lifecycle", () => {
                         },
                       } satisfies RpcConnection,
                     ] as const),
-              connect: () => Effect.die("self binding must not create a connection"),
             }),
             Layer.succeed(AgentHostClient, {
-              parseAgentId: (id: string) => {
-                expect(id).toBe("recorded-phantom-id")
-                return [
-                  typeName,
-                  {
-                    value: { valueNodes: [], root: 0 },
-                    graph: { typeNodes: [], defs: [], root: 0 },
-                  },
-                  { highBits: 17n, lowBits: 29n },
-                ]
+              getAgentTypeByAgentId: (id: CoreTypes.AgentId) => {
+                expect(id).toEqual(selfId)
+                return { agentType: { typeName, mode: "durable" } }
               },
             } as never),
           )
           const result = yield* Counter.client.bindSelf().pipe(
-            Effect.flatMap((client) => client.add.trigger({ by: 7 })),
+            Effect.flatMap((client) => Effect.zip(client.add.trigger({ by: 7 }), client.agentId)),
             Effect.scoped,
             Effect.provide(layer),
             Effect.result,
           )
           expect(invoked).toBe(typeName === "Counter")
           if (typeName === "Counter") {
-            expect(result._tag).toBe("Success")
+            expect(result).toMatchObject({
+              _tag: "Success",
+              success: [undefined, agentIdFor("self")],
+            })
             expect(drops).toBe(1)
           } else {
             expect(result).toMatchObject({
@@ -284,7 +326,7 @@ describe("Client 1.6 durable lifecycle", () => {
       const scheduledSibling = Stream.make(44)
 
       yield* Effect.gen(function* () {
-        const remote = yield* StreamingInput.client.get({})
+        const remote = yield* StreamingInput.client.upsert({})
         const triggered = yield* remote.consume
           .trigger({ nested: { streams: { first, sibling } } })
           .pipe(Effect.result)
@@ -333,7 +375,7 @@ describe("Client 1.6 durable lifecycle", () => {
         const runtime = makeRuntime()
 
         yield* Effect.gen(function* () {
-          const remote = yield* StreamingOutput.client.get({})
+          const remote = yield* StreamingOutput.client.upsert({})
           expect(
             yield* remote.produce.trigger({ label: "trigger" }).pipe(Effect.result),
           ).toMatchObject({ _tag: "Failure", failure: { _tag: "RemoteResponseError" } })
@@ -351,7 +393,7 @@ describe("Client 1.6 durable lifecycle", () => {
   it.effect("encodes schema trees and returns value-only awaited results", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime({ response: yield* encode(Schema.Number, 42) })
-      const value = yield* Counter.client.get({ initial: 7 }).pipe(
+      const value = yield* Counter.client.upsert({ initial: 7 }).pipe(
         Effect.flatMap((remote) => remote.value({})),
         Effect.scoped,
         Effect.provide(runtime.layer),
@@ -359,7 +401,8 @@ describe("Client 1.6 durable lifecycle", () => {
       expect(value).toBe(42)
       expect(runtime.calls[0]!.kind).toBe("await")
       expect(runtime.calls[0]!.agentType).toBe("Counter")
-      expect(runtime.calls[0]!.constructor.valueNodes.length).toBeGreaterThan(0)
+      expect(runtime.opens[0]!.target.kind).toBe("upsert")
+      expect(constructorOf(runtime.calls[0]!.target)!.valueNodes.length).toBeGreaterThan(0)
       expect(runtime.lifecycle).toMatchObject({
         connectionOpen: 1,
         connectionDrop: 1,
@@ -373,7 +416,7 @@ describe("Client 1.6 durable lifecycle", () => {
     Effect.gen(function* () {
       const runtime = makeRuntime()
       yield* Effect.gen(function* () {
-        const remote = yield* Counter.client.get({ initial: 0 })
+        const remote = yield* Counter.client.upsert({ initial: 0 })
         expect(yield* remote.add.trigger({ by: 1 })).toBeUndefined()
         const scheduled = yield* remote.add.schedule({ seconds: 1n, nanoseconds: 2 }, { by: 2 })
         expect("metadata" in scheduled).toBe(false)
@@ -390,7 +433,7 @@ describe("Client 1.6 durable lifecycle", () => {
       const runtime = makeRuntime()
       const epoch = 1_700_000_000_123
       yield* Effect.gen(function* () {
-        const remote = yield* Counter.client.get({ initial: 0 })
+        const remote = yield* Counter.client.upsert({ initial: 0 })
         for (const at of [
           new Date(epoch),
           DateTime.makeZonedUnsafe(epoch, { timeZone: "Pacific/Auckland" }),
@@ -409,7 +452,7 @@ describe("Client 1.6 durable lifecycle", () => {
   it.effect("drops an accepted schedule token without cancelling its work", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime()
-      yield* Counter.client.get({ initial: 0 }).pipe(
+      yield* Counter.client.upsert({ initial: 0 }).pipe(
         Effect.flatMap((remote) => remote.add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 1 })),
         Effect.scoped,
         Effect.provide(runtime.layer),
@@ -422,23 +465,72 @@ describe("Client 1.6 durable lifecycle", () => {
     }),
   )
 
-  it.effect("supports normal, addressed phantom, and freshly generated phantom identities", () =>
+  it.effect("maps upsert, create and getById to the host functions of the same name", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime()
-      yield* Effect.gen(function* () {
-        yield* Counter.client.get({ initial: 0 })
-        yield* Counter.client.getPhantom({ initial: 0 }, "12345678-1234-1234-1234-1234567890ab")
-        const generated = yield* Counter.client.newPhantom({ initial: 0 })
-        expect(generated.phantomId).toBe("00000000-0000-0001-0000-000000000002")
+      const id = agentIdFor("existing")
+      const ids = yield* Effect.gen(function* () {
+        const upserted = yield* Counter.client.upsert({ initial: 1 })
+        const created = yield* Counter.client.create({ initial: 2 })
+        const keyed = yield* Counter.client.create({ initial: 3 }, { keyed: true })
+        const found = yield* Counter.client.getById(id)
+        return [
+          yield* upserted.agentId,
+          yield* created.agentId,
+          yield* keyed.agentId,
+          yield* found.agentId,
+        ]
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
+      expect(runtime.opens.map(({ agentType, target }) => [agentType, target.kind])).toEqual([
+        ["Counter", "upsert"],
+        ["Counter", "create"],
+        ["Counter", "create"],
+        ["Counter", "getById"],
+      ])
+      const [, create, keyedCreate, byId] = runtime.opens.map(({ target }) => target)
+      expect(create).toMatchObject({ options: { keyed: false, agentConfig: [], env: [] } })
+      expect(keyedCreate).toMatchObject({ options: { keyed: true, agentConfig: [], env: [] } })
+      expect(byId).toEqual({ kind: "getById", agentId: hostAgentIdFor("existing") })
+      for (const [index, value] of [1, 2, 3].entries()) {
+        const tree = constructorOf(runtime.opens[index]!.target)!
+        expect(tree.valueNodes).toContainEqual({ tag: "f64-value", val: value })
+      }
+      expect(ids).toEqual([
+        agentIdFor("upserted"),
+        agentIdFor("created"),
+        agentIdFor("created"),
+        id,
+      ])
+      expect(String(ids[3])).toBe(id.uuid)
+      expect(runtime.lifecycle).toMatchObject({ connectionOpen: 4, connectionDrop: 4 })
       expect(runtime.calls).toHaveLength(0)
 
       const invalid = yield* Counter.client
-        .getPhantom({ initial: 0 }, "bad")
+        .getById({ uuid: "bad" } as AgentId)
         .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
-      expect(invalid._tag).toBe("Failure")
-      if (invalid._tag === "Failure")
-        expect(invalid.failure).toMatchObject({ _tag: "InvalidUuidError", value: "bad" })
+      expect(invalid).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "InvalidUuidError", value: "bad" },
+      })
+      expect(runtime.lifecycle.connectionOpen).toBe(4)
+    }),
+  )
+
+  it.effect("reports a typed not-found for an unknown ID and conflict for a current key", () =>
+    Effect.gen(function* () {
+      for (const [cause, open] of [
+        [{ tag: "not-found", val: "no agent of type Counter has the ID" }, "getById"],
+        [{ tag: "conflict", val: "the key Counter(3) is current" }, "keyed create"],
+      ] as const) {
+        const runtime = makeRuntime({ openError: cause })
+        const result = yield* (
+          open === "getById"
+            ? Counter.client.getById(agentIdFor("missing"))
+            : Counter.client.create({ initial: 3 }, { keyed: true })
+        ).pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
+        expect(result).toEqual(Result.fail({ _tag: "RpcCallError", cause }))
+        expect(runtime.lifecycle.connectionOpen).toBe(0)
+      }
     }),
   )
 
@@ -466,7 +558,7 @@ describe("Client 1.6 durable lifecycle", () => {
           input,
         ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
         const runtime = makeRuntime({ response })
-        const actual = yield* RawOutputs.client.get({}).pipe(
+        const actual = yield* RawOutputs.client.upsert({}).pipe(
           Effect.flatMap((remote) => (remote[methodName] as any)({})),
           Effect.scoped,
           Effect.provide(runtime.layer),
@@ -525,7 +617,7 @@ describe("Client 1.6 durable lifecycle", () => {
           never
         >
         const runtime = makeRuntime({ response })
-        const actual = yield* RawResults.client.get({}).pipe(
+        const actual = yield* RawResults.client.upsert({}).pipe(
           Effect.flatMap((remote) => (remote[methodName] as any)({})),
           Effect.scoped,
           Effect.provide(runtime.layer),
@@ -540,7 +632,7 @@ describe("Client 1.6 durable lifecycle", () => {
     Effect.gen(function* () {
       const runtime = makeRuntime({ pending: true })
       const exit = yield* Effect.gen(function* () {
-        const remote = yield* Counter.client.get({ initial: 0 })
+        const remote = yield* Counter.client.upsert({ initial: 0 })
         const fiber = yield* Effect.forkChild(remote.value({}))
         yield* Effect.sleep("1 millis")
         yield* Fiber.interrupt(fiber)
@@ -555,7 +647,7 @@ describe("Client 1.6 durable lifecycle", () => {
   it.live("race interruption and late completion clean up exactly once", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime({ pending: true })
-      const result = yield* Counter.client.get({ initial: 0 }).pipe(
+      const result = yield* Counter.client.upsert({ initial: 0 }).pipe(
         Effect.flatMap((remote) =>
           Effect.raceFirst(
             remote.value({}),
@@ -579,10 +671,10 @@ describe("Client 1.6 durable lifecycle", () => {
       const response = yield* encode(Schema.String, "done")
       const runtime = makeRuntime({ pending: true })
       const result = yield* Effect.gen(function* () {
-        const remote = yield* Worker.client.newPhantom({ job: "snapshot" })
+        const remote = yield* Worker.client.upsert({ job: "snapshot" })
         const fiber = yield* Effect.forkChild(remote.run({ times: 1 }))
         while (!runtime.hasPending()) yield* Effect.yieldNow
-        runtime.awaitedMetadata.agentId = "mutated-after-start"
+        runtime.awaitedMetadata.agentId = hostAgentIdFor("mutated-after-start")
         runtime.resolve(response)
         return yield* Fiber.join(fiber)
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
@@ -611,7 +703,7 @@ describe("Client 1.6 durable lifecycle", () => {
         { tag: "user-tag", val: "not-rpc" },
       ]) {
         const runtime = makeRuntime({ error })
-        const result = yield* Counter.client.get({ initial: 0 }).pipe(
+        const result = yield* Counter.client.upsert({ initial: 0 }).pipe(
           Effect.flatMap((remote) => remote.value({})),
           Effect.scoped,
           Effect.provide(runtime.layer),
@@ -643,7 +735,7 @@ describe("Client 1.6 durable lifecycle", () => {
       const response = yield* encode(Schema.String, "done")
       const failureOf = (options: Parameters<typeof makeRuntime>[0]) => {
         const runtime = makeRuntime({ ...options, rejected: true })
-        return Worker.client.newPhantom({ job: "rejected" }).pipe(
+        return Worker.client.upsert({ job: "rejected" }).pipe(
           Effect.flatMap((remote) => remote.run({ times: 1 })),
           Effect.scoped,
           Effect.provide(runtime.layer),
@@ -677,7 +769,7 @@ describe("Client 1.6 durable lifecycle", () => {
         response: yield* encode(Schema.Result(Schema.Number, NotFound), Result.succeed(9)),
       })
       expect(
-        yield* Lookup.client.get({}).pipe(
+        yield* Lookup.client.upsert({}).pipe(
           Effect.flatMap((remote) => remote.find({ id: "x" })),
           Effect.scoped,
           Effect.provide(okRuntime.layer),
@@ -689,7 +781,7 @@ describe("Client 1.6 durable lifecycle", () => {
           Result.fail({ _tag: "NotFound" as const, id: "x" }) as any,
         ),
       })
-      const result = yield* Lookup.client.get({}).pipe(
+      const result = yield* Lookup.client.upsert({}).pipe(
         Effect.flatMap((remote) => remote.find({ id: "x" })),
         Effect.scoped,
         Effect.provide(failRuntime.layer),
@@ -712,7 +804,7 @@ describe("Client 1.6 durable lifecycle", () => {
         response: yield* encode(Schema.Result(Schema.Struct({}), Failure), Result.succeed({})),
       })
       expect(
-        yield* Commands.client.get({}).pipe(
+        yield* Commands.client.upsert({}).pipe(
           Effect.flatMap((remote) => remote.run({})),
           Effect.scoped,
           Effect.provide(ok.layer),
@@ -720,7 +812,7 @@ describe("Client 1.6 durable lifecycle", () => {
       ).toBeUndefined()
 
       const malformed = makeRuntime({ response: undefined })
-      const result = yield* Commands.client.get({}).pipe(
+      const result = yield* Commands.client.upsert({}).pipe(
         Effect.flatMap((remote) => remote.run({})),
         Effect.scoped,
         Effect.provide(malformed.layer),
@@ -734,7 +826,7 @@ describe("Client 1.6 durable lifecycle", () => {
 })
 
 describe("Client 1.6 config and ephemeral receipts", () => {
-  it.effect("encodes non-secret config and rejects a secret override before connecting", () =>
+  it.effect("passes config and env overrides to create and rejects a secret override", () =>
     Effect.gen(function* () {
       class ClientConfig extends defineConfig("ClientConfig", {
         greeting: Schema.String,
@@ -753,41 +845,41 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         methods: Configured.methods,
       })
       const runtime = makeRuntime()
-      yield* Configured.client.get({}, { overrides: { greeting: "hello" } }).pipe(
+      yield* Configured.client
+        .create({}, { config: { greeting: "hello" }, env: { MODE: "test", LEVEL: "debug" } })
+        .pipe(
+          Effect.flatMap((client) => client.ping({})),
+          Effect.scoped,
+          Effect.provide(runtime.layer),
+        )
+      yield* caller.client.create({}, { keyed: true, config: { greeting: "keyed" } }).pipe(
         Effect.flatMap((client) => client.ping({})),
         Effect.scoped,
         Effect.provide(runtime.layer),
       )
-      yield* caller.client.get({}, { overrides: { greeting: "hello" } }).pipe(
-        Effect.flatMap((client) => client.ping({})),
-        Effect.scoped,
-        Effect.provide(runtime.layer),
-      )
-      const host = Layer.succeed(AgentHostClient, { makeAgentId: () => "Configured()" } as never)
-      const identity = yield* caller.agentId({}).pipe(Effect.provide(host))
-      yield* caller.bindWithConfig(identity, { overrides: { greeting: "bound" } }).pipe(
-        Effect.flatMap((client) => client.ping({})),
-        Effect.scoped,
-        Effect.provide(runtime.layer),
-      )
-      const methodOnly = defineAgentClient({ methods: Configured.methods })
-      yield* methodOnly.bindWithEntries(identity, [runtime.calls[0]!.config[0]!]).pipe(
-        Effect.flatMap((client) => client.ping({})),
-        Effect.scoped,
-        Effect.provide(runtime.layer),
-      )
-      expect(runtime.calls[2]?.config[0]?.path).toEqual(["greeting"])
-      expect(runtime.calls[3]?.config[0]?.path).toEqual(["greeting"])
-      const rejected = yield* caller
-        .bindWithConfig(identity, { overrides: { secret: "leak" } as never })
+      const [plain, keyed] = runtime.opens.map(({ target }) => target)
+      if (plain?.kind !== "create" || keyed?.kind !== "create") throw new Error("expected create")
+      expect(plain.options.keyed).toBe(false)
+      expect(plain.options.env).toEqual([
+        ["MODE", "test"],
+        ["LEVEL", "debug"],
+      ])
+      expect(plain.options.agentConfig.map((entry) => entry.path)).toEqual([["greeting"]])
+      expect(keyed.options.keyed).toBe(true)
+      expect(keyed.options.env).toEqual([])
+      expect(keyed.options.agentConfig.map((entry) => entry.path)).toEqual([["greeting"]])
+      expect(keyed.options.agentConfig[0]!.value).not.toEqual(plain.options.agentConfig[0]!.value)
+
+      const rejected = yield* caller.client
+        .create({}, { config: { secret: "leak" } as never })
         .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
       expect(rejected._tag).toBe("Failure")
-      const remote = yield* Configured.client
-        .get({}, { overrides: { secret: "leak" } as never })
+      const unconfigured = yield* Counter.client
+        .create({ initial: 0 }, { config: { greeting: "x" } as never })
         .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
-      expect(remote._tag).toBe("Failure")
-      expect(runtime.calls).toHaveLength(4)
-      expect(runtime.lifecycle.connectionOpen).toBe(4)
+      expect(unconfigured).toMatchObject({ _tag: "Failure", failure: { _tag: "ConfigError" } })
+      expect(runtime.calls).toHaveLength(2)
+      expect(runtime.lifecycle.connectionOpen).toBe(2)
     }),
   )
 
@@ -795,9 +887,11 @@ describe("Client 1.6 config and ephemeral receipts", () => {
     Effect.gen(function* () {
       const runtime = makeRuntime({ response: yield* encode(Schema.String, "done") })
       yield* Effect.gen(function* () {
-        expect((Worker.client as any).get).toBeUndefined()
-        expect((Worker.client as any).getPhantom).toBeTypeOf("function")
-        const remote = yield* Worker.client.newPhantom({ job: "j" })
+        expect((Worker.client as any).create).toBeUndefined()
+        expect((Worker.client as any).getById).toBeUndefined()
+        expect((Worker.client as any).bindSelf).toBeUndefined()
+        const remote = yield* Worker.client.upsert({ job: "j" })
+        expect("agentId" in remote).toBe(false)
         const awaited = yield* remote.run({ times: 1 })
         expect(awaited).toEqual({ metadata: expectedMetadata("await"), value: "done" })
         expect(yield* remote.run.trigger({ times: 2 })).toEqual(expectedMetadata("trigger"))
@@ -805,43 +899,39 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         expect(receipt.metadata).toEqual(expectedMetadata("scheduled"))
         yield* receipt.cancel()
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
-      expect(runtime.calls.every((call) => call.phantom === undefined)).toBe(true)
+      expect(runtime.opens.map(({ target }) => target.kind)).toEqual(["upsert"])
     }),
   )
 
-  it.effect("binds method-only and full durable clients from one parsed identity", () =>
+  it.effect("binds method-only and full durable clients to an agent ID", () =>
     Effect.gen(function* () {
-      const runtime = makeRuntime({ response: yield* encode(Schema.Number, 42) })
-      const host = Layer.succeed(AgentHostClient, {
-        makeAgentId: () => "Counter(7)",
-      } as never)
-      const layer = Layer.mergeAll(runtime.layer, host)
+      const runtime = makeRuntime({
+        response: yield* encode(Schema.Number, 42),
+        registered: { typeName: "Counter" },
+      })
+      const id = agentIdFor("counter")
       yield* Effect.gen(function* () {
-        const identity = yield* Counter.agentId({ initial: 7 })
-        expect(identity).toMatchObject({ encoded: "Counter(7)", typeName: "Counter" })
-        expect(Object.isFrozen(identity)).toBe(true)
-        const constructorCopy = identity.constructorValue
-        expect(constructorCopy).not.toBe(identity.constructorValue)
-        expect(constructorCopy).toEqual(identity.constructorValue)
-
         const complete = defineAgentClient({
           name: "Counter",
           id: Counter.id,
           methods: Counter.methods,
         })
-        const full = yield* identity.client(complete)
-        expect(yield* full.value({})).toBe(42)
-        expect(yield* (yield* complete.client.get({ initial: 7 })).value({})).toBe(42)
-        expect((yield* complete.agentId({ initial: 7 })).encoded).toBe(identity.encoded)
+        expect(yield* (yield* Client.bind(id, complete)).value({})).toBe(42)
+        expect(yield* (yield* complete.client.getById(id)).value({})).toBe(42)
+        expect(yield* (yield* Client.bind(id, Counter)).value({})).toBe(42)
 
         const methodOnly = defineAgentClient({ methods: Counter.methods })
         expect("client" in methodOnly).toBe(false)
-        expect("agentId" in methodOnly).toBe(false)
-        const bound = yield* identity.client(methodOnly)
+        const bound = yield* Client.bind(id, methodOnly)
         expect(yield* bound.value({})).toBe(42)
-        expect(yield* (yield* Client.bind(identity, methodOnly)).value({})).toBe(42)
-      }).pipe(Effect.scoped, Effect.provide(layer))
-      expect(runtime.lifecycle.connectionOpen).toBe(4)
+        expect(yield* bound.agentId).toEqual(id)
+      }).pipe(Effect.scoped, Effect.provide(runtime.layer))
+      expect(runtime.opens).toEqual(
+        Array.from({ length: 4 }, () => ({
+          agentType: "Counter",
+          target: { kind: "getById", agentId: hostAgentIdFor("counter") },
+        })),
+      )
       expect(runtime.lifecycle.connectionDrop).toBe(4)
     }),
   )
@@ -860,15 +950,8 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         },
       })
       const runtime = makeRuntime({ response: yield* encode(Schema.String, "ok") })
-      const host = Layer.succeed(AgentHostClient, {
-        makeAgentId: () => "PrincipalTarget(main)",
-      } as never)
       yield* Effect.gen(function* () {
-        const identity = yield* PrincipalTarget.agentId({ name: "main" })
-        expect(
-          identity.constructorValue.valueNodes.filter((node) => node.tag === "record-value"),
-        ).toHaveLength(1)
-        const full = yield* Client.bind(identity, PrincipalTarget)
+        const full = yield* Client.bind(agentIdFor("principal"), PrincipalTarget)
         expect(yield* full.value({})).toBe("ok")
         const input = { before: "first", after: 7 }
         expect(yield* full.mixed(input)).toBe("ok")
@@ -888,65 +971,41 @@ describe("Client 1.6 config and ephemeral receipts", () => {
           )
           if (call.method === "value") expect(call.input.valueNodes).toHaveLength(1)
         }
-        const factory = yield* PrincipalTarget.client.get({ name: "main" })
+        const factory = yield* PrincipalTarget.client.upsert({ name: "main" })
         expect(yield* factory.value({})).toBe("ok")
-      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(runtime.layer, host)))
+      }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.lifecycle.connectionOpen).toBe(2)
-      expect(runtime.calls[0]?.constructor.valueNodes).toHaveLength(2)
+      const upserted = constructorOf(runtime.opens[1]?.target)!
+      expect(upserted.valueNodes.filter((node) => node.tag === "record-value")).toHaveLength(1)
+      expect(upserted.valueNodes).toHaveLength(2)
     }),
   )
 
-  it.effect("rejects full-client mismatches and ephemeral generic binding before opening RPC", () =>
+  it.effect("rejects ephemeral and undeployed ID binding before opening RPC", () =>
     Effect.gen(function* () {
-      const runtime = makeRuntime()
-      const host = Layer.succeed(AgentHostClient, {
-        makeAgentId: (name: string) => `${name}(identity)`,
-      } as never)
-      const layer = Layer.mergeAll(runtime.layer, host)
-      yield* Effect.gen(function* () {
-        const wrongName = yield* AgentIdentity.make({
-          typeName: "Other",
-          constructorValue: yield* compileParamBindings("Counter constructor", Counter.id).pipe(
-            Effect.flatMap((codec) => codec.encode({ initial: 1 })),
-          ),
-        })
-        const complete = defineAgentClient({
-          name: "Counter",
-          id: Counter.id,
-          methods: Counter.methods,
-        })
-        expect(yield* wrongName.client(complete).pipe(Effect.result)).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "ClientBindingError" },
-        })
-        const wrongConstructor = yield* AgentIdentity.make({
-          typeName: "Counter",
-          constructorValue: yield* compileParamBindings("Worker constructor", Worker.id).pipe(
-            Effect.flatMap((codec) => codec.encode({ job: "not a number" })),
-          ),
-        })
-        expect(yield* wrongConstructor.client(complete).pipe(Effect.result)).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "ClientBindingError" },
-        })
-
-        const ephemeral = yield* Worker.agentId(
-          { job: "j" },
-          "12345678-1234-1234-1234-1234567890ab",
-        )
-        const ephemeralClient = defineAgentClient({
-          name: "Worker",
-          mode: "ephemeral",
-          id: Worker.id,
-          methods: Worker.methods,
-        })
-        expect("get" in ephemeralClient.client).toBe(false)
-        expect(yield* ephemeral.client(ephemeralClient).pipe(Effect.result)).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "ClientBindingError" },
-        })
-      }).pipe(Effect.scoped, Effect.provide(layer))
-      expect(runtime.lifecycle.connectionOpen).toBe(0)
+      const ephemeralClient = defineAgentClient({
+        name: "Worker",
+        mode: "ephemeral",
+        id: Worker.id,
+        methods: Worker.methods,
+      })
+      expect("upsert" in ephemeralClient.client).toBe(true)
+      expect("getById" in ephemeralClient.client).toBe(false)
+      const methodOnly = defineAgentClient({ methods: Counter.methods })
+      for (const [binding, registered, failure] of [
+        [ephemeralClient, undefined, { _tag: "ClientBindingError" }],
+        [Worker, undefined, { _tag: "ClientBindingError" }],
+        [methodOnly, { typeName: "Worker", mode: "ephemeral" }, { _tag: "ClientBindingError" }],
+        [methodOnly, undefined, { _tag: "RpcCallError", cause: { tag: "not-found" } }],
+      ] as const) {
+        const runtime = makeRuntime({ registered })
+        const result = yield* Client.bind(
+          agentIdFor("worker"),
+          binding as Client.AgentIdBinding<unknown>,
+        ).pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
+        expect(result).toMatchObject({ _tag: "Failure", failure })
+        expect(runtime.lifecycle.connectionOpen).toBe(0)
+      }
     }),
   )
 
@@ -960,37 +1019,14 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       expect(() => defineAgentClient(partial as never)).toThrow(TypeError)
   })
 
-  it.effect("addresses a known ephemeral phantom and retains invocation metadata", () =>
-    Effect.gen(function* () {
-      const runtime = makeRuntime({ response: yield* encode(Schema.String, "done") })
-      const phantomId = "12345678-1234-1234-1234-1234567890ab"
-      yield* Effect.gen(function* () {
-        const remote = yield* Worker.client.getPhantom({ job: "j" }, phantomId)
-        const result = yield* remote.run({ times: 1 })
-        expect(result).toEqual({
-          metadata: expectedMetadata("await"),
-          value: "done",
-        })
-        expect(Object.isFrozen(result.metadata)).toBe(true)
-      }).pipe(Effect.scoped, Effect.provide(runtime.layer))
-      expect(runtime.calls[0]?.phantom).toBeDefined()
-    }),
-  )
-
   it.effect("wraps constructor failures as typed RPC errors", () =>
     Effect.gen(function* () {
-      const layer = Layer.succeed(
-        RpcClient,
-        RpcClient.of({
-          bindSelf: () => Effect.die("unexpected self binding"),
-          connect: () =>
-            Effect.fail(
-              new RpcHostError({ tag: "not-found", val: "missing" }, "WasmRpc.constructor"),
-            ),
-        }),
-      )
+      const layer = rpcLayer({
+        upsert: () =>
+          Effect.fail(new RpcHostError({ tag: "not-found", val: "missing" }, "WasmRpc.upsert")),
+      })
       const result = yield* Counter.client
-        .get({ initial: 0 })
+        .upsert({ initial: 0 })
         .pipe(Effect.scoped, Effect.provide(layer), Effect.result)
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure")

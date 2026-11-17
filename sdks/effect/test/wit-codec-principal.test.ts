@@ -71,10 +71,7 @@ describe("PrincipalSchema → principal variant", () => {
       const value: PrincipalValue = {
         tag: "agent",
         val: {
-          agentId: {
-            componentId: { uuid: { highBits: 1n, lowBits: 2n } },
-            agentId: "counter/foo",
-          },
+          agentId: { uuid: { highBits: 1n, lowBits: 2n } },
         },
       }
       const { sv, back } = yield* roundtrip(value)

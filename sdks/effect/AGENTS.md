@@ -7,17 +7,23 @@ QuickJS-backed WASI Preview 3 components.
 
 - Agent metadata uses `id`, methods use `input`, and `defineAgent` returns a spec with `.client` and
   `.implement(...)`. Do not reintroduce `constructorParams`, `params`, or standalone old clients.
-- Durable agents expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral agents expose
-  `getPhantom` and `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are
-  fiber-interruptible.
+- Agent IDs are opaque UUIDs that the host issues. `AgentId` (`{ uuid }`, text form the UUID) is
+  the only ID type; `AgentId.parse` checks only the text form. Guest code never derives an ID
+  offline and never reads the agent type or constructor input out of an ID.
+- Durable agents expose `client.bindSelf`, `upsert`, `create`, and `getById`; ephemeral agents
+  expose only `upsert`. `upsert(input)` takes no overrides. `create(input, { keyed, config, env })`
+  makes a new agent with a new ID, or with `keyed: true` the keyed agent of the input, which fails
+  with a typed `conflict` when the key is current. `getById(id)` never creates: an unknown or
+  wrong-type ID is a typed `not-found`. Every durable remote client has an `agentId` Effect that
+  calls the WIT `agent-id` method, so a method named `agentId` is not part of a typed client. RPC
+  call/trigger/schedule input is one object. Awaited calls are fiber-interruptible.
 - `defineAgentClient({ name, id, methods, mode?, config? })` is the recommended full caller-owned
-  client with `agentId` and lifecycle factories. Its method-only `{ methods }` form has neither
-  factory nor identity constructor and binds without discovery using durable results. Unimplemented
-  `defineAgent` specs remain available as shared definitions. `identity.client(clientDefinition)` validates
-  declared names and constructor schemas before opening RPC.
-  `DynamicClient.bind(identity)` uses schema-native values with no client definition or discovery. Full
-  ephemeral specs and reflected ephemeral types reject generic existing-ID binding; use their
-  `getPhantom` or `newPhantom` factories. `identity.dynamicClient()` binds schema-native values.
+  client with lifecycle factories. Its method-only `{ methods }` form has no factory; bind it with
+  `Client.bind(id, definition)`, which reads the agent type from `getAgentTypeByAgentId` and
+  connects through `getById`. Unimplemented `defineAgent` specs remain available as shared
+  definitions. `DynamicClient.bind(id)` uses schema-native values with no client definition.
+  Ephemeral specs, ephemeral client definitions, and reflected ephemeral types reject binding to
+  an ID with `ClientBindingError`.
 - Config secrets are `Schema.Redacted` opaque handles. They are uncached, excluded from overrides,
   and never snapshotted.
 - Implement agents with `{ init, methods, snapshot? }`. `init` determines the state type;
@@ -61,9 +67,11 @@ QuickJS-backed WASI Preview 3 components.
   invocation root. The runtime records a timer's sleep in the scope that registered the timer.
 - Do not add Golem 1.5 compatibility shims or claims. Complete cross-language acceptance is still a
   final parity gate. Runtime discovery is in `Reflection`, immutable schema views in `SchemaRef`,
-  and value-only identity binding in `DynamicClient`. Parse strings through `AgentIdentity.parse`
-  once; pass parsed identities to typed, reflected, and dynamic binding. Narrow reflected `mode`
-  before selecting a lifecycle factory; ephemeral clients expose identity only in invocation metadata.
+  and value-only binding in `DynamicClient`. Parse ID text through `AgentId.parse` once; pass the
+  typed `AgentId` to typed, reflected, and dynamic binding. Narrow reflected `mode` before
+  selecting a lifecycle factory; ephemeral clients expose their ID only in invocation metadata.
+- Snapshots carry the constructor input next to the state (`constructorParameters`), because the
+  agent ID no longer encodes it; restoration reads the agent type from `GOLEM_AGENT_TYPE`.
 
 The CLI accepts middleware metadata and attachment. Runtime traversal and invocation gates remain
 separate concerns and must be tested independently.

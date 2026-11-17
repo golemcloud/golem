@@ -690,9 +690,7 @@ type HostUuid = CoreTypes.Uuid
 
 // --- graph type builders (no recursion: everything is built inline) ---
 const uuidType = (): SchemaType => t.uuid()
-const componentIdType = (): SchemaType => t.record([field("uuid", uuidType())])
-const agentIdType = (): SchemaType =>
-  t.record([field("componentId", componentIdType()), field("agentId", t.string())])
+const agentIdType = (): SchemaType => t.record([field("uuid", uuidType())])
 const accountIdType = (): SchemaType => t.record([field("uuid", uuidType())])
 const oidcType = (): SchemaType =>
   t.record([
@@ -723,13 +721,10 @@ const uuidToValue = (u: HostUuid): SchemaValue => v.uuid(u)
 const uuidFromValue = (sv: SchemaValue): HostUuid =>
   (sv as Extract<SchemaValue, { tag: "uuid" }>).value
 
-const agentIdToValue = (a: AgentCommon.AgentId): SchemaValue =>
-  v.record([v.record([uuidToValue(a.componentId.uuid)]), v.string(a.agentId)])
-const agentIdFromValue = (sv: SchemaValue): AgentCommon.AgentId => {
-  const f = recFields(sv)
-  const uuid = uuidFromValue(recFields(f[0]!)[0]!)
-  return { componentId: { uuid }, agentId: strOf(f[1]!) }
-}
+const agentIdToValue = (a: AgentCommon.AgentId): SchemaValue => v.record([uuidToValue(a.uuid)])
+const agentIdFromValue = (sv: SchemaValue): AgentCommon.AgentId => ({
+  uuid: uuidFromValue(recFields(sv)[0]!),
+})
 
 const accountIdToValue = (a: AgentCommon.AccountId): SchemaValue => v.record([uuidToValue(a.uuid)])
 const accountIdFromValue = (sv: SchemaValue): AgentCommon.AccountId => ({

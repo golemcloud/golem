@@ -19,11 +19,11 @@ export const Caller = defineAgent({
     /** Read the current value of the remote counter. */
     peek: method({ input: {}, success: Schema.Number }),
     /**
-     * Construct a Counter client with an RPC config override for the
+     * Create a new Counter with an RPC config override for the
      * `greeting` field, then read it back via `currentGreeting`. Proves
-     * the `{ overrides }` channel on `AgentClient.get` actually drives
-     * `golem:agent/host.WasmRpc(agent-config: list<typed-agent-config-value>)`
-     * and that the override wins over the `golem.yaml` default.
+     * the `config` option of `create` actually drives the `agent-config`
+     * of `golem:agent/host.wasm-rpc.create` and that the override wins
+     * over the `golem.yaml` default.
      */
     greetWithOverride: method({ input: { override: Schema.String }, success: Schema.String }),
     /**
@@ -43,7 +43,7 @@ export const Caller = defineAgent({
   methods: (counterName) => ({
     bump: () =>
       Effect.gen(function* () {
-        const counter = yield* Counter.client.get({ name: counterName })
+        const counter = yield* Counter.client.upsert({ name: counterName })
         return yield* counter.increment({})
       }).pipe(
         Effect.catch(() => Effect.succeed(-1)),
@@ -51,7 +51,7 @@ export const Caller = defineAgent({
       ),
     peek: () =>
       Effect.gen(function* () {
-        const counter = yield* Counter.client.get({ name: counterName })
+        const counter = yield* Counter.client.upsert({ name: counterName })
         return yield* counter.value({})
       }).pipe(
         Effect.catch(() => Effect.succeed(-1)),
@@ -59,9 +59,9 @@ export const Caller = defineAgent({
       ),
     greetWithOverride: ({ override }) =>
       Effect.gen(function* () {
-        const counter = yield* Counter.client.get(
+        const counter = yield* Counter.client.create(
           { name: counterName },
-          { overrides: { greeting: override } },
+          { config: { greeting: override } },
         )
         return yield* counter.currentGreeting({})
       }).pipe(
@@ -70,7 +70,7 @@ export const Caller = defineAgent({
       ),
     abortInFlight: ({ seconds }) =>
       Effect.gen(function* () {
-        const counter = yield* Counter.client.get({ name: counterName })
+        const counter = yield* Counter.client.upsert({ name: counterName })
         // Fork the remote invoke; let it park inside the SDK's
         // pollable.abortablePromise; then interrupt.
         const fiber = yield* Effect.forkChild(counter.slowValue({ seconds }))

@@ -85,7 +85,7 @@ Downloads.implement({
 
 const program = Effect.scoped(
   Effect.gen(function* () {
-    const remote = yield* Downloads.client.get({})
+    const remote = yield* Downloads.client.upsert({})
     const found: Option.Option<TextReferenceValue> = yield* remote
       .optionalTextWithError({})
       .pipe(Effect.catchTag("Pending", () => Effect.succeed(Option.none<TextReferenceValue>())))
