@@ -8,6 +8,7 @@ import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import { z } from 'zod';
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
+import { getRawSelfAgentId } from '../src/host/hostapi';
 import {
   resolveRemoteAgent,
   resolveRemoteAgentFallibly,
@@ -108,6 +109,22 @@ describe('identity boundaries', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(RemoteCallError);
       expect((error as RemoteCallError).cause).toEqual({ tag: 'denied', details: 'no access' });
+    }
+  });
+});
+
+describe('self agent ID', () => {
+  it('names the card grant when GOLEM_AGENT_ID is not readable', () => {
+    const previous = (globalThis as { currentAgentId?: string }).currentAgentId;
+    (globalThis as { currentAgentId?: string }).currentAgentId = undefined;
+    try {
+      expect(() => getRawSelfAgentId()).toThrow(
+        new Error(
+          "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+        ),
+      );
+    } finally {
+      (globalThis as { currentAgentId?: string }).currentAgentId = previous;
     }
   });
 });
