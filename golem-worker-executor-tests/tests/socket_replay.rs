@@ -22,7 +22,9 @@
 //! the durable sockets plan, the test says so and names the ticket that changes it.
 
 use crate::Tracing;
-use golem_common::model::agent::{ParsedAgentKey, UpdateRecord};
+use golem_common::model::agent::{
+    ParsedAgentKey, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
+};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::{AgentId, OplogIndex};
@@ -1147,8 +1149,14 @@ async fn p3_tcp_send_kept_across_invocations_is_lost_after_replay(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let peer = TcpPeer::start(b"", Reply::Silent).await?;
-    let mut session =
-        Session::start(deps, &context, host_api_tests, sockets(), "p3-tcp-send-kept").await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-kept",
+    )
+    .await?;
     let _: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
         .await?;
@@ -1164,10 +1172,7 @@ async fn p3_tcp_send_kept_across_invocations_is_lost_after_replay(
     for part in [b"one".to_vec(), b"two".to_vec()] {
         let written = tokio::time::timeout(
             quick,
-            session.call::<Result<u32, String>>(
-                "p3_tcp_write",
-                data_value!("a".to_string(), part),
-            ),
+            session.call::<Result<u32, String>>("p3_tcp_write", data_value!("a".to_string(), part)),
         )
         .await
         .map_err(|_| anyhow::anyhow!("a write held the invocation"))??;
@@ -1186,7 +1191,11 @@ async fn p3_tcp_send_kept_across_invocations_is_lost_after_replay(
             data_value!("a".to_string(), b"three".to_vec()),
         )
         .await?;
-    assert_eq!(written, Ok(0), "the live write after replay is not accepted");
+    assert_eq!(
+        written,
+        Ok(0),
+        "the live write after replay is not accepted"
+    );
     let closed: Result<(), String> = session
         .call("p3_tcp_close_send", data_value!("a".to_string()))
         .await?;
@@ -1220,8 +1229,14 @@ async fn p3_tcp_send_open_at_a_crash_refuses_live_writes(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let peer = TcpPeer::start(b"", Reply::Silent).await?;
-    let session = Session::start(deps, &context, host_api_tests, sockets(), "p3-tcp-send-crash")
-        .await?;
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-crash",
+    )
+    .await?;
     let _: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
         .await?;
@@ -1263,5 +1278,142 @@ async fn p3_tcp_send_open_at_a_crash_refuses_live_writes(
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(peer.connections().len(), 1, "no new connection");
     assert_eq!(peer.connections()[0].received, b"first".to_vec());
+    session.finish().await
+}
+
+/// A revert cut inside an open send parent. The cut keeps the send `Start` and its first write,
+/// and deletes the invocation of the second write. Recovery replays the retained write, the
+/// next write after the cut is refused instead of being sent, and the send parent completes
+/// with `connection-broken` under its original `Start`. The revert does not undo bytes that
+/// already reached the peer, and Golem does not reconnect.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_revert_inside_an_open_send_recovers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-revert",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let opened: Result<(), String> = session
+        .call("p3_tcp_open_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(opened, Ok(()));
+    for part in [b"one".to_vec(), b"two".to_vec()] {
+        let written: Result<u32, String> = session
+            .call("p3_tcp_write", data_value!("a".to_string(), part))
+            .await?;
+        assert_eq!(written, Ok(3));
+    }
+    peer.wait_until("both writes arrive", |connections| {
+        connections.len() == 1 && connections[0].received == b"onetwo"
+    })
+    .await?;
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let start_of = |name: &str| {
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == name)
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    let parent = start_of("sockets::types::tcp-socket::send");
+    let chunks = start_of("sockets::types::tcp-socket::send-chunk");
+    assert_eq!((parent.len(), chunks.len()), (1, 2));
+    let parent = parent[0];
+    // The last entry of the invocation that made the first write.
+    let cut = oplog
+        .iter()
+        .find(|entry| {
+            entry.oplog_index > chunks[0]
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+        })
+        .map(|entry| entry.oplog_index)
+        .expect("the first write finishes");
+    assert!(cut < chunks[1], "the cut deletes the second write");
+
+    session
+        .executor()
+        .revert(
+            &session.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: cut,
+            }),
+        )
+        .await?;
+
+    let written: Result<u32, String> = session
+        .call(
+            "p3_tcp_write",
+            data_value!("a".to_string(), b"three".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        written,
+        Ok(0),
+        "the live write after the cut is not accepted"
+    );
+    let closed: Result<(), String> = session
+        .call("p3_tcp_close_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(closed, Err("ErrorCode::ConnectionBroken".to_string()));
+    peer.wait_until(
+        "the connection from before the revert closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"onetwo".to_vec());
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "recovery after the cut failed: {oplog:?}"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == parent))
+            .count(),
+        1,
+        "the send parent completes once under its original Start"
+    );
+    let revert = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_)))
+        .map(|entry| entry.oplog_index)
+        .expect("the revert is recorded");
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| entry.oplog_index > revert
+                && matches!(&entry.entry, PublicOplogEntry::Start(start)
+                    if start.function_name == "sockets::types::tcp-socket::send-chunk"))
+            .count(),
+        1,
+        "only the refused write records a chunk after the revert"
+    );
     session.finish().await
 }
