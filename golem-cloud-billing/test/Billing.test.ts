@@ -21,6 +21,7 @@ import {
   polarWebToken,
   queryPool,
   registryBillingToken,
+  registryDefaultPlanId,
   request,
   signInWithGitHub,
   suspendedPlanId,
@@ -231,6 +232,20 @@ describe("Polar billing", () => {
       expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
     })
 
+    it("offers Paid to an account on the default plan of the registry, and starts its checkout", async () => {
+      const { jar, accountId } = await signedIn()
+      upstreams.planOf(accountId).planId = registryDefaultPlanId
+
+      const body = await page(jar)
+      expect(body).toContain("<h1>Default</h1>")
+      expect(body).toContain("When the subscription ends, your plan changes to Free, not back to Default.")
+      expect(body).toContain(`action="/billing/checkout"`)
+      const response = await postCheckout(jar)
+      expect(response.status).toBe(303)
+      expect(response.headers.get("location")).toBe("https://sandbox.polar.sh/checkout/polar_c_test")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+    })
+
     it("refuses a checkout on the free plan while the subscription is past due", async () => {
       const { jar, accountId } = await signedIn()
       const failedAt = new Date(Date.now() - config.pastDueGraceMs - MINUTE)
@@ -242,6 +257,26 @@ describe("Polar billing", () => {
 
       expectRefused(await postCheckout(jar))
       expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
+    })
+
+    it("offers the customer portal, not a checkout, on the default plan while the subscription is past due", async () => {
+      // The first reconcile comes after the past-due grace, so `planFor` gives the free plan, and the
+      // account stays on the default plan.
+      const { jar, accountId } = await signedIn()
+      upstreams.planOf(accountId).planId = registryDefaultPlanId
+      const failedAt = new Date(Date.now() - config.pastDueGraceMs - MINUTE)
+      await deliver(
+        "subscription.past_due",
+        subscription(accountId, { status: "past_due", past_due_at: failedAt.toISOString() })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(registryDefaultPlanId)
+
+      expectRefused(await postCheckout(jar))
+      const html = await page(jar)
+      expect(html).toContain("<h1>Default</h1>")
+      expect(html).not.toContain(`action="/billing/checkout"`)
+      expect(html).toContain(`action="/billing/portal"`)
+      expect(html).toContain("The last payment for Paid failed.")
     })
 
     it("refuses a checkout when the registry does not send the account", async () => {
@@ -803,6 +838,31 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.has(accountId)).toBe(true)
     })
 
+    it("moves an account on the default plan to Paid with its subscription, and to Free after the end", async () => {
+      const accountId = randomUUID()
+      upstreams.planOf(accountId).planId = registryDefaultPlanId
+
+      await deliver("subscription.active", subscription(accountId))
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, { status: "canceled", modified_at: "2026-11-04T11:00:00Z" })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+    })
+
+    it("leaves an account on the default plan while its subscription does not make it paid", async () => {
+      const accountId = randomUUID()
+      upstreams.planOf(accountId).planId = registryDefaultPlanId
+
+      const response = await deliver("subscription.created", subscription(accountId, { status: "trialing" }))
+
+      expect(response.status).toBe(200)
+      expect(upstreams.planOf(accountId).planId).toBe(registryDefaultPlanId)
+      expect(upstreams.planChanges()).toEqual([])
+    })
+
     it("answers 500 when the registry refuses the billing account, so Polar delivers again", async () => {
       // The account exists and is not deleted: the registry hides it because the permission share
       // of the billing account is missing.
@@ -1299,7 +1359,7 @@ describe("Polar billing", () => {
       await unpaidAfterEnd(accountId)
 
       const html = await page(jar)
-      expect(html).toContain("The subscription has ended, so Polar does not charge the invoice again.")
+      expect(html).toContain("The subscription of the invoice has ended, so Polar does not charge the invoice again.")
       expect(html).toContain(`action="/billing/settle"`)
       expect(html).toContain("Settle $3.45")
       expect(html).toContain("When the account owes no more paid overage, your plan is Free")
@@ -1343,6 +1403,30 @@ describe("Polar billing", () => {
       expect(await settledOrders()).toHaveLength(1)
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       expect(await page(jar)).not.toContain("Settle $")
+    })
+
+    it("keeps an account that subscribed again suspended until it settles, and then gives it Paid", async () => {
+      const { jar, accountId } = await signedIn()
+      await unpaidAfterEnd(accountId)
+      await deliver(
+        "subscription.active",
+        subscription(accountId, {
+          id: "sub_2",
+          created_at: "2026-12-05T10:00:00Z",
+          modified_at: "2026-12-05T10:00:00Z",
+          current_period_start: "2026-12-05T10:00:00Z",
+          current_period_end: "2027-01-05T10:00:00Z"
+        })
+      )
+      // A new subscription does not pay the last order of the ended one.
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+
+      const html = await page(jar)
+      expect(html).toContain("Settle $3.45")
+      expect(html).toContain("When the account owes no more paid overage, your plan is Paid")
+
+      await deliver("order.created", settlementOrder(accountId))
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
     })
 
     it("settles the oldest orders first, and after their webhook the returned page offers the rest", async () => {

@@ -148,20 +148,21 @@ export const signedOutPage = (options: { readonly error: string | undefined }) =
   })
 
 /**
- * The plan of the account: one of the plans that a subscription switches between, another plan
- * that an administrator gave the account, or `unknown` when the registry call failed.
+ * The plan of the account: one of the plans that a subscription switches between, the default plan
+ * of the registry (`BillingConfig.defaultPlanId`), another plan that an administrator gave the
+ * account, or `unknown` when the registry call failed.
  */
-export type PlanState = "free" | "paid" | "suspended" | "other" | "unknown"
+export type PlanState = "free" | "paid" | "suspended" | "default" | "other" | "unknown"
 
 /**
  * Whether the page offers a checkout of the paid product, and `POST /billing/checkout` accepts
- * one: only on the free plan. On the paid plan a checkout starts a second subscription. On the
- * suspended plan the account stays suspended until it pays the open order. A subscription does
- * not change another plan (see `changePlan` of `Settlement`). A `past_due` subscription has an
- * open payment, and a second subscription does not pay it.
+ * one: only on the free plan and on the default plan. On the paid plan a checkout starts a second
+ * subscription. On the suspended plan the account stays suspended until it pays the open order. A
+ * subscription does not change another plan (see `changePlan` of `Settlement`). A `past_due`
+ * subscription has an open payment, and a second subscription does not pay it.
  */
 export const canCheckOut = (plan: PlanState, subscription: Subscription | undefined): boolean =>
-  plan === "free" && subscription?.status !== "past_due"
+  (plan === "free" || plan === "default") && subscription?.status !== "past_due"
 
 /**
  * Whether the page offers a settlement, and `POST /billing/settle` accepts one: only on the
@@ -197,6 +198,11 @@ export interface SignedInPageOptions {
   readonly checkoutPending: boolean
   /** The settlement that the account can pay; `undefined` when there is none or the call failed. */
   readonly settlement: SettlementOffer | undefined
+  /**
+   * The plan of the account when it owes no more paid overage: the plan of its subscriptions alone,
+   * so paid when the person subscribed again. `undefined` when the call failed.
+   */
+  readonly planAfterSettlement: "paid" | "free" | undefined
   /**
    * Polar has redirected back after the payment of a settlement, and the app has not recorded the
    * settlement of its orders yet.
@@ -259,7 +265,7 @@ const planHero = (options: SignedInPageOptions) => {
       if (options.settlement !== undefined && canSettle(options.plan, options.settlement)) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Suspended</h1>
-        <p class="alert" role="alert">Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account. The subscription has ended, so Polar does not charge the invoice again. Settle the paid overage of ${usd.format(options.settlement.amount / 100)} here, with the tax of the invoice. When the account owes no more paid overage, your plan is Free, and the agents can run again.</p>
+        <p class="alert" role="alert">Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account. The subscription of the invoice has ended, so Polar does not charge the invoice again. Settle the paid overage of ${usd.format(options.settlement.amount / 100)} here, with the tax of the invoice. When the account owes no more paid overage, your plan is ${options.planAfterSettlement === "paid" ? "Paid" : "Free"}, and the agents can run again.</p>
         <div class="actions">
           ${settleForm(options.settlement.amount)}
           ${portalForm("Billing history")}
@@ -285,6 +291,23 @@ const planHero = (options: SignedInPageOptions) => {
       return html`<span class="eyebrow">Your plan</span>
         <h1>Free</h1>
         <p class="alert" role="alert">The last payment for Paid failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Paid again.</p>
+        <div class="actions">
+          ${portalForm("Manage billing")}
+        </div>`
+    case "default":
+      if (canCheckOut(options.plan, options.subscription)) {
+        return html`<span class="eyebrow">Your plan</span>
+        <h1>Default</h1>
+        <p class="lead">Golem gave this account its default plan. Paid has larger monthly allowances. You pay through Polar. When the subscription ends, your plan changes to Free, not back to Default.</p>
+        <div class="actions">
+          ${checkoutForm}
+          ${options.subscription === undefined ? null : portalForm("Billing history")}
+        </div>`
+      }
+      // On the default plan, `canCheckOut` refuses only an account with a `past_due` subscription.
+      return html`<span class="eyebrow">Your plan</span>
+        <h1>Default</h1>
+        <p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal. After the payment, your plan is Paid.</p>
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`

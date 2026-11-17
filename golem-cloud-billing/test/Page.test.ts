@@ -9,6 +9,7 @@ describe("canSettle", () => {
     ["suspended", true],
     ["free", false],
     ["paid", false],
+    ["default", false],
     ["other", false],
     ["unknown", false]
   ])("on the plan %s with a settlement gives %s", (plan, expected) => {
@@ -41,6 +42,8 @@ describe("canCheckOut", () => {
     ["paid", "active", false],
     ["paid", "past_due", false],
     ["suspended", "canceled", false],
+    ["default", "none", true],
+    ["default", "past_due", false],
     ["other", "none", false],
     ["unknown", "none", false]
   ])("on the %s plan with the subscription status %s: %s", (plan, status, expected) => {

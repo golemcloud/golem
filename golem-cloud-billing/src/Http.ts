@@ -25,7 +25,7 @@ import {
 } from "./Page.ts"
 import { Polar } from "./Polar.ts"
 import { type Account, type AccountLimits, Registry } from "./Registry.ts"
-import { pastDueGraceEnd, type SettlementOffer, settlementFor } from "./Settlement.ts"
+import { pastDueGraceEnd, planFor, type SettlementOffer, settlementFor } from "./Settlement.ts"
 import { type Subscription, Subscriptions } from "./Subscriptions.ts"
 import * as Webhooks from "./Webhooks.ts"
 
@@ -138,8 +138,12 @@ export const routes = HttpRouter.use((router) =>
         const unpaidOrders = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
         return {
           offer: settlementFor(accountSubscriptions, unpaidOrders),
-          unpaidOrderIds: unpaidOrders.map((order) => order.orderId)
-        }
+          unpaidOrderIds: unpaidOrders.map((order) => order.orderId),
+          // Without unpaid orders, `planFor` gives the plan of the subscriptions alone: paid with a
+          // new active subscription, else free.
+          planAfterSettlement:
+            planFor(accountSubscriptions, [], new Date(), config.pastDueGraceMs) === "paid" ? "paid" : "free"
+        } as const
       })
 
     const planOf = (account: Account | undefined): PlanState => {
@@ -147,6 +151,7 @@ export const routes = HttpRouter.use((router) =>
       if (account.planId === config.plans.paid) return "paid"
       if (account.planId === config.plans.suspended) return "suspended"
       if (account.planId === config.plans.free) return "free"
+      if (account.planId === config.defaultPlanId) return "default"
       return "other"
     }
 
@@ -221,7 +226,8 @@ export const routes = HttpRouter.use((router) =>
         const params = new URL(request.url, config.baseUrl).searchParams
         // Polar redirects here with the checkout ID after a payment; the webhook that changes the
         // plan can arrive a few seconds later.
-        const checkoutPending = params.has("checkout_id") && (plan === "free" || plan === "suspended")
+        const checkoutPending =
+          params.has("checkout_id") && (plan === "free" || plan === "default" || plan === "suspended")
         const debt =
           plan === "suspended"
             ? yield* settlementOf(user.golemAccountId).pipe(
@@ -263,6 +269,7 @@ export const routes = HttpRouter.use((router) =>
                 : undefined,
             checkoutPending,
             settlement,
+            planAfterSettlement: debt?.planAfterSettlement,
             settlementPending,
             cliCommand,
             limits,

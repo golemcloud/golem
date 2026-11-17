@@ -1,4 +1,4 @@
-import { Config, ConfigProvider, Context, Duration, Effect, Layer, Redacted } from "effect"
+import { Config, ConfigProvider, Context, Duration, Effect, Layer, Option, Redacted } from "effect"
 
 /**
  * TLS mode of the PostgreSQL connection.
@@ -60,6 +60,13 @@ export interface BillingConfigShape {
     /** No monthly amounts and no overage, so the agents of the account stop. */
     readonly suspended: string
   }
+  /**
+   * The plan that the registry gives a new account (`initial_plans.default`), if the page offers
+   * Paid to an account on it. A subscription moves an account on this plan only to Paid, so the
+   * account keeps it until it subscribes. Without it, the app treats the default plan like a plan
+   * that an administrator gave the account.
+   */
+  readonly defaultPlanId: string | undefined
   readonly overagePrices: OveragePrices
   /**
    * How long an account keeps the paid plan after a payment of its subscription fails, in
@@ -146,6 +153,36 @@ export const pastDueGraceMs: Config.Config<number> = Config.Duration("GOLEM_CLOU
   )
 )
 
+/** The plan IDs of the app: each one a UUID, and no two the same. */
+export const plansConfig: Config.Config<Pick<BillingConfigShape, "plans" | "defaultPlanId">> = Config.all({
+  plans: Config.all({
+    free: Config.String("GOLEM_CLOUD_BILLING_FREE_PLAN_ID"),
+    paid: Config.String("GOLEM_CLOUD_BILLING_PAID_PLAN_ID"),
+    suspended: Config.String("GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID")
+  }),
+  defaultPlanId: Config.option(Config.String("GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID")).pipe(
+    Config.map(Option.getOrUndefined)
+  )
+}).pipe(
+  Config.mapEffect(({ plans, defaultPlanId }) => {
+    const ids: ReadonlyArray<readonly [string, string]> = [
+      ["GOLEM_CLOUD_BILLING_FREE_PLAN_ID", plans.free],
+      ["GOLEM_CLOUD_BILLING_PAID_PLAN_ID", plans.paid],
+      ["GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID", plans.suspended],
+      ...(defaultPlanId === undefined ? [] : [["GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID", defaultPlanId] as const])
+    ]
+    for (const [name, value] of ids) {
+      if (!uuid.test(value)) {
+        return invalid(`${name} must be a UUID, got ${value}`)
+      }
+    }
+    if (new Set(ids.map(([, value]) => value)).size !== ids.length) {
+      return invalid(`${ids.map(([name]) => name).join(", ")} must differ`)
+    }
+    return Effect.succeed({ plans, defaultPlanId })
+  })
+)
+
 export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   httpPort: Config.Port("GOLEM_CLOUD_BILLING_HTTP_PORT").pipe(Config.withDefault(8080)),
   baseUrl: Config.URL("BETTER_AUTH_URL"),
@@ -157,11 +194,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   registryUrl: Config.URL("GOLEM_CLOUD_BILLING_REGISTRY_URL"),
   publicApiUrl: Config.URL("GOLEM_CLOUD_BILLING_PUBLIC_API_URL"),
   registryBillingToken: Config.Redacted("GOLEM_CLOUD_BILLING_REGISTRY_TOKEN"),
-  plans: Config.all({
-    free: Config.String("GOLEM_CLOUD_BILLING_FREE_PLAN_ID"),
-    paid: Config.String("GOLEM_CLOUD_BILLING_PAID_PLAN_ID"),
-    suspended: Config.String("GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID")
-  }),
+  planIds: plansConfig,
   overagePrices: Config.all({
     perMillionGcu: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU"),
     perGbHour: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR"),
@@ -178,22 +211,9 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   }),
   db: postgresConfig
 }).pipe(
-  Config.mapEffect((config) => {
+  Config.mapEffect(({ planIds, ...config }) => {
     if (Redacted.value(config.authSecret).length < 32) {
       return invalid("BETTER_AUTH_SECRET must be at least 32 characters")
-    }
-    const plans = [
-      ["GOLEM_CLOUD_BILLING_FREE_PLAN_ID", config.plans.free],
-      ["GOLEM_CLOUD_BILLING_PAID_PLAN_ID", config.plans.paid],
-      ["GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID", config.plans.suspended]
-    ] as const
-    for (const [name, value] of plans) {
-      if (!uuid.test(value)) {
-        return invalid(`${name} must be a UUID, got ${value}`)
-      }
-    }
-    if (new Set(plans.map(([, value]) => value)).size !== plans.length) {
-      return invalid(`${plans.map(([name]) => name).join(", ")} must differ`)
     }
     const prices = [
       ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU", config.overagePrices.perMillionGcu],
@@ -212,7 +232,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     if (!Redacted.value(config.polar.webhookSecret).startsWith("whsec_")) {
       return invalid("POLAR_WEBHOOK_SECRET must start with whsec_")
     }
-    return Effect.succeed(config)
+    return Effect.succeed({ ...config, ...planIds })
   })
 )
 
