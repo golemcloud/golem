@@ -36,7 +36,7 @@ use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, InvocationIdSource,
     import_invocation_id, resolve_current_observational_owner,
 };
-use crate::durable_host::durability::CustomInvocationContext;
+use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 
@@ -337,7 +337,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
     ) -> anyhow::Result<Result<StreamReader<u8>, Error>> {
         let custom_invocation_context = host
             .as_context_mut()
-            .guest_task_context::<CustomInvocationContext>()?;
+            .guest_task_context::<GuestTaskContext>()?;
         let observational_owner =
             resolve_current_observational_owner(host.get(), custom_invocation_context.as_deref())?;
         let (contents, admission) = {

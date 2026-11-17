@@ -262,13 +262,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.snapshotting_mode {
             return Ok(None);
         }
-        let observed_by_custom_invocation = wasmtime::component::current_guest_task_context::<
-            durability::CustomInvocationContext,
-        >()
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        .as_deref()
-        .and_then(durability::CustomInvocationContext::current)
-        .is_some();
+        let observed_by_custom_invocation =
+            wasmtime::component::current_guest_task_context::<durability::GuestTaskContext>()
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                .as_deref()
+                .and_then(durability::GuestTaskContext::current)
+                .is_some();
         if observed_by_custom_invocation {
             return Ok(None);
         }

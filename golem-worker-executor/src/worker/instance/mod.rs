@@ -19,7 +19,7 @@ use super::owner_wallet::{OwnerWallet, WalletBaseline};
 use super::state_actor::OwnerCommitController;
 use super::tasks::RuntimeAppendTasks;
 use super::{ObservedPrimaryStore, Worker};
-use crate::durable_host::durability::CustomInvocationContext;
+use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
@@ -919,9 +919,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     }
                     let custom_invocation_scope = store
                         .as_context()
-                        .guest_task_context::<CustomInvocationContext>()?
+                        .guest_task_context::<GuestTaskContext>()?
                         .as_deref()
-                        .and_then(CustomInvocationContext::current);
+                        .and_then(GuestTaskContext::current);
                     guest_imports.number_next_import(
                         store
                             .data()

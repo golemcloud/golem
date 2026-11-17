@@ -32,7 +32,7 @@ use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessorContext, CallReplayOutcome, Cancellable, DurableCallSession,
     InvocationIdSource, import_invocation_id, resolve_current_observational_owner,
 };
-use crate::durable_host::durability::{CustomInvocationContext, TerminalCallError};
+use crate::durable_host::durability::{GuestTaskContext, TerminalCallError};
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, LiveAuthorizationPermit};
 use crate::preview2::wasi::keyvalue::types::{
@@ -458,7 +458,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
     ) -> anyhow::Result<Result<StreamReader<u8>, Resource<Error>>> {
         let custom_invocation_context = host
             .as_context_mut()
-            .guest_task_context::<CustomInvocationContext>()?;
+            .guest_task_context::<GuestTaskContext>()?;
         let observational_owner =
             resolve_current_observational_owner(host.get(), custom_invocation_context.as_deref())?;
         let contents = {

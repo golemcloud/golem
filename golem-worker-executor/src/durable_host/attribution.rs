@@ -29,16 +29,20 @@
 //!    does not inherit the outer Store's answer.
 //! 3. Nothing: the call is outside any invocation.
 //!
-//! The guest-task context slot holds only custom-durability scopes, never the invocation.
+//! The guest-task context slot ([`GuestTaskContext`]) holds custom-durability scopes and retry
+//! policy scopes, never the invocation. Golem's scoped value also carries the slot value of the
+//! task a store task was spawned for, so [`InvocationAttribution::guest_task_context`] answers for
+//! store tasks too.
 
+use crate::durable_host::durability::GuestTaskContext;
 use golem_common::model::InvocationId;
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use wasmtime::component::{TaskGroupHook, TaskGroupId};
 
 /// The invocation a host call is attributed to.
@@ -76,15 +80,24 @@ pub(crate) struct InvocationAttribution {
     state: Arc<Mutex<GroupState>>,
 }
 
-thread_local! {
-    static SCOPED: Cell<Option<(usize, InvocationKey)>> = const { Cell::new(None) };
+/// The scoped attribution of one Store: its invocation, and the context slot value of the task
+/// the scoped work belongs to.
+#[derive(Clone)]
+struct Scope {
+    store: usize,
+    key: Option<InvocationKey>,
+    context: Option<Arc<GuestTaskContext>>,
 }
 
-struct ScopedGuard(Option<(usize, InvocationKey)>);
+thread_local! {
+    static SCOPED: RefCell<Option<Scope>> = const { RefCell::new(None) };
+}
+
+struct ScopedGuard(Option<Scope>);
 
 impl Drop for ScopedGuard {
     fn drop(&mut self) {
-        SCOPED.with(|scoped| scoped.set(self.0.take()));
+        SCOPED.with(|scoped| *scoped.borrow_mut() = self.0.take());
     }
 }
 
@@ -154,11 +167,26 @@ impl InvocationAttribution {
                 return Some(key);
             }
         }
+        self.scope().and_then(|scope| scope.key)
+    }
+
+    /// The context slot value of the task the running host code belongs to: the calling guest
+    /// task's, or the value a store task captured when it was spawned.
+    pub(crate) fn guest_task_context(&self) -> Option<Arc<GuestTaskContext>> {
+        if self.state.lock().unwrap().current.is_none() {
+            return self.scope().and_then(|scope| scope.context);
+        }
+        wasmtime::component::current_guest_task_context::<GuestTaskContext>().unwrap_or_else(
+            |err| {
+                warn!(%err, "The guest task context of a host call is unavailable");
+                None
+            },
+        )
+    }
+
+    fn scope(&self) -> Option<Scope> {
         let id = self.id();
-        SCOPED
-            .with(Cell::get)
-            .filter(|(owner, _)| *owner == id)
-            .map(|(_, key)| key)
+        SCOPED.with(|scoped| scoped.borrow().clone().filter(|scope| scope.store == id))
     }
 
     /// Captures the attribution of the running host code for a store task it spawns.
@@ -166,12 +194,27 @@ impl InvocationAttribution {
         CapturedAttribution {
             attribution: self.clone(),
             key: self.resolve(),
+            context: self.guest_task_context(),
         }
     }
 
     /// Runs `f` with `key` as the scoped attribution of this Store.
     pub(crate) fn with_scope<R>(&self, key: Option<InvocationKey>, f: impl FnOnce() -> R) -> R {
-        let previous = SCOPED.with(|scoped| scoped.replace(key.map(|key| (self.id(), key))));
+        self.with_task_scope(key, None, f)
+    }
+
+    fn with_task_scope<R>(
+        &self,
+        key: Option<InvocationKey>,
+        context: Option<Arc<GuestTaskContext>>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        let scope = (key.is_some() || context.is_some()).then(|| Scope {
+            store: self.id(),
+            key,
+            context,
+        });
+        let previous = SCOPED.with(|scoped| scoped.replace(scope));
         let _guard = ScopedGuard(previous);
         f()
     }
@@ -193,12 +236,19 @@ impl InvocationAttribution {
 pub(crate) struct CapturedAttribution {
     attribution: InvocationAttribution,
     key: Option<InvocationKey>,
+    context: Option<Arc<GuestTaskContext>>,
 }
 
 impl CapturedAttribution {
-    /// Polls `future` with the captured invocation as the scoped attribution of its Store.
+    /// Polls `future` with the captured invocation and task context as the scoped attribution of
+    /// its Store.
     pub(crate) async fn run<F: Future>(&self, future: F) -> F::Output {
-        self.attribution.scoped(self.key, future).await
+        let mut future = pin!(future);
+        std::future::poll_fn(move |cx| {
+            self.attribution
+                .with_task_scope(self.key, self.context.clone(), || future.as_mut().poll(cx))
+        })
+        .await
     }
 }
 
@@ -278,6 +328,7 @@ impl TaskGroupHook for AttributionHook {
 pub(crate) struct Attributed<P> {
     attribution: InvocationAttribution,
     last: Option<InvocationKey>,
+    context: Option<Arc<GuestTaskContext>>,
     inner: Pin<Box<P>>,
 }
 
@@ -286,17 +337,32 @@ impl<P> Attributed<P> {
         Self {
             attribution,
             last: None,
+            context: None,
             inner: Box::pin(inner),
         }
     }
 
-    fn poll_attributed<R>(self: Pin<&mut Self>, f: impl FnOnce(Pin<&mut P>) -> R) -> R {
+    fn poll_attributed<'s, D, R>(
+        self: Pin<&mut Self>,
+        mut store: wasmtime::StoreContextMut<'s, D>,
+        f: impl FnOnce(Pin<&mut P>, wasmtime::StoreContextMut<'s, D>) -> R,
+    ) -> R {
         let this = self.get_mut();
         if let Some(key) = this.attribution.resolve() {
             this.last = Some(key);
         }
+        if this.attribution.state.lock().unwrap().current.is_some() {
+            this.context = store
+                .guest_task_context::<GuestTaskContext>()
+                .unwrap_or_else(|err| {
+                    warn!(%err, "The guest task context of a stream read or write is unavailable");
+                    None
+                });
+        }
         let attribution = this.attribution.clone();
-        attribution.with_scope(this.last, || f(this.inner.as_mut()))
+        attribution.with_task_scope(this.last, this.context.clone(), || {
+            f(this.inner.as_mut(), store)
+        })
     }
 }
 
@@ -314,7 +380,9 @@ where
         destination: wasmtime::component::Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<wasmtime::component::StreamResult>> {
-        self.poll_attributed(|inner| inner.poll_produce(cx, store, destination, finish))
+        self.poll_attributed(store, |inner, store| {
+            inner.poll_produce(cx, store, destination, finish)
+        })
     }
 
     fn try_into(
@@ -324,12 +392,14 @@ where
         let Self {
             attribution,
             last,
+            context,
             inner,
         } = *Pin::into_inner(me);
         P::try_into(inner, ty).map_err(|inner| {
             Box::pin(Self {
                 attribution,
                 last,
+                context,
                 inner,
             })
         })
@@ -349,7 +419,9 @@ where
         source: wasmtime::component::Source<'_, Self::Item>,
         finish: bool,
     ) -> Poll<wasmtime::Result<wasmtime::component::StreamResult>> {
-        self.poll_attributed(|inner| inner.poll_consume(cx, store, source, finish))
+        self.poll_attributed(store, |inner, store| {
+            inner.poll_consume(cx, store, source, finish)
+        })
     }
 }
 

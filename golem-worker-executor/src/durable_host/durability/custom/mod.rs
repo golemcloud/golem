@@ -34,6 +34,7 @@ use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex,
 };
+use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -41,8 +42,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, warn};
-use wasmtime::AsContextMut;
 use wasmtime::component::{Access, Accessor, HasSelf, Resource, TerminalConsumption};
+use wasmtime::{AsContextMut, StoreContextMut};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ActiveCustomInvocation {
@@ -289,15 +290,27 @@ pub(crate) struct CustomInvocationScope {
     pub owner_start_index: OplogIndex,
 }
 
+/// A named retry policy that a task opened with `retry-policy-scope`.
+#[derive(Debug, Clone)]
+pub(crate) struct RetryPolicyScope {
+    pub scope_id: u64,
+    pub policy: NamedRetryPolicy,
+}
+
+/// The value of a guest task's context slot. A subtask copies its parent's value when it is
+/// created. Writers of one half keep the other half of the calling task's current value.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct CustomInvocationContext {
+pub(crate) struct GuestTaskContext {
+    /// The custom durable invocations the task runs in, innermost last.
     pub scopes: Vec<CustomInvocationScope>,
+    /// The retry policy scopes the task has open, innermost last.
+    pub retry_scopes: Vec<RetryPolicyScope>,
 }
 
 #[derive(Debug)]
 pub struct CustomInvocationContextSnapshot {
     invocation: Option<InvocationKey>,
-    context: Option<Arc<CustomInvocationContext>>,
+    context: Option<Arc<GuestTaskContext>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,7 +320,50 @@ enum ScopeRemoval {
     Missing,
 }
 
-impl CustomInvocationContext {
+impl GuestTaskContext {
+    /// Installs this value in the calling task's context slot, clearing the slot when both halves
+    /// are empty.
+    pub(crate) fn install<T>(self, mut store: StoreContextMut<'_, T>) -> anyhow::Result<()> {
+        if self.scopes.is_empty() && self.retry_scopes.is_empty() {
+            store.clear_guest_task_context()?;
+        } else {
+            store.set_guest_task_context(Arc::new(self))?;
+        }
+        Ok(())
+    }
+
+    /// Replaces the custom scopes of the calling task, keeping its retry policy scopes.
+    pub(crate) fn install_custom_scopes<T>(
+        mut store: StoreContextMut<'_, T>,
+        scopes: Vec<CustomInvocationScope>,
+    ) -> anyhow::Result<()> {
+        let retry_scopes = store
+            .guest_task_context::<GuestTaskContext>()?
+            .map(|current| current.retry_scopes.clone())
+            .unwrap_or_default();
+        Self {
+            scopes,
+            retry_scopes,
+        }
+        .install(store)
+    }
+
+    /// Replaces the retry policy scopes of the calling task, keeping its custom scopes.
+    pub(crate) fn install_retry_scopes<T>(
+        mut store: StoreContextMut<'_, T>,
+        retry_scopes: Vec<RetryPolicyScope>,
+    ) -> anyhow::Result<()> {
+        let scopes = store
+            .guest_task_context::<GuestTaskContext>()?
+            .map(|current| current.scopes.clone())
+            .unwrap_or_default();
+        Self {
+            scopes,
+            retry_scopes,
+        }
+        .install(store)
+    }
+
     pub(crate) fn current(&self) -> Option<CustomInvocationScope> {
         self.scopes.last().copied()
     }
@@ -343,7 +399,7 @@ pub struct LiveCustomDurableInvocation {
     scope_id: u64,
     start_index: Option<OplogIndex>,
     invocation: Option<InvocationKey>,
-    context: Arc<CustomInvocationContext>,
+    context: Arc<GuestTaskContext>,
     finishing: bool,
 }
 impl<Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocation for DurableWorkerCtx<Ctx> {}
@@ -365,7 +421,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostCustomInvocationContextW
 fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     start_index: OplogIndex,
-    previous: Option<Arc<CustomInvocationContext>>,
+    previous: Option<Arc<GuestTaskContext>>,
     install: bool,
 ) -> anyhow::Result<Resource<LiveCustomDurableInvocation>> {
     accessor.with(|mut access| {
@@ -382,7 +438,7 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 })?;
             if let Some(current) = previous
                 .as_deref()
-                .and_then(CustomInvocationContext::current)
+                .and_then(GuestTaskContext::current)
             {
                 let registered = ctx
                     .state
@@ -439,10 +495,12 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             },
         );
         if install
-            && let Err(err) = access.as_context_mut().set_guest_task_context(next) {
+            && let Err(err) =
+                GuestTaskContext::install_custom_scopes(access.as_context_mut(), next.scopes.clone())
+            {
                 let _ = access.get().table().delete(resource);
                 access.get().state.custom_invocation_scopes.remove(&scope_id);
-                return Err(err.into());
+                return Err(err);
             }
         record_custom_invocation_scope_open();
         Ok(resource)
@@ -470,7 +528,7 @@ fn deactivate_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
     };
     let current = access
         .as_context_mut()
-        .guest_task_context::<CustomInvocationContext>()?;
+        .guest_task_context::<GuestTaskContext>()?;
     let registered = access
         .get()
         .state
@@ -497,13 +555,7 @@ fn deactivate_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
         }
         ScopeRemoval::Missing => return Ok(Some(start_index)),
     }
-    if next.scopes.is_empty() {
-        access.as_context_mut().clear_guest_task_context()?;
-    } else {
-        access
-            .as_context_mut()
-            .set_guest_task_context(Arc::new(next))?;
-    }
+    next.install(access.as_context_mut())?;
     Ok(Some(start_index))
 }
 
@@ -535,7 +587,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
                 scope.scope_id
             );
         }
-        access.as_context_mut().set_guest_task_context(context)?;
+        GuestTaskContext::install_custom_scopes(access.as_context_mut(), context.scopes.clone())?;
         Ok(())
     }
 
@@ -739,7 +791,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
     ) -> anyhow::Result<Resource<CustomInvocationContextSnapshot>> {
         let current = access
             .as_context_mut()
-            .guest_task_context::<CustomInvocationContext>()?;
+            .guest_task_context::<GuestTaskContext>()?;
         let ctx = access.get();
         let invocation = ctx.attributed_invocation();
         let replacement = if let Some(resource) = &next {
@@ -790,11 +842,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
         })?;
         if let Some(resource) = next {
             access.get().table().delete(resource)?;
-            if let Some(context) = replacement {
-                access.as_context_mut().set_guest_task_context(context)?;
-            } else {
-                access.as_context_mut().clear_guest_task_context()?;
-            }
+            let scopes = replacement
+                .map(|context| context.scopes.clone())
+                .unwrap_or_default();
+            GuestTaskContext::install_custom_scopes(access.as_context_mut(), scopes)?;
         }
         Ok(previous)
     }
@@ -827,7 +878,7 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
 ) -> anyhow::Result<durability::CustomDurableInvocation> {
     // Capture attribution before the first await. The immutable Arc is the initiation-time
     // snapshot inherited by this host task and its continuations.
-    let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
+    let custom_invocation_context = accessor.guest_task_context::<GuestTaskContext>()?;
     let activity = accessor
         .has_guest_visible_subtask()
         .then(|| accessor.runtime_activity())
@@ -866,7 +917,7 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
 
         let contextual_parent = custom_invocation_context
             .as_deref()
-            .and_then(CustomInvocationContext::current)
+            .and_then(GuestTaskContext::current)
             .map(|scope| {
                 let registered = ctx
                     .state

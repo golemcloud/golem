@@ -1252,6 +1252,8 @@ struct PrivateDurableWorkerState {
     /// `Some(policy)` = set/overwrite, `None` = tombstone (removed).
     /// Applied on top of base policies from agent_config during `named_retry_policies()`.
     runtime_retry_policy_mutations: BTreeMap<String, Option<NamedRetryPolicy>>,
+    /// The identity of the next retry policy scope a task opens in this Store.
+    next_retry_policy_scope_id: u64,
 
     /// Maps child pollable rep → parent FutureInvokeResult rep.
     /// Used to finalize deferred parent deletion when a child pollable is dropped.
@@ -1383,6 +1385,15 @@ impl WakeupScheduler {
     }
 }
 
+fn overlay_retry_policy_scopes(
+    mutations: &mut BTreeMap<String, Option<NamedRetryPolicy>>,
+    scopes: &[durability::RetryPolicyScope],
+) {
+    for scope in scopes {
+        mutations.insert(scope.policy.name.clone(), Some(scope.policy.clone()));
+    }
+}
+
 impl PrivateDurableWorkerState {
     /// Returns the agent-config-derived retry policies (cached, cheap).
     pub fn agent_config_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
@@ -1399,6 +1410,23 @@ impl PrivateDurableWorkerState {
     /// agent config, environment-level policies (fetched dynamically via EnvironmentStateService),
     /// and runtime overlay.
     pub async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        let mutations = self.retry_policy_mutations();
+        self.named_retry_policies_with(&mutations).await
+    }
+
+    /// The named retry policies for the retry decision of a guest trap: the agent-wide policies
+    /// overlaid with the retry policy scopes that a task of the invocation had open after its
+    /// latest scope change.
+    pub async fn guest_trap_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        let mut mutations = self.runtime_retry_policy_mutations.clone();
+        overlay_retry_policy_scopes(&mut mutations, &self.invocation_state().trap_retry_scopes);
+        self.named_retry_policies_with(&mutations).await
+    }
+
+    async fn named_retry_policies_with(
+        &mut self,
+        mutations: &BTreeMap<String, Option<NamedRetryPolicy>>,
+    ) -> Vec<NamedRetryPolicy> {
         // Tier 0: default catch-all policy from GolemConfig (priority 0, Predicate::True)
         let default_policy = NamedRetryPolicy::default_from_config(&self.config.retry);
 
@@ -1420,8 +1448,18 @@ impl PrivateDurableWorkerState {
             default_policy,
             agent_config_policies,
             environment_policies,
-            &self.runtime_retry_policy_mutations,
+            mutations,
         )
+    }
+
+    /// The agent-wide runtime retry policy mutations, overlaid with the retry policy scopes open
+    /// in the task the running host code belongs to. The innermost scope with a name wins.
+    pub(crate) fn retry_policy_mutations(&self) -> BTreeMap<String, Option<NamedRetryPolicy>> {
+        let mut mutations = self.runtime_retry_policy_mutations.clone();
+        if let Some(context) = self.attribution.guest_task_context() {
+            overlay_retry_policy_scopes(&mut mutations, &context.retry_scopes);
+        }
+        mutations
     }
 
     /// Apply a set-retry-policy mutation (from oplog replay or live execution).
@@ -1701,6 +1739,15 @@ impl PrivateDurableWorkerState {
     ) -> &mut execution_state::InvocationExecutionState {
         let attributed = self.attribution.resolve();
         self.invocations.get_mut(attributed)
+    }
+
+    /// The execution state of exactly the invocation that the calling code is attributed to,
+    /// while that invocation's entry lives.
+    pub(crate) fn own_invocation_state_mut(
+        &mut self,
+    ) -> Option<&mut execution_state::InvocationExecutionState> {
+        let attributed = self.attribution.resolve();
+        self.invocations.own_mut(attributed)
     }
 
     /// The execution state of the invocation the invocation loop runs.

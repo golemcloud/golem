@@ -298,7 +298,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // named retry policies. The synthesized default-from-config has
         // `Predicate::True` so resolution is guaranteed to find a match for
         // any properties this branch produces.
-        let named_retry_policies = self.named_retry_policies().await;
+        let named_retry_policies = self.state.guest_trap_retry_policies().await;
 
         let mut properties = RetryContext::trap(
             Self::semantic_trap_type_name(error),

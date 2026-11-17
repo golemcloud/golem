@@ -25,6 +25,7 @@
 
 use super::InvocationStrictness;
 use super::attribution::InvocationKey;
+use super::durability::RetryPolicyScope;
 use super::tail_work::TailWorkTracker;
 use crate::model::InvocationContext;
 use crate::worker::owner_lane::OwnerInvocationId;
@@ -70,6 +71,10 @@ pub(crate) struct InvocationExecutionState {
     /// The tail work counted on the invocation: the activities of trackers obtained while the
     /// invocation was attributed. It is not carried to the next invocation.
     pub(crate) tail_work: TailWorkTracker,
+    /// The retry policy scopes that a task of the invocation had open after its latest scope
+    /// change. The retry decision for a guest trap, which names no task, uses them. They are not
+    /// carried to the next invocation.
+    pub(crate) trap_retry_scopes: Vec<RetryPolicyScope>,
 }
 
 impl Default for InvocationExecutionState {
@@ -90,6 +95,7 @@ impl Default for InvocationExecutionState {
             scope_card_mint_ordinal: 0,
             tool_invocation_attempt_ordinals: HashMap::new(),
             tail_work: TailWorkTracker::default(),
+            trap_retry_scopes: Vec::new(),
         }
     }
 }
@@ -129,6 +135,7 @@ impl Invocations {
                 .expect("the loop's invocation always has an entry")
         };
         carried.tail_work = TailWorkTracker::default();
+        carried.trap_retry_scopes.clear();
         self.entries.insert(key, carried);
         self.entries
             .retain(|existing, _| *existing == InvocationKey::AgentLevel || *existing == key);
@@ -159,6 +166,16 @@ impl Invocations {
         self.entries
             .get_mut(&key)
             .expect("the loop's invocation always has an entry")
+    }
+
+    /// The entry of exactly the `attributed` invocation while it lives, for state that only the
+    /// invocation's own work may write. Work of a replaced invocation gets none, so it never
+    /// writes the entry of the invocation the loop runs.
+    pub(crate) fn own_mut(
+        &mut self,
+        attributed: Option<InvocationKey>,
+    ) -> Option<&mut InvocationExecutionState> {
+        self.entries.get_mut(&attributed?)
     }
 
     /// The entry of the loop's invocation, for the invocation loop's own code.
@@ -208,6 +225,11 @@ mod tests {
 
         // Agent-level work reads the running invocation's entry.
         assert_eq!(invocations.key(Some(InvocationKey::AgentLevel)), second);
+
+        // Work of the replaced invocation writes no invocation-owned state of the running one.
+        assert!(invocations.own_mut(Some(first)).is_none());
+        assert!(invocations.own_mut(None).is_none());
+        assert!(invocations.own_mut(Some(second)).is_some());
 
         // Once the loop runs no invocation, the agent-level entry starts from the last one.
         invocations.begin(InvocationKey::AgentLevel);

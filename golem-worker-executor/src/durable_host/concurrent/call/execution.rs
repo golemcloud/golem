@@ -455,7 +455,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ctx.state.owned_agent_id.environment_id,
                 golem_common::model::NamedRetryPolicy::default_from_config(&ctx.state.config.retry),
                 ctx.state.agent_config_retry_policies(),
-                ctx.state.runtime_retry_policy_mutations.clone(),
+                ctx.state.retry_policy_mutations(),
                 ctx.public_state.worker(),
             )
         });

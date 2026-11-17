@@ -17,7 +17,7 @@ Rules come from three tiers, and the Go `retry` subpackage
 - **Manifest** (`golem.yaml`) or CLI — operator-tuned base rules; the code reads
   them back.
 - **Code-owned** — `retry.Set(...)` registers a rule that persists for the agent.
-- **Per-call** — `retry.With(...)` overrides a rule for one call, restored on return.
+- **Per-call** — `retry.With(...)` opens a retry policy scope that overrides a rule until it is closed.
 
 ## Steps
 
@@ -209,13 +209,13 @@ var agent = retrying.Agent.Implement(func(retrying.ID) *state {
 })
 ```
 
-`retry.With` applies a rule for the **current call only** and returns a `restore`
-function that reinstates the previously registered rule (or removes it) — scope it
+`retry.With` opens a retry policy scope in which the rule overrides the registered
+rule of the same name, and returns the function that closes the scope — scope it
 with `defer`:
 
 ```go
 agent.Handle(retrying.Burst, func(_ *golem.Context[state], _ golem.Unit) retrying.Snapshot {
-	// Override the code-owned rule just for this call, restored on return.
+	// Override the code-owned rule just for this call; the scope closes on return.
 	defer retry.With(retry.Named("code-owned", retry.Immediate().MaxRetries(10)).
 		WithPriority(99).
 		AppliesWhen(retry.TargetAgentType.Eq("InventoryAgent")))()
@@ -225,10 +225,12 @@ agent.Handle(retrying.Burst, func(_ *golem.Context[state], _ golem.Unit) retryin
 
 `retry.Remove(name)` deletes a rule.
 
-> **Concurrency.** `Set`, `Remove`, and `With` apply at the **worker level**, not
-> per goroutine. `With` is safe as long as its scope does not await while other
-> goroutines run concurrently; don't hold an override open across a `CallAsync`
-> fan-out.
+> **Concurrency.** `Set` and `Remove` apply at the **worker level** and are
+> recorded in the oplog. `With` changes no registered rule and records nothing in
+> the oplog. Its scope belongs to the component-model task of the current export
+> call: the rule applies to the host calls of that task, including those of the
+> goroutines it runs, until the scope is closed, and to no other invocation.
+> Scopes nest; the innermost open scope with a name wins.
 
 ## 3. Query Policies at Runtime
 
@@ -334,8 +336,8 @@ clamped to [100ms, 1s], 15% jitter.
 - Policies are defined **per-environment**; names must be unique within one; higher
   priority is evaluated first.
 - A property-keyed policy is silently skipped in a context that lacks that property.
-- `retry.With` is scoped to the current call — the previous rule is restored on
-  return; it is worker-global, so mind concurrent awaits.
+- `retry.With` is scoped to the current call — the scope closes on return, and the
+  registered rules never change.
 - A host policy retries host operations only. Retry your own code with
   `Policy.Schedule()` and `Schedule.Retry` / `Schedule.RetryValue`.
 

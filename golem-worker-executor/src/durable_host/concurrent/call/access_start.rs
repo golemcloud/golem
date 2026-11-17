@@ -217,10 +217,10 @@ where
     Ctx: WorkerCtx,
 {
     let observed_by_custom_invocation = store
-        .guest_task_context::<CustomInvocationContext>()
+        .guest_task_context::<GuestTaskContext>()
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
         .as_deref()
-        .and_then(CustomInvocationContext::current)
+        .and_then(GuestTaskContext::current)
         .is_some();
     guest_import_invocation_id(store, get_ctx, observed_by_custom_invocation)
         .map(InvocationIdSource::Reserved)
@@ -349,12 +349,12 @@ pub(crate) fn resolve_observational_owner<Ctx: WorkerCtx>(
 
 pub(crate) fn resolve_current_observational_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
-    custom_invocation_context: Option<&CustomInvocationContext>,
+    custom_invocation_context: Option<&GuestTaskContext>,
 ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
     resolve_observational_owner(
         ctx,
         None,
-        custom_invocation_context.and_then(CustomInvocationContext::current),
+        custom_invocation_context.and_then(GuestTaskContext::current),
     )
 }
 

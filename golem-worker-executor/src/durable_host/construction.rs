@@ -610,6 +610,7 @@ impl PrivateDurableWorkerState {
             config,
             cached_agent_config_retry_policies: None,
             runtime_retry_policy_mutations: BTreeMap::new(),
+            next_retry_policy_scope_id: 1,
             rpc_pollable_to_parent: HashMap::new(),
             shard_service,
             automatic_update_unsettled: pending_update.as_ref().is_some_and(|update| {

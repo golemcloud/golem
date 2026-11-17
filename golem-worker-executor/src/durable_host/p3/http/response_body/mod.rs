@@ -25,7 +25,7 @@ use crate::durable_host::concurrent::{
     DurableDemandStream, InvocationIdSource, ScopeReplayDecision, ScopeReplayRecovery,
     demand_channel, import_invocation_id,
 };
-use crate::durable_host::durability::CustomInvocationContext;
+use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
     InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
@@ -265,9 +265,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // invocation observed the send, so it takes no ordinal from the root counter.
         let observed_by_custom_invocation = store
             .as_context_mut()
-            .guest_task_context::<CustomInvocationContext>()?
+            .guest_task_context::<GuestTaskContext>()?
             .as_deref()
-            .and_then(CustomInvocationContext::current)
+            .and_then(GuestTaskContext::current)
             .is_some();
         let invocation_id = if observed_by_custom_invocation {
             InvocationIdSource::Reserved(None)
