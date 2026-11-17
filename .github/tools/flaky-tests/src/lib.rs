@@ -490,6 +490,7 @@ pub fn render_report(
     existing_body: &str,
     limit: usize,
 ) -> String {
+    let existing_body = existing_body.replace("\r\n", "\n");
     let shown = candidates.iter().take(limit).collect::<Vec<_>>();
     let active = shown
         .iter()
@@ -501,7 +502,7 @@ pub fn render_report(
         .copied()
         .filter(|test| !test.is_active())
         .collect::<Vec<_>>();
-    let claimed = checked_tests(existing_body);
+    let claimed = checked_tests(&existing_body);
     let mut lines = vec![
         ISSUE_MARKER.to_string(),
         format!("# {ISSUE_TITLE}"),
@@ -509,6 +510,8 @@ pub fn render_report(
         format!(
             "Generated {generated} from **{analyzed_run_count} of {discovered_run_count}** CI runs and **{artifact_count}** consolidated test-report artifacts in the last **{days} days**. Runs before consolidated report collection was enabled are excluded."
         ),
+        String::new(),
+        "The generation time records the last successful collection. Check the Known flaky tests workflow for later failures; a failed collection leaves this report unchanged.".to_string(),
         String::new(),
         "Score = 5 × cross-attempt flips + 3 × runs with in-run retries + 2 × runs failing on `main`. Failures seen only on a feature branch are not treated as flaky unless they later pass in another attempt of the same run.".to_string(),
         String::new(),
@@ -560,6 +563,16 @@ pub fn render_report(
             ),
         ]);
     }
+    lines.extend([
+        String::new(),
+        "## Investigation notes".to_string(),
+        existing_body
+            .split_once("\n## Investigation notes\n")
+            .map(|(_, notes)| notes.trim_end_matches('\n').to_string())
+            .unwrap_or_else(|| {
+                "\nAdd findings and fix links here or in issue comments. The collector preserves this section; it regenerates the tables and claim list above.".to_string()
+            }),
+    ]);
     lines.join("\n") + "\n"
 }
 
@@ -886,6 +899,46 @@ mod tests {
         let second = render_report(&tests, 2, 2, 2, 30, "2026-09-10 12:00 UTC", &claimed, 100);
 
         assert!(second.contains("- [x] <code>suite::flaky</code>"));
+    }
+
+    #[test]
+    fn report_preserves_investigation_notes_after_a_test_leaves_the_window() {
+        let existing = concat!(
+            "<!-- known-flaky-tests:v1 -->\n",
+            "Old generated report\n\n",
+            "## Investigation notes\n\n",
+            "- Fixed `suite::old` in #123.\n\n",
+            "### Pending investigation\n\n",
+            "Keep this finding even when the table is empty.\n",
+        );
+        let rendered = render_report(&[], 2, 3, 2, 30, "2026-09-10 12:00 UTC", existing, 100);
+        assert!(!rendered.contains("Old generated report"));
+        assert!(rendered.contains("No active flaky tests in this window"));
+        assert_eq!(
+            rendered
+                .split_once("\n## Investigation notes\n")
+                .unwrap()
+                .1
+                .trim(),
+            existing
+                .split_once("\n## Investigation notes\n")
+                .unwrap()
+                .1
+                .trim()
+        );
+        let next = render_report(&[], 2, 3, 2, 30, "2026-09-10 12:00 UTC", &rendered, 100);
+        assert_eq!(next, rendered);
+        let from_browser = render_report(
+            &[],
+            2,
+            3,
+            2,
+            30,
+            "2026-09-10 12:00 UTC",
+            &existing.replace('\n', "\r\n"),
+            100,
+        );
+        assert_eq!(from_browser, rendered);
     }
 
     #[test]
