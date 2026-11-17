@@ -52,6 +52,16 @@ pub fn p3_tcp_connect<R>(
     }
 }
 
+pub fn p3_tcp_connect<R>(
+    _request: &R,
+    _denial: &str,
+) -> crate::model::oplog::HostResponseP3SocketsTcpConnect {
+    crate::model::oplog::HostResponseP3SocketsTcpConnect {
+        result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        closed: false,
+    }
+}
+
 pub fn p3_udp_send<R>(_request: &R, _denial: &str) -> HostResponseP3SocketsUdpSend {
     HostResponseP3SocketsUdpSend {
         result: Err(SerializableP3SocketErrorCode::AccessDenied),

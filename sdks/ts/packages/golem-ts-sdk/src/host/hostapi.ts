@@ -365,12 +365,17 @@ export async function awaitAbortablePromise(
 
 /**
  * Returns the raw string agent ID of the current agent.
+ *
+ * The ID comes from the `GOLEM_AGENT_ID` environment variable, which the agent can read only
+ * when its permission card allows `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`.
  */
 export function getRawSelfAgentId(): ParsedAgentId {
   const env = wasiEnv.getEnvironment();
   const agentId: [string, string] | undefined = env.find(([key]) => key === 'GOLEM_AGENT_ID');
   if (!agentId) {
-    throw new Error('GOLEM_AGENT_ID is not set');
+    throw new Error(
+      "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+    );
   }
   return new ParsedAgentId(agentId[1]);
 }

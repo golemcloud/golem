@@ -1,7 +1,6 @@
 package golem
 
 import (
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -175,16 +174,19 @@ func TestDiscoverAgentTypes(t *testing.T) {
 	}
 }
 
-func TestPanicTrapsWithAttribution(t *testing.T) {
+func TestHandlerPanicReturnsAnAttributedMethodError(t *testing.T) {
 	initAgent(t)
-	defer func() {
-		var pe *panicError
-		if r := recover(); !errors.As(asError(r), &pe) || pe.Method != "boom" || pe.Stage != stageHandler || pe.Value != "kaboom from agent code" {
-			t.Fatalf("a panicking method must trap with an attributed panicError, got %#v", r)
-		}
-	}()
-	guestExports.Invoke("boom", params())
-	t.Fatal("a panicking method must not return")
+	res := guestExports.Invoke("boom", params())
+	if !res.IsErr() || res.Err().Tag() != common.AgentErrorCustomError {
+		t.Fatalf("handler panic must return a custom error, got %v", res)
+	}
+	payload := res.Err().CustomError().Value
+	if got := payload.ValueNodes[payload.Root].StringValue(); got != `agent method "boom" panicked: kaboom from agent code` {
+		t.Fatalf("unexpected panic diagnostic: %s", got)
+	}
+	if got := invokeInt(t, "increment", params()); got != 1 {
+		t.Fatalf("increment after panic = %d, want 1", got)
+	}
 }
 
 func TestUnknownMethodAndBadInputAreDistinguished(t *testing.T) {

@@ -15,8 +15,8 @@
 // Package export_golem_agent_guest holds the hand-written export slots for
 // golem:agent/guest@2.0.0.
 //
-// These are NOT generated: `componentize-go bindings` is run with
-// --export-pkg-name pointing here, so the generated wasmexport glue in
+// These are NOT generated: dev-tools/go-bindgen sets export_pkg_name to
+// this package, so the generated wasmexport glue in
 // internal/wit/wit_exports calls into this package while never overwriting it.
 // The SDK fills the slots from its init(); leaving one nil is a programming
 // error and panics with a clear message rather than a nil-deref.

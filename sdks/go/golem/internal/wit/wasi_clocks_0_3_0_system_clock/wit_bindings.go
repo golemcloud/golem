@@ -70,8 +70,9 @@ func Now() Instant {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 16, 8))
 	wasm_import_now(returnArea)
-	result := Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 0)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 8)))}
-	return result
+	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
 
 }
 
@@ -83,4 +84,10 @@ func GetResolution() uint64 {
 	result := wasm_import_get_resolution()
 	return uint64(result)
 
+}
+
+//go:noinline
+func wasm_lift_1_t113(src unsafe.Pointer) Instant {
+
+	return Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(src), 0)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))}
 }

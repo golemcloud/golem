@@ -15,7 +15,7 @@ Inspect all files in the PR, including generated files. A change can belong to m
 |---|---|
 | Root Rust crate(s) | Package-scoped format check, clippy, check/build, and affected tests |
 | Shared Rust API, proc macro, or shared type | Verify the producer and directly affected consumers; use the full workspace only when the affected closure is broad or unclear |
-| `dev-tools/` | Use `--manifest-path dev-tools/Cargo.toml`; do not check the root workspace unless it is also affected |
+| `dev-tools/` | Use `--manifest-path dev-tools/Cargo.toml`, except the standalone Go generator uses `--manifest-path dev-tools/go-bindgen/Cargo.toml`; do not check the root workspace unless it is also affected |
 | Rust SDK (`sdks/rust/`) | Use that SDK's Cargo workspace checks; do not run root `cargo make fix` or `cargo make build` |
 | TypeScript SDK (`sdks/ts/`) | Check affected packages; rebuild the agent template only when its runtime/WIT inputs changed |
 | Scala SDK (`sdks/scala/`) | Check affected sbt projects and Scala versions |
