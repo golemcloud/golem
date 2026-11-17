@@ -24,6 +24,7 @@
     .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric{padding:14px;background:var(--card);border:1px solid var(--line);border-radius:8px}.metric-value{font-size:27px;font-weight:600;letter-spacing:-1px;line-height:1.25;font-variant-numeric:tabular-nums}.metric-label{font-size:11px;color:var(--muted);margin-top:5px}.metric.failed .metric-value{color:var(--red)}.metric.recovered .metric-value{color:var(--teal)}.test-note{font-size:12px;color:var(--muted);margin-top:12px}.job{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}.job:first-child{padding-top:0}.job:last-child{border-bottom:0;padding-bottom:0}.job-name{font-size:13px;font-weight:600;overflow-wrap:anywhere}.steps{font-size:12px;color:var(--red);margin:6px 0 0;padding-left:18px}
     .analysis{background:linear-gradient(135deg,rgba(245,176,62,.045),transparent 70%),var(--white)}.analysis-summary{font-size:15px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.analysis-label{display:inline-flex;border:1px solid var(--accent-border);color:var(--accent);background:var(--accent-bg);border-radius:4px;font-family:var(--font-mono);font-size:9px;padding:3px 6px;letter-spacing:.08em;white-space:nowrap}.baseline{padding:12px 14px;border-left:2px solid var(--accent);background:var(--accent-bg);margin:16px 0;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.suspect{padding:14px 0;border-top:1px solid var(--line)}.suspect-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.confidence{font-family:var(--font-mono);font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}.suspect p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.limits{margin-top:16px;font-size:12px;color:var(--muted)}.limits ul{padding-left:18px;margin:7px 0 0}.limits li{white-space:pre-wrap;overflow-wrap:anywhere}
     .test-details{border:1px solid var(--line);border-radius:8px;margin-top:10px;overflow:hidden}.test-details summary{cursor:pointer;padding:14px;position:relative;overflow-wrap:anywhere;font-size:13px;font-weight:600}.test-details summary:hover{background:var(--hover)}.test-suite{display:block;margin:4px 0 0 17px;font-size:11px;font-weight:400;color:var(--muted)}.test-body{padding:0 14px 14px}.test-message{font:11px/1.7 var(--font-mono);background:#0d0d12;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;margin:8px 0}.attempts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0;font-size:11px}.report-name{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.recovered-group{margin-top:24px}.footer{display:flex;justify-content:space-between;gap:14px;border-top:1px solid var(--line);margin-top:32px;padding-top:20px;color:var(--muted);font-size:11px}.loading{padding:70px 24px;text-align:center}.loading .eyebrow{margin-bottom:10px}.loading h2{margin-bottom:10px}.selection-note{margin-top:12px;font-size:12px;color:var(--muted)}
+    .progress-counts{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.progress-counts span{border:1px solid var(--line);border-radius:5px;padding:5px 9px;font-size:12px}.lane{margin-top:20px}.lane h4{font:12px var(--font-mono);color:var(--accent);margin:0 0 10px;overflow-wrap:anywhere}.timeline-task{margin-bottom:12px}.task-caption{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;font-size:12px;overflow-wrap:anywhere}.task-track{height:12px;border-radius:3px;background:var(--card);position:relative;margin:5px 0}.task-bar{position:absolute;top:0;height:100%;min-width:2px;background:var(--muted);border-radius:3px}.task-bar.running{background:var(--blue)}.task-bar.passed{background:var(--teal)}.task-bar.failed,.task-bar.interrupted{background:var(--red)}.timeline-scale{display:flex;justify-content:space-between;gap:14px;font-size:11px;color:var(--muted);flex-wrap:wrap}.progress-active{font-size:13px;padding-left:18px;overflow-wrap:anywhere}.progress-stale{color:var(--amber)}
     @media(min-width:1200px){.run-panel{position:sticky;top:20px}}@media(max-width:1000px){.workspace{grid-template-columns:290px minmax(0,1fr);gap:16px}.shell{padding:28px 24px}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metadata{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-heading,.section{padding:20px}.live-card{align-items:flex-start;flex-direction:column;gap:10px}}
     @media(max-width:720px){.topbar{padding:16px 20px}.top-label,.separator{display:none}.repo{font-size:10px}.shell{padding:26px 16px}.page-heading{align-items:flex-start;flex-direction:column;gap:14px}.refresh-area{text-align:left;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.feed-status{margin:0}.live-grid{grid-template-columns:1fr}.live-card{flex-direction:row;align-items:center;padding:16px}.workspace{grid-template-columns:1fr}.run-list{max-height:300px}.panel-head{padding:16px}.filters{grid-template-columns:1fr 1fr}.run-button{padding:14px 16px}.detail-top{flex-wrap:wrap}.detail-heading,.section{padding:18px}.metadata{gap:14px}.metric-grid{gap:8px}.metric{padding:12px}.footer{flex-direction:column;gap:4px}.detail-links{gap:12px}.section-head{align-items:flex-start}.analysis-label{font-size:8px}h2{font-size:20px}}
     @media(prefers-reduced-motion:no-preference){button,a{transition:background-color .15s,border-color .15s}.loading{animation:arrive .3s ease-out}@keyframes arrive{from{opacity:.4}to{opacity:1}}}
@@ -107,6 +108,7 @@
       for (const run of runs) {
         const card = el('div','live-card'); const button = el('button','live-open'); button.type = 'button';
         button.append(el('div','eyebrow',contextName(run)),el('div','live-title',`${run.branch || 'Branch unavailable'} · #${run.run_id}`),el('div','small subtle',`Attempt ${run.attempt} · started ${formatted(run.created_at)}`));
+        if (run.progress) button.append(el('div','small subtle',`${run.progress.tasks.filter(t=>t.status === 'running').length} running · ${run.progress.tasks.filter(t=>t.status === 'pending').length} pending · requested ${run.progress.mode}`));
         button.addEventListener('click',()=>selectRun(run,true)); card.append(button,runBadge(run)); $('live-runs').append(card);
       }
     }
@@ -128,6 +130,74 @@
     }
     function addMetadata(parent, name, value, mono = false) { const box = el('div'); box.append(el('dt','',name),el('dd',mono ? 'mono' : '',value || 'Unavailable')); parent.append(box); }
     function numeric(value) { return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value.toLocaleString() : '—'; }
+    function duration(milliseconds) {
+      const seconds = Math.max(0,Math.floor(milliseconds/1000));
+      return seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds/60)}m ${seconds%60}s` : `${Math.floor(seconds/3600)}h ${Math.floor(seconds%3600/60)}m`;
+    }
+    function intervalTime(value) {
+      const d = date(value);
+      return d ? d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'Unavailable';
+    }
+    function renderProgress(run, card) {
+      const box = section('Validation progress'), p = run.progress;
+      if (!p) {
+        box.append(el('p','small subtle','Task progress has not been published for this attempt.'));
+      } else {
+        const tasks = list(p.tasks), updated = date(p.updated_at), unfinished = tasks.some(t=>['pending','running'].includes(t.status));
+        const stale = unfinished && (!updated || Date.now()-updated.getTime() > 120000);
+        box.append(el('p','',`Requested execution mode: ${p.mode}`),el('p',`small ${stale ? 'progress-stale' : 'subtle'}`,`${stale ? 'Stale progress · no update in over 2 minutes. ' : ''}Last task report: ${intervalTime(p.updated_at)}. Durations stop at that report.${unfinished ? ' Task activity may have changed.' : ''}`));
+        const counts = el('div','progress-counts');
+        for (const status of ['pending','running','passed','failed','blocked','interrupted']) counts.append(el('span','',`${tasks.filter(t=>t.status === status).length} ${status}`));
+        box.append(counts);
+        const running = tasks.filter(t=>t.status === 'running'), pending = tasks.filter(t=>t.status === 'pending');
+        box.append(el('p','small',`${pending.length} remaining to start · ${running.length} active at last report`));
+        if (running.length) {
+          const activeTasks = el('ul','progress-active');
+          for (const task of running) activeTasks.append(el('li','',`${task.name} · ${duration(updated-date(task.started_at))} elapsed · lane ${task.lane}`));
+          box.append(activeTasks);
+        }
+        if (pending.length) {
+          const remaining = el('details','test-details'); remaining.append(el('summary','',`Remaining tasks · ${pending.length}`));
+          const names = el('ul','progress-active'); pending.forEach(t=>names.append(el('li','',`${t.name} · ${t.lane}`))); remaining.append(names); box.append(remaining);
+        }
+        const intervals = tasks.filter(t=>t.started_at).map(t=>({task:t,start:date(t.started_at).getTime(),end:date(t.completed_at || p.updated_at).getTime()}));
+        const points = intervals.filter(i=>i.end > i.start).flatMap(i=>[[i.start,1],[i.end,-1]]).sort((a,b)=>a[0]-b[0] || a[1]-b[1]);
+        let concurrent = 0, peak = 0;
+        for (const [,delta] of points) { concurrent += delta; peak = Math.max(peak,concurrent); }
+        box.append(el('p','small subtle',`Measured overlapping lifetimes: peak ${peak} task${peak === 1 ? '' : 's'}. This shows process lifetime overlap, not CPU utilization. Requested parallel mode alone is not proof of parallel execution.`));
+        if (intervals.length) {
+          const origin = Math.min(...intervals.map(i=>i.start)), end = Math.max(origin,...intervals.map(i=>i.end)), span = Math.max(1,end-origin);
+          const scale = el('div','timeline-scale'); scale.append(el('span','',`Timeline begins ${intervalTime(new Date(origin).toISOString())}`),el('span','',`Ends ${intervalTime(new Date(end).toISOString())}`)); box.append(scale);
+          for (const lane of new Set(tasks.map(t=>t.lane))) {
+            const laneTasks = tasks.filter(t=>t.lane === lane), started = intervals.filter(i=>i.task.lane === lane);
+            const group = el('div','lane'); group.append(el('h4','',`Lane · ${lane}`));
+            group.append(el('div','small subtle',`${started.length} of ${laneTasks.length} started · ${laneTasks.filter(t=>t.status === 'running').length} active · ${laneTasks.filter(t=>t.status === 'passed').length} passed · ${laneTasks.filter(t=>['failed','interrupted'].includes(t.status)).length} failed or interrupted`));
+            const track = el('div','task-track'); track.setAttribute('aria-hidden','true');
+            for (const interval of started) {
+              const bar = el('span',`task-bar ${interval.task.status}`);
+              bar.style.left = `${100*(interval.start-origin)/span}%`; bar.style.width = `${100*(interval.end-interval.start)/span}%`;
+              bar.title = `${interval.task.name} · ${interval.task.status} · ${duration(interval.end-interval.start)}`;
+              track.append(bar);
+            }
+            group.append(track);
+            const details = el('details','test-details'); details.append(el('summary','',`Task details · ${laneTasks.length}`));
+            for (const task of laneTasks) {
+              const row = el('div','timeline-task'), caption = el('div','task-caption');
+              caption.append(el('strong','',task.name),el('span','subtle',`${task.status}${task.started_at ? ` · ${duration(date(task.completed_at || p.updated_at)-date(task.started_at))}` : ''}`)); row.append(caption);
+              if (task.started_at) {
+                row.append(el('div','small subtle',`${intervalTime(task.started_at)} → ${task.completed_at ? intervalTime(task.completed_at) : `running as of ${intervalTime(p.updated_at)}`}${task.pid ? ` · PID ${task.pid}` : ''}`));
+              } else row.append(el('div','small subtle',task.completed_at ? `No process started · ${intervalTime(task.completed_at)}` : 'Not started'));
+              row.append(el('div','small subtle',`Artifact log: ${task.log}${task.exit_code != null ? ` · exit ${task.exit_code}` : ''}`));
+              details.append(row);
+            }
+            group.append(details);
+            box.append(group);
+          }
+        }
+      }
+      box.append(el('p','small subtle','Full logs are retained in GitHub Actions artifacts, subject to repository access. Open the run on GitHub to download them. Raw logs are not published here.'));
+      card.append(box);
+    }
     function renderTests(run, card) {
       const tests = run.tests || {}, totals = tests.totals || {}, available = Array.isArray(tests.reports) && tests.reports.length > 0;
       const box = section('Test results');
@@ -193,7 +263,7 @@
         if (list(job.failed_steps).length) { const steps = el('ul','steps'); job.failed_steps.forEach(step=>steps.append(el('li','',step))); info.append(steps); }
         row.append(info,badge(job.conclusion || 'running',job.conclusion || (job.completed_at ? 'Unknown' : job.started_at ? 'In progress' : 'Pending'))); jobs.append(row);
       }
-      card.append(jobs); renderTests(run,card); renderAnalysis(run,card); root.replaceChildren(card);
+      renderProgress(run,card); card.append(jobs); renderTests(run,card); renderAnalysis(run,card); root.replaceChildren(card);
       [...root.querySelectorAll('details')].forEach((d,i)=>{d.dataset.testKey = `${key(run)}:${i}`; d.open = opened.has(d.dataset.testKey);});
     }
     function updateHealth() {

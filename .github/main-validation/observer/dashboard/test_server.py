@@ -24,7 +24,8 @@ class DashboardTest(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.store = Store(self.directory.name)
         self.token = 'test-only-token"with-backslash\\end'
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler(self.store, self.token))
+        self.progress_token = 'progress-only-token"with-backslash\\end'
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler(self.store, self.token, self.progress_token))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.stop)
@@ -44,12 +45,14 @@ class DashboardTest(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def request(self, method, path, value=None, authorized=False):
+    def request(self, method, path, value=None, authorized=False, credential=None):
         connection = http.client.HTTPConnection(*self.server.server_address, timeout=5)
         try:
             headers = {"Content-Type": "application/json"}
             if authorized:
                 headers["Authorization"] = "Bearer " + self.token
+            if credential is not None:
+                headers["Authorization"] = "Bearer " + credential
             connection.request(method, path, json.dumps(value) if value is not None else None, headers)
             response = connection.getresponse()
             return response.status, response.read()
@@ -58,6 +61,204 @@ class DashboardTest(unittest.TestCase):
 
     def publish(self, run):
         return self.request("POST", "/api/run", run, authorized=True)
+
+    def progress(self):
+        return {"run_id": 901, "attempt": 1, "created_at": self.run["created_at"],
+                "source": "a" * 40, "workflow_sha": "c" * 40, "branch": "main", "event": "push",
+                "context": "Main validation", "progress": {
+                    "updated_at": "2026-11-17T08:05:00Z", "mode": "parallel", "tasks": [
+                        {"id": "build", "lane": "rust", "name": "Build Rust", "status": "running",
+                         "started_at": "2026-11-17T08:01:00Z", "completed_at": None,
+                         "pid": 123, "exit_code": None, "log": "tasks/build.log"},
+                        {"id": "lint", "lane": "web", "name": "Lint web", "status": "pending",
+                         "started_at": None, "completed_at": None, "pid": None,
+                         "exit_code": None, "log": "tasks/lint.log"}]}}
+
+    def publish_progress(self, value):
+        return self.request("POST", "/api/progress", value, credential=self.progress_token)
+
+    def record(self):
+        return json.loads(self.store.snapshot())["runs"][0]
+
+    def test_progress_credential_is_separate_and_missing_configuration_disables_it(self):
+        value = self.progress()
+        self.assertEqual(self.request("POST", "/api/progress", value)[0], 401)
+        self.assertEqual(self.request("POST", "/api/progress", value, authorized=True)[0], 401)
+        for path in ("/api/run", "/api/heartbeat"):
+            self.assertEqual(self.request("POST", path, self.run, credential=self.progress_token)[0], 401)
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        self.stop()
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler(self.store, self.token))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.assertEqual(self.request("POST", "/api/progress", value, authorized=True)[0], 401)
+        self.assertEqual(self.publish_progress(value)[0], 401)
+
+    def test_progress_creates_only_selected_activity_and_cannot_publish_analysis(self):
+        value = self.progress()
+        value.update(status="completed", conclusion="success", selected=False,
+                     analysis={"summary": "must not publish"}, tests={"totals": {"passed": 900}},
+                     raw_logs="private", environment={"KEY": "private"}, argv=["private"])
+        value["progress"]["tasks"][0].update(raw_logs="private", message="private", argv=["private"])
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        run = self.record()
+        self.assertEqual(run["status"], "in_progress")
+        self.assertEqual(run["conclusion"], "")
+        self.assertTrue(run["selected"])
+        self.assertEqual(run["analysis"]["summary"], "")
+        self.assertEqual(run["tests"]["totals"]["passed"], 0)
+        self.assertEqual(run["progress"], self.progress()["progress"])
+        self.assertNotIn("raw_logs", run)
+        self.assertNotIn("_progress_only", run)
+        self.assertEqual(json.loads(Store(self.directory.name).snapshot())["runs"][0], run)
+
+    def test_observer_and_progress_merge_with_independent_clocks_in_both_orders(self):
+        value = self.progress()
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        self.assertIsNone(json.loads(self.store.snapshot())["updated_at"])
+        self.run.update(status="in_progress", conclusion="", updated_at="2026-11-17T08:02:00Z")
+        self.assertEqual(self.publish(self.run)[0], 200)
+        observer_seen = json.loads(self.store.snapshot())["updated_at"]
+        self.assertEqual(self.record()["progress"], value["progress"])
+        # The observer knows the Actions creation time; the runner can start later.
+        value["created_at"] = "2026-11-17T08:00:30Z"
+        value["progress"]["updated_at"] = "2026-11-17T08:06:00Z"
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        self.assertEqual(json.loads(self.store.snapshot())["updated_at"], observer_seen)
+        self.assertEqual(self.record()["created_at"], self.run["created_at"])
+        self.assertEqual(self.record()["updated_at"], self.run["updated_at"])
+        self.assertEqual(self.record()["analysis"]["summary"], self.run["analysis"]["summary"])
+        self.assertEqual(self.record()["tests"]["totals"]["failed"], 2)
+        self.assertEqual(self.publish(self.run)[0], 200)
+        self.assertEqual(self.record()["progress"], value["progress"])
+        self.run.update(status="completed", conclusion="failure", updated_at="2026-11-17T08:04:00Z")
+        self.assertEqual(self.publish(self.run)[0], 200)
+        restarted = Store(self.directory.name)
+        self.assertEqual(json.loads(restarted.snapshot())["runs"][0]["progress"], value["progress"])
+
+    def test_progress_does_not_revive_completed_or_cancelled_runs(self):
+        for conclusion in ("success", "failure", "cancelled"):
+            with self.subTest(conclusion=conclusion):
+                self.run.update(conclusion=conclusion)
+                self.assertEqual(self.publish(self.run)[0], 200)
+                value = self.progress()
+                value["progress"]["updated_at"] = "2026-11-17T09:01:00Z"
+                self.assertEqual(self.publish_progress(value)[0], 200)
+                stored = json.loads(self.store.path.read_text())["runs"][0]
+                self.assertEqual((stored["status"], stored["conclusion"]), ("completed", conclusion))
+                self.assertEqual(stored["analysis"]["summary"], self.run["analysis"]["summary"])
+                self.assertEqual(len(json.loads(self.store.snapshot())["runs"]), 0 if conclusion == "cancelled" else 1)
+
+    def test_progress_order_and_task_history_are_protected(self):
+        value = self.progress()
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        for change in ("older", "equal_conflict", "missing", "start", "identity", "mode"):
+            invalid = copy.deepcopy(value)
+            invalid["progress"]["updated_at"] = "2026-11-17T08:06:00Z"
+            if change == "older":
+                invalid["progress"]["updated_at"] = "2026-11-17T08:04:00Z"
+            elif change == "equal_conflict":
+                invalid["progress"]["updated_at"] = value["progress"]["updated_at"]
+                invalid["progress"]["tasks"][0]["pid"] = 124
+            elif change == "missing":
+                invalid["progress"]["tasks"].pop()
+            elif change == "start":
+                invalid["progress"]["tasks"][0]["started_at"] = "2026-11-17T08:02:00Z"
+            elif change == "identity":
+                invalid["source"] = "d" * 40
+            else:
+                invalid["progress"]["mode"] = "serial"
+            with self.subTest(change=change):
+                self.assertEqual(self.publish_progress(invalid)[0], 400)
+                self.assertEqual(self.record()["progress"], value["progress"])
+        task = value["progress"]["tasks"][0]
+        task.update(status="passed", completed_at="2026-11-17T08:06:00Z", exit_code=0)
+        value["progress"]["updated_at"] = "2026-11-17T08:06:00Z"
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        task.update(completed_at="2026-11-17T08:07:00Z")
+        value["progress"]["updated_at"] = "2026-11-17T08:07:00Z"
+        self.assertEqual(self.publish_progress(value)[0], 400)
+        self.assertEqual(self.record()["progress"]["tasks"][0]["completed_at"], "2026-11-17T08:06:00Z")
+
+    def test_blocked_tasks_have_no_invented_interval_and_compressed_names_can_update(self):
+        value = self.progress()
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        value["progress"]["updated_at"] = "2026-11-17T08:06:00Z"
+        value["progress"]["tasks"][0].update(status="passed", completed_at="2026-11-17T08:06:00Z", exit_code=0)
+        value["progress"]["tasks"][1].update(status="blocked", completed_at="2026-11-17T08:06:00Z")
+        value["progress"]["tasks"][0]["log"] += ".gz"
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        self.assertEqual(self.record()["progress"], value["progress"])
+        self.assertIsNone(self.record()["progress"]["tasks"][1]["started_at"])
+        value["progress"]["updated_at"] = "2026-11-17T08:07:00Z"
+        value["progress"]["tasks"][1]["log"] += ".gz"
+        self.assertEqual(self.publish_progress(value)[0], 400)  # Terminal records cannot change.
+
+    def test_active_log_name_can_only_move_once_to_its_own_gzip_name(self):
+        value = self.progress()
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        value["progress"]["updated_at"] = "2026-11-17T08:06:00Z"
+        for name in ("different.log", "tasks/build.gz", "tasks/build.log.gz.gz"):
+            value["progress"]["tasks"][0]["log"] = name
+            self.assertEqual(self.publish_progress(value)[0], 400)
+        value["progress"]["tasks"][0]["log"] = "tasks/build.log.gz"
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        value["progress"]["updated_at"] = "2026-11-17T08:07:00Z"
+        value["progress"]["tasks"][0]["log"] = "tasks/build.log"
+        self.assertEqual(self.publish_progress(value)[0], 400)
+
+    def test_progress_rejects_invalid_intervals_paths_and_unbounded_fields(self):
+        changes = [
+            ("started_at", "2026-11-17T08:06:00Z"), ("started_at", "2026-11-17T07:59:00Z"),
+            ("started_at", "2026-11-17T08:00:00"), ("started_at", "2026-02-30T08:00:00Z"),
+            ("started_at", "2026-11-17X08:00:00Z"), ("started_at", "2026-11-17T08:00:00+99:00"),
+            ("completed_at", "2026-11-17T08:00:00Z"), ("completed_at", "2026-11-17T08:04:00Z"),
+            ("status", "passed"), ("status", "pending"), ("pid", True), ("exit_code", 0),
+            ("log", "../private.log"), ("log", "/tmp/private.log"), ("log", "tasks/%2e%2e/x"),
+            ("log", "https://example.com/log"), ("name", "task\nsecret"), ("name", "n" * 201)]
+        for field, replacement in changes:
+            value = self.progress()
+            value["progress"]["tasks"][0][field] = replacement
+            with self.subTest(field=field, replacement=replacement):
+                self.assertEqual(self.publish_progress(value)[0], 400)
+        for field, replacement in (("updated_at", "bad"), ("updated_at", "2026-11-17T07:00:00Z"),
+                                   ("mode", "auto"), ("tasks", [self.progress()["progress"]["tasks"][0]] * 201)):
+            value = self.progress()
+            value["progress"][field] = replacement
+            self.assertEqual(self.publish_progress(value)[0], 400)
+        for secret in (self.token, self.progress_token):
+            value = self.progress()
+            value["diagnostic"] = secret  # JSON escapes quote and backslash before transmission.
+            self.assertEqual(self.publish_progress(value)[0], 400)
+        self.assertEqual(json.loads(self.store.snapshot())["runs"], [])
+
+    def test_actual_overlapping_intervals_and_final_progress_survive_restart(self):
+        value = self.progress()
+        value["progress"]["tasks"][0].update(status="passed", completed_at="2026-11-17T08:04:00Z", exit_code=0)
+        value["progress"]["tasks"][1].update(status="passed", started_at="2026-11-17T08:02:00Z",
+                                                  completed_at="2026-11-17T08:03:00Z", pid=124, exit_code=0)
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        self.assertEqual(self.record()["status"], "in_progress")  # Task results do not conclude the run.
+        self.assertEqual(self.publish(self.run)[0], 200)
+        saved = json.loads(Store(self.directory.name).snapshot())["runs"][0]
+        self.assertEqual(saved["progress"], value["progress"])
+        self.assertEqual(saved["status"], "completed")
+        self.assertEqual(saved["tests"]["totals"]["passed"], 15)
+        rerun = copy.deepcopy(value)
+        rerun["attempt"] = 2
+        self.assertEqual(self.publish_progress(rerun)[0], 200)
+        self.assertEqual([r["attempt"] for r in json.loads(self.store.snapshot())["runs"]], [2, 1])
+
+    def test_failed_atomic_progress_write_keeps_previous_snapshot(self):
+        value = self.progress()
+        self.assertEqual(self.publish_progress(value)[0], 200)
+        before = self.store.snapshot()
+        value["progress"]["updated_at"] = "2026-11-17T08:06:00Z"
+        with patch("server.os.replace", side_effect=OSError("disk unavailable")):
+            self.assertEqual(self.publish_progress(value)[0], 503)
+        self.assertEqual(self.store.snapshot(), before)
+        self.assertEqual(Store(self.directory.name).snapshot(), before)
 
     def test_read_is_public_but_writes_require_credentials(self):
         self.assertEqual(self.request("GET", "/data.json")[0], 200)

@@ -25,7 +25,9 @@ job_id() { jq -r --arg n "$1" '[.[] | select(.name == $n)][0].id // ""' "$out/jo
 for job in select result linux; do
   jid=$(job_id "$job")
   if [[ -n "$jid" ]]; then
-    gh api "repos/$repo/actions/jobs/$jid/logs" > "$out/logs/$job.log" 2>/dev/null || true
+    if ! gh api --allow-escape-sequences "repos/$repo/actions/jobs/$jid/logs" > "$out/logs/$job.log" 2>/dev/null; then
+      echo "Job log unavailable: $job ($jid); source and analysis may be incomplete" >&2
+    fi
   fi
 done
 

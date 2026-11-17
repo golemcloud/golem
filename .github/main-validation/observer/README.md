@@ -38,6 +38,10 @@ Deploy `dashboard/` to an always-on Amp Box with its `.amp/box.yaml`. The operat
 
 The page refreshes every 30 seconds, while observations arrive on the 30-minute schedule. A timestamp older than 45 minutes shows a stale warning. Publishing a heartbeat records a successful observation without inventing a run. Public data contains selected fields and sanitized failure snippets, never raw log archives or secrets. The Box must remain on for the public URL to remain available.
 
+Linux validation can separately publish task progress every 30 seconds to `/api/progress`. Configure `CI_DASHBOARD_PROGRESS_TOKEN` on the dashboard and as a GitHub Actions secret, and `CI_DASHBOARD_URL` as a repository variable. This credential can update structured task lifetimes only; it cannot write observer analysis, tests or final run outcomes. It never falls back to `CI_DASHBOARD_TOKEN`. Both endpoints are disabled without their own credential. These settings and the endpoint deployment require operator authorization. No new schedule or observer is needed.
+
+The page shows task counts, remaining tasks, active elapsed times and a lane timeline. Measured overlap comes from recorded start/end intervals, not the requested execution mode. It does not prove CPU utilization or dependency isolation. Durations stop at the last task report, and unfinished progress older than two minutes is marked stale. This clock is independent of the observer's freshness. Observer updates preserve progress; progress cannot replace a completed or cancelled result. Complete logs remain in the Actions evidence, subject to repository access, not on the public dashboard. APFS still uses job-level observations.
+
 For development, run `python3 -m unittest discover -s .github/main-validation/observer/dashboard -p 'test_*.py'`. These are reporting-tool tests, not observer instructions or Golem workload tests.
 
 ## Helpers and limits

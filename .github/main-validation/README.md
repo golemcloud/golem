@@ -55,13 +55,14 @@ and let the remaining prepared workloads run. A separate executor target prevent
 service compilation from replacing live worker test binaries. Test consumers use
 local nextest binaries metadata, not cross-job archives.
 
-Serial execution is the default. `MAIN_VALIDATION_PARALLEL=true` permits worker
-tests to overlap service compilation, then service and CLI tests. Groups within
+Parallel execution is the default. Worker tests overlap service compilation,
+then service and CLI tests. Groups within
 each subflow remain serial. The ceiling is three stateful subflows, not a custom
 scheduler. Each fork collects ordinary failures before joining; the final task
 rejects failed or missing branch completion records. Conflicting privileged
-checks follow the join. The manual acceptance `parallel` input exercises this
-option; production remains serial until real overlap is accepted.
+checks follow the join. Set `MAIN_VALIDATION_PARALLEL=false` locally or the manual
+acceptance `parallel` input to false for a serial diagnostic run. Production
+sampling always uses parallel execution. Accept real overlap before cutover.
 
 Offsets are 0 for worker tests, 10000 for service tests, and 20000 for CLI tests.
 Each subflow receives its own absolute `TMPDIR`. The framework applies offsets
@@ -94,6 +95,40 @@ succeed. The existing `publish-test-report` action shows original failures and
 recovered tests. Artifacts retain reports for 90 days; the commit status, not a
 retained artifact certificate, is the release precondition. Checks without CTRF
 remain visible in the job logs.
+
+## Linux task progress and diagnostic logs
+
+Actions wraps the same cargo-make command with `progress.py observe`. The helper
+does not select, schedule or retry tasks. The task lists in the Makefile drive
+both execution and the initial progress plan. Each existing task invocation runs
+through `progress.py run`, which records its PID, start, completion and exit code.
+The console shows task transitions, counts, active elapsed times and a heartbeat
+every 30 seconds. Failure excerpts are bounded; the original output is not.
+Counts describe cargo-make tasks, not individual tests or an estimated time left.
+
+`MAIN_VALIDATION_REPORT_DIR/logs/` contains complete combined stdout and stderr
+for each task and the controller. Completed logs use gzip. Partial logs remain
+readable if a process is interrupted or compression fails. `progress/*.json`
+contains individual task records; `progress.json` is the periodic snapshot. The
+job summary includes the task results and log filenames. The existing Linux
+artifact retains all these files and unchanged CTRF reports for 90 days, even
+after failure. A hard runner loss can still prevent artifact upload.
+
+The test commands retain `--nocapture`, test-r retries and existing execution
+semantics. Redirecting their output at the process boundary does not change
+test-r's capture mode or serialize the cargo-make forks. Recorded intervals show
+actual process lifetime overlap, not CPU utilization or isolation. APFS retains
+its separate job-level reporting.
+
+Optional live dashboard publication uses the repository variable
+`CI_DASHBOARD_URL` and the separate secret `CI_DASHBOARD_PROGRESS_TOKEN`, also
+configured on the dashboard host. The workflow does not receive the observer's
+write token. The workload child does not inherit the progress token. Publication
+uses a bounded HTTPS request every 30 seconds and once at completion; a failed
+publication does not change the command result. Without these settings, local
+progress, the job summary and retained artifacts still work. The observer keeps
+its independent 30-minute schedule and never executes this helper. Enabling the
+credential and deploying the endpoint require operator authorization.
 
 ## Exact requests and releases
 

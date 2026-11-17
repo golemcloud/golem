@@ -15,7 +15,7 @@ on:
       parallel:
         description: 'Acceptance only: exercise the three overlapping subflows'
         type: boolean
-        default: false
+        default: true
 
 # Only one cycle runs. Replaced pending wake-ups lose no exact-source requests:
 # those requests remain open issues until their cycle finishes.
@@ -121,7 +121,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 20
       WASI_SDK_PATH: /opt/wasi-sdk
-      MAIN_VALIDATION_PARALLEL: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance && inputs.parallel }}
+      MAIN_VALIDATION_PARALLEL: ${{ !(github.event_name == 'workflow_dispatch' && inputs.acceptance) || inputs.parallel }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -159,7 +159,12 @@ jobs:
       - uses: ./.validation-control/.github/actions/setup-main-validation
       - name: Validate the selected source
         timeout-minutes: 300
-        run: cargo make --profile ci main-validation
+        env:
+          CI_DASHBOARD_URL: ${{ vars.CI_DASHBOARD_URL }}
+          CI_DASHBOARD_PROGRESS_TOKEN: ${{ secrets.CI_DASHBOARD_PROGRESS_TOKEN }}
+          MAIN_VALIDATION_SOURCE: ${{ needs.select.outputs.source }}
+          MAIN_VALIDATION_CONTEXT: ${{ needs.select.outputs.context }}
+        run: python3 .validation-control/.github/main-validation/progress.py observe -- cargo make --profile ci main-validation
       - name: Retain Linux reports even after failure
         if: always()
         uses: actions/upload-artifact@v6
