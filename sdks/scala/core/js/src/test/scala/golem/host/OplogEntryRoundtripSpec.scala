@@ -165,6 +165,21 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.params.startIndex == BigInt(17)
       )
     },
+    test("AgentInvocationSettled with invocation ID and consumed fuel from dynamic") {
+      val raw = wrapEntry(
+        "agent-invocation-settled",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          invocationId = invocationUuidJs,
+          consumedFuel = js.BigInt("4242")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.AgentInvocationSettled]
+      assertTrue(
+        parsed.params.invocationId == invocationUuid,
+        parsed.params.consumedFuel == 4242L
+      )
+    },
     test("EndRemoteWrite from dynamic") {
       val raw = wrapEntry(
         "end-remote-write",

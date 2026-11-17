@@ -297,6 +297,12 @@ interface oplog {
         start-index: oplog-index,
     }
 
+    record agent-invocation-settled-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        consumed-fuel: s64,
+    }
+
     enum oplog-error-kind {
         invocation,
         recovery
@@ -1004,6 +1010,12 @@ interface oplog {
         start-index: oplog-index,
     }
 
+    record raw-agent-invocation-settled-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        consumed-fuel: s64,
+    }
+
     record raw-error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
@@ -1145,6 +1157,8 @@ interface oplog {
         /// The agent has completed an invocation
         agent-invocation-finished(raw-agent-invocation-finished-parameters),
         agent-invocation-failed(raw-agent-invocation-failed-parameters),
+        /// The background work of an agent invocation ended after its result was recorded
+        agent-invocation-settled(raw-agent-invocation-settled-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed
@@ -1259,6 +1273,8 @@ interface oplog {
         /// The agent has completed an invocation
         agent-invocation-finished(agent-invocation-finished-parameters),
         agent-invocation-failed(agent-invocation-failed-parameters),
+        /// The background work of an agent invocation ended after its result was recorded
+        agent-invocation-settled(agent-invocation-settled-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed

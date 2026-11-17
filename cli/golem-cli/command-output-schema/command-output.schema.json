@@ -6950,6 +6950,7 @@
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationStarted" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFailed" },
+        { "$ref": "#/definitions/PublicOplogEntryAgentInvocationSettled" },
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
         { "$ref": "#/definitions/PublicOplogEntryError" },
         { "$ref": "#/definitions/PublicOplogEntryRecoverySucceeded" },
@@ -7129,6 +7130,17 @@
         "invocationId": { "type": "string" },
         "error": { "type": "string" },
         "startIndex": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryAgentInvocationSettled": {
+      "type": "object",
+      "required": ["type", "timestamp", "invocationId", "consumedFuel"],
+      "properties": {
+        "type": { "const": "AgentInvocationSettled" },
+        "timestamp": { "type": "string" },
+        "invocationId": { "type": "string" },
+        "consumedFuel": { "type": "integer" }
       },
       "additionalProperties": false
     },

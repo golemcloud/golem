@@ -201,6 +201,12 @@ object OplogApi {
     startIndex: OplogIndex
   )
 
+  final case class AgentInvocationSettledParameters(
+    timestamp: ContextApi.DateTime,
+    invocationId: UUID,
+    consumedFuel: Long
+  )
+
   sealed trait OplogErrorKind extends Product with Serializable
   object OplogErrorKind {
     case object Invocation extends OplogErrorKind
@@ -414,6 +420,9 @@ object OplogApi {
     final case class AgentInvocationFailed(params: AgentInvocationFailedParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class AgentInvocationSettled(params: AgentInvocationSettledParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
     final case class Suspend(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
@@ -578,6 +587,15 @@ object OplogApi {
               invocationId = JsUuid.toUuid(p.invocationId),
               error = p.error,
               startIndex = BigInt(p.startIndex.toString)
+            )
+          )
+        case "agent-invocation-settled" =>
+          val p = v.asInstanceOf[JsAgentInvocationSettledParameters]
+          AgentInvocationSettled(
+            AgentInvocationSettledParameters(
+              timestamp = parseDateTime(p.timestamp),
+              invocationId = JsUuid.toUuid(p.invocationId),
+              consumedFuel = BigInt(p.consumedFuel.toString).toLong
             )
           )
         case "suspend"            => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))

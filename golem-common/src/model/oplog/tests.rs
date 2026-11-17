@@ -28,9 +28,9 @@ use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTim
 use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
-    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardExpiredParams, CardInstalledParams,
-    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    AgentInvocationSettledParams, AgentInvocationStartedParams, BeginRemoteTransactionParams,
+    CancelPendingInvocationParams, CancelledParams, CardDerivedParams, CardExpiredParams,
+    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
     CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
     ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, InterruptedParams, JumpParams,
@@ -1701,6 +1701,53 @@ fn agent_invocation_failed_contract_roundtrips() {
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
         public.clone().try_into().unwrap();
     assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+}
+
+#[test]
+fn agent_invocation_settled_is_a_hint_and_roundtrips() {
+    use golem_api_grpc::proto::golem::worker::{RawOplogEntry, raw_oplog_entry::Entry};
+
+    let invocation_id = Uuid::from_u128(0x0123456789abcdef_fedcba9876543213).into();
+    let entry = OplogEntry::agent_invocation_settled(invocation_id, 4242).rounded();
+    assert!(entry.is_hint());
+    assert_eq!(entry.entity_parent_start_index(), None);
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    assert_eq!(
+        crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+        entry
+    );
+
+    let proto: RawOplogEntry = entry.clone().try_into().unwrap();
+    let Some(Entry::AgentInvocationSettled(parameters)) = &proto.entry else {
+        panic!("expected an invocation-settled entry");
+    };
+    assert_eq!(parameters.consumed_fuel, 4242);
+    assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+
+    let public = PublicOplogEntry::AgentInvocationSettled(AgentInvocationSettledParams {
+        timestamp: entry.timestamp(),
+        invocation_id,
+        consumed_fuel: 4242,
+    });
+    assert_eq!(
+        serde_json::from_str::<PublicOplogEntry>(&public.to_json_string()).unwrap(),
+        public
+    );
+    assert_eq!(
+        public.to_json(),
+        Some(serde_json::to_value(&public).unwrap())
+    );
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        public.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+
+    let super::OplogEnrichmentEntry::Other(raw) =
+        super::OplogEnrichmentEntry::try_from(public).unwrap()
+    else {
+        panic!("expected non-Create projection");
+    };
+    assert_eq!(raw, entry);
 }
 
 #[test]

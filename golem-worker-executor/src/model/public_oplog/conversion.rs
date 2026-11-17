@@ -309,6 +309,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     start_index,
                 },
             )),
+            OplogEntry::AgentInvocationSettled {
+                timestamp,
+                invocation_id,
+                consumed_fuel,
+            } => Ok(PublicOplogEntry::AgentInvocationSettled(
+                AgentInvocationSettledParams {
+                    timestamp,
+                    invocation_id,
+                    consumed_fuel,
+                },
+            )),
             OplogEntry::Suspend { timestamp } => {
                 Ok(PublicOplogEntry::Suspend(SuspendParams { timestamp }))
             }

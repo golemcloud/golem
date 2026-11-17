@@ -321,6 +321,11 @@ declare module 'golem:api/oplog@1.5.0' {
     error: string;
     startIndex: OplogIndex;
   };
+  export type AgentInvocationSettledParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    consumedFuel: bigint;
+  };
   export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
     timestamp: Datetime;
@@ -1094,6 +1099,11 @@ declare module 'golem:api/oplog@1.5.0' {
     error: WorkerError;
     startIndex: OplogIndex;
   };
+  export type RawAgentInvocationSettledParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    consumedFuel: bigint;
+  };
   export type RawErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;
@@ -1252,6 +1262,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-failed'
     val: RawAgentInvocationFailedParameters
+  } |
+  /** The background work of an agent invocation ended after its result was recorded */
+  {
+    tag: 'agent-invocation-settled'
+    val: RawAgentInvocationSettledParameters
   } |
   /** Agent suspended */
   {
@@ -1535,6 +1550,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-failed'
     val: AgentInvocationFailedParameters
+  } |
+  /** The background work of an agent invocation ended after its result was recorded */
+  {
+    tag: 'agent-invocation-settled'
+    val: AgentInvocationSettledParameters
   } |
   /** Agent suspended */
   {

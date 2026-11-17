@@ -147,6 +147,11 @@ before (value) {}
         error: params.error.into(),
         start_index: golem_common::model::OplogIndex::from_u64(params.start_index),
     } }
+    AgentInvocationSettled { record (params) {
+        timestamp: timestamp_from_datetime(params.timestamp),
+        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+        consumed_fuel: params.consumed_fuel,
+    } }
     Suspend { record (ts) {
         timestamp: timestamp_from_datetime(ts.timestamp),
     } }
@@ -653,6 +658,11 @@ before (value) {}
         invocation_id: invocation_id.0.into(),
         error: error.into(),
         start_index: start_index.into(),
+    } }
+    AgentInvocationSettled { record () => RawAgentInvocationSettledParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        consumed_fuel: consumed_fuel,
     } }
     Suspend { override (M::Suspend { timestamp }) => Ok(Self::Suspend(timestamp.into())) }
     Error { record (entity_parent_start_index) => RawErrorParameters {

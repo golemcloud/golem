@@ -442,6 +442,24 @@ pub trait OplogOps: Oplog {
         self.add(entry).await
     }
 
+    async fn add_agent_invocation_settled(
+        &self,
+        invocation_id: golem_common::model::InvocationId,
+        consumed_fuel: u64,
+    ) -> Result<OplogIndex, OplogError> {
+        let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
+            i64::MAX
+        } else {
+            consumed_fuel as i64
+        };
+
+        self.add(OplogEntry::agent_invocation_settled(
+            invocation_id,
+            consumed_fuel,
+        ))
+        .await
+    }
+
     async fn create_snapshot_based_update_description(
         &self,
         target_revision: ComponentRevision,

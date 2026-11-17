@@ -221,6 +221,7 @@ where
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }

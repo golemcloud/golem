@@ -7763,6 +7763,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -7824,6 +7825,7 @@ components:
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
+          AgentInvocationSettled: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -7960,6 +7962,18 @@ components:
             - AgentInvocationFinished
             example: AgentInvocationFinished
       - $ref: '#/components/schemas/r#AgentInvocationFinishedParams'
+    PublicOplogEntry_r#AgentInvocationSettledParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AgentInvocationSettled
+            example: AgentInvocationSettled
+      - $ref: '#/components/schemas/r#AgentInvocationSettledParams'
     PublicOplogEntry_r#AgentInvocationStartedParams:
       allOf:
       - type: object
@@ -11704,6 +11718,23 @@ components:
         componentRevision:
           type: integer
           format: uint64
+    r#AgentInvocationSettledParams:
+      type: object
+      title: r#AgentInvocationSettledParams
+      required:
+      - timestamp
+      - invocationId
+      - consumedFuel
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        consumedFuel:
+          type: integer
+          format: int64
     r#AgentInvocationStartedParams:
       type: object
       title: r#AgentInvocationStartedParams

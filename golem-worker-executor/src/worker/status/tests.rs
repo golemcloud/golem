@@ -1960,6 +1960,129 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
 }
 
 #[test]
+async fn background_work_after_invocation_result_runs_until_settled() {
+    let invocation = InvocationId(Uuid::new_v4());
+    let background_start = OplogIndex::from_u64(4);
+    let test_case = TestCase::builder(0)
+        .agent_invocation_started("spawns", vec![], invocation)
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            invocation,
+            ComponentRevision::INITIAL,
+        )
+        .add(
+            OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::Custom("background".to_string()),
+                invocation_id: None,
+                observational_owner: None,
+                request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                    HostRequestNoInput {},
+                )))),
+                durable_function_type: DurableFunctionType::ReadLocal,
+                span_started: None,
+                denial: None,
+            },
+            |mut status| {
+                assert_eq!(status.oplog_idx, background_start);
+                status.status = AgentStatus::Running;
+                status
+            },
+        )
+        .add(
+            OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: background_start,
+                response: None,
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            },
+            |mut status| {
+                status.status = AgentStatus::Running;
+                status
+            },
+        )
+        .add(
+            OplogEntry::agent_invocation_settled(invocation, 17),
+            |mut status| {
+                status.status = AgentStatus::Idle;
+                status
+            },
+        )
+        .build();
+
+    let fold = |entries: &[TestEntry]| {
+        let entries = entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                (
+                    OplogIndex::from_u64(idx as u64 + 1),
+                    entry.oplog_entry.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        calculate_latest_worker_status(
+            AgentStatus::Idle,
+            None,
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            &RetryConfig::default(),
+            &DeletedRegions::default(),
+            &DeletedRegions::default(),
+            &entries,
+        )
+        .0
+    };
+    let settled = test_case.entries.len();
+    assert_eq!(
+        fold(&test_case.entries[..settled - 1]),
+        AgentStatus::Running
+    );
+    assert_eq!(fold(&test_case.entries), AgentStatus::Idle);
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+fn settled_clears_an_invocation_retry_but_not_an_unresolved_recovery() {
+    let anchor = OplogIndex::from_u64(13);
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(29),
+        OplogEntry::agent_invocation_settled(InvocationId(Uuid::new_v4()), 3),
+    )]);
+    for recovery in [false, true] {
+        let (status, kind, retries, _, _) = calculate_latest_worker_status(
+            AgentStatus::Retrying,
+            Some(if recovery {
+                OplogErrorKind::Recovery
+            } else {
+                OplogErrorKind::Invocation
+            }),
+            HashMap::from([(anchor, RetryPolicyState::Counter(2))]),
+            HashMap::new(),
+            None,
+            &RetryConfig::default(),
+            &DeletedRegions::default(),
+            &DeletedRegions::default(),
+            &entries,
+        );
+        if recovery {
+            assert_eq!(status, AgentStatus::Retrying);
+            assert_eq!(kind, Some(OplogErrorKind::Recovery));
+            assert_eq!(retries.get(&anchor), Some(&RetryPolicyState::Counter(2)));
+        } else {
+            assert_eq!(status, AgentStatus::Idle);
+            assert_eq!(kind, None);
+            assert!(retries.is_empty());
+        }
+    }
+}
+
+#[test]
 async fn repeated_lifecycle_hints_preserve_completed_and_suspended_invocations() {
     let completed = InvocationId(Uuid::new_v4());
     let pending = InvocationId(Uuid::new_v4());

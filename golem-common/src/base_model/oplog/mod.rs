@@ -245,6 +245,20 @@ oplog_entry! {
             start_index: OplogIndex,
         }
     },
+    /// The background work of an agent invocation ended after its result was recorded.
+    AgentInvocationSettled {
+        hint: true
+        wit_raw_type: "raw-agent-invocation-settled-parameters"
+        wit_public_type: "agent-invocation-settled-parameters"
+        raw {
+            invocation_id: InvocationId,
+            consumed_fuel: i64,
+        }
+        public {
+            invocation_id: InvocationId,
+            consumed_fuel: i64,
+        }
+    },
     /// Worker suspended
     Suspend {
         hint: true

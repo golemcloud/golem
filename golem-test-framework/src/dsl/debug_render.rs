@@ -186,6 +186,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
             let _ = writeln!(result, "{pad}error:             {}", params.error);
         }
+        PublicOplogEntry::AgentInvocationSettled(params) => {
+            let _ = writeln!(result, "AGENT INVOCATION SETTLED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
+            let _ = writeln!(result, "{pad}consumed fuel:     {}", params.consumed_fuel);
+        }
         PublicOplogEntry::Suspend(params) => {
             let _ = writeln!(result, "SUSPEND");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);

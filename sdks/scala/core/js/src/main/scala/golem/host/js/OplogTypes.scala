@@ -422,6 +422,13 @@ sealed trait JsAgentInvocationFailedParameters extends js.Object {
   def startIndex: js.BigInt = js.native
 }
 
+@js.native
+sealed trait JsAgentInvocationSettledParameters extends js.Object {
+  def timestamp: JsDatetime   = js.native
+  def invocationId: JsUuid    = js.native
+  def consumedFuel: js.BigInt = js.native
+}
+
 // --- PendingAgentInvocationParameters ---
 
 @js.native

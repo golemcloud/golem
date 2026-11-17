@@ -125,7 +125,8 @@ pub(super) fn calculate_latest_worker_status(
                 }
             }
             OplogEntry::AgentInvocationFinished { .. }
-            | OplogEntry::AgentInvocationFailed { .. } => {
+            | OplogEntry::AgentInvocationFailed { .. }
+            | OplogEntry::AgentInvocationSettled { .. } => {
                 current_status = AgentStatus::Idle;
                 if !unresolved_recovery {
                     last_error_kind = None;

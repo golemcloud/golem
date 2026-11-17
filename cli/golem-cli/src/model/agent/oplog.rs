@@ -525,6 +525,18 @@ impl TextOutput for PublicOplogEntry {
                     format_error(&params.error)
                 ));
             }
+            PublicOplogEntry::AgentInvocationSettled(params) => {
+                logln(format_message_highlight("INVOKE SETTLED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id)
+                ));
+                logln(format!("{pad}consumed fuel:     {}", params.consumed_fuel));
+            }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
                 logln(format!(

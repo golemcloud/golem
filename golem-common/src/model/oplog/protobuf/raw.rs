@@ -472,11 +472,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         use golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry;
         use golem_api_grpc::proto::golem::worker::{
             RawActivatePluginParameters, RawAgentInvocationFailedParameters,
-            RawAgentInvocationFinishedParameters, RawAgentInvocationStartedParameters,
-            RawBeginRemoteTransactionParameters, RawCancelPendingInvocationParameters,
-            RawCancelledParameters, RawCardDerivedParameters, RawCardEventQueuedParameters,
-            RawCardInstallFailedParameters, RawCardInstalledParameters,
-            RawCardRevokedCascadeParameters, RawCardRevokedParameters,
+            RawAgentInvocationFinishedParameters, RawAgentInvocationSettledParameters,
+            RawAgentInvocationStartedParameters, RawBeginRemoteTransactionParameters,
+            RawCancelPendingInvocationParameters, RawCancelledParameters, RawCardDerivedParameters,
+            RawCardEventQueuedParameters, RawCardInstallFailedParameters,
+            RawCardInstalledParameters, RawCardRevokedCascadeParameters, RawCardRevokedParameters,
             RawCardTransferConfirmedParameters, RawCardTransferStartedParameters,
             RawCardTransferredParameters, RawCompletionDeliveredParameters,
             RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
@@ -651,6 +651,14 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 invocation_id: Some(invocation_id.into()),
                 error: Some(error.into()),
                 start_index: start_index.into(),
+            }),
+            OplogEntry::AgentInvocationSettled {
+                invocation_id,
+                consumed_fuel,
+                ..
+            } => Entry::AgentInvocationSettled(RawAgentInvocationSettledParameters {
+                invocation_id: Some(invocation_id.into()),
+                consumed_fuel,
             }),
             OplogEntry::Suspend { .. } => Entry::Suspend(RawTimestampOnly {}),
             OplogEntry::Error {
@@ -1320,6 +1328,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
                 error: p.error.ok_or("Missing error")?.try_into()?,
                 start_index: OplogIndex::from_u64(p.start_index),
+            }),
+            Entry::AgentInvocationSettled(p) => Ok(OplogEntry::AgentInvocationSettled {
+                timestamp,
+                invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
+                consumed_fuel: p.consumed_fuel,
             }),
             Entry::Suspend(_) => Ok(OplogEntry::Suspend { timestamp }),
             Entry::Error(p) => {

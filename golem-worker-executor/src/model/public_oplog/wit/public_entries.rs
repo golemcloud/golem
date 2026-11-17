@@ -142,6 +142,11 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         error: error,
         start_index: start_index.into(),
     } }
+    AgentInvocationSettled { record AgentInvocationSettledParams => AgentInvocationSettledParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        consumed_fuel: consumed_fuel,
+    } }
     Suspend { override (PublicOplogEntry::Suspend(SuspendParams { timestamp })) => Ok({
                     Self::Suspend(timestamp.into())
                 }) }

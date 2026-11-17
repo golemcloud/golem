@@ -2854,6 +2854,11 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             error: "method error".to_string(),
             start_index: OplogIndex::from_u64(2),
         }),
+        PublicOplogEntry::AgentInvocationSettled(AgentInvocationSettledParams {
+            timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(7)),
+            consumed_fuel: 23,
+        }),
         PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
             timestamp: timestamp(),
         }),

@@ -1015,6 +1015,14 @@ impl Walker<'_, '_> {
                 .add("error", self.agent_error_message(error))
                 .add("startIndex", idx(start_index))
                 .build(),
+            PublicOplogEntry::AgentInvocationSettled(AgentInvocationSettledParams {
+                timestamp: _,
+                invocation_id,
+                consumed_fuel,
+            }) => Fields::new()
+                .add("invocationId", self.tok(invocation_id))
+                .add("consumedFuel", self.int(*consumed_fuel))
+                .build(),
             PublicOplogEntry::Suspend(SuspendParams { timestamp: _ })
             | PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp: _ })
             | PublicOplogEntry::Interrupted(InterruptedParams { timestamp: _ })
