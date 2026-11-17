@@ -77,13 +77,14 @@ pub struct Mode {
     pub requests: &'static [Request],
 }
 
-/// An argument that selects a mode: given at all, or given with this value
-/// among its values.
+/// An argument that selects a mode or conditions a request: given at all,
+/// or given with one of these values among its values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Selector {
     /// The clap argument ID.
     pub arg: &'static str,
-    pub value: Option<&'static str>,
+    /// Empty when the argument only has to be given.
+    pub values: &'static [&'static str],
 }
 
 /// One server request of a mode, which is one operation and one decision.
@@ -141,18 +142,24 @@ pub enum Stage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum When {
     Always,
-    /// Only when one of these clap arguments is given.
-    With(&'static [&'static str]),
-    /// Only when none of these clap arguments is given.
-    Without(&'static [&'static str]),
+    /// Only when one of these arguments is given.
+    With(&'static [Selector]),
+    /// Only when none of these arguments is given.
+    Without(&'static [Selector]),
     /// Only when an argument of the row's `stdin_marker_args` is `-`.
     StdinMarker,
-    /// Only when the tool can stop a command: the stop goes through the
-    /// command's stdin.
-    ToolCanStop,
+    /// Only when the user stops a command of a tool that can stop one: the
+    /// stop goes through the command's stdin.
+    StoppedThroughStdin,
     /// Only when the user stops the command, or the CLI stops waiting for
     /// it.
     Stopped,
+    /// Only when the command was stopped and its session ended without the
+    /// result, or the cancellation found it finished: the CLI then looks the
+    /// result up.
+    StoppedWithoutResult,
+    /// Only when the outcome of the command is unknown.
+    OutcomeUnknown,
 }
 
 /// What the never-live mark of the target agent changes in a request. The
@@ -432,7 +439,11 @@ macro_rules! one_mode {
 }
 
 const fn arg(arg: &'static str) -> Selector {
-    Selector { arg, value: None }
+    Selector { arg, values: &[] }
+}
+
+const fn arg_is(arg: &'static str, values: &'static [&'static str]) -> Selector {
+    Selector { arg, values }
 }
 
 const VIEW: Part = agent(A::View, R::None);
@@ -447,6 +458,9 @@ const TOOL_VIEW: Part = pending(PendingVerb::ToolView, Tool, R::None);
 /// an agent the caller may not see looks unknown before the tool is named.
 const DESCRIBE_HOSTED: &[Part] = &[VIEW, TOOL_VIEW];
 const DESCRIBE_STANDALONE: &[Part] = &[TOOL_VIEW];
+/// The flags for which the tool's argument parser answers with the tool's
+/// help (`golem_schema::schema::tool::argv`).
+const HELP: &[&str] = &["--help", "-h"];
 /// A tool that reads static `File` config fields also needs the tool-wide
 /// `invoke : *` (5.3).
 const STATIC_FILE_CONFIG: Option<Extra> = Some(Extra {
@@ -478,10 +492,10 @@ const CANCEL_ACCEPTED: Part =
     invocation(PendingVerb::InvocationCancel, InvocationSelector::Accepted);
 /// The live output connection that `agent invoke` opens to the agent before
 /// it dispatches, so that it names no invocation yet and can expose the
-/// output of other invocations of the agent.
+/// output of other invocations of the agent. Raw stdout opens none.
 const OUTPUT_CONNECTION: Request = conditional(
     Follow,
-    When::Without(&["no_stream"]),
+    When::Without(&[arg("no_stream"), arg_is("stdout_format", &["raw"])]),
     &[invocation(
         PendingVerb::InvocationRead,
         InvocationSelector::EachExposed,
@@ -489,22 +503,29 @@ const OUTPUT_CONNECTION: Request = conditional(
 );
 const FOLLOW_ENTRIES: Request = conditional(
     Follow,
-    When::Without(&["omit_payloads"]),
+    When::Without(&[arg("omit_payloads")]),
     &[oplog(R::OplogEntry)],
 );
-const AWAIT_UPDATE: Request = conditional(Follow, When::With(&["await"]), &[VIEW]);
+const AWAIT_UPDATE: Request = conditional(Follow, When::With(&[arg("await")]), &[VIEW]);
 /// The requests of an `ssh` command: the description of its tool, the start,
-/// the stop through stdin, the read of the agent's state next to each
-/// command, and, when the user or the CLI stops waiting, the cancellation and
-/// the lookup of a result that finished meanwhile.
-const SSH_COMMAND: &[Request] = &[
-    request(Prepare, DESCRIBE_HOSTED),
-    tool_start(EXEC),
-    conditional(Input, When::ToolCanStop, &[SEND_TO_ACCEPTED]),
-    request(Follow, &[VIEW]),
-    conditional(Cancel, When::Stopped, &[CANCEL_ACCEPTED]),
-    conditional(Follow, When::Stopped, &[READ_ACCEPTED]),
-];
+/// the stop through stdin, the read of the agent's state, and, when the user
+/// or the CLI stops waiting, the cancellation and the lookup of a result
+/// that finished meanwhile. `state_read` says when the command reads the
+/// agent's state.
+const fn ssh_command(state_read: When) -> [Request; 6] {
+    [
+        request(Prepare, DESCRIBE_HOSTED),
+        tool_start(EXEC),
+        conditional(Input, When::StoppedThroughStdin, &[SEND_TO_ACCEPTED]),
+        conditional(Follow, state_read, &[VIEW]),
+        conditional(Cancel, When::Stopped, &[CANCEL_ACCEPTED]),
+        conditional(Follow, When::StoppedWithoutResult, &[READ_ACCEPTED]),
+    ]
+}
+/// A session reads the agent's state next to each command.
+const SSH_SESSION_COMMAND: &[Request] = &ssh_command(When::Always);
+/// A script reads it only to report a command whose outcome is unknown.
+const SSH_SCRIPT_COMMAND: &[Request] = &ssh_command(When::OutcomeUnknown);
 const RESUME_SESSION: &[Request] = &[
     PREPARE_AGENT,
     OUTPUT_CONNECTION,
@@ -720,10 +741,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
             },
             Mode {
                 name: "manual",
-                selected_by: &[Selector {
-                    arg: "mode",
-                    value: Some("manual"),
-                }],
+                selected_by: &[arg_is("mode", &["manual"])],
                 class: ManagementControl,
                 requests: &[
                     PREPARE_AGENT,
@@ -992,7 +1010,8 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
     // Without `-c`, a session; with `-c`, the script's raw stdout and stderr,
     // and no JSON output type. The CLI resolves the agent's component without
     // reading the agent's metadata. Each command of a session, and its
-    // helper scripts, make the requests of `SSH_COMMAND`.
+    // helper scripts, make the requests of `SSH_SESSION_COMMAND`; a script
+    // makes those of `SSH_SCRIPT_COMMAND`.
     CommandRow {
         path: &["ssh"],
         modes: &[
@@ -1000,13 +1019,13 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 name: "session",
                 selected_by: &[],
                 class: Exec,
-                requests: SSH_COMMAND,
+                requests: SSH_SESSION_COMMAND,
             },
             Mode {
                 name: "script",
                 selected_by: &[arg("command")],
                 class: Exec,
-                requests: SSH_COMMAND,
+                requests: SSH_SCRIPT_COMMAND,
             },
         ],
         interactive: true,
@@ -1020,8 +1039,8 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
     // `--stdin` reads a host file, or the process's stdin when its value is
     // `-`; the raw output flags write to stdout or to host files. The CLI
     // resolves an `--agent` and its component without reading the agent's
-    // metadata. `-h` in the tool's arguments selects the help modes as
-    // `--help` does.
+    // metadata. The help modes apply when the tool's argument parser answers
+    // with the tool's help, for either of its help flags (`HELP`).
     CommandRow {
         path: &["tool", "invoke"],
         modes: &[
@@ -1032,7 +1051,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 requests: &[
                     request(Prepare, DESCRIBE_HOSTED),
                     tool_start(EXEC),
-                    conditional(Input, When::With(&["stdin"]), &[SEND_TO_ACCEPTED]),
+                    conditional(Input, When::With(&[arg("stdin")]), &[SEND_TO_ACCEPTED]),
                 ],
             },
             // The server runs this invocation in a fresh owner agent today;
@@ -1044,31 +1063,19 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 requests: &[
                     request(Prepare, DESCRIBE_STANDALONE),
                     tool_start(STANDALONE_INVOKE),
-                    conditional(Input, When::With(&["stdin"]), &[SEND_TO_ACCEPTED]),
+                    conditional(Input, When::With(&[arg("stdin")]), &[SEND_TO_ACCEPTED]),
                 ],
             },
             // The tool's help is its description alone.
             Mode {
                 name: "hosted-help",
-                selected_by: &[
-                    arg("agent"),
-                    Selector {
-                        arg: "tool_args",
-                        value: Some("--help"),
-                    },
-                ],
+                selected_by: &[arg("agent"), arg_is("tool_args", HELP)],
                 class: ManagementRead,
                 requests: &[operation(DESCRIBE_HOSTED)],
             },
             Mode {
                 name: "standalone-help",
-                selected_by: &[
-                    arg("component"),
-                    Selector {
-                        arg: "tool_args",
-                        value: Some("--help"),
-                    },
-                ],
+                selected_by: &[arg("component"), arg_is("tool_args", HELP)],
                 class: ManagementRead,
                 requests: &[operation(DESCRIBE_STANDALONE)],
             },
@@ -1221,22 +1228,7 @@ mod test {
             if mode.selected_by.is_empty() {
                 defaults += 1;
             }
-            for selector in mode.selected_by {
-                let Some(arg) = command.get_arguments().find(|a| a.get_id() == selector.arg) else {
-                    problems.push(format!("{at} selects on no argument `{}`", selector.arg));
-                    continue;
-                };
-                let values = arg.get_possible_values();
-                if let Some(value) = selector.value
-                    && !values.is_empty()
-                    && !values.iter().any(|v| v.matches(value, false))
-                {
-                    problems.push(format!(
-                        "{at} selects on `{}` with a value it does not take: `{value}`",
-                        selector.arg
-                    ));
-                }
-            }
+            check_selectors(&at, "selects on", mode.selected_by, command, problems);
             let operations = mode
                 .requests
                 .iter()
@@ -1261,19 +1253,14 @@ mod test {
                 if request.parts.is_empty() {
                     problems.push(format!("{at} has a request without parts"));
                 }
-                let args = match request.when {
-                    When::With(args) | When::Without(args) => args,
-                    When::Always | When::ToolCanStop | When::Stopped => &[][..],
+                match request.when {
+                    When::With(selectors) | When::Without(selectors) => {
+                        check_selectors(&at, "depends on", selectors, command, problems)
+                    }
                     When::StdinMarker if row.stdin_marker_args.is_empty() => {
-                        problems.push(format!("{at} reads stdin but has no stdin argument"));
-                        &[][..]
+                        problems.push(format!("{at} reads stdin but has no stdin argument"))
                     }
-                    When::StdinMarker => &[][..],
-                };
-                for arg in args {
-                    if !has_arg(command, arg) {
-                        problems.push(format!("{at} depends on no argument `{arg}`"));
-                    }
+                    _ => {}
                 }
                 // D27: the parts on 5.3 Rule 21 targets come first, so that a
                 // denial of one of them looks unknown before a tool by name
@@ -1311,6 +1298,30 @@ mod test {
         }
         if defaults > 1 {
             problems.push(format!("`{path}` has {defaults} default modes"));
+        }
+    }
+
+    fn check_selectors(
+        at: &str,
+        what: &str,
+        selectors: &[Selector],
+        command: &Command,
+        problems: &mut Vec<String>,
+    ) {
+        for selector in selectors {
+            let Some(arg) = command.get_arguments().find(|a| a.get_id() == selector.arg) else {
+                problems.push(format!("{at} {what} no argument `{}`", selector.arg));
+                continue;
+            };
+            let possible = arg.get_possible_values();
+            for value in selector.values {
+                if !possible.is_empty() && !possible.iter().any(|v| v.matches(value, false)) {
+                    problems.push(format!(
+                        "{at} {what} `{}` with a value it does not take: `{value}`",
+                        selector.arg
+                    ));
+                }
+            }
         }
     }
 

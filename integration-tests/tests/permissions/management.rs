@@ -46,8 +46,8 @@
 
 use futures::future::BoxFuture;
 use golem_cli::command_table::{
-    COMMAND_TABLE, CommandClass, Extra, Marked, Part, PartVerb, Request, Resource, Stage, Target,
-    When,
+    COMMAND_TABLE, CommandClass, Extra, Marked, Part, PartVerb, Request, Resource, Selector, Stage,
+    Target, When,
 };
 use golem_client::api::{
     AgentClient, AgentClientLive, RegistryServiceClient, WorkerClient, WorkerClientLive,
@@ -101,7 +101,7 @@ type User = TestUserContext<EnvBasedTestDependencies>;
 // ── The expected classification ─────────────────────────────────────────
 
 /// What a grant of a case is on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum On {
     /// The target agent.
     Target,
@@ -117,7 +117,7 @@ enum On {
 
 /// One grant that a case gives the caller: the class and verb of the 2.0
 /// class catalog (GOL-1276), its owner and its resource, in grant text.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Grant {
     class: &'static str,
     verb: &'static str,
@@ -158,6 +158,9 @@ enum LooksLike {
 struct ExpectedRequest {
     spec: &'static str,
     grants: &'static [(Grant, LooksLike)],
+    /// The request reads an agent that does not exist yet, so it finds
+    /// nothing also with its grants.
+    finds_nothing: bool,
 }
 
 /// Where a case seeds its target.
@@ -197,9 +200,10 @@ enum Effect {
     Updated,
     Interrupted,
     Resumed,
-    /// The guest state has the item that the caller added.
+    /// The target's oplog has the caller's invocation.
     Invoked,
-    /// The seeded item is gone from the guest state.
+    /// The target's oplog has a new deleted region: the seeded item, its
+    /// last invocation, is reverted.
     Reverted,
     /// The target has one scheduled invocation less.
     Cancelled,
@@ -212,6 +216,9 @@ enum Effect {
 struct Case {
     path: &'static [&'static str],
     mode: &'static str,
+    /// The arguments that select the mode, spelled `arg` or
+    /// `arg=value|value` and joined by `, `; `default` for none.
+    selected_by: &'static str,
     class: CommandClass,
     fixture: Fixture,
     precondition: Precondition,
@@ -272,12 +279,21 @@ const fn control(verb: &'static str, resource: &'static str) -> (Grant, LooksLik
 }
 
 const fn expected(spec: &'static str, grants: &'static [(Grant, LooksLike)]) -> ExpectedRequest {
-    ExpectedRequest { spec, grants }
+    ExpectedRequest {
+        spec,
+        grants,
+        finds_nothing: false,
+    }
 }
 
 const PREPARE: ExpectedRequest = expected("prepare: agent view @agent", &[VIEW_DENIED]);
+/// `agent new` reads the agent that it creates, which does not exist yet.
+const PREPARE_NEW: ExpectedRequest = ExpectedRequest {
+    finds_nothing: true,
+    ..PREPARE
+};
 const OUTPUT_CONNECTION: ExpectedRequest = expected(
-    "follow without no_stream: invocation read @invocation:each-exposed",
+    "follow without no_stream,stdout_format=raw: invocation read @invocation:each-exposed",
     &[EXPOSED_OUTPUT],
 );
 const INVOKE: ExpectedRequest = expected(
@@ -302,28 +318,48 @@ const RESUME_SESSION: &[ExpectedRequest] = &[
 ];
 const DESCRIBE_HOSTED: &[(Grant, LooksLike)] = &[VIEW_DENIED, TOOL_VIEW];
 const EXEC: &[(Grant, LooksLike)] = &[control("exec", ""), TOOL_INVOKE_RUN];
-const SSH: &[ExpectedRequest] = &[
-    expected(
-        "prepare: agent view @agent, tool view @tool",
-        DESCRIBE_HOSTED,
-    ),
-    expected(
-        "operation: agent exec @agent, tool invoke @tool [tool-command] + if tool-reads-static-file-config: tool invoke @tool [any-tool-command]",
-        EXEC,
-    ),
-    expected(
-        "input if tool-can-stop: invocation send @invocation:accepted",
-        &[INVOCATION_SEND],
-    ),
+const SSH_DESCRIBE: ExpectedRequest = expected(
+    "prepare: agent view @agent, tool view @tool",
+    DESCRIBE_HOSTED,
+);
+const SSH_START: ExpectedRequest = expected(
+    "operation: agent exec @agent, tool invoke @tool [tool-command] + if tool-reads-static-file-config: tool invoke @tool [any-tool-command]",
+    EXEC,
+);
+const SSH_STOP: ExpectedRequest = expected(
+    "input if stopped-through-stdin: invocation send @invocation:accepted",
+    &[INVOCATION_SEND],
+);
+const SSH_CANCEL: ExpectedRequest = expected(
+    "cancel if stopped: invocation cancel @invocation:accepted",
+    &[INVOCATION_CANCEL],
+);
+const SSH_LOOKUP: ExpectedRequest = expected(
+    "follow if stopped-without-result: invocation read @invocation:accepted",
+    &[INVOCATION_READ],
+);
+/// The agent's state, which a session reads next to each command. Without
+/// `view` its denial is the denial of the description before it, which makes
+/// the same `agent : view` read of the same agent and stops the command;
+/// `agent get` covers this read on its own.
+const SSH_SESSION: &[ExpectedRequest] = &[
+    SSH_DESCRIBE,
+    SSH_START,
+    SSH_STOP,
     expected("follow: agent view @agent", &[VIEW_DENIED]),
+    SSH_CANCEL,
+    SSH_LOOKUP,
+];
+const SSH_SCRIPT: &[ExpectedRequest] = &[
+    SSH_DESCRIBE,
+    SSH_START,
+    SSH_STOP,
     expected(
-        "cancel if stopped: invocation cancel @invocation:accepted",
-        &[INVOCATION_CANCEL],
+        "follow if outcome-unknown: agent view @agent",
+        &[VIEW_DENIED],
     ),
-    expected(
-        "follow if stopped: invocation read @invocation:accepted",
-        &[INVOCATION_READ],
-    ),
+    SSH_CANCEL,
+    SSH_LOOKUP,
 ];
 const OPLOG_ENTRIES: ExpectedRequest = expected(
     "follow without omit_payloads: oplog read @agent [oplog-entry]",
@@ -349,11 +385,19 @@ const fn case(
     Case {
         path,
         mode,
+        selected_by: "default",
         class,
         fixture: Fixture::Repository,
         precondition: Precondition::None,
         requests,
         effect,
+    }
+}
+
+const fn selected(selected_by: &'static str, case: Case) -> Case {
+    Case {
+        selected_by,
+        ..case
     }
 }
 
@@ -376,7 +420,7 @@ const CASES: &[Case] = &[
         "create",
         ManagementControl,
         &[
-            PREPARE,
+            PREPARE_NEW,
             expected(
                 "operation: agent create @new-agent",
                 &[(
@@ -394,26 +438,35 @@ const CASES: &[Case] = &[
         &[PREPARE, OUTPUT_CONNECTION, INVOKE, SEND_STDIN],
         Effect::Invoked,
     ),
-    case(
-        &["agent", "invoke"],
+    selected(
         "trigger",
-        InvocationGrant,
-        &[PREPARE, OUTPUT_CONNECTION, INVOKE],
-        Effect::Invoked,
+        case(
+            &["agent", "invoke"],
+            "trigger",
+            InvocationGrant,
+            &[PREPARE, OUTPUT_CONNECTION, INVOKE],
+            Effect::Invoked,
+        ),
     ),
-    case(
-        &["agent", "invoke"],
-        "resume-session",
-        InvocationGrant,
-        RESUME_SESSION,
-        Effect::Reads("InvocationAccepted"),
+    selected(
+        "resume_session",
+        case(
+            &["agent", "invoke"],
+            "resume-session",
+            InvocationGrant,
+            RESUME_SESSION,
+            Effect::Reads("InvocationAccepted"),
+        ),
     ),
-    case(
-        &["agent", "invoke"],
-        "takeover-session",
-        InvocationGrant,
-        RESUME_SESSION,
-        Effect::Reads("InvocationAccepted"),
+    selected(
+        "takeover_session",
+        case(
+            &["agent", "invoke"],
+            "takeover-session",
+            InvocationGrant,
+            RESUME_SESSION,
+            Effect::Reads("InvocationAccepted"),
+        ),
     ),
     case(
         &["agent", "get"],
@@ -498,19 +551,22 @@ const CASES: &[Case] = &[
         Effect::Updated,
     ),
     // `marked: undecided` waits for decision 2 of the GOL-1403 plan.
-    case(
-        &["agent", "update"],
-        "manual",
-        ManagementControl,
-        &[
-            PREPARE,
-            expected(
-                "operation: agent update-revision @agent | marked: undecided",
-                &[control("update-revision", "")],
-            ),
-            AWAIT_UPDATE,
-        ],
-        Effect::Updated,
+    selected(
+        "mode=manual",
+        case(
+            &["agent", "update"],
+            "manual",
+            ManagementControl,
+            &[
+                PREPARE,
+                expected(
+                    "operation: agent update-revision @agent | marked: undecided",
+                    &[control("update-revision", "")],
+                ),
+                AWAIT_UPDATE,
+            ],
+            Effect::Updated,
+        ),
     ),
     case(
         &["agent", "interrupt"],
@@ -562,30 +618,39 @@ const CASES: &[Case] = &[
         ],
         Effect::Reads("Create"),
     ),
-    case(
-        &["agent", "oplog"],
-        "search",
-        ManagementRead,
-        &[
-            PREPARE,
-            expected("operation: oplog read @agent [oplog-all]", &[OPLOG_READ]),
-            OPLOG_ENTRIES,
-        ],
-        Effect::Reads("Create"),
+    selected(
+        "query",
+        case(
+            &["agent", "oplog"],
+            "search",
+            ManagementRead,
+            &[
+                PREPARE,
+                expected("operation: oplog read @agent [oplog-all]", &[OPLOG_READ]),
+                OPLOG_ENTRIES,
+            ],
+            Effect::Reads("Create"),
+        ),
     ),
-    case(
-        &["agent", "revert"],
-        "to-oplog-index",
-        ManagementControl,
-        REVERT,
-        Effect::Reverted,
+    selected(
+        "last_oplog_index",
+        case(
+            &["agent", "revert"],
+            "to-oplog-index",
+            ManagementControl,
+            REVERT,
+            Effect::Reverted,
+        ),
     ),
-    case(
-        &["agent", "revert"],
-        "by-invocation-count",
-        ManagementControl,
-        REVERT,
-        Effect::Reverted,
+    selected(
+        "number_of_invocations",
+        case(
+            &["agent", "revert"],
+            "by-invocation-count",
+            ManagementControl,
+            REVERT,
+            Effect::Reverted,
+        ),
     ),
     case(
         &["agent", "cancel-invocation"],
@@ -673,97 +738,115 @@ const CASES: &[Case] = &[
             &["ssh"],
             "session",
             ExecClass,
-            SSH,
+            SSH_SESSION,
             Effect::Reads("ToolSuccess"),
         ),
     ),
     on(
         Fixture::BashTool,
-        case(
-            &["ssh"],
-            "script",
-            ExecClass,
-            SSH,
-            Effect::Reads("ToolSuccess"),
+        selected(
+            "command",
+            case(
+                &["ssh"],
+                "script",
+                ExecClass,
+                SSH_SCRIPT,
+                Effect::Reads("ToolSuccess"),
+            ),
         ),
     ),
     on(
         Fixture::BashTool,
-        case(
-            &["tool", "invoke"],
-            "hosted-start",
-            ExecClass,
-            &[
-                expected(
-                    "prepare: agent view @agent, tool view @tool",
+        selected(
+            "agent",
+            case(
+                &["tool", "invoke"],
+                "hosted-start",
+                ExecClass,
+                &[
+                    expected(
+                        "prepare: agent view @agent, tool view @tool",
+                        DESCRIBE_HOSTED,
+                    ),
+                    expected(
+                        "operation: agent exec @agent, tool invoke @tool [tool-command] + if tool-reads-static-file-config: tool invoke @tool [any-tool-command]",
+                        EXEC,
+                    ),
+                    expected(
+                        "input with stdin: invocation send @invocation:accepted",
+                        &[INVOCATION_SEND],
+                    ),
+                ],
+                Effect::Reads("result"),
+            ),
+        ),
+    ),
+    on(
+        Fixture::BashTool,
+        selected(
+            "component",
+            case(
+                &["tool", "invoke"],
+                "standalone-start",
+                InvocationGrant,
+                &[
+                    expected("prepare: tool view @tool", &[TOOL_VIEW]),
+                    expected(
+                        "operation: tool invoke @tool [tool-command] + if tool-reads-static-file-config: tool invoke @tool [any-tool-command]",
+                        &[TOOL_INVOKE_RUN],
+                    ),
+                    expected(
+                        "input with stdin: invocation send @invocation:accepted",
+                        &[INVOCATION_SEND],
+                    ),
+                ],
+                Effect::Reads("result"),
+            ),
+        ),
+    ),
+    on(
+        Fixture::BashTool,
+        selected(
+            "agent, tool_args=--help|-h",
+            case(
+                &["tool", "invoke"],
+                "hosted-help",
+                ManagementRead,
+                &[expected(
+                    "operation: agent view @agent, tool view @tool",
                     DESCRIBE_HOSTED,
-                ),
-                expected(
-                    "operation: agent exec @agent, tool invoke @tool [tool-command] + if tool-reads-static-file-config: tool invoke @tool [any-tool-command]",
-                    EXEC,
-                ),
-                expected(
-                    "input with stdin: invocation send @invocation:accepted",
-                    &[INVOCATION_SEND],
-                ),
-            ],
-            Effect::Reads("result"),
+                )],
+                Effect::Reads("run"),
+            ),
         ),
     ),
     on(
         Fixture::BashTool,
-        case(
-            &["tool", "invoke"],
-            "standalone-start",
-            InvocationGrant,
-            &[
-                expected("prepare: tool view @tool", &[TOOL_VIEW]),
-                expected(
-                    "operation: tool invoke @tool [tool-command] + if tool-reads-static-file-config: tool invoke @tool [any-tool-command]",
-                    &[TOOL_INVOKE_RUN],
-                ),
-                expected(
-                    "input with stdin: invocation send @invocation:accepted",
-                    &[INVOCATION_SEND],
-                ),
-            ],
-            Effect::Reads("result"),
+        selected(
+            "component, tool_args=--help|-h",
+            case(
+                &["tool", "invoke"],
+                "standalone-help",
+                ManagementRead,
+                &[expected("operation: tool view @tool", &[TOOL_VIEW])],
+                Effect::Reads("run"),
+            ),
         ),
     ),
     on(
         Fixture::BashTool,
-        case(
-            &["tool", "invoke"],
-            "hosted-help",
-            ManagementRead,
-            &[expected(
-                "operation: agent view @agent, tool view @tool",
-                DESCRIBE_HOSTED,
-            )],
-            Effect::Reads("run"),
-        ),
-    ),
-    on(
-        Fixture::BashTool,
-        case(
-            &["tool", "invoke"],
-            "standalone-help",
-            ManagementRead,
-            &[expected("operation: tool view @tool", &[TOOL_VIEW])],
-            Effect::Reads("run"),
-        ),
-    ),
-    on(
-        Fixture::BashTool,
-        case(
-            &["tool", "invoke"],
+        selected(
             "lookup",
-            InvocationGrant,
-            &[expected(
-                "operation: invocation read @invocation:idempotency-key",
-                &[INVOCATION_READ],
-            )],
-            Effect::Reads("result"),
+            case(
+                &["tool", "invoke"],
+                "lookup",
+                InvocationGrant,
+                &[expected(
+                    "operation: invocation read @invocation:idempotency-key",
+                    &[INVOCATION_READ],
+                )],
+                Effect::Reads("result"),
+            ),
         ),
     ),
 ];
@@ -792,13 +875,13 @@ const PENDING_REQUESTS: &[(&[&str], &str, usize, &str)] = &[
         &["ssh"],
         "session",
         2,
-        "remaining GOL-1403 work: the stdin stream binding of a tool invocation, with `Fixture::BashTool`",
+        "remaining GOL-1403 work: the stop through the stdin stream binding of a tool invocation, with `Fixture::BashTool`",
     ),
     (
         &["ssh"],
         "script",
         2,
-        "remaining GOL-1403 work: the stdin stream binding of a tool invocation, with `Fixture::BashTool`",
+        "remaining GOL-1403 work: the stop through the stdin stream binding of a tool invocation, with `Fixture::BashTool`",
     ),
     (
         &["tool", "invoke"],
@@ -880,12 +963,26 @@ fn spell_parts(parts: &[Part]) -> String {
     parts.iter().map(spell_part).collect::<Vec<_>>().join(", ")
 }
 
+fn spell_selectors(selectors: &[Selector], separator: &str) -> String {
+    if selectors.is_empty() {
+        return "default".to_string();
+    }
+    selectors
+        .iter()
+        .map(|selector| match selector.values {
+            [] => selector.arg.to_string(),
+            values => format!("{}={}", selector.arg, values.join("|")),
+        })
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
 fn spell_request(request: &Request) -> String {
     let stage = kebab(request.stage);
     let when = match request.when {
         When::Always => String::new(),
-        When::With(args) => format!(" with {}", args.join(",")),
-        When::Without(args) => format!(" without {}", args.join(",")),
+        When::With(selectors) => format!(" with {}", spell_selectors(selectors, ",")),
+        When::Without(selectors) => format!(" without {}", spell_selectors(selectors, ",")),
         when => format!(" if {}", kebab(when)),
     };
     let mut spelled = format!("{stage}{when}: {}", spell_parts(request.parts));
@@ -917,15 +1014,17 @@ enum Denial {
     /// The status, the stable headers and the whole body of an HTTP
     /// response.
     Http(RawResponse),
-    /// The whole rejection message of an invocation session.
+    /// The rejection message of an invocation session, without the attempt
+    /// ID that it echoes from the request.
     Session(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RawResponse {
     status: u16,
-    headers: BTreeMap<String, String>,
-    body: String,
+    /// Every header value, in the order of the response.
+    headers: Vec<(String, Vec<u8>)>,
+    body: Vec<u8>,
 }
 
 /// Headers that differ between two responses to the same request.
@@ -938,14 +1037,9 @@ impl RawResponse {
             headers: headers
                 .iter()
                 .filter(|(name, _)| !UNSTABLE_HEADERS.contains(&name.as_str()))
-                .map(|(name, value)| {
-                    (
-                        name.to_string(),
-                        String::from_utf8_lossy(value.as_bytes()).into_owned(),
-                    )
-                })
+                .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
                 .collect(),
-            body: String::from_utf8_lossy(body).into_owned(),
+            body: body.to_vec(),
         }
     }
 }
@@ -1063,6 +1157,9 @@ struct Seed {
     /// The session token of an invocation of the target that the owner
     /// started.
     session_token: String,
+    /// When set, the requests on the invocation that a command started
+    /// address this missing invocation of the target instead.
+    missing_invocation: Option<String>,
 }
 
 impl Seed {
@@ -1144,18 +1241,10 @@ impl Seed {
                 "pending on GOL-1086: a tool that reads static `File` config fields, and its admission"
             ),
         };
-        let next_revision = owner
-            .update_component(&component.id, component_file(fixture))
-            .await?
-            .revision
-            .into();
+        // The target starts on the component's first revision, before the
+        // next one is published, so that an update moves it.
         let target = agent_id!(agent_type, "management-target");
         let target_id = owner.start_agent(&component.id, target.clone()).await?;
-        let before_seed_item = worker_client(&owner)
-            .await
-            .get_worker_metadata(&component.id.0, &target_id.agent_id)
-            .await?
-            .last_oplog_index;
         let mut seed = Self {
             owner,
             caller,
@@ -1164,16 +1253,33 @@ impl Seed {
             environment: env.name.0.clone(),
             fixture,
             component,
-            next_revision,
+            next_revision: 0,
             target,
             target_id,
             new_agent: agent_id!(agent_type, "management-new"),
-            before_seed_item,
+            before_seed_item: OplogIndex::from_u64(0),
             scheduled_invocation: String::new(),
             other_scheduled_invocation: String::new(),
             session_token: String::new(),
+            missing_invocation: None,
         };
         if fixture == Fixture::Repository {
+            seed.session_token =
+                match start_session(&seed, &seed.owner, "session-item", false).await? {
+                    (Outcome::Allowed(_), Some(accepted)) => accepted.session_token,
+                    other => anyhow::bail!("the owner could not start a session: {other:?}"),
+                };
+            seed.scheduled_invocation = seed.schedule_invocation().await?;
+            seed.other_scheduled_invocation = seed.schedule_invocation().await?;
+            seed.wait_until_only_the_scheduled_invocations_are_pending()
+                .await?;
+            // The seeded item is the target's last invocation, so that
+            // reverting one invocation or to the index before it removes it.
+            seed.before_seed_item = worker_client(&seed.owner)
+                .await
+                .get_worker_metadata(&seed.component.id.0, seed.agent_name())
+                .await?
+                .last_oplog_index;
             seed.owner
                 .invoke_and_await_agent(
                     &seed.component,
@@ -1182,13 +1288,13 @@ impl Seed {
                     data_value!(SEED_ITEM, "added by the owner"),
                 )
                 .await?;
-            seed.scheduled_invocation = seed.schedule_invocation().await?;
-            seed.other_scheduled_invocation = seed.schedule_invocation().await?;
-            seed.session_token = match start_session(&seed, &seed.owner, "session-item").await? {
-                (Outcome::Allowed(_), Some(accepted)) => accepted.session_token,
-                other => anyhow::bail!("the owner could not start a session: {other:?}"),
-            };
         }
+        seed.next_revision = seed
+            .owner
+            .update_component(&seed.component.id, component_file(fixture))
+            .await?
+            .revision
+            .into();
         Ok(seed)
     }
 
@@ -1212,6 +1318,7 @@ impl Seed {
         Self {
             scheduled_invocation: uuid::Uuid::new_v4().to_string(),
             other_scheduled_invocation: uuid::Uuid::new_v4().to_string(),
+            missing_invocation: Some(uuid::Uuid::new_v4().to_string()),
             ..self.same()
         }
     }
@@ -1233,7 +1340,22 @@ impl Seed {
             scheduled_invocation: self.scheduled_invocation.clone(),
             other_scheduled_invocation: self.other_scheduled_invocation.clone(),
             session_token: self.session_token.clone(),
+            missing_invocation: self.missing_invocation.clone(),
         }
+    }
+
+    async fn wait_until_only_the_scheduled_invocations_are_pending(&self) -> anyhow::Result<()> {
+        let worker = worker_client(&self.owner).await;
+        for _ in 0..30 {
+            let metadata = worker
+                .get_worker_metadata(&self.component.id.0, self.agent_name())
+                .await?;
+            if metadata.pending_invocation_count == 2 && metadata.status == AgentStatus::Idle {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        anyhow::bail!("the owner's session invocation did not finish")
     }
 
     async fn schedule_invocation(&self) -> anyhow::Result<String> {
@@ -1315,9 +1437,8 @@ impl Seed {
         Ok(())
     }
 
-    /// What the owner sees of the target, the agent that `agent new`
-    /// creates, and the guest state. Its metadata comes first, because
-    /// reading the guest state resumes an interrupted agent.
+    /// What the owner sees of the target and of the agent that `agent new`
+    /// creates, through reads that neither wake nor invoke the target.
     async fn observe(&self) -> anyhow::Result<Observation> {
         let worker = worker_client(&self.owner).await;
         let metadata = worker
@@ -1328,14 +1449,20 @@ impl Seed {
             .get_worker_metadata(&self.component.id.0, &self.new_agent.to_string())
             .await
             .is_ok();
-        let guest = match (&metadata, self.fixture) {
-            (Some(_), Fixture::Repository) => Some(format!(
-                "{:?}",
-                self.owner
-                    .invoke_and_await_agent(&self.component, &self.target, "list", data_value!())
-                    .await?
-            )),
-            _ => None,
+        let caller_invocations = match &metadata {
+            Some(_) => worker
+                .get_oplog(
+                    &self.component.id.0,
+                    self.agent_name(),
+                    None,
+                    100,
+                    None,
+                    Some(CALL_ITEM),
+                )
+                .await?
+                .entries
+                .len(),
+            None => 0,
         };
         Ok(Observation {
             target: metadata.map(|metadata| TargetState {
@@ -1343,9 +1470,10 @@ impl Seed {
                 revision: metadata.component_revision.into(),
                 pending_invocations: metadata.pending_invocation_count,
                 active_processors: metadata.active_plugins.len(),
+                deleted_regions: metadata.deleted_regions.len(),
             }),
             created,
-            guest,
+            caller_invocations,
         })
     }
 }
@@ -1361,7 +1489,8 @@ fn component_file(fixture: Fixture) -> &'static str {
 struct Observation {
     target: Option<TargetState>,
     created: bool,
-    guest: Option<String>,
+    /// The oplog entries of the target that name the caller's item.
+    caller_invocations: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1370,6 +1499,7 @@ struct TargetState {
     revision: u64,
     pending_invocations: u64,
     active_processors: usize,
+    deleted_regions: usize,
 }
 
 async fn worker_client(user: &User) -> WorkerClientLive {
@@ -1466,10 +1596,12 @@ struct Accepted {
 }
 
 /// Opens an invocation session with one start or resume, and returns whether
-/// the server accepted it.
+/// the server accepted it. With `until_result`, an accepted outcome carries
+/// the invocation's result instead of the acceptance.
 async fn session(
     user: &User,
     operation: PublicClientMessage,
+    until_result: bool,
 ) -> anyhow::Result<(Outcome, Option<Accepted>)> {
     let service = user.deps.worker_service();
     let requests = SessionRequests {
@@ -1495,6 +1627,7 @@ async fn session(
         Arc::new(()),
     )
     .await?;
+    let mut accepted = None;
     loop {
         let mut frame = session.receive().await?;
         let message = frame.frame().clone();
@@ -1506,17 +1639,38 @@ async fn session(
                 agent_id,
                 ..
             }) => {
-                return Ok((
-                    Outcome::Allowed(format!("InvocationAccepted {agent_id:?} {idempotency_key}")),
-                    Some(Accepted {
-                        session_token,
-                        idempotency_key: idempotency_key.to_string(),
-                    }),
-                ));
+                let invocation = Accepted {
+                    session_token,
+                    idempotency_key: idempotency_key.to_string(),
+                };
+                if !until_result {
+                    return Ok((
+                        Outcome::Allowed(format!(
+                            "InvocationAccepted {agent_id:?} {idempotency_key}"
+                        )),
+                        Some(invocation),
+                    ));
+                }
+                accepted = Some(invocation);
             }
-            ServerFrame::Message(rejected @ PublicServerMessage::InvocationRejected { .. }) => {
+            ServerFrame::Message(
+                result @ (PublicServerMessage::InvocationResult { .. }
+                | PublicServerMessage::InvocationFinished { .. }),
+            ) if accepted.is_some() => {
+                return Ok((Outcome::Allowed(format!("{result:?}")), accepted));
+            }
+            ServerFrame::Message(PublicServerMessage::InvocationRejected {
+                code,
+                message,
+                retryable,
+                stderr,
+                version,
+                ..
+            }) => {
                 return Ok((
-                    Outcome::Denied(Denial::Session(format!("{rejected:?}"))),
+                    Outcome::Denied(Denial::Session(format!(
+                        "{code:?} {message:?} retryable={retryable} stderr={stderr:?} version={version}"
+                    ))),
                     None,
                 ));
             }
@@ -1529,6 +1683,7 @@ async fn start_session(
     seed: &Seed,
     user: &User,
     item: &str,
+    until_result: bool,
 ) -> anyhow::Result<(Outcome, Option<Accepted>)> {
     let selector = InvocationSelector {
         agent_type: AGENT_TYPE.to_string(),
@@ -1548,6 +1703,7 @@ async fn start_session(
             selector: Box::new(selector),
             version: INVOCATION_SESSION_VERSION,
         },
+        until_result,
     )
     .await
 }
@@ -1562,6 +1718,7 @@ async fn resume_session(seed: &Seed, operation: PublicResumeOperation) -> anyhow
             session_token: seed.session_token.clone(),
             version: INVOCATION_SESSION_VERSION,
         },
+        false,
     )
     .await?
     .0)
@@ -1794,33 +1951,59 @@ async fn cancel(seed: &Seed, idempotency_key: &str) -> anyhow::Result<Outcome> {
     )
 }
 
+/// What the user, or the CLI, does to a running `ssh` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// Nothing: the command runs to its result.
+    None,
+    /// The command is stopped and the accepted invocation cancelled.
+    Cancel,
+    /// The command is stopped, and its session ends without the result, so
+    /// the CLI also looks the result up.
+    CancelAndLookUp,
+}
+
 /// One command of an `ssh` session or script: the description, the start
-/// through the session, the read of the agent's state, and, when `stopped`,
-/// the cancellation and the lookup of the accepted invocation.
-async fn ssh_command(seed: &Seed, stopped: bool) -> anyhow::Result<Trace> {
+/// through the session up to the result, the read of the agent's state when
+/// `state_read`, and the requests of `stop` on the accepted invocation, or on
+/// `Seed::missing_invocation` when it is set.
+async fn ssh_command(seed: &Seed, state_read: bool, stop: Stop) -> anyhow::Result<Trace> {
     let mut trace = Trace::default();
     trace.push(Step::Request(describe(seed, true).await?));
     if trace.stopped {
         return Ok(trace);
     }
     let key = uuid::Uuid::new_v4().to_string();
-    let (started, accepted) =
-        session(&seed.caller, tool_start(seed, hosted_target(seed), &key)?).await?;
+    let (started, accepted) = session(
+        &seed.caller,
+        tool_start(seed, hosted_target(seed), &key)?,
+        true,
+    )
+    .await?;
     trace.push(Step::Request(started));
     if trace.stopped {
         return Ok(trace);
     }
-    // The state read is best effort: a denial does not stop the command.
-    trace.outcomes.push(match metadata(seed).await? {
-        Step::Request(outcome) | Step::Prepare(outcome) => outcome,
-    });
-    if stopped {
-        let accepted = accepted
-            .expect("an accepted start has its key")
-            .idempotency_key;
-        trace.push(Step::Request(cancel(seed, &accepted).await?));
+    if state_read {
+        // The state read is best effort: a denial does not stop the command.
+        trace.outcomes.push(match metadata(seed).await? {
+            Step::Request(outcome) | Step::Prepare(outcome) => outcome,
+        });
+    }
+    let addressed = match &seed.missing_invocation {
+        Some(missing) => missing.clone(),
+        None => {
+            accepted
+                .expect("an accepted start has its key")
+                .idempotency_key
+        }
+    };
+    if stop != Stop::None {
+        trace.push(Step::Request(cancel(seed, &addressed).await?));
+    }
+    if stop == Stop::CancelAndLookUp && !trace.stopped {
         trace.push(Step::Request(
-            invoke_tool(seed, true, NativeToolInvocationMode::Lookup, &accepted).await?,
+            invoke_tool(seed, true, NativeToolInvocationMode::Lookup, &addressed).await?,
         ));
     }
     Ok(trace)
@@ -1884,7 +2067,21 @@ const ADAPTERS: &[Adapter] = &[
         [0, 2],
         |seed| in_order!(
             prepare_target(seed).await?,
-            request(async { Ok(start_session(seed, &seed.caller, CALL_ITEM).await?.0) }).await?,
+            request(async { Ok(start_session(seed, &seed.caller, CALL_ITEM, true).await?.0) })
+                .await?,
+        )
+    ),
+    // `--stdout-format raw` opens no output connection either; the CLI
+    // allows it for a method with a stream result.
+    adapter!(
+        ["agent", "invoke"],
+        "start",
+        "raw-output",
+        [0, 2],
+        |seed| in_order!(
+            prepare_target(seed).await?,
+            request(async { Ok(start_session(seed, &seed.caller, CALL_ITEM, true).await?.0) })
+                .await?,
         )
     ),
     adapter!(
@@ -1895,7 +2092,8 @@ const ADAPTERS: &[Adapter] = &[
         |seed| in_order!(
             prepare_target(seed).await?,
             request(connect(seed)).await?,
-            request(async { Ok(start_session(seed, &seed.caller, CALL_ITEM).await?.0) }).await?,
+            request(async { Ok(start_session(seed, &seed.caller, CALL_ITEM, true).await?.0) })
+                .await?,
         )
     ),
     adapter!(
@@ -1923,6 +2121,16 @@ const ADAPTERS: &[Adapter] = &[
         ["agent", "invoke"],
         "resume-session",
         "no-stream",
+        [0, 2],
+        |seed| in_order!(
+            prepare_target(seed).await?,
+            request(resume_session(seed, PublicResumeOperation::Resume)).await?,
+        )
+    ),
+    adapter!(
+        ["agent", "invoke"],
+        "resume-session",
+        "raw-output",
         [0, 2],
         |seed| in_order!(
             prepare_target(seed).await?,
@@ -1944,6 +2152,16 @@ const ADAPTERS: &[Adapter] = &[
         ["agent", "invoke"],
         "takeover-session",
         "no-stream",
+        [0, 2],
+        |seed| in_order!(
+            prepare_target(seed).await?,
+            request(resume_session(seed, PublicResumeOperation::Takeover)).await?,
+        )
+    ),
+    adapter!(
+        ["agent", "invoke"],
+        "takeover-session",
+        "raw-output",
         [0, 2],
         |seed| in_order!(
             prepare_target(seed).await?,
@@ -2262,19 +2480,44 @@ const ADAPTERS: &[Adapter] = &[
         )
     ),
     adapter!(["ssh"], "session", "runs", [0, 1, 3], |seed| ssh_command(
-        seed, false
+        seed,
+        true,
+        Stop::None
     )
     .await),
-    adapter!(["ssh"], "session", "stopped", [0, 1, 3, 4, 5], |seed| {
-        ssh_command(seed, true).await
+    adapter!(["ssh"], "session", "stopped", [0, 1, 3, 4], |seed| {
+        ssh_command(seed, true, Stop::Cancel).await
     }),
-    adapter!(["ssh"], "script", "runs", [0, 1, 3], |seed| ssh_command(
-        seed, false
+    adapter!(
+        ["ssh"],
+        "session",
+        "stopped-without-result",
+        [0, 1, 3, 4, 5],
+        |seed| ssh_command(seed, true, Stop::CancelAndLookUp).await
+    ),
+    adapter!(["ssh"], "script", "runs", [0, 1], |seed| ssh_command(
+        seed,
+        false,
+        Stop::None
     )
     .await),
-    adapter!(["ssh"], "script", "stopped", [0, 1, 3, 4, 5], |seed| {
-        ssh_command(seed, true).await
+    // A script reads the agent's state only to report an unknown outcome.
+    adapter!(["ssh"], "script", "outcome-unknown", [0, 1, 3], |seed| {
+        ssh_command(seed, true, Stop::None).await
     }),
+    adapter!(["ssh"], "script", "stopped", [0, 1, 4], |seed| ssh_command(
+        seed,
+        false,
+        Stop::Cancel
+    )
+    .await),
+    adapter!(
+        ["ssh"],
+        "script",
+        "stopped-without-result",
+        [0, 1, 4, 5],
+        |seed| ssh_command(seed, false, Stop::CancelAndLookUp).await
+    ),
     adapter!(
         ["tool", "invoke"],
         "hosted-start",
@@ -2441,6 +2684,13 @@ fn management_every_command_mode_has_an_adapter_and_a_case() {
         else {
             continue;
         };
+        let selected_by = spell_selectors(mode.selected_by, ", ");
+        if case.selected_by != selected_by {
+            problems.push(format!(
+                "{at} is selected by `{selected_by}`, the plan says `{}`",
+                case.selected_by
+            ));
+        }
         if case.class != mode.class {
             problems.push(format!(
                 "{at} is {:?}, the plan says {:?}",
@@ -2593,7 +2843,8 @@ async fn check_effect(
             Effect::Created => !before.created && after.created,
             Effect::Deleted => target(before).is_some() && target(after).is_none(),
             Effect::Updated => {
-                target(after).is_some_and(|state| state.revision == seed.next_revision)
+                target(before).is_some_and(|state| state.revision != seed.next_revision)
+                    && target(after).is_some_and(|state| state.revision == seed.next_revision)
             }
             Effect::Interrupted => {
                 target(after).is_some_and(|state| state.status == AgentStatus::Interrupted)
@@ -2602,20 +2853,11 @@ async fn check_effect(
                 target(before).is_some_and(|state| state.status == AgentStatus::Interrupted)
                     && target(after).is_some_and(|state| state.status != AgentStatus::Interrupted)
             }
-            Effect::Invoked => after
-                .guest
-                .as_deref()
-                .is_some_and(|guest| guest.contains(CALL_ITEM)),
-            Effect::Reverted => {
-                before
-                    .guest
-                    .as_deref()
-                    .is_some_and(|guest| guest.contains(SEED_ITEM))
-                    && after
-                        .guest
-                        .as_deref()
-                        .is_some_and(|guest| !guest.contains(SEED_ITEM))
-            }
+            Effect::Invoked => after.caller_invocations > before.caller_invocations,
+            Effect::Reverted => match (target(before), target(after)) {
+                (Some(before), Some(after)) => after.deleted_regions > before.deleted_regions,
+                _ => false,
+            },
             Effect::Cancelled => match (target(before), target(after)) {
                 (Some(before), Some(after)) => {
                     after.pending_invocations + 1 == before.pending_invocations
@@ -2658,25 +2900,27 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
 ) -> anyhow::Result<()> {
     for case in CASES {
         for adapter in adapters(case.path, case.mode) {
-            let grants = adapter
+            let made = adapter
                 .makes
                 .iter()
-                .flat_map(|index| {
-                    case.requests[*index]
-                        .grants
-                        .iter()
-                        .map(move |(grant, looks_like)| (*index, *grant, *looks_like))
-                })
+                .map(|index| &case.requests[*index])
                 .collect::<Vec<_>>();
-            let all = grants
-                .iter()
-                .map(|(_, grant, _)| *grant)
-                .collect::<Vec<_>>();
-            for (removed, (index, missing, looks_like)) in grants.iter().enumerate() {
+            let mut all = Vec::<Grant>::new();
+            for (grant, _) in made.iter().flat_map(|request| request.grants) {
+                if !all.contains(grant) {
+                    all.push(*grant);
+                }
+            }
+            // Each distinct grant is removed with every request that needs
+            // it, so that no equivalent grant stays installed.
+            for missing in &all {
                 let seed = Seed::new(deps, case.fixture).await?;
                 seed.put_in(case.precondition).await?;
-                let mut without = all.clone();
-                without.remove(removed);
+                let without = all
+                    .iter()
+                    .filter(|grant| *grant != missing)
+                    .copied()
+                    .collect::<Vec<_>>();
                 give(&seed, &without).await?;
                 let before = seed.observe().await?;
                 let trace = (adapter.run)(&seed).await?;
@@ -2686,37 +2930,61 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
                     case.mode,
                     adapter.variant
                 );
-                let position = adapter
-                    .makes
+                let needing = made
                     .iter()
-                    .position(|made| made == index)
-                    .expect("the adapter makes the request");
-                if case.requests[*index].spec.starts_with("operation") {
+                    .enumerate()
+                    .filter_map(|(position, request)| {
+                        request
+                            .grants
+                            .iter()
+                            .find(|(grant, _)| grant == missing)
+                            .map(|(_, looks_like)| (position, *request, *looks_like))
+                    })
+                    .collect::<Vec<_>>();
+                if needing
+                    .iter()
+                    .any(|(_, request, _)| request.spec.starts_with("operation"))
+                {
                     assert_eq!(seed.observe().await?, before, "{at} changed the target");
                 }
-                let denied = match trace.outcomes.get(position) {
-                    Some(Outcome::Denied(denial)) => denial.clone(),
-                    other => panic!("{at} was not denied: {other:?}"),
-                };
-                match looks_like {
-                    LooksLike::UnknownAgent | LooksLike::UnknownInvocation => {
-                        let unknown = if *looks_like == LooksLike::UnknownAgent {
-                            seed.with_unknown_agent()
-                        } else {
-                            seed.with_unknown_invocation()
-                        };
-                        let unknown = (adapter.run)(&unknown).await?;
-                        assert_eq!(
-                            unknown.outcomes.get(position),
-                            Some(&Outcome::Denied(denied)),
-                            "{at} differs from an unknown target"
-                        );
+                let stopped_by_it = trace.stopped
+                    && needing
+                        .iter()
+                        .any(|(position, _, _)| *position + 1 == trace.outcomes.len());
+                for (position, _, looks_like) in &needing {
+                    if let LooksLike::Pending(_) = looks_like {
+                        continue;
                     }
-                    LooksLike::Forbidden => assert!(
-                        matches!(denied, Denial::Http(RawResponse { status: 403, .. })),
-                        "{at} is not a 403 on a tool by name: {denied:?}"
-                    ),
-                    LooksLike::Pending(_) => {}
+                    let Some(outcome) = trace.outcomes.get(*position) else {
+                        // An earlier request that needs the same grant was
+                        // denied and stopped the command.
+                        assert!(stopped_by_it, "{at} did not make request {position}");
+                        continue;
+                    };
+                    let denied = match outcome {
+                        Outcome::Denied(denial) => denial.clone(),
+                        other => panic!("{at} request {position} was not denied: {other:?}"),
+                    };
+                    match looks_like {
+                        LooksLike::UnknownAgent | LooksLike::UnknownInvocation => {
+                            let unknown = if *looks_like == LooksLike::UnknownAgent {
+                                seed.with_unknown_agent()
+                            } else {
+                                seed.with_unknown_invocation()
+                            };
+                            let unknown = (adapter.run)(&unknown).await?;
+                            assert_eq!(
+                                unknown.outcomes.get(*position),
+                                Some(&Outcome::Denied(denied)),
+                                "{at} request {position} differs from an unknown target"
+                            );
+                        }
+                        LooksLike::Forbidden => assert!(
+                            matches!(denied, Denial::Http(RawResponse { status: 403, .. })),
+                            "{at} request {position} is not a 403 on a tool by name: {denied:?}"
+                        ),
+                        LooksLike::Pending(_) => {}
+                    }
                 }
             }
             let seed = Seed::new(deps, case.fixture).await?;
@@ -2724,12 +2992,20 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
             give(&seed, &all).await?;
             let before = seed.observe().await?;
             let trace = (adapter.run)(&seed).await?;
+            let as_expected = trace.outcomes.len() == made.len()
+                && trace
+                    .outcomes
+                    .iter()
+                    .zip(&made)
+                    .all(|(outcome, request)| match outcome {
+                        Outcome::Allowed(_) => !request.finds_nothing,
+                        Outcome::Denied(Denial::Http(RawResponse { status: 404, .. })) => {
+                            request.finds_nothing
+                        }
+                        Outcome::Denied(_) => false,
+                    });
             assert!(
-                trace.outcomes.len() == adapter.makes.len()
-                    && trace
-                        .outcomes
-                        .iter()
-                        .all(|outcome| matches!(outcome, Outcome::Allowed(_))),
+                as_expected,
                 "`{}` mode `{}` variant `{}` was denied with its grants: {:?}",
                 case.path.join(" "),
                 case.mode,
