@@ -42,6 +42,7 @@ Usage:
 
 import json
 import sys
+import copy
 
 
 def percentile(sorted_values, k):
@@ -84,7 +85,7 @@ def main():
 
     # Template from the first iteration; pooled stats are written into its
     # first run-result, which becomes the cell's single combined run-result.
-    merged = collections[0]
+    merged = copy.deepcopy(collections[0])
     merged_run_results = run_results_of(merged)
     if not merged_run_results:
         sys.stderr.write(
@@ -94,6 +95,37 @@ def main():
             json.dump(merged, fh, indent=2)
         return
     merged_run_result = merged_run_results[0]
+
+    entry = benchmark_result_of(merged)
+    identity = (entry["name"], entry["series_key"], entry["entry_version"])
+    iterations = []
+    failures = {}
+    for coll in collections:
+        run = coll["runs"][0]
+        candidate = benchmark_result_of(coll)
+        if run["schema_version"] != 2 or run["harness_version"] != merged["runs"][0]["harness_version"]:
+            raise ValueError("density iterations require matching schema-2 harness versions")
+        if (candidate["name"], candidate["series_key"], candidate["entry_version"]) != identity:
+            raise ValueError("density iterations have different entry identities")
+        if run.get("source") != merged["runs"][0].get("source") or run.get("artifacts") != merged["runs"][0].get("artifacts"):
+            raise ValueError("density iterations have different source or artifacts")
+        results = run_results_of(coll)
+        if len(results) != 1 or results[0]["run_config"] != merged_run_result["run_config"]:
+            raise ValueError("density iterations require one matching configuration")
+        for evidence in results[0]["iteration_results"]:
+            evidence = copy.deepcopy(evidence)
+            evidence["index"] = len(iterations)
+            iterations.append(evidence)
+        for key, failure in results[0].get("failures", {}).items():
+            aggregate = failures.setdefault(key, {"count": 0, "samples": [], "perIteration": []})
+            aggregate["count"] += failure["count"]
+            for message in failure.get("samples", []):
+                if message not in aggregate["samples"] and len(aggregate["samples"]) < 5:
+                    aggregate["samples"].append(message)
+            aggregate["perIteration"].extend(failure.get("perIteration", []))
+    entry["iterations"] = len(iterations)
+    merged_run_result["iteration_results"] = iterations
+    merged_run_result["failures"] = failures
 
     # ── Pool count results ────────────────────────────────────────────────────
     pooled_counts = {}
@@ -134,7 +166,7 @@ def main():
             "p90": percentile(s, 90.0),
             "p95": percentile(s, 95.0),
             "p99": percentile(s, 99.0),
-            "all": s,
+            "all": all_vals,
         }
     merged_run_result["duration_results"] = merged_durations
 

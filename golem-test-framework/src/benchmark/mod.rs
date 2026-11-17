@@ -19,15 +19,16 @@ pub mod storage_metrics;
 mod tests;
 
 pub use config::{
-    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, ChaosAction, ChaosScenarioArg,
-    DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg, DensityPromiseTopologyArg,
-    DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
-    DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
-    DensitySnapshottingArg, RunConfig,
+    BenchmarkConfig, BenchmarkPartition, BenchmarkSuite, BenchmarkSuiteItem, ChaosAction,
+    ChaosScenarioArg, DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg,
+    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
+    DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
+    DensitySharingArg, DensitySnapshottingArg, RunConfig,
 };
 pub use results::{
     BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,
-    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata,
+    BenchmarkSource, BenchmarkSuiteResult, BenchmarkSuiteResultCollection, CeilingMeasurement,
+    HARNESS_VERSION, MeasurementEnvironment, ResultKey, RunMetadata, benchmark_sockets_enabled,
 };
 
 use crate::config::benchmark::TestMode;
@@ -307,6 +308,7 @@ async fn run_benchmark<B: Benchmark>(
     .await
     else {
         aggregated_results.add(recorder);
+        aggregated_results.skip_iterations(iterations, "create");
         return aggregated_results;
     };
 
@@ -354,7 +356,7 @@ async fn run_benchmark<B: Benchmark>(
             )
             .await;
         }
-        aggregated_results.add(recorder);
+        aggregated_results.add_iteration(iteration, recorder);
 
         info!("Finished iteration");
     }
@@ -375,6 +377,7 @@ impl<B: Benchmark> BenchmarkApi for B {
         info!("Initializing benchmark {}", B::name());
 
         let runs = item.runs(mode);
+        let measurement_environment = MeasurementEnvironment::for_mode(mode);
 
         let runs_cnt = runs.len();
         let mut current_run = 0;
@@ -412,6 +415,7 @@ impl<B: Benchmark> BenchmarkApi for B {
                 for config in runs {
                     let mut result = BenchmarkRunResult::new(config.clone());
                     result.add(recorder.clone());
+                    result.skip_iterations(item.iterations, "setup-context");
                     results.push(result);
                 }
                 continue;
@@ -448,6 +452,11 @@ impl<B: Benchmark> BenchmarkApi for B {
         }
 
         BenchmarkResult {
+            entry_version: item.version,
+            iterations: item.iterations,
+            series_key: measurement_environment.series_key(HARNESS_VERSION, item.version),
+            measurement_environment,
+            ceiling: None,
             name: if item.disable_compilation_cache.unwrap_or_default() {
                 format!("{}-no-cache", B::name())
             } else {
