@@ -12329,6 +12329,193 @@ async fn expected_fingerprint_after_a_failed_deletion_gets_the_deletion_refusal(
     Ok(())
 }
 
+// A deletion that fails after stopping the incarnation's state actor leaves the stopped generation
+// resident. The management calls resolve it and read its status before any deletion check, so
+// each must get the deletion's refusal instead of panicking on the stopped actor, which aborts an
+// executor built with panic = "abort". A cancel of a key that only the Bloom filter of the result
+// index may contain is the one that reads the status. The executor keeps serving: the retried
+// deletion succeeds.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn management_calls_after_a_failed_deletion_get_the_deletion_refusal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        ActivatePluginRequest, InterruptWorkerRequest, activate_plugin_response,
+        interrupt_worker_response,
+    };
+    use golem_common::model::OwnedInvocationId;
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let name = "failed-delete-management";
+    crate::panic_watch::watch_panics_naming(name);
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            // The oldest results leave the exact index and stay only in its Bloom filter.
+            configure: Some(Arc::new(|config| {
+                config.invocation_results.recent_capacity = 1;
+                config.invocation_results.bloom_bits = 64;
+            })),
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Counter", name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let mut oldest_key = None;
+    for _ in 0..8 {
+        let key = IdempotencyKey::fresh();
+        executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent_id,
+                &key,
+                "increment",
+                data_value!(),
+            )
+            .await?;
+        oldest_key.get_or_insert(key);
+    }
+    let oldest_invocation = OwnedInvocationId::external(
+        worker_id.clone(),
+        fingerprint,
+        "increment",
+        executor.auth_ctx().idempotency_scope(),
+        oldest_key.as_ref(),
+    )
+    .id();
+
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(DeletionStageHook::new(
+        owned,
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated()).await?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(30), deleting)
+            .await??
+            .is_err(),
+        "the injected failure has to fail the first delete"
+    );
+
+    // Called on the client, because the test DSL panics on a refused interrupt.
+    let interrupt = async {
+        let response = executor
+            .client
+            .clone()
+            .interrupt_worker(InterruptWorkerRequest {
+                agent_id: Some(worker_id.clone().into()),
+                recover_immediately: false,
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: None,
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(interrupt_worker_response::Result::Success(_)) => Ok(()),
+            Some(interrupt_worker_response::Result::Failure(error)) => Err(anyhow!("{error:?}")),
+            None => Err(anyhow!("no result")),
+        }
+    };
+    let activate_plugin = async {
+        let response = executor
+            .client
+            .clone()
+            .activate_plugin(ActivatePluginRequest {
+                agent_id: Some(worker_id.clone().into()),
+                plugin_priority: 0,
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: None,
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(activate_plugin_response::Result::Success(_)) => Ok(()),
+            Some(activate_plugin_response::Result::Failure(error)) => Err(anyhow!("{error:?}")),
+            None => Err(anyhow!("no result")),
+        }
+    };
+    let answers = [
+        ("interrupt", format!("{:?}", interrupt.await)),
+        (
+            "resume",
+            format!("{:?}", executor.resume(&worker_id, false).await),
+        ),
+        (
+            "update",
+            format!(
+                "{:?}",
+                executor
+                    .auto_update_worker(&worker_id, component.revision, false)
+                    .await
+            ),
+        ),
+        ("activate plugin", format!("{:?}", activate_plugin.await)),
+        (
+            "cancel",
+            format!(
+                "{:?}",
+                executor
+                    .cancel_invocation(&worker_id, &oldest_invocation)
+                    .await
+            ),
+        ),
+    ];
+    let failures: Vec<_> = answers
+        .iter()
+        .filter(|(_, answer)| !answer.contains("being deleted"))
+        .collect();
+    assert!(failures.is_empty(), "{failures:#?}");
+    let panics = crate::panic_watch::panics_naming(name);
+    assert!(panics.is_empty(), "{panics:#?}");
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
 // An external-tool lookup that names an incarnation is answered by the existing-only guard for
 // that incarnation: the matching incarnation is looked up, another one is not found, and one whose
 // deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an

@@ -65,6 +65,7 @@ pub mod oplog_processor;
 pub mod oplog_sweep;
 pub mod oplog_unreadable;
 pub mod owner_tool_isolation;
+mod panic_watch;
 pub mod permission_cards_scala;
 pub mod rdbms;
 pub mod rdbms_service;
