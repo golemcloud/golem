@@ -35,7 +35,6 @@ pub(crate) type SocketEntries = HashMap<u32, SocketEntry>;
 pub(crate) enum SocketPhase {
     Created,
     Bound,
-    Listening,
     Connecting,
     Connected,
     Lost,

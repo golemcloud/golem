@@ -21,7 +21,7 @@
 //! it depends only on its arguments and the executor configuration.
 
 use crate::services::golem_config::GolemConfig;
-use golem_common::base_model::address_class::AddressClass;
+use golem_common::base_model::address_class::{AddressClass, embedded_ipv4};
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::network_target::socket_target;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
@@ -93,9 +93,17 @@ impl SocketPolicy {
 }
 
 /// Loopback, unspecified (which Linux connects to the local host) and the addresses of this
-/// host's interfaces, which are the addresses a socket can bind to.
+/// host's interfaces, which are the addresses a socket can bind to. An IPv6 address that embeds
+/// an IPv4 address (NAT64, 6to4, IPv4-compatible) reaches this host also when the embedded
+/// address does, because a gateway can translate it back to this host.
 fn reaches_this_host(ip: IpAddr) -> bool {
-    ip.is_loopback() || ip.is_unspecified() || UdpSocket::bind((ip, 0)).is_ok()
+    let reaches =
+        |ip: IpAddr| ip.is_loopback() || ip.is_unspecified() || UdpSocket::bind((ip, 0)).is_ok();
+    reaches(ip)
+        || match ip {
+            IpAddr::V6(v6) => embedded_ipv4(&v6).is_some_and(|v4| reaches(IpAddr::V4(v4))),
+            IpAddr::V4(_) => false,
+        }
 }
 
 #[cfg(test)]
@@ -128,6 +136,8 @@ mod tests {
             "[::1]:9000",
             "[::]:9000",
             "[::ffff:127.0.0.1]:9000",
+            "[64:ff9b::7f00:1]:9000",
+            "[2002:7f00:1::1]:9000",
         ] {
             assert!(
                 policy.refusal(address(refused)).is_some(),
