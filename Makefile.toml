@@ -1682,6 +1682,8 @@ if is_path_exists ${fixture}
 end
 mkdir "${fixture}/sdks/rust/golem-rust"
 cp Makefile.toml "${fixture}/Makefile.toml"
+cp Makefile.sdk-validation.toml "${fixture}/Makefile.sdk-validation.toml"
+cp Makefile.main-validation.toml "${fixture}/Makefile.main-validation.toml"
 crates = array golem-schema-derive golem-schema golem-tool-metadata
 workspace = set "[workspace]\nmembers = []\n[workspace.dependencies]\ngolem-common = { version = \"=0.0.0\" }\n"
 expected_workspace = set "${workspace}"
