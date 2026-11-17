@@ -720,6 +720,9 @@ oplog_payload! {
         P3SocketsTcpReceiveChunk {
             chunk: SerializableP3TcpChunk
         },
+        P3SocketsTcpSendChunk {
+            result: Result<u64, SerializableP3SocketErrorCode>
+        },
         P3SocketsTcpAcquire {
             result: Result<(), SerializableP3SocketErrorCode>
         },
@@ -1040,6 +1043,7 @@ pub mod host_functions {
         (P3SocketsTypesTcpSocketReceiveChunk => "sockets::types::tcp-socket", "receive-chunk", NoInput, P3SocketsTcpReceiveChunk),
         (P3SocketsTypesTcpSocketSendAcquire => "sockets::types::tcp-socket", "send-acquire", NoInput, P3SocketsTcpAcquire),
         (P3SocketsTypesTcpSocketReceiveAcquire => "sockets::types::tcp-socket", "receive-acquire", NoInput, P3SocketsTcpAcquire),
+        (P3SocketsTypesTcpSocketSendChunk => "sockets::types::tcp-socket", "send-chunk", NoInput, P3SocketsTcpSendChunk),
         (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend, denied = denied::sockets::p3_udp_send),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult, denied = denied::http::p3_send),

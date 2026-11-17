@@ -1048,3 +1048,220 @@ async fn an_open_p2_tcp_socket_does_not_block_snapshots(
     );
     session.finish().await
 }
+
+/// Whether the public oplog shows `bytes`, as text or as a byte list.
+async fn oplog_shows(session: &Session<'_>, bytes: &[u8]) -> anyhow::Result<bool> {
+    let rendered = format!("{:?}", session.oplog().await?);
+    Ok(rendered.contains(std::str::from_utf8(bytes)?) || rendered.contains(&format!("{bytes:?}")))
+}
+
+/// A live P3 TCP send delivers each byte to the peer once and records only byte counts. Replay
+/// of the completed conversation neither connects nor sends again.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_completed_conversation_replays_without_contacting_the_peer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Fixed("pong 1")).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-conversation",
+    )
+    .await?;
+
+    let response: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_conversation",
+            data_value!(peer.port, b"ping-7f3a\n".to_vec()),
+        )
+        .await?;
+    assert_eq!(response, Ok(b"pong 1\n".to_vec()));
+    peer.wait_until("the agent closes its connection", |connections| {
+        connections.iter().all(|connection| connection.closed)
+    })
+    .await?;
+    assert!(
+        !oplog_shows(&session, b"ping-7f3a").await?,
+        "a P3 TCP send records no bytes"
+    );
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::send-chunk")
+            .await?,
+        1
+    );
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert_eq!(
+        log,
+        vec![received("conversation", b"pong 1\n")],
+        "replay returns the recorded bytes"
+    );
+    assert_eq!(
+        peer.connections(),
+        vec![Connection {
+            received: b"ping-7f3a\n".to_vec(),
+            closed: true,
+        }],
+        "replay neither connects nor sends again"
+    );
+
+    // The next conversation is live and opens the second connection.
+    let response: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_conversation",
+            data_value!(peer.port, b"again\n".to_vec()),
+        )
+        .await?;
+    assert_eq!(response, Ok(b"pong 1\n".to_vec()));
+    assert_eq!(peer.connections().len(), 2);
+    assert_eq!(peer.connections()[1].received, b"again\n".to_vec());
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::connect")
+            .await?,
+        2
+    );
+    session.finish().await
+}
+
+/// G4 and G1 on one pooled connection. A send stream kept open across invocations does not hold
+/// them: the parked send parent leaves the agent idle, so each call returns well before the
+/// tail-work deadline. After a restart, replay drains exactly the recorded writes, the next write
+/// is refused, and the send completes with `connection-broken`. Each byte reaches the peer once.
+#[test]
+#[timeout("5m")]
+async fn p3_tcp_send_kept_across_invocations_is_lost_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p3-tcp-send-kept").await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+
+    let quick = Duration::from_secs(10);
+    let opened = tokio::time::timeout(
+        quick,
+        session.call::<Result<(), String>>("p3_tcp_open_send", data_value!("a".to_string())),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("opening the send stream held the invocation"))??;
+    assert_eq!(opened, Ok(()));
+    for part in [b"one".to_vec(), b"two".to_vec()] {
+        let written = tokio::time::timeout(
+            quick,
+            session.call::<Result<u32, String>>(
+                "p3_tcp_write",
+                data_value!("a".to_string(), part),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("a write held the invocation"))??;
+        assert_eq!(written, Ok(3));
+    }
+    peer.wait_until("both writes arrive", |connections| {
+        connections.len() == 1 && connections[0].received == b"onetwo"
+    })
+    .await?;
+    assert!(!oplog_shows(&session, b"onetwo").await?);
+
+    session.restart_executor().await?;
+    let written: Result<u32, String> = session
+        .call(
+            "p3_tcp_write",
+            data_value!("a".to_string(), b"three".to_vec()),
+        )
+        .await?;
+    assert_eq!(written, Ok(0), "the live write after replay is not accepted");
+    let closed: Result<(), String> = session
+        .call("p3_tcp_close_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(closed, Err("ErrorCode::ConnectionBroken".to_string()));
+    peer.wait_until(
+        "the connection from before the restart closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"onetwo".to_vec());
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::send-chunk")
+            .await?,
+        3,
+        "two replayed writes and the refused one"
+    );
+    session.finish().await
+}
+
+/// G1 across a crash inside an open send. The first part is sent live; the agent crashes during
+/// the pause. Recovery drains the recorded first part without sending it again, and the second
+/// part, written live after replay, is refused instead of being accepted and dropped.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_open_at_a_crash_refuses_live_writes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(deps, &context, host_api_tests, sockets(), "p3-tcp-send-crash")
+        .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let call = {
+        let executor = session.executor().clone();
+        let component = session.component.clone();
+        let agent_id = session.agent_id.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "p3_tcp_send_with_pause",
+                    data_value!(
+                        "a".to_string(),
+                        b"first".to_vec(),
+                        3000u64,
+                        b"second".to_vec()
+                    ),
+                )
+                .await
+        })
+    };
+    peer.wait_until("the first part arrives", |connections| {
+        connections.len() == 1 && connections[0].received == b"first"
+    })
+    .await?;
+    session
+        .executor()
+        .simulated_crash(&session.worker_id)
+        .await?;
+    let result = call.await??.into_typed::<Result<(), String>>()?;
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("6 bytes were not accepted")),
+        "the live write after replay must not be accepted: {result:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(peer.connections().len(), 1, "no new connection");
+    assert_eq!(peer.connections()[0].received, b"first".to_vec());
+    session.finish().await
+}

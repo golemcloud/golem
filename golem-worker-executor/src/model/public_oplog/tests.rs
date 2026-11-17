@@ -44,9 +44,9 @@ use golem_common::model::oplog::{
     HostResponseP3BlobstoreIncomingValueStream, HostResponseP3HttpClientConsumeBodyChunk,
     HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientSendResult,
     HostResponseP3KeyvalueIncomingValueStream, HostResponseP3SocketsTcpAcquire,
-    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsUdpReceive,
-    HostResponseP3SocketsUdpSend, HostResponseSecretRevealed, HostStreamKind, LogLevel,
-    OplogPayload,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSendChunk,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseSecretRevealed,
+    HostStreamKind, LogLevel, OplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::{
@@ -2194,6 +2194,11 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                 chunk: SerializableP3TcpChunk::Data(vec![7, 8, 9]),
             }
             .into(),
+        ),
+        (
+            HostFunctionName::P3SocketsTypesTcpSocketSendChunk,
+            HostRequestNoInput {}.into(),
+            HostResponseP3SocketsTcpSendChunk { result: Ok(4096) }.into(),
         ),
         (
             HostFunctionName::P3SocketsTypesTcpSocketSendAcquire,

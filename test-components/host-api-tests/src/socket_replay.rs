@@ -177,6 +177,8 @@ pub trait SocketSession {
     /// Writes `data` to the send stream kept in `slot`. Returns the number of bytes the host
     /// accepted.
     async fn p3_tcp_write(&self, slot: String, data: Vec<u8>) -> Result<u32, String>;
+    /// Closes the send stream kept in `slot` and returns the result of the send.
+    async fn p3_tcp_close_send(&self, slot: String) -> Result<(), String>;
     /// Sends `first`, waits `pause_ms` on the monotonic clock, sends `second`, closes the send
     /// stream and returns its result.
     async fn p3_tcp_send_with_pause(
@@ -377,6 +379,20 @@ impl SocketSession for SocketSessionImpl {
             *send = Some(writer);
         }
         Ok((len - remaining.len()) as u32)
+    }
+
+    async fn p3_tcp_close_send(&self, slot: String) -> Result<(), String> {
+        let (send, send_result) = match self.slots.borrow_mut().get_mut(&slot) {
+            Some(Slot::P3Tcp {
+                send, send_result, ..
+            }) => (send.take(), send_result.take()),
+            _ => return Err(format!("slot {slot} holds no P3 TCP socket")),
+        };
+        drop(send);
+        match send_result {
+            Some(result) => result.await.map_err(error),
+            None => Err(format!("slot {slot} has no send stream")),
+        }
     }
 
     async fn p3_tcp_send_with_pause(

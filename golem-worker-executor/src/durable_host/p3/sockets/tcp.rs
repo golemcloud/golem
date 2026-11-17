@@ -19,11 +19,11 @@ use std::task::{Context, Poll};
 
 use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
-    DeferredCallReplayOutcome, DemandDelivery, DemandDeliveryMode, DurableCallSession,
-    DurableDemandItem, DurableDemandStream, InvocationIdSource, NotCancellable,
-    ScopeReplayRecovery, access_invocation_id, closed_demand, deliver_demand, demand_channel,
-    reserve_invocation_id_before_await, resolve_current_observational_owner,
+    AccessClaimOptions, Cancellable, CompletionDelivery, DeferredCallReplayOutcome, DemandDelivery,
+    DemandDeliveryMode, DurableCallSession, DurableDemandItem, DurableDemandStream,
+    InvocationIdSource, NotCancellable, ScopeReplayRecovery, access_invocation_id, closed_demand,
+    deliver_demand, demand_channel, reserve_invocation_id_before_await,
+    resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
     CustomInvocationContext, DurabilityHost, DurableCallTrapContext,
@@ -37,20 +37,21 @@ use crate::durable_host::sockets::{SocketEntry, SocketPhase, TcpSocketOptions};
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurableWorkerCtx, TcpSocketStreamDirection};
 use crate::services::HasWorker;
-use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::host_functions::{
     P3SocketsTypesTcpSocketBind, P3SocketsTypesTcpSocketConnect, P3SocketsTypesTcpSocketReceive,
     P3SocketsTypesTcpSocketReceiveAcquire, P3SocketsTypesTcpSocketReceiveChunk,
     P3SocketsTypesTcpSocketSend, P3SocketsTypesTcpSocketSendAcquire,
+    P3SocketsTypesTcpSocketSendChunk,
 };
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableP3TcpChunk};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostRequestP3SocketsBind,
     HostRequestP3SocketsConnect, HostResponseP3SocketsBind, HostResponseP3SocketsTcpAcquire,
     HostResponseP3SocketsTcpConnect, HostResponseP3SocketsTcpReceive,
-    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend, OplogIndex,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
+    HostResponseP3SocketsTcpSendChunk, OplogIndex,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::PollSender;
@@ -143,19 +144,6 @@ fn deserialize_tcp_stream_result(
     result.map_err(Into::into)
 }
 
-/// Resolves the guest-facing send/receive result `FutureReader`. The durable
-/// task sends the final result here; a closed channel means the task was dropped
-/// before replying, which surfaces as a trap.
-async fn wait_tcp_task_result(
-    result_rx: oneshot::Receiver<wasmtime::Result<Result<(), types::ErrorCode>>>,
-) -> wasmtime::Result<Result<(), types::ErrorCode>> {
-    result_rx.await.unwrap_or_else(|_| {
-        Err(wasmtime::Error::msg(
-            "tcp socket task dropped before replying",
-        ))
-    })
-}
-
 /// Bridges the upstream socket's transmission-result `FutureReader` into a
 /// `oneshot` the durable task awaits. Shared by `send` (live) and `receive`
 /// (live).
@@ -203,54 +191,6 @@ impl<D> FutureConsumer<D> for TcpSocketResultConsumer {
     }
 }
 
-/// Drains replayed outgoing bytes without transmitting or retaining them.
-struct TcpSendDrainConsumer {
-    result_tx: Option<oneshot::Sender<()>>,
-}
-
-impl TcpSendDrainConsumer {
-    fn new(result_tx: oneshot::Sender<()>) -> Self {
-        Self {
-            result_tx: Some(result_tx),
-        }
-    }
-
-    fn close(&mut self) {
-        if let Some(result_tx) = self.result_tx.take() {
-            let _ = result_tx.send(());
-        }
-    }
-}
-
-impl<D> StreamConsumer<D> for TcpSendDrainConsumer {
-    type Item = u8;
-
-    fn poll_consume(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        store: StoreContextMut<D>,
-        src: Source<Self::Item>,
-        _finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        let mut src = src.as_direct(store);
-        let bytes = src.remaining();
-        if bytes.is_empty() {
-            return Poll::Ready(Ok(StreamResult::Completed));
-        }
-
-        let len = bytes.len();
-        src.mark_read(len);
-
-        Poll::Ready(Ok(StreamResult::Completed))
-    }
-}
-
-impl Drop for TcpSendDrainConsumer {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
-
 /// The durable receive task's reply to a single guest stream demand.
 enum TcpReceiveReply {
     /// One non-empty chunk, already persisted as a `receive-chunk` child before
@@ -272,11 +212,10 @@ enum TcpReceiveReply {
 /// chunk, carrying the channel the task replies on.
 type TcpReceiveDemand = oneshot::Sender<TcpReceiveReply>;
 
-/// Resolution delivered to the guest-facing receive-result future once the
-/// receive stream closes (or the durable task fails before recording the
-/// terminal).
-enum TcpReceiveResolution {
-    /// The receive terminal: a clean close or a socket `ErrorCode`.
+/// Resolution delivered to the guest-facing send- or receive-result future once
+/// the stream closes (or the durable task fails before recording the terminal).
+enum TcpStreamResolution {
+    /// The stream terminal: a clean close or a socket `ErrorCode`.
     Outcome(Result<(), types::ErrorCode>),
     /// A durability failure: the result future traps with this message, tagged
     /// with the failing call scope's trap context.
@@ -286,22 +225,22 @@ enum TcpReceiveResolution {
     },
 }
 
-/// Resolves the guest-facing receive-result future. A durability failure traps
+/// Resolves the guest-facing send- or receive-result future. A durability failure traps
 /// (carrying the failing call scope's trap context) rather than resolving to a
 /// normal error that would mask it.
-async fn wait_tcp_receive_result(
-    result_rx: oneshot::Receiver<TcpReceiveResolution>,
+async fn wait_tcp_stream_result(
+    result_rx: oneshot::Receiver<TcpStreamResolution>,
 ) -> wasmtime::Result<Result<(), types::ErrorCode>> {
     match result_rx.await {
-        Ok(TcpReceiveResolution::Outcome(result)) => Ok(result),
-        Ok(TcpReceiveResolution::Trap {
+        Ok(TcpStreamResolution::Outcome(result)) => Ok(result),
+        Ok(TcpStreamResolution::Trap {
             message,
             trap_context,
         }) => Err(wasmtime::Error::from_anyhow(
             mark_durable_call_trap_context(anyhow::Error::msg(message), trap_context),
         )),
         Err(_) => Err(wasmtime::Error::msg(
-            "tcp receive durable task dropped before resolving result",
+            "tcp socket durable task dropped before resolving result",
         )),
     }
 }
@@ -528,6 +467,189 @@ impl<D> StreamConsumer<D> for TcpReceiveForwardConsumer {
                 }
             }
             Poll::Ready(Err(_)) => Poll::Ready(Ok(StreamResult::Dropped)),
+            Poll::Pending if finish => Poll::Ready(Ok(StreamResult::Cancelled)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// The largest guest write a single `send-chunk` child carries. A longer write is accepted in
+/// several chunks, each its own child.
+const TCP_SEND_CHUNK_LIMIT: usize = 64 * 1024;
+
+/// The durable send task's reply to one guest write.
+enum TcpSendReply {
+    /// The native sink accepted this many bytes of the write, recorded as a `send-chunk` child.
+    Accepted(u64),
+    /// The send failed or the connection is lost: the write is not accepted and the guest
+    /// stream is closed.
+    Rejected,
+    /// A durable failure occurred; the guest stream traps with this message, tagged with the
+    /// failing call scope's trap context.
+    Failed {
+        message: String,
+        trap_context: DurableCallTrapContext,
+    },
+}
+
+/// One guest write handed from the guest-facing consumer to the durable send task.
+struct TcpSendDemand {
+    bytes: Bytes,
+    reply: oneshot::Sender<TcpSendReply>,
+}
+
+/// Consumer of the guest's outgoing byte stream.
+///
+/// The host owns the reader of the guest stream. Each non-empty guest write becomes one demand
+/// to the spawned [`TcpSocketSendTask`], which records it as one `send-chunk` child and, only
+/// when the send started live in this Store, writes it to the native socket. The write stays
+/// pending until the task replies, so the guest observes exactly the recorded byte count, live
+/// and on replay. Dropping the consumer (the guest closing its writer) ends the demand stream.
+struct DurableTcpSendConsumer {
+    demand_tx: mpsc::Sender<TcpSendDemand>,
+    pending: Option<oneshot::Receiver<TcpSendReply>>,
+    finished: bool,
+}
+
+impl DurableTcpSendConsumer {
+    fn new(demand_tx: mpsc::Sender<TcpSendDemand>) -> Self {
+        Self {
+            demand_tx,
+            pending: None,
+            finished: false,
+        }
+    }
+}
+
+impl<D> StreamConsumer<D> for DurableTcpSendConsumer {
+    type Item = u8;
+
+    fn poll_consume(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        store: StoreContextMut<D>,
+        src: Source<Self::Item>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        if self.finished {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        let mut src = src.as_direct(store);
+        loop {
+            if let Some(rx) = self.pending.as_mut() {
+                // A write in flight is being recorded as a child: wait for its reply even when
+                // the guest cancels, so the recorded count always reaches the guest.
+                let reply = match Pin::new(rx).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(reply) => reply,
+                };
+                self.pending = None;
+                return match reply {
+                    Ok(TcpSendReply::Accepted(count)) => {
+                        let count = count as usize;
+                        if count > src.remaining().len() {
+                            self.finished = true;
+                            return Poll::Ready(Err(wasmtime::Error::msg(format!(
+                                "tcp send recorded {count} accepted bytes for a write of {}",
+                                src.remaining().len()
+                            ))));
+                        }
+                        src.mark_read(count);
+                        Poll::Ready(Ok(StreamResult::Completed))
+                    }
+                    Ok(TcpSendReply::Rejected) => {
+                        self.finished = true;
+                        Poll::Ready(Ok(StreamResult::Dropped))
+                    }
+                    Ok(TcpSendReply::Failed {
+                        message,
+                        trap_context,
+                    }) => {
+                        self.finished = true;
+                        Poll::Ready(Err(wasmtime::Error::from_anyhow(
+                            mark_durable_call_trap_context(
+                                anyhow::Error::msg(message),
+                                trap_context,
+                            ),
+                        )))
+                    }
+                    Err(_) => {
+                        self.finished = true;
+                        Poll::Ready(Err(wasmtime::Error::msg(
+                            "tcp send durable task dropped before replying",
+                        )))
+                    }
+                };
+            }
+
+            let bytes = src.remaining();
+            if bytes.is_empty() {
+                // A zero-length write probes readiness; it is not a durable send.
+                return Poll::Ready(Ok(StreamResult::Completed));
+            }
+            if finish {
+                return Poll::Ready(Ok(StreamResult::Cancelled));
+            }
+            let bytes = Bytes::copy_from_slice(&bytes[..bytes.len().min(TCP_SEND_CHUNK_LIMIT)]);
+            let (reply, rx) = oneshot::channel();
+            if self
+                .demand_tx
+                .try_send(TcpSendDemand { bytes, reply })
+                .is_err()
+            {
+                // The consumer keeps at most one demand in flight, so the channel is never full;
+                // a closed channel means the task already finished the send.
+                self.finished = true;
+                return Poll::Ready(Ok(StreamResult::Dropped));
+            }
+            self.pending = Some(rx);
+        }
+    }
+}
+
+/// One chunk for the native sink, and the signal that the native sink has taken all of it.
+type TcpSendFeedItem = (Bytes, oneshot::Sender<()>);
+
+/// Host producer of the stream that the native socket's send consumes.
+///
+/// The runtime hands a whole chunk to the native consumer and calls `poll_produce` again only
+/// after the consumer has taken all of it, so that next call acknowledges the previous chunk.
+/// If the native write fails, the transfer ends and the acknowledgement is dropped instead.
+struct TcpSendFeedProducer {
+    chunks: mpsc::Receiver<TcpSendFeedItem>,
+    written: Option<oneshot::Sender<()>>,
+}
+
+impl TcpSendFeedProducer {
+    fn new(chunks: mpsc::Receiver<TcpSendFeedItem>) -> Self {
+        Self {
+            chunks,
+            written: None,
+        }
+    }
+}
+
+impl<D> StreamProducer<D> for TcpSendFeedProducer {
+    type Item = u8;
+    type Buffer = Bytes;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        _store: StoreContextMut<'a, D>,
+        mut dst: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        if let Some(written) = self.written.take() {
+            let _ = written.send(());
+        }
+        match self.chunks.poll_recv(cx) {
+            Poll::Ready(Some((bytes, written))) => {
+                self.written = Some(written);
+                dst.set_buffer(bytes);
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+            Poll::Ready(None) => Poll::Ready(Ok(StreamResult::Dropped)),
             Poll::Pending if finish => Poll::Ready(Ok(StreamResult::Cancelled)),
             Poll::Pending => Poll::Pending,
         }
@@ -1022,49 +1144,32 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
     }
 }
 
-enum TcpSendMode {
-    Live {
-        socket_result_rx: oneshot::Receiver<Result<(), types::ErrorCode>>,
-    },
-    Replay {
-        input_rx: oneshot::Receiver<()>,
-    },
-}
-
 struct TcpSocketSendTask<Ctx> {
-    call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
-    mode: TcpSendMode,
-    result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
+    socket: Resource<TcpSocket>,
+    demand_rx: mpsc::Receiver<TcpSendDemand>,
+    result_tx: oneshot::Sender<TcpStreamResolution>,
+    observational_owner: Option<OplogIndex>,
+    /// The invocation id of the `send` guest import that spawned the task.
+    invocation_id: InvocationIdSource,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
 impl<Ctx> TcpSocketSendTask<Ctx> {
-    fn live(
-        call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
-        socket_result_rx: oneshot::Receiver<Result<(), types::ErrorCode>>,
-        result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
+    fn new(
+        socket: Resource<TcpSocket>,
+        demand_rx: mpsc::Receiver<TcpSendDemand>,
+        result_tx: oneshot::Sender<TcpStreamResolution>,
+        observational_owner: Option<OplogIndex>,
+        invocation_id: InvocationIdSource,
         activity: TailActivity,
     ) -> Self {
         Self {
-            call,
-            mode: TcpSendMode::Live { socket_result_rx },
+            socket,
+            demand_rx,
             result_tx,
-            activity,
-            _phantom: PhantomData,
-        }
-    }
-
-    fn replay(
-        call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
-        input_rx: oneshot::Receiver<()>,
-        result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-        activity: TailActivity,
-    ) -> Self {
-        Self {
-            call,
-            mode: TcpSendMode::Replay { input_rx },
-            result_tx,
+            observational_owner,
+            invocation_id,
             activity,
             _phantom: PhantomData,
         }
@@ -1079,101 +1184,312 @@ where
         self,
         accessor: &Accessor<U, DurableP3<Ctx>>,
     ) -> wasmtime::Result<()> {
-        let TcpSocketSendTask {
-            call,
-            mode,
-            result_tx,
-            activity,
-            ..
-        } = self;
-        let result = match mode {
-            // Live: the wait on the transmission outcome stays *active* — its `Start` is already
-            // persisted, so its `End` must land before the invocation boundary (the guest exiting
-            // drops the send stream, which terminates the transmission and resolves the wait).
-            TcpSendMode::Live { socket_result_rx } => {
-                complete_tcp_socket_send::<Ctx, U>(accessor, call, socket_result_rx).await
-            }
-            TcpSendMode::Replay { input_rx } => {
-                replay_tcp_socket_send::<Ctx, U>(accessor, call, input_rx, &activity).await
-            }
-        };
-        if !result_tx.is_closed() {
-            let _ = result_tx.send(result);
-        }
-        Ok(())
+        run_tcp_socket_send::<Ctx, U>(
+            accessor,
+            self.socket,
+            self.demand_rx,
+            self.result_tx,
+            self.observational_owner,
+            self.invocation_id,
+            self.activity,
+        )
+        .await
     }
 }
 
-/// Live `send`: the guest bytes are already being forwarded to the socket; here
-/// we only await the transmission result and persist it (result-only, no bytes
-/// in the oplog).
-async fn complete_tcp_socket_send<Ctx, U>(
+/// The native socket's send stream, owned by a send that started live in this Store.
+struct TcpSendSink {
+    chunks: mpsc::Sender<TcpSendFeedItem>,
+    result: oneshot::Receiver<Result<(), types::ErrorCode>>,
+}
+
+impl TcpSendSink {
+    /// The native outcome of a failed write. A sink that closed without an error still lost
+    /// the bytes it did not take.
+    async fn failure(self) -> types::ErrorCode {
+        match self.result.await {
+            Ok(Err(code)) => code,
+            Ok(Ok(())) | Err(_) => types::ErrorCode::ConnectionBroken,
+        }
+    }
+
+    /// Closes the native send stream (a write shutdown) and returns its final result.
+    async fn close(self) -> Result<(), types::ErrorCode> {
+        drop(self.chunks);
+        self.result
+            .await
+            .unwrap_or(Err(types::ErrorCode::ConnectionBroken))
+    }
+}
+
+/// Durable driver for a `send` socket stream.
+///
+/// The `send` parent owns the stream. Each guest write is one `send-chunk` child that records
+/// the write's result and the number of bytes the native sink accepted, never the bytes. The
+/// parent waits for the next guest write at a safe park point, so an open send does not keep
+/// the agent busy. Only a parent that started live in this Store writes to the native socket:
+/// a write that has no recorded child after replay, and a child left incomplete by a crash,
+/// complete with `connection-broken` and are never written. The parent terminal is persisted
+/// after every child terminal.
+async fn run_tcp_socket_send<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
-    socket_result_rx: oneshot::Receiver<Result<(), types::ErrorCode>>,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
+    socket: Resource<TcpSocket>,
+    demand_rx: mpsc::Receiver<TcpSendDemand>,
+    result_tx: oneshot::Sender<TcpStreamResolution>,
+    observational_owner: Option<OplogIndex>,
+    invocation_id: InvocationIdSource,
+    activity: TailActivity,
+) -> wasmtime::Result<()>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
-    let socket_result = socket_result_rx
-        .await
-        .unwrap_or(Err(types::ErrorCode::ConnectionBroken));
-    let response = call
-        .complete_access(
+    let mut stream = match DurableDemandStream::<
+        P3SocketsTypesTcpSocketSend,
+        P3SocketsTypesTcpSocketSendChunk,
+        TcpSendDemand,
+    >::start(
+        accessor,
+        durable_worker_ctx::<Ctx, U>,
+        demand_rx,
+        AccessClaimOptions {
+            observational_owner,
+            invocation_id,
+            scope_replay_recovery: ScopeReplayRecovery::reexecute_when(async { Ok(()) }),
+            ..Default::default()
+        },
+        DemandDeliveryMode::Markerless,
+        HostRequestNoInput {},
+    )
+    .await
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            let trap_context = find_durable_call_trap_context(&error);
+            return fail_tcp_stream_task(
+                result_tx,
+                wasmtime::Error::from_anyhow(error),
+                trap_context,
+            );
+        }
+    };
+
+    // The parent `Start` is committed by `start`, before the native sink can see a byte.
+    let mut sink = None;
+    if stream.is_live() {
+        let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+        let (chunk_tx, chunk_rx) = mpsc::channel::<TcpSendFeedItem>(1);
+        let (native_result_tx, native_result_rx) = oneshot::channel();
+        let feed = accessor
+            .with(|mut store| StreamReader::new(&mut store, TcpSendFeedProducer::new(chunk_rx)));
+        let native = match feed {
+            Ok(feed) => {
+                match <WasiSockets as types::HostTcpSocketWithStore<U>>::send(
+                    &sockets, socket, feed,
+                )
+                .await
+                {
+                    Ok(native_result) => accessor.with(|mut store| {
+                        native_result
+                            .pipe(&mut store, TcpSocketResultConsumer::new(native_result_tx))
+                    }),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = native {
+            let trap_context = stream.trap_context();
+            return fail_tcp_stream_task(
+                result_tx,
+                wasmtime::Error::from_anyhow(stream.trap(error)),
+                Some(trap_context),
+            );
+        }
+        sink = Some(TcpSendSink {
+            chunks: chunk_tx,
+            result: native_result_rx,
+        });
+    }
+
+    // A parent that did not start live in this Store lost its connection.
+    let mut terminal = if sink.is_some() {
+        Ok(())
+    } else {
+        Err(types::ErrorCode::ConnectionBroken)
+    };
+
+    loop {
+        // Safe park: waiting for the guest's next write.
+        let Some(demand) = stream.next_demand(&activity).await else {
+            break;
+        };
+        let TcpSendDemand { bytes, reply } = demand;
+
+        let item = match stream
+            .next(
+                accessor,
+                durable_worker_ctx::<Ctx, U>,
+                HostRequestNoInput {},
+            )
+            .await
+        {
+            Ok(item) => item,
+            Err(error) => {
+                let trap_context =
+                    find_durable_call_trap_context(&error).unwrap_or_else(|| stream.trap_context());
+                let _ = reply.send(TcpSendReply::Failed {
+                    message: error.to_string(),
+                    trap_context,
+                });
+                return fail_tcp_stream_task(
+                    result_tx,
+                    wasmtime::Error::from_anyhow(stream.trap(error)),
+                    Some(trap_context),
+                );
+            }
+        };
+
+        let (result, delivery) = match item {
+            DurableDemandItem::Replayed { response, delivery } => {
+                (deserialize_tcp_send_chunk(response.result), delivery)
+            }
+            DurableDemandItem::Live(mut child) => {
+                let result = match sink.take() {
+                    // No native sink: the connection did not survive into this Store.
+                    None => Err(types::ErrorCode::ConnectionBroken),
+                    Some(live) => {
+                        let len = bytes.len() as u64;
+                        let (written_tx, written_rx) = oneshot::channel();
+                        let interrupt = accessor.with(|mut access| {
+                            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                                .create_interrupt_signal()
+                        });
+                        let chunks = live.chunks.clone();
+                        let write = async move {
+                            chunks.send((bytes, written_tx)).await.is_ok()
+                                && written_rx.await.is_ok()
+                        };
+                        tokio::select! {
+                            written = write => {
+                                if written {
+                                    sink = Some(live);
+                                    Ok(len)
+                                } else {
+                                    Err(live.failure().await)
+                                }
+                            }
+                            kind = interrupt => {
+                                // Leave both Starts incomplete; recovery completes them with
+                                // connection loss and never writes the chunk again.
+                                child.abandon_for_trap();
+                                stream.abandon_for_trap();
+                                return Err(wasmtime::Error::from_anyhow(kind.into()));
+                            }
+                        }
+                    }
+                };
+                let delivery = match stream
+                    .complete_item(
+                        accessor,
+                        durable_worker_ctx::<Ctx, U>,
+                        child,
+                        HostResponseP3SocketsTcpSendChunk {
+                            result: result.clone().map_err(SerializableP3SocketErrorCode::from),
+                        },
+                    )
+                    .await
+                {
+                    Ok(delivery) => delivery,
+                    Err(error) => {
+                        let trap_context = stream.trap_context();
+                        let _ = reply.send(TcpSendReply::Failed {
+                            message: error.to_string(),
+                            trap_context,
+                        });
+                        stream.abandon_for_trap();
+                        return fail_tcp_stream_task(
+                            result_tx,
+                            wasmtime::Error::from(error),
+                            Some(trap_context),
+                        );
+                    }
+                };
+                (result, delivery)
+            }
+        };
+
+        let reply_value = match result {
+            Ok(count) => TcpSendReply::Accepted(count),
+            Err(_) => TcpSendReply::Rejected,
+        };
+        match deliver_demand(&activity, reply, reply_value, delivery).await {
+            Ok(DemandDelivery::Delivered) => {}
+            Ok(DemandDelivery::Abandoned) => {
+                let trap_context = stream.trap_context();
+                return fail_tcp_stream_task(
+                    result_tx,
+                    wasmtime::Error::from_anyhow(stream.trap(anyhow::Error::msg(
+                        "tcp send recorded a chunk whose result could not reach the guest stream",
+                    ))),
+                    Some(trap_context),
+                );
+            }
+            Err(error) => {
+                let trap_context = stream.trap_context();
+                return fail_tcp_stream_task(
+                    result_tx,
+                    wasmtime::Error::from_anyhow(stream.trap(error)),
+                    Some(trap_context),
+                );
+            }
+        }
+        if let Err(code) = result {
+            terminal = Err(code);
+            break;
+        }
+    }
+
+    // The guest closed its writer, or a write failed: shut the native send stream down.
+    if let Some(live) = sink.take() {
+        terminal = live.close().await;
+    }
+
+    let parent_trap_context = stream.trap_context();
+    let outcome = match stream
+        .finish(
             accessor,
             durable_worker_ctx::<Ctx, U>,
             HostResponseP3SocketsTcpSend {
-                result: serialize_tcp_stream_result(socket_result),
+                result: serialize_tcp_stream_result(terminal),
             },
         )
         .await
-        .map_err(wasmtime::Error::from)?;
-    Ok(deserialize_tcp_stream_result(response.result))
+    {
+        Ok(response) => deserialize_tcp_stream_result(response.result),
+        Err(error) => {
+            return fail_tcp_stream_task(
+                result_tx,
+                wasmtime::Error::from(error),
+                Some(parent_trap_context),
+            );
+        }
+    };
+
+    let _ = result_tx.send(TcpStreamResolution::Outcome(outcome));
+    Ok(())
 }
 
-/// Replay `send`: drain the (re-produced) guest bytes. If the call already
-/// completed, return the recorded result without re-sending. If the call is
-/// incomplete (a crash mid-send), record connection loss under the original Start.
-async fn replay_tcp_socket_send<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
-    input_rx: oneshot::Receiver<()>,
-    activity: &TailActivity,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
-where
-    Ctx: WorkerCtx,
-    U: Send + 'static,
-{
-    // Safe park: the bytes are re-produced by the replaying guest.
-    let _ = activity.park(input_rx).await;
-
-    match call
-        .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-        .await
-        .map_err(wasmtime::Error::from)?
-    {
-        CallReplayOutcome::Replayed(response) => Ok(deserialize_tcp_stream_result(response.result)),
-        CallReplayOutcome::Incomplete(call) => {
-            let response = call
-                .complete_access(
-                    accessor,
-                    durable_worker_ctx::<Ctx, U>,
-                    HostResponseP3SocketsTcpSend {
-                        result: Err(SerializableP3SocketErrorCode::ConnectionBroken),
-                    },
-                )
-                .await
-                .map_err(wasmtime::Error::from)?;
-            Ok(deserialize_tcp_stream_result(response.result))
-        }
-    }
+fn deserialize_tcp_send_chunk(
+    result: Result<u64, SerializableP3SocketErrorCode>,
+) -> Result<u64, types::ErrorCode> {
+    result.map_err(Into::into)
 }
 
 struct TcpSocketReceiveTask<Ctx> {
     socket: Resource<TcpSocket>,
     demand_rx: mpsc::Receiver<TcpReceiveDemand>,
-    result_tx: oneshot::Sender<TcpReceiveResolution>,
+    result_tx: oneshot::Sender<TcpStreamResolution>,
     observational_owner: Option<OplogIndex>,
     /// The invocation id of the `receive` guest import that spawned the task.
     invocation_id: InvocationIdSource,
@@ -1185,7 +1501,7 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
     fn new(
         socket: Resource<TcpSocket>,
         demand_rx: mpsc::Receiver<TcpReceiveDemand>,
-        result_tx: oneshot::Sender<TcpReceiveResolution>,
+        result_tx: oneshot::Sender<TcpStreamResolution>,
         observational_owner: Option<OplogIndex>,
         invocation_id: InvocationIdSource,
         activity: TailActivity,
@@ -1242,7 +1558,7 @@ async fn observe_tcp_receive_driver(
     result
 }
 
-/// Fail the durable `receive` task loudly on a durability-machinery error (an
+/// Fail the durable `send` or `receive` task loudly on a durability-machinery error (an
 /// oplog read/write/socket-setup failure), as opposed to a normal socket error.
 ///
 /// Mirrors the P3 HTTP `consume-body` fail-loud contract: a durability failure
@@ -1250,18 +1566,18 @@ async fn observe_tcp_receive_driver(
 /// parent marker after an incomplete child chunk). The caller leaves the parent
 /// without a terminal marker (it traps/abandons the parent handle so no
 /// `Cancelled` is written), and the guest-facing result future is resolved with
-/// a [`TcpReceiveResolution::Trap`] carrying the failing call scope's trap
+/// a [`TcpStreamResolution::Trap`] carrying the failing call scope's trap
 /// context so it also fails loud with correct retry grouping. When `trap_context`
 /// is `None` the sender is dropped, which still traps the result future loudly.
-fn fail_tcp_receive_task(
-    result_tx: oneshot::Sender<TcpReceiveResolution>,
+fn fail_tcp_stream_task(
+    result_tx: oneshot::Sender<TcpStreamResolution>,
     error: wasmtime::Error,
     trap_context: Option<DurableCallTrapContext>,
 ) -> wasmtime::Result<()> {
     match trap_context {
         Some(trap_context) => {
-            let _ = result_tx.send(TcpReceiveResolution::Trap {
-                message: "tcp receive durable persistence failed".to_string(),
+            let _ = result_tx.send(TcpStreamResolution::Trap {
+                message: "tcp socket durable persistence failed".to_string(),
                 trap_context,
             });
         }
@@ -1289,7 +1605,7 @@ async fn run_tcp_socket_receive<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket: Resource<TcpSocket>,
     demand_rx: mpsc::Receiver<TcpReceiveDemand>,
-    result_tx: oneshot::Sender<TcpReceiveResolution>,
+    result_tx: oneshot::Sender<TcpStreamResolution>,
     observational_owner: Option<OplogIndex>,
     invocation_id: InvocationIdSource,
     activity: TailActivity,
@@ -1322,7 +1638,7 @@ where
         Ok(parent) => parent,
         Err(error) => {
             let trap_context = find_durable_call_trap_context(&error);
-            return fail_tcp_receive_task(
+            return fail_tcp_stream_task(
                 result_tx,
                 wasmtime::Error::from_anyhow(error),
                 trap_context,
@@ -1354,7 +1670,7 @@ where
                     Ok(())
                 }) {
                     let trap_context = stream.trap_context();
-                    return fail_tcp_receive_task(
+                    return fail_tcp_stream_task(
                         result_tx,
                         wasmtime::Error::from_anyhow(stream.trap(error)),
                         Some(trap_context),
@@ -1366,7 +1682,7 @@ where
             }
             Err(error) => {
                 let trap_context = stream.trap_context();
-                return fail_tcp_receive_task(
+                return fail_tcp_stream_task(
                     result_tx,
                     wasmtime::Error::from_anyhow(stream.trap(error)),
                     Some(trap_context),
@@ -1408,7 +1724,7 @@ where
                         trap_context,
                     });
                 }
-                return fail_tcp_receive_task(
+                return fail_tcp_stream_task(
                     result_tx,
                     wasmtime::Error::from_anyhow(stream.trap(error)),
                     Some(trap_context),
@@ -1512,7 +1828,7 @@ where
                             });
                         }
                         stream.abandon_for_trap();
-                        return fail_tcp_receive_task(
+                        return fail_tcp_stream_task(
                             result_tx,
                             wasmtime::Error::from(error),
                             Some(trap_context),
@@ -1540,7 +1856,7 @@ where
                     Ok(result) => result,
                     Err(error) => {
                         let trap_context = stream.trap_context();
-                        return fail_tcp_receive_task(
+                        return fail_tcp_stream_task(
                             result_tx,
                             wasmtime::Error::from_anyhow(stream.trap(error)),
                             Some(trap_context),
@@ -1549,7 +1865,7 @@ where
                 };
                 if matches!(result, DemandDelivery::Abandoned) {
                     let trap_context = stream.trap_context();
-                    return fail_tcp_receive_task(
+                    return fail_tcp_stream_task(
                         result_tx,
                         wasmtime::Error::from_anyhow(stream.trap(anyhow::Error::msg(
                             "tcp receive persisted a chunk that could not be delivered to the \
@@ -1575,7 +1891,7 @@ where
                     Ok(DemandDelivery::Abandoned) => {}
                     Err(error) => {
                         let trap_context = stream.trap_context();
-                        return fail_tcp_receive_task(
+                        return fail_tcp_stream_task(
                             result_tx,
                             wasmtime::Error::from_anyhow(stream.trap(error)),
                             Some(trap_context),
@@ -1601,7 +1917,7 @@ where
     {
         Ok(response) => deserialize_tcp_stream_result(response.result),
         Err(error) => {
-            return fail_tcp_receive_task(
+            return fail_tcp_stream_task(
                 result_tx,
                 wasmtime::Error::from(error),
                 Some(parent_trap_context),
@@ -1609,7 +1925,7 @@ where
         }
     };
 
-    let _ = result_tx.send(TcpReceiveResolution::Outcome(outcome));
+    let _ = result_tx.send(TcpStreamResolution::Outcome(outcome));
     Ok(())
 }
 
@@ -1935,7 +2251,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         socket: Resource<TcpSocket>,
         mut data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
-        reserve_invocation_id_before_await(accessor, durable_worker_ctx::<Ctx, U>)?;
+        let invocation_id = access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)?;
+        let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
+        let observational_owner = accessor.with(|mut access| {
+            resolve_current_observational_owner(
+                durable_worker_ctx::<Ctx, U>(access.data_mut()),
+                custom_invocation_context.as_deref(),
+            )
+        })?;
         // One-shot acquire of the send stream. On a second call (or when the
         // socket is not connected) this returns an error, which we surface
         // without invoking the native send, mirroring the native `take_send_stream`
@@ -1956,71 +2279,27 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                     return Ok(future);
                 }
 
-                let call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable> =
-                    DurableCallSession::start_access_with_options(
-                        accessor,
-                        durable_worker_ctx::<Ctx, U>,
-                        DurableFunctionType::WriteRemote,
-                        AccessClaimOptions {
-                            incomplete_repair_authorized_by_scope: true,
-                            ..Default::default()
-                        },
-                        HostRequestNoInput {},
-                    )
-                    .await?;
+                let (demand_tx, demand_rx) = demand_channel();
                 let (result_tx, result_rx) = oneshot::channel();
-
-                let future = if call.is_live() {
-                    if call.is_persisted() {
-                        // Fence the original send Start before any bytes can reach the socket.
-                        let public_state = accessor.with(|mut store| {
-                            durable_worker_ctx::<Ctx, U>(store.data_mut())
-                                .public_state
-                                .clone()
-                        });
-                        public_state
-                            .worker()
-                            .commit_oplog_and_update_state(CommitLevel::Always)
-                            .await?;
-                    }
-                    // Forward the guest's outgoing bytes straight to the socket; only the
-                    // transmission result is persisted (no bytes in the oplog).
-                    let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                    let socket_result_future =
-                        <WasiSockets as types::HostTcpSocketWithStore<U>>::send(
-                            &sockets, socket, data,
-                        )
-                        .await?;
-                    let (socket_result_tx, socket_result_rx) = oneshot::channel();
-                    accessor.with(|mut store| {
-                        socket_result_future
-                            .pipe(&mut store, TcpSocketResultConsumer::new(socket_result_tx))?;
-                        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                            .tail_work_tracker()
-                            .activity();
-                        let task = TcpSocketSendTask::<Ctx>::live(
-                            call,
-                            socket_result_rx,
-                            result_tx,
-                            activity,
-                        );
-                        store.spawn(async move |store| task.run(store).await)?;
-                        FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
-                    })
-                } else {
-                    // Drain the replayed bytes without repeating a possibly completed send.
-                    let (input_tx, input_rx) = oneshot::channel();
-                    accessor.with(|mut store| {
-                        data.pipe(&mut store, TcpSendDrainConsumer::new(input_tx))?;
-                        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                            .tail_work_tracker()
-                            .activity();
-                        let task =
-                            TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
-                        store.spawn(async move |store| task.run(store).await)?;
-                        FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
-                    })
-                }?;
+                // The host owns the reader of the guest stream; the durable task appends the
+                // `send` `Start` only after both guest-facing handles exist.
+                let future = accessor.with(|mut store| {
+                    let future = FutureReader::new(&mut store, wait_tcp_stream_result(result_rx))?;
+                    data.pipe(&mut store, DurableTcpSendConsumer::new(demand_tx))?;
+                    let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                        .tail_work_tracker()
+                        .activity();
+                    let task = TcpSocketSendTask::<Ctx>::new(
+                        socket,
+                        demand_rx,
+                        result_tx,
+                        observational_owner,
+                        invocation_id,
+                        activity,
+                    );
+                    store.spawn(async move |store| task.run(store).await)?;
+                    wasmtime::error::Ok(future)
+                })?;
                 wasmtime::error::Ok(future)
             })
             .await?;
@@ -2074,7 +2353,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                     let mut stream =
                         StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
                     let future =
-                        match FutureReader::new(&mut store, wait_tcp_receive_result(result_rx)) {
+                        match FutureReader::new(&mut store, wait_tcp_stream_result(result_rx)) {
                             Ok(future) => future,
                             Err(error) => {
                                 let _ = stream.close(store.as_context_mut());
