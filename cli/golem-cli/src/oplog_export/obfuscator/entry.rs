@@ -829,7 +829,7 @@ impl Walker<'_, '_> {
                     "originalPhantomId",
                     original_phantom_id.as_ref().map(|id| self.tok(id)),
                 )
-                .add("instanceId", self.tok(instance_id))
+                .add("instanceId", text(instance_id.to_string()))
                 .build(),
             PublicOplogEntry::Start(StartParams {
                 timestamp: _,
