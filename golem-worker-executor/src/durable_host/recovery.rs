@@ -301,6 +301,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
+                                        // A rejected periodic snapshot is reported with its own
+                                        // index, so only a divergence that ends the replay
+                                        // names the snapshot that the replay started from.
+                                        let error = if snapshot_divergence
+                                            && Self::rejects_diverged_record(store, &error)
+                                        {
+                                            error
+                                        } else {
+                                            Self::with_replay_snapshot_hint(store, error)
+                                        };
                                         Some(TrapType::from_worker_executor_error::<Ctx>(
                                             error,
                                             OplogIndex::INITIAL,
@@ -484,7 +494,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 store, error, true,
             )));
         }
-        result.map_err(|error| ReplayFailure { error, diverged })
+        result.map_err(|error| ReplayFailure {
+            error: Self::with_replay_snapshot_hint(store, error),
+            diverged,
+        })
+    }
+
+    /// Adds the oplog index of the loaded snapshot to a divergence of a replay that started from
+    /// it, with the hint that a restored state that differs from the live one is a common cause.
+    /// A divergence of a replay without a snapshot keeps its text.
+    fn with_replay_snapshot_hint(
+        store: &Store<Ctx>,
+        error: WorkerExecutorError,
+    ) -> WorkerExecutorError {
+        match (error, store.data().durable_ctx().state.last_snapshot_index) {
+            (WorkerExecutorError::UnexpectedOplogEntry { expected, got }, Some(snapshot_index)) => {
+                WorkerExecutorError::UnexpectedOplogEntry {
+                    expected,
+                    got: format!(
+                        "{got}; replay started from the snapshot at oplog index {snapshot_index}; a snapshot load that differs from the live state is a common cause"
+                    ),
+                }
+            }
+            (error, _) => error,
+        }
     }
 }
 
