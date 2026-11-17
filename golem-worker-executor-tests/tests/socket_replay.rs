@@ -1281,6 +1281,59 @@ async fn p3_tcp_send_open_at_a_crash_refuses_live_writes(
     session.finish().await
 }
 
+/// A guest that drops its socket right after opening the send stream. The stream owns the
+/// connection, so the bytes written afterwards reach the peer. The `send` import takes the native
+/// stream before it returns, while the task commits the parent `Start` later. Replay of the
+/// completed send neither reconnects nor needs the dropped socket.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_survives_dropping_the_socket(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-dropped-socket",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let sent: Result<(), String> = session
+        .call(
+            "p3_tcp_send_after_dropping_socket",
+            data_value!("a".to_string(), b"after-drop-9c1e".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(()));
+    peer.wait_until(
+        "the bytes arrive and the connection closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"after-drop-9c1e".to_vec());
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the send after the socket drop failed"
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not reconnect");
+    session.finish().await
+}
+
 /// A revert cut inside an open send parent. The cut keeps the send `Start` and its first write,
 /// and deletes the invocation of the second write. Recovery replays the retained write, the
 /// next write after the cut is refused instead of being sent, and the send parent completes

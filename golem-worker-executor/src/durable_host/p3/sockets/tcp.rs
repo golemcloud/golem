@@ -1145,7 +1145,8 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
 }
 
 struct TcpSocketSendTask<Ctx> {
-    socket: Resource<TcpSocket>,
+    /// The native send stream, taken by the `send` import when its Store was live.
+    sink: Option<TcpSendSink>,
     demand_rx: mpsc::Receiver<TcpSendDemand>,
     result_tx: oneshot::Sender<TcpStreamResolution>,
     observational_owner: Option<OplogIndex>,
@@ -1157,7 +1158,7 @@ struct TcpSocketSendTask<Ctx> {
 
 impl<Ctx> TcpSocketSendTask<Ctx> {
     fn new(
-        socket: Resource<TcpSocket>,
+        sink: Option<TcpSendSink>,
         demand_rx: mpsc::Receiver<TcpSendDemand>,
         result_tx: oneshot::Sender<TcpStreamResolution>,
         observational_owner: Option<OplogIndex>,
@@ -1165,7 +1166,7 @@ impl<Ctx> TcpSocketSendTask<Ctx> {
         activity: TailActivity,
     ) -> Self {
         Self {
-            socket,
+            sink,
             demand_rx,
             result_tx,
             observational_owner,
@@ -1186,7 +1187,7 @@ where
     ) -> wasmtime::Result<()> {
         run_tcp_socket_send::<Ctx, U>(
             accessor,
-            self.socket,
+            self.sink,
             self.demand_rx,
             self.result_tx,
             self.observational_owner,
@@ -1204,6 +1205,30 @@ struct TcpSendSink {
 }
 
 impl TcpSendSink {
+    /// Takes the native send stream of `socket`, fed by an empty host stream. The native
+    /// stream owns the connection from then on, so the guest may drop the socket. No byte
+    /// reaches the socket until the send task hands its first chunk to the feed.
+    async fn take<Ctx, U>(
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+        socket: Resource<TcpSocket>,
+    ) -> wasmtime::Result<Self>
+    where
+        Ctx: WorkerCtx,
+        U: Send + 'static,
+    {
+        let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+        let (chunks, chunk_rx) = mpsc::channel::<TcpSendFeedItem>(1);
+        let (result_tx, result) = oneshot::channel();
+        let feed = accessor
+            .with(|mut store| StreamReader::new(&mut store, TcpSendFeedProducer::new(chunk_rx)))?;
+        let native_result =
+            <WasiSockets as types::HostTcpSocketWithStore<U>>::send(&sockets, socket, feed).await?;
+        accessor.with(|mut store| {
+            native_result.pipe(&mut store, TcpSocketResultConsumer::new(result_tx))
+        })?;
+        Ok(Self { chunks, result })
+    }
+
     /// The native outcome of a failed write. A sink that closed without an error still lost
     /// the bytes it did not take.
     async fn failure(self) -> types::ErrorCode {
@@ -1233,7 +1258,7 @@ impl TcpSendSink {
 /// after every child terminal.
 async fn run_tcp_socket_send<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    socket: Resource<TcpSocket>,
+    sink: Option<TcpSendSink>,
     demand_rx: mpsc::Receiver<TcpSendDemand>,
     result_tx: oneshot::Sender<TcpStreamResolution>,
     observational_owner: Option<OplogIndex>,
@@ -1274,43 +1299,10 @@ where
         }
     };
 
-    // The parent `Start` is committed by `start`, before the native sink can see a byte.
-    let mut sink = None;
-    if stream.is_live() {
-        let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-        let (chunk_tx, chunk_rx) = mpsc::channel::<TcpSendFeedItem>(1);
-        let (native_result_tx, native_result_rx) = oneshot::channel();
-        let feed = accessor
-            .with(|mut store| StreamReader::new(&mut store, TcpSendFeedProducer::new(chunk_rx)));
-        let native = match feed {
-            Ok(feed) => {
-                match <WasiSockets as types::HostTcpSocketWithStore<U>>::send(
-                    &sockets, socket, feed,
-                )
-                .await
-                {
-                    Ok(native_result) => accessor.with(|mut store| {
-                        native_result
-                            .pipe(&mut store, TcpSocketResultConsumer::new(native_result_tx))
-                    }),
-                    Err(error) => Err(error),
-                }
-            }
-            Err(error) => Err(error),
-        };
-        if let Err(error) = native {
-            let trap_context = stream.trap_context();
-            return fail_tcp_stream_task(
-                result_tx,
-                wasmtime::Error::from_anyhow(stream.trap(error)),
-                Some(trap_context),
-            );
-        }
-        sink = Some(TcpSendSink {
-            chunks: chunk_tx,
-            result: native_result_rx,
-        });
-    }
+    // The parent `Start` is committed by `start`, before the native sink can see a byte. A
+    // Store moves from replay to live only once, so a sink taken by the import belongs to a
+    // parent that starts live; a parent that becomes live at the replay tail has no sink.
+    let mut sink = sink.filter(|_| stream.is_live());
 
     // A parent that did not start live in this Store lost its connection.
     let mut terminal = if sink.is_some() {
@@ -2279,6 +2271,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                     return Ok(future);
                 }
 
+                // Take the native send stream while this import still holds the socket borrow:
+                // the guest may drop the socket as soon as the import returns, before the task
+                // has committed the `send` `Start`.
+                let live = accessor
+                    .with(|mut store| durable_worker_ctx::<Ctx, U>(store.data_mut()).is_live());
+                let sink = if live {
+                    Some(TcpSendSink::take::<Ctx, U>(accessor, socket).await?)
+                } else {
+                    None
+                };
                 let (demand_tx, demand_rx) = demand_channel();
                 let (result_tx, result_rx) = oneshot::channel();
                 // The host owns the reader of the guest stream; the durable task appends the
@@ -2290,7 +2292,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                         .tail_work_tracker()
                         .activity();
                     let task = TcpSocketSendTask::<Ctx>::new(
-                        socket,
+                        sink,
                         demand_rx,
                         result_tx,
                         observational_owner,

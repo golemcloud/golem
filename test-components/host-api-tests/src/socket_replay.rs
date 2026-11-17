@@ -188,6 +188,13 @@ pub trait SocketSession {
         pause_ms: u64,
         second: Vec<u8>,
     ) -> Result<(), String>;
+    /// Opens the send stream of the P3 TCP socket in `slot`, drops the socket before the first
+    /// write, then sends `data` on the stream, closes it and returns its result.
+    async fn p3_tcp_send_after_dropping_socket(
+        &self,
+        slot: String,
+        data: Vec<u8>,
+    ) -> Result<(), String>;
     /// Connects a P3 TCP socket and drops it, in a read-only method.
     #[read_only]
     async fn p3_tcp_connect_read_only(&self, port: u16) -> Result<(), String>;
@@ -429,6 +436,31 @@ impl SocketSession for SocketSessionImpl {
         };
         self.insert(slot, value);
         result
+    }
+
+    async fn p3_tcp_send_after_dropping_socket(
+        &self,
+        slot: String,
+        data: Vec<u8>,
+    ) -> Result<(), String> {
+        let Some(Slot::P3Tcp { socket, .. }) = self.slots.borrow_mut().remove(&slot) else {
+            return Err(format!("slot {slot} holds no P3 TCP socket"));
+        };
+        let (mut writer, reader) = p3::wit_stream::new::<u8>();
+        let result = socket.send(reader);
+        // The stream owns the connection: dropping the socket does not end it.
+        drop(socket);
+        let remaining = writer.write_all(data).await;
+        drop(writer);
+        let sent = result.await.map_err(error);
+        if remaining.is_empty() {
+            sent
+        } else {
+            Err(format!(
+                "{} bytes were not accepted: {sent:?}",
+                remaining.len()
+            ))
+        }
     }
 
     async fn p3_tcp_connect_read_only(&self, port: u16) -> Result<(), String> {
