@@ -199,23 +199,44 @@ plan.
   handler answers 500 and Polar delivers the webhook again. A 404 of the registry for an account
   that is not deleted also answers 500: the permission share of the billing account is missing. A
   409 of the registry (the account changed between the read and the write) makes the handler read
-  the account again.  The plan of a customer is not up to its owner: the registry refuses `set-plan`
-  on the own account. The app changes plans and deletion holds with the token of a separate billing
-  account (`GOLEM_CLOUD_BILLING_REGISTRY_TOKEN`). An administrator gives that account the three
-  permissions once, with a permission share from the administrator account (`POST
-  /v1/accounts/<administrator account ID>/permission-shares` with an administrator token):  ```json
-  { "targetAccountEmail": "<email of the billing account>", "name": "cloud-billing-set-plan",
-  "data": { "lowerPositive": [ "account(*) @ <email of the billing account> : view :", "account(*) @
-  <email of the billing account> : set-plan :", "account(*) @ <email of the billing account> :
-  hold-deletion :" ], "lowerNegative": [], "upperPositive": [], "upperNegative": [] } } ```
-  `set-plan` and `hold-deletion` need `view`, because the registry reads the account first. A holder
-  places and removes only its own deletion hold, so the owner of an account cannot remove the hold
-  of the billing account. The token of the billing account can read accounts, change plans and set
-  its deletion holds, and nothing else.  ### Settlement  Polar bills a usage event only if the
-  customer has a billable subscription (`active`, `trialing` or `past_due`) when Polar processes the
-  event. Polar accepts a later event and does not bill it. Polar also does not bill usage during a
-  trial, and invoices the usage of a `past_due` subscription only after the payment. The plans above
-  keep the paid overage inside the time that Polar bills:
+  the account again.
+
+The plan of a customer is not up to its owner: the registry refuses `set-plan` on the own account.
+The app changes plans and deletion holds with the token of a separate billing account
+(`GOLEM_CLOUD_BILLING_REGISTRY_TOKEN`). An administrator gives that account the three permissions
+once, with a permission share from the administrator account
+(`POST /v1/accounts/<administrator account ID>/permission-shares` with an administrator token):
+
+```json
+{
+  "targetAccountEmail": "<email of the billing account>",
+  "name": "cloud-billing-set-plan",
+  "data": {
+    "lowerPositive": [
+      "account(*) @ <email of the billing account> : view :",
+      "account(*) @ <email of the billing account> : set-plan :",
+      "account(*) @ <email of the billing account> : hold-deletion :"
+    ],
+    "lowerNegative": [],
+    "upperPositive": [],
+    "upperNegative": []
+  }
+}
+```
+
+`set-plan` and `hold-deletion` need `view`, because the registry reads the account first. A holder
+places and removes only its own deletion hold, so the owner of an account cannot remove the hold
+of the billing account. The token of the billing account can read accounts, change plans and set
+its deletion holds, and nothing else.
+
+### Settlement
+
+Polar bills a usage event only if the customer has a billable subscription (`active`, `trialing`
+or `past_due`) when Polar processes the event. Polar accepts a later event and does not bill it.
+Polar also does not bill usage during a trial, and invoices the usage of a `past_due`
+subscription only after the payment. The plans above keep the paid overage inside the time that
+Polar bills:
+
 - **Cancellation.** The account moves to the free plan 15 minutes before the scheduled end. The
   executors report usage every minute and the usage push runs every 10 minutes, so the push sends
   the last paid overage before the end.
