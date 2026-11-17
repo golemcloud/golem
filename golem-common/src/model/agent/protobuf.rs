@@ -15,7 +15,9 @@ use crate::base_model::AgentFingerprint;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, Pair, Principal,
-    PrincipalRef, TokenProvenance, ToolPrincipal, UserPrincipal,
+    PrincipalRef, PublicAccountPrincipal, PublicAgentPrincipal, PublicCaller, PublicPrincipal,
+    PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal, TokenProvenance,
+    ToolPrincipal, UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::tool::ToolName;
@@ -817,6 +819,245 @@ impl From<Caller> for golem_api_grpc::proto::golem::component::Caller {
                 .then(|| value.immediate.into()),
             original: Some(value.original.into()),
             tokens: value.tokens.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicCaller> for PublicCaller {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicCaller,
+    ) -> Result<Self, Self::Error> {
+        let original: PublicPrincipal = value
+            .original
+            .ok_or_else(|| missing("original"))?
+            .try_into()?;
+        Ok(Self {
+            // An absent immediate principal is the same as the original one.
+            immediate: match value.immediate {
+                Some(immediate) => immediate.try_into()?,
+                None => original.clone(),
+            },
+            original,
+            tokens: value
+                .tokens
+                .into_iter()
+                .map(PublicTokenProvenance::try_from)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<PublicCaller> for golem_api_grpc::proto::golem::component::PublicCaller {
+    fn from(value: PublicCaller) -> Self {
+        Self {
+            // The immediate principal is left out when it is the same as the original one, so
+            // that shown claims cross the wire once.
+            immediate: (value.original != value.immediate).then(|| value.immediate.into()),
+            original: Some(value.original.into()),
+            tokens: value.tokens.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicPrincipal> for PublicPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicPrincipal,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::public_principal::Value;
+
+        match value.value.ok_or_else(|| missing("value"))? {
+            Value::User(v) => Ok(Self::User(v.try_into()?)),
+            Value::Account(v) => Ok(Self::Account(v.try_into()?)),
+            Value::Agent(v) => Ok(Self::Agent(v.try_into()?)),
+            Value::Tool(v) => Ok(Self::Tool(v.try_into()?)),
+            Value::Anonymous(_) => Ok(Self::Anonymous(Empty {})),
+        }
+    }
+}
+
+impl From<PublicPrincipal> for golem_api_grpc::proto::golem::component::PublicPrincipal {
+    fn from(value: PublicPrincipal) -> Self {
+        use golem_api_grpc::proto::golem::component::public_principal::Value;
+
+        Self {
+            value: Some(match value {
+                PublicPrincipal::User(v) => Value::User(v.into()),
+                PublicPrincipal::Account(v) => Value::Account(v.into()),
+                PublicPrincipal::Agent(v) => Value::Agent(v.into()),
+                PublicPrincipal::Tool(v) => Value::Tool(v.into()),
+                PublicPrincipal::Anonymous(_) => {
+                    Value::Anonymous(golem_schema::proto::golem::common::Empty {})
+                }
+            }),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicUserPrincipal> for PublicUserPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicUserPrincipal,
+    ) -> Result<Self, Self::Error> {
+        let claims = match value.claims {
+            Some(claims) => {
+                let claims: serde_json::Value = serde_json::from_str(&claims)
+                    .map_err(|error| format!("Invalid field: claims: {error}"))?;
+                if !claims.is_object() {
+                    return Err("Invalid field: claims: the claim set must be a JSON object".into());
+                }
+                Some(claims)
+            }
+            None => None,
+        };
+        Ok(Self {
+            pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
+            authenticated_at: authenticated_at_from_protobuf(
+                value
+                    .authenticated_at
+                    .ok_or_else(|| missing("authenticated_at"))?,
+            )?,
+            claims,
+        })
+    }
+}
+
+impl From<PublicUserPrincipal> for golem_api_grpc::proto::golem::component::PublicUserPrincipal {
+    fn from(value: PublicUserPrincipal) -> Self {
+        Self {
+            pair: Some(value.pair.into()),
+            authenticated_at: Some(value.authenticated_at.into()),
+            claims: value.claims.map(|claims| claims.to_string()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicAccountPrincipal>
+    for PublicAccountPrincipal
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicAccountPrincipal,
+    ) -> Result<Self, Self::Error> {
+        let authentication =
+            golem_api_grpc::proto::golem::component::AccountAuthentication::try_from(
+                value.authentication,
+            )
+            .map_err(|_| "Invalid field: authentication".to_string())?
+            .try_into()?;
+        Ok(Self {
+            pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
+            account_id: value
+                .account_id
+                .ok_or_else(|| missing("account_id"))?
+                .try_into()?,
+            authentication,
+        })
+    }
+}
+
+impl From<PublicAccountPrincipal>
+    for golem_api_grpc::proto::golem::component::PublicAccountPrincipal
+{
+    fn from(value: PublicAccountPrincipal) -> Self {
+        Self {
+            pair: Some(value.pair.into()),
+            account_id: Some(value.account_id.into()),
+            authentication: golem_api_grpc::proto::golem::component::AccountAuthentication::from(
+                value.authentication,
+            ) as i32,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicAgentPrincipal>
+    for PublicAgentPrincipal
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicAgentPrincipal,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
+            agent_id: value
+                .agent_id
+                .ok_or_else(|| missing("agent_id"))?
+                .try_into()?,
+            agent_type: value.agent_type,
+            environment_id: value
+                .environment_id
+                .ok_or_else(|| missing("environment_id"))?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<PublicAgentPrincipal> for golem_api_grpc::proto::golem::component::PublicAgentPrincipal {
+    fn from(value: PublicAgentPrincipal) -> Self {
+        Self {
+            pair: Some(value.pair.into()),
+            agent_id: Some(value.agent_id.into()),
+            agent_type: value.agent_type,
+            environment_id: Some(value.environment_id.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicToolPrincipal> for PublicToolPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicToolPrincipal,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
+            environment_id: value
+                .environment_id
+                .ok_or_else(|| missing("environment_id"))?
+                .try_into()?,
+            tool_name: value.tool_name,
+        })
+    }
+}
+
+impl From<PublicToolPrincipal> for golem_api_grpc::proto::golem::component::PublicToolPrincipal {
+    fn from(value: PublicToolPrincipal) -> Self {
+        Self {
+            pair: Some(value.pair.into()),
+            environment_id: Some(value.environment_id.into()),
+            tool_name: value.tool_name,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicTokenProvenance>
+    for PublicTokenProvenance
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicTokenProvenance,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id.ok_or_else(|| missing("token id"))?.into(),
+            maker: value.maker.map(Into::into),
+        })
+    }
+}
+
+impl From<PublicTokenProvenance>
+    for golem_api_grpc::proto::golem::component::PublicTokenProvenance
+{
+    fn from(value: PublicTokenProvenance) -> Self {
+        Self {
+            id: Some(value.id.into()),
+            maker: value.maker.map(Into::into),
         }
     }
 }

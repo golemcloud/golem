@@ -186,6 +186,56 @@ message Caller {
   repeated TokenProvenance tokens = 3;
 }
 
+// The public form of a caller, as a reader of an oplog sees it.
+message PublicCaller {
+  PublicPrincipal original = 1;
+  // Absent when the immediate principal is the same as the original one. The decoder rebuilds
+  // both roles.
+  PublicPrincipal immediate = 2;
+  repeated PublicTokenProvenance tokens = 3;
+}
+
+message PublicPrincipal {
+  oneof value {
+    PublicUserPrincipal user = 1;
+    PublicAccountPrincipal account = 2;
+    PublicAgentPrincipal agent = 3;
+    PublicToolPrincipal tool = 4;
+    golem.common.Empty anonymous = 5;
+  }
+}
+
+message PublicUserPrincipal {
+  Pair pair = 1;
+  google.protobuf.Timestamp authenticated_at = 2;
+  // The claim set as a JSON object. Absent unless the reader asked for the claims.
+  optional string claims = 3;
+}
+
+message PublicAccountPrincipal {
+  Pair pair = 1;
+  golem.common.AccountId account_id = 2;
+  AccountAuthentication authentication = 3;
+}
+
+message PublicAgentPrincipal {
+  Pair pair = 1;
+  golem.worker.AgentId agent_id = 2;
+  string agent_type = 3;
+  golem.common.EnvironmentId environment_id = 4;
+}
+
+message PublicToolPrincipal {
+  Pair pair = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  string tool_name = 3;
+}
+
+message PublicTokenProvenance {
+  golem.common.UUID id = 1;
+  optional Pair maker = 2;
+}
+
 enum AgentConfigSource {
   AGENT_CONFIG_SOURCE_UNSPECIFIED = 0;
   AGENT_CONFIG_SOURCE_LOCAL = 1;

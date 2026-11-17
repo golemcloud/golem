@@ -30,7 +30,10 @@ pub const GITHUB_ISSUER: &str = "https://github.com";
 /// Each string is escaped as RFC 8785 serializes JSON strings, and the parser refuses every other
 /// spelling, so two texts are equal exactly when their pairs are equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Pair {
     pub issuer: String,

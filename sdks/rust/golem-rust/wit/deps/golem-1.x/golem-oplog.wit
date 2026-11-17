@@ -433,12 +433,79 @@ interface oplog {
         %record: typed-schema-value,
     }
 
+    /// The (issuer, subject) pair of a principal. golem:agent imports golem:api, so this
+    /// interface cannot use golem:agent/common.principal-ref; this record has the same fields.
+    record public-principal-ref {
+        issuer: string,
+        subject: string,
+    }
+
+    enum public-account-authentication {
+        api-token,
+        bootstrap-token,
+        sign-in,
+    }
+
+    /// A user, authenticated by a sign-in provider: the provider's pair. The oplog never gives
+    /// a user's claims to a guest.
+    record public-user-principal {
+        pair: public-principal-ref,
+        authenticated-at: datetime,
+    }
+
+    /// An account: (Golem issuer, "account:<account-id>").
+    record public-account-principal {
+        pair: public-principal-ref,
+        account-id: account-id,
+        authentication: public-account-authentication,
+    }
+
+    /// An agent: (Golem issuer, "agent:<agent-id>/<fingerprint>").
+    record public-agent-principal {
+        pair: public-principal-ref,
+        agent-id: agent-id,
+        agent-type: string,
+        environment-id: environment-id,
+    }
+
+    /// A tool: (Golem issuer, "tool:<environment-id>/<tool-name>").
+    record public-tool-principal {
+        pair: public-principal-ref,
+        environment-id: environment-id,
+        tool-name: string,
+    }
+
+    /// One principal, as Golem verified it. Every kind except anonymous has a pair.
+    variant public-principal {
+        user(public-user-principal),
+        account(public-account-principal),
+        agent(public-agent-principal),
+        tool(public-tool-principal),
+        anonymous,
+    }
+
+    /// A token that the request presented, and the pair of its maker. It never holds the
+    /// token's value.
+    record public-token-provenance {
+        id: uuid,
+        maker: option<public-principal-ref>,
+    }
+
+    /// Who started the chain, who made this call, and the tokens presented at the entry point.
+    /// Both roles are always present, also when they are the same principal.
+    record public-caller {
+        original: public-principal,
+        immediate: public-principal,
+        tokens: list<public-token-provenance>,
+    }
+
     record agent-initialization-parameters {
         invocation-id: uuid,
         constructor-parameters: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
+        caller: public-caller,
     }
 
     record agent-method-invocation-parameters {
@@ -448,14 +515,21 @@ interface oplog {
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
+        caller: public-caller,
+    }
+
+    record save-snapshot-parameters {
+        caller: public-caller,
     }
 
     record load-snapshot-parameters {
         snapshot: snapshot-data,
+        caller: public-caller,
     }
 
     record process-oplog-entries-parameters {
         invocation-id: uuid,
+        caller: public-caller,
     }
 
     record manual-update-parameters {
@@ -470,13 +544,14 @@ interface oplog {
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
+        caller: public-caller,
     }
 
     variant agent-invocation {
         agent-initialization(agent-initialization-parameters),
         agent-method-invocation(agent-method-invocation-parameters),
         external-tool(external-tool-invocation-parameters),
-        save-snapshot,
+        save-snapshot(save-snapshot-parameters),
         load-snapshot(load-snapshot-parameters),
         process-oplog-entries(process-oplog-entries-parameters),
         manual-update(manual-update-parameters),
