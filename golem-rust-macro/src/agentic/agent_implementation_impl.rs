@@ -448,8 +448,8 @@ fn generate_base_agent_impl(
     quote! {
         #[golem_rust::async_trait::async_trait(?Send)]
         impl #impl_generics golem_rust::agentic::BaseAgent for #self_ty #ty_generics #where_clause {
-            fn get_agent_id(&self) -> String {
-                golem_rust::agentic::get_agent_id().agent_id
+            fn get_agent_id(&self) -> golem_rust::AgentId {
+                golem_rust::agentic::get_agent_id()
             }
 
             async fn invoke(&mut self, method_name: String, input: golem_rust::schema::wit::wire::SchemaValueTree, principal: golem_rust::golem_agentic::golem::agent::common::Principal)

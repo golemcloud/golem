@@ -15,7 +15,7 @@
 use crate::golem_agentic::golem::agent::common::{
     AgentPrincipal, GolemUserPrincipal, OidcPrincipal, Principal,
 };
-use crate::schema::wit::wire::{AccountId, AgentId, ComponentId, Uuid};
+use crate::schema::wit::wire::{AccountId, AgentId, Uuid};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -84,12 +84,8 @@ impl<'de> Deserialize<'de> for OidcPrincipal {
 
 impl Serialize for AgentPrincipal {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut s = serializer.serialize_struct("AgentPrincipal", 2)?;
-        s.serialize_field(
-            "componentId",
-            &uuid_to_string(&self.agent_id.component_id.uuid),
-        )?;
-        s.serialize_field("agentId", &self.agent_id.agent_id)?;
+        let mut s = serializer.serialize_struct("AgentPrincipal", 1)?;
+        s.serialize_field("agentId", &uuid_to_string(&self.agent_id.uuid))?;
         s.end()
     }
 }
@@ -99,16 +95,12 @@ impl<'de> Deserialize<'de> for AgentPrincipal {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Helper {
-            component_id: String,
             agent_id: String,
         }
         let h = Helper::deserialize(deserializer)?;
-        let uuid = uuid_from_string(&h.component_id).map_err(de::Error::custom)?;
+        let uuid = uuid_from_string(&h.agent_id).map_err(de::Error::custom)?;
         Ok(AgentPrincipal {
-            agent_id: AgentId {
-                component_id: ComponentId { uuid },
-                agent_id: h.agent_id,
-            },
+            agent_id: AgentId { uuid },
         })
     }
 }
@@ -260,7 +252,7 @@ mod tests {
     fn principal_payloads_decode_in_either_field_order() {
         let cases = [
             r#"{"tag":"anonymous"}"#,
-            r#"{"val":{"componentId":"10203040-5060-7080-9012-3456789abcde","agentId":"worker(7)"},"tag":"agent"}"#,
+            r#"{"val":{"agentId":"10203040-5060-8080-9012-3456789abcde"},"tag":"agent"}"#,
             r#"{"tag":"golem-user","val":{"accountId":"fedcba98-7654-3210-9876-543210abcdef"}}"#,
             r#"{"val":{"sub":"subject","issuer":"https://issuer","email":"a@example.test","emailVerified":false,"name":null,"givenName":null,"familyName":"Family","picture":null,"preferredUsername":"login","claims":"{\"role\":\"reader\"}"},"tag":"oidc"}"#,
         ];
@@ -287,7 +279,8 @@ mod tests {
             r#"{"tag":"agent"}"#,
             r#"{"tag":"oidc","val":null}"#,
             r#"{"tag":"golem-user","val":{"accountId":"not-a-uuid"}}"#,
-            r#"{"tag":"agent","val":{"componentId":"10203040-5060-7080-9012-3456789abcde","agentId":4}}"#,
+            r#"{"tag":"agent","val":{"agentId":4}}"#,
+            r#"{"tag":"agent","val":{"agentId":"worker(7)"}}"#,
         ] {
             assert!(serde_json::from_str::<Principal>(json).is_err(), "{json}");
             assert!(from_json_bytes(json.as_bytes()).is_err(), "{json}");
