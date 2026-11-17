@@ -9,6 +9,10 @@ on:
         description: Publish the merged run (disable for validation)
         type: boolean
         default: true
+      r3_controls:
+        description: Run overlapping R3 controls on every partition host (requires publish=false)
+        type: boolean
+        default: false
 
 env:
   WASM_RQUICKJS_VERSION: "0.5.3"
@@ -23,6 +27,11 @@ jobs:
       attempt: ${{ github.run_attempt }}
       bundle: benchmark-bundle-attempt${{ github.run_attempt }}
     steps:
+      - name: Require unpublished research runs
+        if: inputs.r3_controls && inputs.publish
+        run: |
+          echo 'R3 controls require publish=false.' >&2
+          exit 1
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
@@ -141,6 +150,63 @@ jobs:
         with:
           name: benchmark-partial-${{ matrix.partition }}-attempt${{ github.run_attempt }}
           path: ${{ runner.temp }}/partial-${{ matrix.partition }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Run overlapping R3 controls after partition cleanup
+        if: inputs.r3_controls && steps.benchmark.outcome == 'success'
+        env:
+          PARTITION: ${{ matrix.partition }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/r3-controls.yaml" <<'YAML'
+          name: R3 controls
+          benchmarks:
+            - name: latency-small
+              version: 1
+              iterations: 3
+              clusterSize: [1]
+              size: [100]
+              length: [2]
+            - name: throughput-cpu-intensive
+              version: 1
+              iterations: 3
+              clusterSize: [1]
+              size: [1]
+              length: [100]
+          YAML
+          target/benchmarks/benchmarks \
+            --primary-only --retain-details --retain-selected-zero-counts \
+            suite --run-id "r3-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$PARTITION" \
+            --save-to-json "$RUNNER_TEMP/r3-controls-$PARTITION.json" \
+            --runner-id github-actions-blacksmith-32vcpu \
+            --runner-label "GitHub Actions (Blacksmith 32 vCPU)" \
+            --source-repository "$GITHUB_REPOSITORY" --source-commit-sha "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF" "$RUNNER_TEMP/r3-controls.yaml" spawned
+
+      - name: Record R3 dependency and host evidence
+        if: always() && inputs.r3_controls
+        run: |
+          {
+            date -u +%Y-%m-%dT%H:%M:%SZ
+            uname -a
+            lscpu
+            free -b
+            redis-server --version
+            docker version
+            docker image inspect postgres:17.7 --format '{{json .RepoDigests}}'
+            sha256sum "$RUNNER_TEMP/benchmark-bundle.tar.gz"
+          } > "$RUNNER_TEMP/r3-host.txt" 2>&1
+
+      - name: Upload R3 controls separately from canonical partials
+        if: always() && inputs.r3_controls
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-r3-${{ matrix.partition }}-attempt${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/r3-controls-${{ matrix.partition }}.json
+            ${{ runner.temp }}/r3-controls.yaml
+            ${{ runner.temp }}/r3-host.txt
           if-no-files-found: error
           retention-days: 30
 
