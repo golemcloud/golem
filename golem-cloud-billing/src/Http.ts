@@ -25,7 +25,7 @@ import {
 } from "./Page.ts"
 import { Polar } from "./Polar.ts"
 import { type Account, type AccountLimits, Registry } from "./Registry.ts"
-import { pastDueGraceEnd, planFor, type SettlementOffer, settlementFor } from "./Settlement.ts"
+import { make as makeSettlement, pastDueGraceEnd, planFor, type SettlementOffer, settlementFor } from "./Settlement.ts"
 import { type Subscription, Subscriptions } from "./Subscriptions.ts"
 import * as Webhooks from "./Webhooks.ts"
 
@@ -48,6 +48,13 @@ const page = (body: SafeHtml, status = 200) =>
     contentType: "text/html; charset=utf-8",
     headers: securityHeaders
   })
+
+/**
+ * How long an open checkout must still take payments for the checkout route to send the person
+ * back to it, in place of a new checkout. A second click then does not make the deletion hold of
+ * the checkout longer.
+ */
+export const CHECKOUT_REUSE_MS = 60 * 60 * 1000
 
 const errorPage = HttpServerResponse.text("An error occurred. Reload the page.", {
   status: 500,
@@ -125,6 +132,7 @@ export const routes = HttpRouter.use((router) =>
     const config = yield* BillingConfig
     const { pool } = yield* Database
     const handleWebhook = yield* Webhooks.makeHandler
+    const settlement = yield* makeSettlement
     const cliCommand = cliBootstrapCommand(config.publicApiUrl)
     const home = new URL("/", config.baseUrl).href
     // The query parameter of the page after a settlement: the IDs of the orders that it pays.
@@ -377,16 +385,78 @@ export const routes = HttpRouter.use((router) =>
             if (!offered) {
               return HttpServerResponse.redirect("/", { status: 303 })
             }
-            const url = yield* polar.createCheckout({
-              productId: config.polar.productId,
-              externalCustomerId: user.golemAccountId,
-              customerEmail: user.email,
-              customerName: user.name === "" ? undefined : user.name,
-              customerIpAddress: clientAddress(request),
-              successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
-              returnUrl: home
-            })
-            return HttpServerResponse.redirect(url, { status: 303 })
+            // The URL of a checkout holds the client secret that pays it. The route sends it to
+            // the browser only after the deletion hold of the checkout is in the registry, so the
+            // registry never deletes an account while Polar can take a payment for it. A checkout
+            // whose route fails before then can never be paid; its row holds the account until it
+            // expires (`Subscriptions.holdCandidates`).
+            //
+            // First the route reads from Polar each unfinished checkout of the account whose status
+            // can change. While Polar has the payment of a checkout, each click goes to the payment
+            // notice and starts no new checkout. A failed payment makes the checkout `open` again.
+            const accountId = user.golemAccountId
+            const started = yield* subscriptions.withAccountLock(
+              accountId,
+              Effect.gen(function* () {
+                const now = new Date()
+                const unfinished = yield* subscriptions.unfinishedCheckouts(accountId)
+                const read = yield* Effect.forEach(
+                  unfinished.filter((checkout) => checkout.status !== "succeeded"),
+                  (checkout) =>
+                    polar.getCheckout(checkout.checkoutId).pipe(
+                      Effect.tap((session) =>
+                        session.status === checkout.status
+                          ? Effect.void
+                          : subscriptions.recordCheckoutStatus(checkout.checkoutId, session.status, now)
+                      )
+                    )
+                )
+                const paid =
+                  unfinished.find((checkout) => checkout.status === "succeeded")?.checkoutId ??
+                  read.find((session) => session.status === "confirmed" || session.status === "succeeded")?.id
+                if (paid !== undefined) {
+                  return { paid, reasons: yield* settlement.reconcile(accountId, now) }
+                }
+                // `read` keeps the order of `unfinished`, by expiry.
+                let session = read
+                  .filter(
+                    (candidate) =>
+                      candidate.status === "open" && candidate.expiresAt.getTime() > now.getTime() + CHECKOUT_REUSE_MS
+                  )
+                  .at(-1)
+                if (session === undefined) {
+                  session = yield* polar.createCheckout({
+                    productId: config.polar.productId,
+                    externalCustomerId: accountId,
+                    customerEmail: user.email,
+                    customerName: user.name === "" ? undefined : user.name,
+                    customerIpAddress: clientAddress(request),
+                    successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
+                    returnUrl: home
+                  })
+                  yield* subscriptions.recordCheckout({
+                    checkoutId: session.id,
+                    accountId,
+                    expiresAt: session.expiresAt
+                  })
+                }
+                return { session, reasons: yield* settlement.reconcile(accountId, now) }
+              })
+            )
+            if (started.paid !== undefined) {
+              // The person paid a checkout, also in another tab; the page waits for the subscription.
+              const notice = new URL(home)
+              notice.searchParams.set("checkout_id", started.paid)
+              return HttpServerResponse.redirect(notice.href, { status: 303 })
+            }
+            const { session, reasons } = started
+            if (reasons === "deleted" || !reasons.includes("openCheckout")) {
+              yield* Effect.logWarning("Refused a checkout that no deletion hold covers").pipe(
+                Effect.annotateLogs({ golemAccountId: accountId, checkoutId: session.id, reasons: String(reasons) })
+              )
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            return HttpServerResponse.redirect(session.url, { status: 303 })
           }).pipe(
             Effect.catch((error) =>
               Effect.logError("Cannot start the checkout").pipe(

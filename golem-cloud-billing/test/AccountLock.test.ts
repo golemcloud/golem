@@ -72,9 +72,9 @@ describe("account lock", () => {
     }
   })
 
-  it("lets the holder of the lock finish while the deliveries that wait for it hold every other connection", async () => {
-    // Ten deliveries of one account on a pool of two: the holder keeps the lock for a moment, so
-    // the others take the free connection and queue for more while it holds the lock.
+  it("runs ten deliveries of one account at once on a pool of two connections", async () => {
+    // The holder keeps the lock for a moment, while the other deliveries wait in the queue of the
+    // process.
     const services = servicesWith(2)
     try {
       const accountId = randomUUID()

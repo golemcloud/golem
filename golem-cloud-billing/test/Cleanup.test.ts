@@ -1,16 +1,10 @@
 import { randomUUID } from "node:crypto"
-import { Effect, Layer, Redacted } from "effect"
-import { FetchHttpClient } from "effect/http"
+import { Effect, Logger } from "effect"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { BillingConfig } from "../src/BillingConfig.ts"
 import * as Cleanup from "../src/Cleanup.ts"
-import * as Database from "../src/Database.ts"
-import * as Polar from "../src/Polar.ts"
-import * as RegistryAccounts from "../src/RegistryAccounts.ts"
-import * as Subscriptions from "../src/Subscriptions.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
-import { queryPool } from "./support.ts"
+import { cleanupLayer, queryPool } from "./support.ts"
 
 const polarUrl = "https://polar.test"
 const polarToken = "polar-cleanup-token"
@@ -45,18 +39,18 @@ describe("cleanup of deleted accounts", () => {
   const registry = new RegistryDatabase()
   let pool: pg.Pool
   let polar: FakePolar
+  /** The JSON log lines of the cleanup runs of the test. */
+  let logs: Array<Record<string, unknown>>
 
-  const cleanup = () =>
+  const cleanup = (maxConnections = registry.configs.cleanup.db.maxConnections) =>
     Effect.runPromise(
       Cleanup.cleanupDeletedAccounts.pipe(
+        Effect.provide(Logger.layer([Logger.map(Logger.formatJson, (line) => void logs.push(JSON.parse(line)))])),
         Effect.provide(
-          Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
-            Layer.provideMerge(Database.layer),
-            Layer.provide(FetchHttpClient.layer),
-            Layer.provide(Layer.succeed(BillingConfig, registry.configs.cleanup)),
-            Layer.provide(
-              Layer.succeed(Polar.PolarConfig, { apiUrl: new URL(polarUrl), accessToken: Redacted.make(polarToken) })
-            )
+          cleanupLayer(
+            { ...registry.configs.cleanup, db: { ...registry.configs.cleanup.db, maxConnections } },
+            polarUrl,
+            polarToken
           )
         )
       )
@@ -127,12 +121,13 @@ describe("cleanup of deleted accounts", () => {
 
   beforeEach(() => {
     polar = new FakePolar()
+    logs = []
   })
 
   afterEach(async () => {
     await pool.query(
-      `TRUNCATE "user", polar_subscriptions, polar_orders, usage_events, deleted_account_cleanups, deletion_holds,
-         usage_settlements CASCADE`
+      `TRUNCATE "user", polar_subscriptions, polar_orders, polar_checkouts, usage_events, deleted_account_cleanups,
+         deletion_holds, usage_settlements CASCADE`
     )
   })
 
@@ -143,7 +138,7 @@ describe("cleanup of deleted accounts", () => {
     await subscribe(live, "active")
     polar.customers.add(live)
 
-    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
 
     expect(polar.deletes).toEqual([{ externalId: deleted.accountId, authorization: `Bearer ${polarToken}` }])
     expect(await rowsOf(deleted.userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
@@ -151,8 +146,15 @@ describe("cleanup of deleted accounts", () => {
     const kept = await pool.query("SELECT account_id::text AS account_id FROM polar_subscriptions ORDER BY account_id")
     expect(kept.rows.map((row) => row.account_id).sort()).toEqual([deleted.accountId, live].sort())
 
-    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 0, deletedUsers: 0 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 0 })
     expect(polar.deletes).toHaveLength(1)
+  })
+
+  it("runs on a pool of one connection, with the queries of the account lock on its connection", async () => {
+    const deleted = await deletedAccount()
+
+    expect(await cleanup(1)).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
+    expect(await rowsOf(deleted.userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
   })
 
   it("keeps the customer and the user of a deleted account that owes paid overage", async () => {
@@ -169,13 +171,13 @@ describe("cleanup of deleted accounts", () => {
       [unbilled.accountId]
     )
 
-    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 2, deletedUsers: 0 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 2, canceledSubscriptions: 0, deletedUsers: 0 })
     expect(polar.deletes).toEqual([])
     expect(await rowsOf(unpaid.userId)).toEqual({ users: 1, sessions: 1, accounts: 1 })
 
     await pool.query("UPDATE polar_orders SET status = 'paid'")
     await pool.query("UPDATE usage_events SET sent_at = NULL, held_at = now()")
-    expect(await cleanup()).toEqual({ deletedCustomers: 2, unsettled: 0, deletedUsers: 2 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 2, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 2 })
   })
 
   it("keeps the customer of a deleted account whose subscription runs to the end of the period", async () => {
@@ -190,13 +192,13 @@ describe("cleanup of deleted accounts", () => {
     const recordedHolds = async () =>
       (await pool.query("SELECT reason FROM deletion_holds WHERE account_id = $1", [accountId])).rows
 
-    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 1, deletedUsers: 0 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 1, canceledSubscriptions: 0, deletedUsers: 0 })
     expect(polar.deletes).toEqual([])
     expect(await rowsOf(userId)).toEqual({ users: 1, sessions: 1, accounts: 1 })
     expect(await recordedHolds()).toEqual([{ reason: "held" }])
 
     await pool.query("UPDATE polar_subscriptions SET status = 'canceled' WHERE account_id = $1", [accountId])
-    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
     expect(await recordedHolds()).toEqual([])
   })
 
@@ -220,7 +222,7 @@ describe("cleanup of deleted accounts", () => {
     )
     await sentEvent(accountId)
 
-    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
     expect(await rowsOf(userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
   })
 
@@ -229,13 +231,13 @@ describe("cleanup of deleted accounts", () => {
     const { accountId, userId } = await deletedAccount()
     await pool.query("UPDATE polar_subscriptions SET ended_at = current_period_end WHERE account_id = $1", [accountId])
     await sentEvent(accountId)
-    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 1, deletedUsers: 0 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 1, canceledSubscriptions: 0, deletedUsers: 0 })
 
     await pool.query("INSERT INTO usage_settlements (account_id, settled_through) VALUES ($1, clock_timestamp())", [
       accountId
     ])
 
-    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
     expect(await rowsOf(userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
   })
 
@@ -244,7 +246,7 @@ describe("cleanup of deleted accounts", () => {
     const userId = await user(accountId)
     await registry.deleteAccount(accountId)
 
-    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
     expect(polar.deletes.map((request) => request.externalId)).toEqual([accountId])
     expect(await rowsOf(userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
   })
@@ -256,7 +258,79 @@ describe("cleanup of deleted accounts", () => {
     await expect(cleanup()).rejects.toThrow(/1 Polar customers of deleted accounts are not deleted/)
     expect(await rowsOf(deleted.userId)).toEqual({ users: 1, sessions: 1, accounts: 1 })
 
-    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
     expect(polar.customers.has(deleted.accountId)).toBe(false)
+  })
+
+  /** The log lines of `deleted_account_subscription_canceled`: the cancellations that an operator refunds. */
+  const cancellations = () =>
+    logs.filter(
+      (line) => (line["annotations"] as Record<string, unknown>)["event"] === "deleted_account_subscription_canceled"
+    )
+
+  it("cancels a subscription of a deleted account that is not canceled at the period end, and deletes the user", async () => {
+    // An administrator removed the deletion hold and deleted the account of an active subscription.
+    const accountId = await registry.account()
+    const userId = await user(accountId)
+    await subscribe(accountId, "active")
+    polar.customers.add(accountId)
+    await registry.deleteAccount(accountId)
+
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 1, deletedUsers: 1 })
+
+    expect(polar.deletes.map((request) => request.externalId)).toEqual([accountId])
+    expect(cancellations()).toEqual([
+      expect.objectContaining({
+        level: "ERROR",
+        annotations: expect.objectContaining({ golemAccountId: accountId, subscriptionIds: `sub_${accountId}` })
+      })
+    ])
+    expect(await rowsOf(userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
+    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 0 })
+    expect(polar.deletes).toHaveLength(1)
+  })
+
+  it("keeps the customer and the user of a deleted account while its checkout is unfinished", async () => {
+    // An administrator removed the deletion hold of an open checkout and deleted the account.
+    const { accountId, userId } = await deletedAccount()
+    const checkout = (status: string, subscriptionId: string | null = null) =>
+      pool.query(
+        `INSERT INTO polar_checkouts (checkout_id, account_id, status, expires_at, subscription_id)
+         VALUES ($1, $2, $3, now() + interval '1 day', $4)`,
+        [`checkout_${status}_${randomUUID()}`, accountId, status, subscriptionId]
+      )
+    await checkout("open")
+    await checkout("succeeded", `sub_${accountId}`)
+
+    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 1, canceledSubscriptions: 0, deletedUsers: 0 })
+    expect(polar.deletes).toEqual([])
+    expect(await rowsOf(userId)).toEqual({ users: 1, sessions: 1, accounts: 1 })
+
+    await pool.query("UPDATE polar_checkouts SET status = 'expired' WHERE status = 'open'")
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
+  })
+
+  it("cancels a subscription that the app records after the cleanup deleted the Polar customer", async () => {
+    // After the delete, Polar created a new customer with the external ID of the deleted account.
+    const { accountId } = await deletedAccount()
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
+
+    polar.customers.add(accountId)
+    await pool.query(
+      `INSERT INTO polar_subscriptions
+         (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
+          metered_price_ids)
+       VALUES ('sub_late', $1, 'paid-product', 'active', now() + interval '30 days', false, now(), '{}')`,
+      [accountId]
+    )
+
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 1, deletedUsers: 0 })
+    expect(polar.deletes.map((request) => request.externalId)).toEqual([accountId, accountId])
+    expect(cancellations()).toEqual([
+      expect.objectContaining({ annotations: expect.objectContaining({ subscriptionIds: "sub_late" }) })
+    ])
+
+    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 0 })
+    expect(polar.deletes).toHaveLength(2)
   })
 })

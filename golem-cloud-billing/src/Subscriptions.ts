@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer, RcMap, type Scope, Semaphore } from "effect"
 import type pg from "pg"
 import { connectionOf, Database, LockConnection, requireTables, type SchemaError } from "./Database.ts"
 
@@ -89,6 +89,35 @@ export interface OverageSettlement {
   readonly orders: ReadonlyArray<{ readonly orderId: string; readonly amount: number }>
 }
 
+/**
+ * The status of a Polar checkout. `confirmed`: the person sent the payment, and Polar processes
+ * it. `succeeded`: Polar has the payment and creates the subscription.
+ *
+ * Polar moves a checkout from `open` to `confirmed` when the person pays, back to `open` when the
+ * payment fails, and from `confirmed` to `succeeded`. A job of Polar moves each `open` checkout
+ * after its expiry to `expired`. No status follows `succeeded`, `expired` or `failed` (which Polar
+ * no longer sets), so these are final.
+ */
+export type CheckoutStatus = "open" | "expired" | "confirmed" | "succeeded" | "failed"
+
+/**
+ * A checkout of the paid product that the checkout route created for the account, as the app
+ * last saw it.
+ */
+export interface Checkout {
+  readonly checkoutId: string
+  readonly accountId: string
+  /**
+   * The status of the checkout at the last read from Polar. The app records `open` when it creates
+   * the checkout. While the status is `open` or `confirmed`, the checkout route reads the checkout
+   * again at each click of the account, and the sweep reads it after `expiresAt`
+   * (`Settlement.sweep`).
+   */
+  readonly status: CheckoutStatus
+  /** When Polar stops taking the payment of an open checkout. */
+  readonly expiresAt: Date
+}
+
 /** A failed query of the subscription tables. */
 export class SubscriptionsError extends Data.TaggedError("SubscriptionsError")<{
   readonly reason: string
@@ -147,6 +176,8 @@ export interface SubscriptionsShape {
    *   need a hold, and a held one no longer counts as unbilled, so it can remove the hold,
    * - an account with a usage settlement after `since`. An operator records it outside the app,
    *   and no webhook comes for it,
+   * - an account with an unfinished checkout and no hold in `deletion_holds`: the placement of the
+   *   checkout route failed,
    * - an account whose row in `deletion_holds` is older than `recheckBefore`. A hold that the app
    *   failed to remove keeps its row, so the sweep tries again, with no time limit.
    */
@@ -185,14 +216,49 @@ export interface SubscriptionsShape {
   readonly recordHold: (accountId: string, reason: string) => Effect.Effect<void, SubscriptionsError>
   /** Records that the app removed its deletion hold from the account. */
   readonly forgetHold: (accountId: string) => Effect.Effect<void, SubscriptionsError>
+  /** Records a checkout that Polar created now, as `open`. */
+  readonly recordCheckout: (checkout: {
+    readonly checkoutId: string
+    readonly accountId: string
+    readonly expiresAt: Date
+  }) => Effect.Effect<void, SubscriptionsError>
+  /**
+   * The unfinished checkouts of the account: Polar can still take their payment, or has taken it,
+   * and the app has not recorded the subscription that they started. A checkout is finished when a
+   * subscription webhook links it (`linkCheckout`), or when Polar reports it `expired` or `failed`.
+   */
+  readonly unfinishedCheckouts: (accountId: string) => Effect.Effect<ReadonlyArray<Checkout>, SubscriptionsError>
+  /** Links the checkout of the account to the subscription that it started, which finishes it. */
+  readonly linkCheckout: (
+    checkoutId: string,
+    accountId: string,
+    subscriptionId: string
+  ) => Effect.Effect<void, SubscriptionsError>
+  /**
+   * The unfinished checkouts that expired at or before `now` and are `open` or `confirmed`, and
+   * that the app did not read from Polar after `readAfter`, of every account.
+   */
+  readonly checkoutsToRead: (now: Date, readAfter: Date) => Effect.Effect<ReadonlyArray<Checkout>, SubscriptionsError>
+  /**
+   * Records the status of the checkout that the app read from Polar at `readAt`; with no status,
+   * only the time of a read that failed. A final status (`CheckoutStatus`) stays: Polar answers a
+   * read from a replica that can lag, so a later read can report an older status. The caller holds
+   * the lock of the account (`withAccountLock`).
+   */
+  readonly recordCheckoutStatus: (
+    checkoutId: string,
+    status: CheckoutStatus | undefined,
+    readAt: Date
+  ) => Effect.Effect<void, SubscriptionsError>
   /** Whether a webhook with this `webhook-id` was handled before. */
   readonly isDelivered: (webhookId: string) => Effect.Effect<boolean, SubscriptionsError>
   readonly markDelivered: (webhookId: string, eventType: string) => Effect.Effect<void, SubscriptionsError>
   /**
    * Runs `effect` while holding an advisory lock for the account, so that two webhooks of one
-   * account, also on two replicas, change its plan one after the other. The lock holds one
-   * connection of the pool, and the queries of `Subscriptions` and `RegistryAccounts` in `effect`
-   * run on it (`Database.LockConnection`).
+   * account, also on two replicas, change its plan one after the other. The callers of one
+   * account in this process wait in a queue of the process, and hold no connection of the pool
+   * while they wait. The lock holds one connection of the pool, and the queries of `Subscriptions`
+   * and `RegistryAccounts` in `effect` run on it (`Database.LockConnection`).
    */
   readonly withAccountLock: <A, E, R>(
     accountId: string,
@@ -206,10 +272,11 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
 
 /**
  * The tables of the app besides the tables of Better Auth: the subscriptions and their orders,
- * the overage settlements that paid unpaid orders, the usage events of the usage push, the deleted
- * accounts that the cleanup has finished, the deletion holds that the app placed in the registry,
- * and the usage settlements of operators with their history. `Migrations.migrate` creates them; the web app, the usage push and the cleanup
- * only check that they exist.
+ * the checkouts of the paid product, the overage settlements that paid unpaid orders, the usage
+ * events of the usage push, the deleted accounts that the cleanup has finished, the deletion holds
+ * that the app placed in the registry, and the usage settlements of operators with their history.
+ * `Migrations.migrate` creates them; the web app, the usage push and the cleanup only check that
+ * they exist.
  *
  * An operator script outside the app records a usage settlement with the admin database user: it
  * sets `usage_settlements.settled_through` of the account, and adds a row with the same time, the
@@ -242,6 +309,17 @@ export const tables = `
   );
   CREATE INDEX IF NOT EXISTS polar_orders_unpaid ON polar_orders (account_id, created_at)
     WHERE status IN ('pending', 'void');
+  CREATE TABLE IF NOT EXISTS polar_checkouts (
+    checkout_id TEXT PRIMARY KEY,
+    account_id UUID NOT NULL,
+    status TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    subscription_id TEXT,
+    read_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+  );
+  CREATE INDEX IF NOT EXISTS polar_checkouts_unfinished ON polar_checkouts (account_id)
+    WHERE subscription_id IS NULL AND status IN ('open', 'confirmed', 'succeeded');
   CREATE TABLE IF NOT EXISTS overage_settlements (
     order_id TEXT PRIMARY KEY,
     account_id UUID NOT NULL,
@@ -297,6 +375,7 @@ export const tables = `
 export const tableNames: ReadonlyArray<string> = [
   "polar_subscriptions",
   "polar_orders",
+  "polar_checkouts",
   "overage_settlements",
   "polar_webhook_deliveries",
   "usage_events",
@@ -385,11 +464,35 @@ const columns = `subscription_id, account_id::text AS account_id, product_id, st
 const failure = (error: unknown) =>
   new SubscriptionsError({ reason: error instanceof Error ? error.message : String(error) })
 
+/** The condition of an unfinished checkout (`SubscriptionsShape.unfinishedCheckouts`) in `polar_checkouts`. */
+const unfinished = (alias: string) =>
+  `${alias}.subscription_id IS NULL AND ${alias}.status IN ('open', 'confirmed', 'succeeded')`
+
+interface CheckoutRow {
+  readonly checkout_id: string
+  readonly account_id: string
+  readonly status: CheckoutStatus
+  readonly expires_at: Date
+}
+
+const checkoutColumns = "checkout_id, account_id::text AS account_id, status, expires_at"
+
+const fromCheckoutRow = (row: CheckoutRow): Checkout => ({
+  checkoutId: row.checkout_id,
+  accountId: row.account_id,
+  status: row.status,
+  expiresAt: row.expires_at
+})
+
 /** Checks that the tables exist, and returns the queries. */
-const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
+const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scope> =
   Effect.gen(function* () {
     yield* requireTables(tableNames)
     const { pool } = yield* Database
+    // A queue for each account with a caller of `withAccountLock`. A caller that waited for the
+    // advisory lock on a connection would hold that connection, and enough callers of one account
+    // would hold every connection of the pool, also the ones that the holder of the lock needs.
+    const accountQueues = yield* RcMap.make({ lookup: (_accountId: string) => Semaphore.make(1) })
 
     const query = <R extends object>(text: string, values: ReadonlyArray<unknown> = []) =>
       Effect.flatMap(connectionOf(pool), (connection) =>
@@ -518,6 +621,11 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
          UNION
          SELECT account_id::text AS account_id FROM usage_settlements WHERE settled_through > $3
          UNION
+         SELECT c.account_id::text AS account_id
+           FROM polar_checkouts c
+          WHERE ${unfinished("c")}
+            AND NOT EXISTS (SELECT 1 FROM deletion_holds h WHERE h.account_id = c.account_id)
+         UNION
          SELECT account_id::text AS account_id FROM deletion_holds WHERE updated_at < $4`,
         [productId, billableStatuses, since, recheckBefore]
       ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
@@ -568,6 +676,47 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
         [accountId, productId]
       ).pipe(Effect.map((result) => (result.rows[0] === undefined ? undefined : fromRow(result.rows[0]))))
 
+    const recordCheckout = (checkout: {
+      readonly checkoutId: string
+      readonly accountId: string
+      readonly expiresAt: Date
+    }) =>
+      query("INSERT INTO polar_checkouts (checkout_id, account_id, status, expires_at) VALUES ($1, $2, 'open', $3)", [
+        checkout.checkoutId,
+        checkout.accountId,
+        checkout.expiresAt
+      ]).pipe(Effect.asVoid)
+
+    const unfinishedCheckouts = (accountId: string) =>
+      query<CheckoutRow>(
+        `SELECT ${checkoutColumns} FROM polar_checkouts c WHERE c.account_id = $1 AND ${unfinished("c")}
+          ORDER BY c.expires_at`,
+        [accountId]
+      ).pipe(Effect.map((result) => result.rows.map(fromCheckoutRow)))
+
+    const linkCheckout = (checkoutId: string, accountId: string, subscriptionId: string) =>
+      query(
+        `UPDATE polar_checkouts SET subscription_id = $3
+          WHERE checkout_id = $1 AND account_id = $2 AND subscription_id IS NULL`,
+        [checkoutId, accountId, subscriptionId]
+      ).pipe(Effect.asVoid)
+
+    const checkoutsToRead = (now: Date, readAfter: Date) =>
+      query<CheckoutRow>(
+        `SELECT ${checkoutColumns} FROM polar_checkouts c
+          WHERE ${unfinished("c")} AND c.status IN ('open', 'confirmed') AND c.expires_at <= $1
+            AND (c.read_at IS NULL OR c.read_at <= $2)
+          ORDER BY c.expires_at`,
+        [now, readAfter]
+      ).pipe(Effect.map((result) => result.rows.map(fromCheckoutRow)))
+
+    const recordCheckoutStatus = (checkoutId: string, status: CheckoutStatus | undefined, readAt: Date) =>
+      query(
+        `UPDATE polar_checkouts SET status = COALESCE($2, status), read_at = $3
+          WHERE checkout_id = $1 AND status NOT IN ('succeeded', 'expired', 'failed')`,
+        [checkoutId, status, readAt]
+      ).pipe(Effect.asVoid)
+
     const isDelivered = (webhookId: string) =>
       query("SELECT 1 FROM polar_webhook_deliveries WHERE webhook_id = $1", [webhookId]).pipe(
         Effect.map((result) => (result.rowCount ?? 0) > 0)
@@ -580,7 +729,7 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
         [webhookId, eventType]
       ).pipe(Effect.asVoid)
 
-    const withAccountLock = <A, E, R>(accountId: string, effect: Effect.Effect<A, E, R>) =>
+    const advisoryLock = <A, E, R>(accountId: string, effect: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
         Effect.tryPromise({
           try: async () => {
@@ -608,6 +757,13 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
           })
       )
 
+    const withAccountLock = <A, E, R>(accountId: string, effect: Effect.Effect<A, E, R>) =>
+      Effect.scoped(
+        Effect.flatMap(RcMap.get(accountQueues, accountId), (queue) =>
+          Semaphore.withPermits(queue, 1)(advisoryLock(accountId, effect))
+        )
+      )
+
     return {
       record,
       recordOrder,
@@ -623,6 +779,11 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
       awaitingPayment,
       pastDue,
       latest,
+      recordCheckout,
+      unfinishedCheckouts,
+      linkCheckout,
+      checkoutsToRead,
+      recordCheckoutStatus,
       isDelivered,
       markDelivered,
       withAccountLock

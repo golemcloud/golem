@@ -46,9 +46,9 @@ export const makePool = (config: PostgresConfig): pg.Pool =>
 
 /**
  * The connection of the pool that holds the account lock of the fiber
- * (`Subscriptions.withAccountLock`), or none. Inside the lock, the queries of `Subscriptions` and
- * `RegistryAccounts` run on it (`connectionOf`). The holder of the lock then never waits for a
- * second connection, which the fibers that wait for the lock can hold, also in a pool of one.
+ * (`Subscriptions.withAccountLock`), or none. Inside the lock, the queries of `Subscriptions`,
+ * `RegistryAccounts` and `Cleanup` run on it (`connectionOf`). The holder of the lock then never
+ * waits for a second connection, also in a pool of one.
  */
 export const LockConnection = Context.Reference<pg.PoolClient | undefined>("golem-cloud-billing/LockConnection", {
   defaultValue: () => undefined
