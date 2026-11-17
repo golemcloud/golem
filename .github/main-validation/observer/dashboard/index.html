@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#17252d">
+  <title>Golem · Main validation</title>
+  <style>
+    :root{--ink:#1c3039;--muted:#637078;--paper:#f6f5f0;--white:#fffefa;--line:#dedfd7;--navy:#17252d;--teal:#176653;--green-bg:#e5f0e8;--red:#ad4135;--red-bg:#f9e9e4;--amber:#886013;--amber-bg:#f7efd8;--blue:#31647c;--blue-bg:#e5eff4;--radius:12px}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select{font:inherit}button,a,input,select{outline-offset:4px}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #368f9c}a{color:var(--teal);text-underline-offset:3px}button{cursor:pointer}button:disabled{cursor:wait;opacity:.6}[hidden]{display:none!important}.skip{position:absolute;left:16px;top:-80px;background:white;padding:12px;z-index:9}.skip:focus{top:12px}
+    .topbar{background:var(--navy);color:#edf3ed;padding:20px 36px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{display:flex;align-items:center;gap:14px}.mark{display:grid;place-items:center;width:36px;height:36px;background:#a7c7a8;color:var(--navy);border-radius:9px;font:bold 23px Georgia,serif}.wordmark{font-size:22px;letter-spacing:-1px;font-weight:700}.separator{height:23px;width:1px;background:#435056;margin:0 7px}.top-label{font-size:13px;color:#bfcecf}.repo{color:#d1dddc;font-size:12px;text-decoration:none;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.repo:hover{text-decoration:underline}.shell{max-width:1600px;margin:auto;padding:36px}.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:10px;font-weight:750;color:var(--muted)}.page-heading{display:flex;justify-content:space-between;gap:20px;align-items:flex-end;margin-bottom:24px}h1{font-size:clamp(28px,3vw,38px);line-height:1.15;letter-spacing:-1.3px;margin:8px 0 10px}h2{font-size:22px;letter-spacing:-.5px;line-height:1.3;margin:0}h3{font-size:16px;margin:0}p{margin:8px 0}.subtle{color:var(--muted)}.small{font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.refresh-area{text-align:right;flex-shrink:0}.refresh{background:var(--white);border:1px solid var(--line);color:var(--ink);padding:8px 14px;border-radius:7px;font-weight:600}.refresh:hover{border-color:#81988b}.feed-status{margin-top:8px;font-size:12px;color:var(--muted)}.notice{padding:12px 16px;border:1px solid #deca94;border-radius:8px;background:var(--amber-bg);color:#72511b;margin:0 0 20px;font-size:13px}.notice.preview{background:var(--navy);color:#d9e9df;border-color:var(--navy);font-weight:650}.feed-health{display:inline-flex;align-items:center;gap:7px}.dot{width:7px;height:7px;display:inline-block;border-radius:50%;background:currentColor;flex-shrink:0}
+    .live-section{margin-bottom:28px}.section-label{display:flex;gap:12px;align-items:center;margin-bottom:12px}.section-label .rule{height:1px;flex:1;background:var(--line)}.live-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.live-card{background:var(--white);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;justify-content:space-between;align-items:center;gap:16px}.live-title{font-weight:650;margin:7px 0 5px}.live-open{padding:0;border:0;background:none;text-align:left;color:var(--ink)}.live-open:hover .live-title{text-decoration:underline;text-underline-offset:3px}.badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;line-height:1.4;padding:5px 9px;border-radius:5px;white-space:nowrap;color:var(--muted);background:#eceee9}.badge.green,.badge.recovery{background:var(--green-bg);color:var(--teal)}.badge.failure,.badge.repeat-failure{background:var(--red-bg);color:var(--red)}.badge.running{background:var(--blue-bg);color:var(--blue)}.badge.incomplete,.badge.no-selection{background:var(--amber-bg);color:var(--amber)}
+    .workspace{display:grid;grid-template-columns:340px minmax(0,1fr);gap:24px;align-items:start}.run-panel{border:1px solid var(--line);background:var(--white);border-radius:var(--radius);overflow:hidden}.panel-head{padding:20px;border-bottom:1px solid var(--line)}.panel-head h2{font-size:18px}.filters{display:grid;gap:10px;margin-top:16px}.field-label{font-size:11px;font-weight:650;color:var(--muted);display:block;margin-bottom:4px}.filters input,.filters select{width:100%;padding:9px 10px;border:1px solid #cdd3cc;border-radius:6px;background:var(--white);color:var(--ink);font-size:13px}.history-caption{display:flex;justify-content:space-between;gap:12px;margin:15px 0 0;font-size:11px;color:var(--muted)}.run-list{max-height:820px;overflow:auto}.run-button{width:100%;text-align:left;border:0;border-bottom:1px solid #e7e8e0;background:transparent;padding:17px 20px;color:var(--ink);position:relative}.run-button:last-child{border-bottom:0}.run-button:hover{background:#f1f3ec}.run-button[aria-current="true"]{background:#eaf0e8;box-shadow:inset 3px 0 var(--teal)}.run-row{display:flex;justify-content:space-between;align-items:center;gap:10px}.run-context{font-size:12px;font-weight:650;margin-top:10px}.run-meta{display:flex;flex-wrap:wrap;gap:5px 10px;margin-top:5px;font-size:11px;color:var(--muted)}.run-branch{overflow-wrap:anywhere;font-size:12px;margin-top:8px}.empty{padding:32px 24px;text-align:center;color:var(--muted)}.empty strong{display:block;color:var(--ink);font-size:16px;margin-bottom:7px}.detail{min-width:0}.detail-card{background:var(--white);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}.detail-heading{padding:24px;border-bottom:1px solid var(--line)}.detail-top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.detail-title{margin-top:9px;overflow-wrap:anywhere}.detail-links{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:12px}.metadata{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:22px 0 0}.metadata dt{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}.metadata dd{margin:0;font-size:12px;overflow-wrap:anywhere}.section{padding:24px;border-bottom:1px solid var(--line)}.section:last-child{border-bottom:0}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}.section-head .eyebrow{font-size:9px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric{padding:14px;background:#f3f4ee;border-radius:8px}.metric-value{font-size:27px;font-weight:650;letter-spacing:-1px;line-height:1.25;font-variant-numeric:tabular-nums}.metric-label{font-size:11px;color:var(--muted);margin-top:5px}.metric.failed .metric-value{color:var(--red)}.metric.recovered .metric-value{color:var(--teal)}.test-note{font-size:12px;color:var(--muted);margin-top:12px}.job{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid #e8e9e1}.job:first-child{padding-top:0}.job:last-child{border-bottom:0;padding-bottom:0}.job-name{font-size:13px;font-weight:600;overflow-wrap:anywhere}.steps{font-size:12px;color:var(--red);margin:6px 0 0;padding-left:18px}.analysis{background:#eff3ed}.analysis-summary{font-size:15px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.analysis-label{display:inline-flex;border:1px solid #bdcdbd;border-radius:4px;font-size:9px;padding:3px 6px;letter-spacing:.08em;white-space:nowrap}.baseline{padding:12px 14px;border-left:2px solid #89a28d;background:#e5ece1;margin:16px 0;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.suspect{padding:14px 0;border-top:1px solid #d7e0d3}.suspect-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.confidence{font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}.suspect p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.limits{margin-top:16px;font-size:12px;color:var(--muted)}.limits ul{padding-left:18px;margin:7px 0 0}.limits li{white-space:pre-wrap;overflow-wrap:anywhere}.test-details{border:1px solid var(--line);border-radius:8px;margin-top:10px;overflow:hidden}.test-details summary{cursor:pointer;padding:14px;position:relative;overflow-wrap:anywhere;font-size:13px;font-weight:600}.test-details summary:hover{background:#f4f4ee}.test-suite{display:block;margin:4px 0 0 17px;font-size:11px;font-weight:400;color:var(--muted)}.test-body{padding:0 14px 14px}.test-message{font:11px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;background:#1e2d35;color:#e4eae6;border-radius:6px;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;margin:8px 0}.attempts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0;font-size:11px}.report-name{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.recovered-group{margin-top:24px}.footer{display:flex;justify-content:space-between;gap:14px;padding-top:26px;color:var(--muted);font-size:11px}.loading{padding:70px 24px;text-align:center}.loading .eyebrow{margin-bottom:10px}.loading h2{margin-bottom:10px}.selection-note{margin-top:12px;font-size:12px;color:var(--muted)}
+    @media(min-width:1200px){.run-panel{position:sticky;top:20px}}@media(max-width:1000px){.workspace{grid-template-columns:290px minmax(0,1fr);gap:16px}.shell{padding:28px 24px}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metadata{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-heading,.section{padding:20px}.live-card{align-items:flex-start;flex-direction:column;gap:10px}}
+    @media(max-width:720px){.topbar{padding:16px 20px}.top-label,.separator{display:none}.repo{font-size:10px}.shell{padding:26px 16px}.page-heading{align-items:flex-start;flex-direction:column;gap:14px}.refresh-area{text-align:left;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.feed-status{margin:0}.live-grid{grid-template-columns:1fr}.live-card{flex-direction:row;align-items:center;padding:16px}.workspace{grid-template-columns:1fr}.run-list{max-height:300px}.panel-head{padding:16px}.filters{grid-template-columns:1fr 1fr}.run-button{padding:14px 16px}.detail-top{flex-wrap:wrap}.detail-heading,.section{padding:18px}.metadata{gap:14px}.metric-grid{gap:8px}.metric{padding:12px}.footer{flex-direction:column;gap:4px}.detail-links{gap:12px}.section-head{align-items:flex-start}.analysis-label{font-size:8px}h2{font-size:20px}}
+    @media(prefers-reduced-motion:no-preference){button,a{transition:background-color .15s,border-color .15s}.loading{animation:arrive .3s ease-out}@keyframes arrive{from{opacity:.4}to{opacity:1}}}
+  </style>
+</head>
+<body>
+  <a class="skip" href="#run-detail">Skip to selected run</a>
+  <header class="topbar">
+    <div class="brand"><span class="mark" aria-hidden="true">g</span><span class="wordmark">golem</span><span class="separator"></span><span class="top-label">Engineering / CI observatory</span></div>
+    <a class="repo" href="https://github.com/golemcloud/golem" target="_blank" rel="noopener noreferrer">golemcloud / golem ↗</a>
+  </header>
+  <main class="shell">
+    <div class="page-heading"><div><div class="eyebrow">The state of the build</div><h1>Main validation</h1><p class="subtle">A shared view of progress, failures, and what changed.</p></div><div class="refresh-area"><button class="refresh" id="refresh" type="button">↻ Refresh</button><div class="feed-status" id="feed-status" role="status" aria-live="polite">Connecting to the observer…</div></div></div>
+    <div id="preview" class="notice preview" hidden>Preview fixtures · not live CI</div>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section class="live-section" aria-labelledby="live-heading"><div class="section-label"><h2 id="live-heading" class="eyebrow">Current activity</h2><span class="rule"></span><span class="small subtle" id="active-count"></span></div><div id="live-runs" class="live-grid"><div class="live-card subtle">Waiting for observer data…</div></div></section>
+    <div class="workspace">
+      <aside class="run-panel" aria-labelledby="history-heading"><div class="panel-head"><h2 id="history-heading">Run history</h2><div class="filters"><label><span class="field-label">Context</span><select id="context"><option value="">All contexts</option><option>Main validation</option><option>Main validation (acceptance)</option><option value="__unknown">Unspecified context</option></select></label><label><span class="field-label">Search runs</span><input id="search" type="search" placeholder="Branch, SHA, run…" autocomplete="off"></label></div><div class="history-caption"><span>Finished runs · newest first</span><span id="history-count">—</span></div></div><nav id="run-list" class="run-list" aria-label="Finished validation runs"><div class="empty">Loading run history…</div></nav></aside>
+      <section id="run-detail" class="detail" aria-label="Selected run details" tabindex="-1"><div class="detail-card loading"><div class="eyebrow">CI observatory</div><h2>Finding the latest signal</h2><p class="subtle">Run details will appear when the observer responds.</p></div></section>
+    </div>
+    <footer class="footer"><span>Golem engineering · Main validation observer</span><span>Refreshes every 30 seconds. All times shown in your local time zone.</span></footer>
+  </main>
+  <script>
+    'use strict';
+    const $ = id => document.getElementById(id);
+    const state = { data: null, selected: null, busy: false, error: '', lastSuccess: null };
+    const labels = {green:'Passed',failure:'Failed','repeat-failure':'Repeat failure',recovery:'Recovered',incomplete:'Incomplete','no-selection':'Not selected',running:'Running'};
+    const list = value => Array.isArray(value) ? value : [];
+    const str = value => value == null ? '' : String(value);
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = str(text);
+      return node;
+    }
+    function date(value) {
+      const d = new Date(value);
+      return value && Number.isFinite(d.getTime()) ? d : null;
+    }
+    function formatted(value) { const d = date(value); return d ? d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Unavailable'; }
+    function ago(value) {
+      const d = date(value); if (!d) return 'Time unavailable';
+      const minutes = Math.max(0, Math.floor((Date.now()-d.getTime())/60000));
+      return minutes < 1 ? 'Just now' : minutes < 60 ? `${minutes}m ago` : minutes < 1440 ? `${Math.floor(minutes/60)}h ago` : `${Math.floor(minutes/1440)}d ago`;
+    }
+    function safeGithub(value) {
+      try {
+        const u = new URL(value);
+        return u.protocol === 'https:' && u.hostname === 'github.com' && !u.username && !u.password && !u.port && /^\/golemcloud\/golem(?:\/|$)/.test(u.pathname) ? u.href : null;
+      } catch { return null; }
+    }
+    function githubLink(text, value) {
+      const href = safeGithub(value);
+      if (!href) return el('span','subtle',text);
+      const a = el('a','',text); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a;
+    }
+    function key(run) { return `run-${run.run_id}-a${run.attempt}`; }
+    function active(run) { return run.status !== 'completed'; }
+    function badge(value, text) {
+      const known = Object.hasOwn(labels,value) ? value : value === 'success' ? 'green' : value === 'queued' || value === 'in_progress' ? 'running' : 'incomplete';
+      const b = el('span',`badge ${known}`); b.append(el('span','dot'),document.createTextNode(text || labels[value] || str(value) || 'Unknown')); return b;
+    }
+    function runBadge(run) { return badge(active(run) ? 'running' : run.classification, active(run) ? (run.status === 'in_progress' ? 'In progress' : str(run.status) || 'Status unknown') : labels[run.classification] || str(run.conclusion) || 'Unknown'); }
+    function runName(run) { return `#${run.run_id} · attempt ${run.attempt}`; }
+    function contextName(run) { return run.context || 'Unspecified context'; }
+    function empty(title, message) { const box = el('div','empty'); box.append(el('strong','',title),el('div','small',message)); return box; }
+    function section(title, extraClass) { const box = el('section',`section ${extraClass || ''}`); const head = el('div','section-head'); head.append(el('h3','',title)); box.append(head); return box; }
+    function selectRun(run, focus = false) {
+      state.selected = key(run);
+      if (location.hash !== `#${state.selected}`) history.replaceState(null,'',`#${state.selected}`);
+      renderHistory(); renderDetail();
+      if (focus) $('run-detail').focus();
+    }
+    function renderLive() {
+      const runs = state.data.runs.filter(active);
+      $('active-count').textContent = `${runs.length} active`;
+      $('live-runs').replaceChildren();
+      if (!runs.length) {
+        const box = el('div','live-card'); box.style.gridColumn = '1 / -1'; box.append(el('div','', 'No runs currently in progress.'),el('span','small subtle',state.data.runs.length ? 'Latest results are in history.' : 'Waiting for the first validation.')); $('live-runs').append(box); return;
+      }
+      for (const run of runs) {
+        const card = el('div','live-card'); const button = el('button','live-open'); button.type = 'button';
+        button.append(el('div','eyebrow',contextName(run)),el('div','live-title',`${run.branch || 'Branch unavailable'} · #${run.run_id}`),el('div','small subtle',`Attempt ${run.attempt} · started ${formatted(run.created_at)}`));
+        button.addEventListener('click',()=>selectRun(run,true)); card.append(button,runBadge(run)); $('live-runs').append(card);
+      }
+    }
+    function renderHistory() {
+      if (!state.data) return;
+      const query = $('search').value.trim().toLowerCase(), context = $('context').value;
+      const finished = state.data.runs.filter(r=>!active(r));
+      const runs = finished.filter(r=>(!context || (context === '__unknown' ? !r.context : r.context === context)) && [r.run_id,r.attempt,r.branch,r.workflow_sha,r.source,r.context,r.event,r.conclusion,r.classification].map(str).join(' ').toLowerCase().includes(query));
+      $('history-count').textContent = `${runs.length} / ${finished.length}`;
+      $('run-list').replaceChildren();
+      if (!runs.length) { $('run-list').append(empty(finished.length ? 'No matching runs' : 'No finished runs yet',finished.length ? 'Try another context or search term.' : 'Completed validation runs will appear here.')); return; }
+      for (const run of runs) {
+        const button = el('button','run-button'); button.type = 'button'; button.setAttribute('aria-current',String(state.selected === key(run)));
+        const row = el('div','run-row'); row.append(el('span','mono',`#${run.run_id} / a${run.attempt}`),runBadge(run));
+        const meta = el('div','run-meta'); meta.append(el('span','',ago(run.created_at)),el('span','',run.event || 'Event unavailable'));
+        button.append(row,el('div','run-context',contextName(run)),el('div','run-branch',run.branch || 'Branch unavailable'),meta);
+        button.addEventListener('click',()=>selectRun(run,true)); $('run-list').append(button);
+      }
+    }
+    function addMetadata(parent, name, value, mono = false) { const box = el('div'); box.append(el('dt','',name),el('dd',mono ? 'mono' : '',value || 'Unavailable')); parent.append(box); }
+    function numeric(value) { return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value.toLocaleString() : '—'; }
+    function renderTests(run, card) {
+      const tests = run.tests || {}, totals = tests.totals || {}, available = Array.isArray(tests.reports) && tests.reports.length > 0;
+      const box = section('Test results');
+      if (!available) {
+        box.append(el('p','subtle small','CTRF reports unavailable. Test totals cannot be determined for this run.'));
+      } else {
+        const grid = el('div','metric-grid');
+        for (const [label,value,cls] of [['Total tests',totals.tests,''],['Passed',totals.passed,''],['Failed',totals.failed,'failed'],['Recovered',list(tests.recovered).length,'recovered']]) {
+          const metric = el('div',`metric ${cls}`); metric.append(el('div','metric-value',numeric(value)),el('div','metric-label',label)); grid.append(metric);
+        }
+        box.append(grid,el('div','test-note',`${numeric(totals.skipped)} skipped · ${numeric(totals.pending)} pending · ${numeric(totals.other)} other · ${tests.reports.length} CTRF report${tests.reports.length === 1 ? '' : 's'}`));
+      }
+      const failed = list(tests.failed), recovered = list(tests.recovered);
+      if (failed.length) { const group = el('div'); group.append(el('h3','recovered-group',`Failed tests · ${failed.length}`)); failed.forEach(t=>group.append(testDetail(t))); box.append(group); }
+      else if (available) box.append(el('p','small subtle','No failed test details reported.'));
+      if (recovered.length) { const group = el('div','recovered-group'); group.append(el('h3','',`Recovered tests · ${recovered.length}`),el('p','small subtle','Tests reported as recovered by the observer. Inspect attempts for their recorded outcomes.')); recovered.forEach(t=>group.append(testDetail(t))); box.append(group); }
+      card.append(box);
+    }
+    function testDetail(test) {
+      const details = el('details','test-details'), summary = el('summary','',test.name || 'Unnamed test');
+      if (test.suite) summary.append(el('span','test-suite',test.suite));
+      const body = el('div','test-body');
+      if (test.report) body.append(el('div','report-name',`Report: ${test.report}`));
+      if (list(test.attempts).length) { const attempts = el('div','attempts'); attempts.append(el('span','subtle','Recorded attempts:')); test.attempts.forEach((s,i)=>attempts.append(badge(s,`${i+1}: ${str(s)}`))); body.append(attempts); }
+      body.append(el('pre','test-message',test.message || 'No failure message was included in the report.'));
+      details.append(summary,body); return details;
+    }
+    function renderAnalysis(run, card) {
+      const analysis = run.analysis || {}, box = section('Failure analysis','analysis');
+      box.firstChild.append(el('span','analysis-label','LLM · REVIEW REQUIRED'));
+      box.append(el('p','analysis-summary',analysis.summary || (active(run) ? 'Analysis is not available while this run is active.' : 'No failure analysis is available for this run.')));
+      if (analysis.baseline) box.append(el('div','baseline',`Baseline: ${analysis.baseline}`));
+      const suspects = list(analysis.suspects);
+      if (suspects.length) {
+        box.append(el('div','eyebrow','Suspected changes · not confirmed causes'));
+        for (const suspect of suspects) {
+          const item = el('div','suspect'), head = el('div','suspect-head');
+          const sha = str(suspect.sha);
+          head.append(/^[a-fA-F0-9]{7,40}$/.test(sha) ? githubLink(sha.slice(0,12),`https://github.com/golemcloud/golem/commit/${sha}`) : el('span','mono',sha || 'SHA unavailable'));
+          head.append(el('span','confidence',`${['high','medium','low'].includes(suspect.confidence) ? suspect.confidence : 'Unknown'} confidence`));
+          item.append(head,el('p','',suspect.reason || 'No reasoning provided.')); box.append(item);
+        }
+      }
+      if (list(analysis.limits).length) { const limits = el('div','limits'); limits.append(el('strong','','Limits & missing evidence')); const ul = el('ul'); analysis.limits.forEach(limit=>ul.append(el('li','',limit))); limits.append(ul); box.append(limits); }
+      card.append(box);
+    }
+    function renderDetail() {
+      const root = $('run-detail');
+      const run = state.data?.runs.find(r=>key(r) === state.selected);
+      if (!run) { const placeholder = empty(state.selected ? 'This run is not in the available history' : 'Awaiting the first validation',state.selected ? 'Choose a run from history or current activity. The requested permalink may be outside the retained history.' : 'The observer has not published any validation runs yet. Progress, test results and failure analysis will appear here.'); placeholder.classList.add('detail-card'); root.replaceChildren(placeholder); return; }
+      // Preserve expanded failure messages across background refreshes.
+      const opened = new Set([...root.querySelectorAll('details[open]')].map(d=>d.dataset.testKey));
+      const card = el('article','detail-card'), heading = el('header','detail-heading'), top = el('div','detail-top'), title = el('div');
+      title.append(el('div','eyebrow',contextName(run)),el('h2','detail-title',runName(run))); top.append(title,runBadge(run)); heading.append(top);
+      const links = el('div','detail-links'); links.append(githubLink('View on GitHub ↗',run.url)); const permalink = el('a','','Permalink'); permalink.href = `#${key(run)}`; links.append(permalink); heading.append(links);
+      const meta = el('dl','metadata'); addMetadata(meta,'Branch',run.branch); addMetadata(meta,'Workflow SHA',run.workflow_sha,true); addMetadata(meta,'Event',run.event); addMetadata(meta,'Created',formatted(run.created_at)); addMetadata(meta,'Updated',formatted(run.updated_at)); addMetadata(meta,'Source',run.source || 'Not provided',true); heading.append(meta);
+      heading.append(el('p','selection-note',run.selected === true ? 'Selected for validation.' : run.selected === false ? 'Not selected for validation.' : 'Validation selection is not available.')); card.append(heading);
+      const jobs = section('Jobs'); jobs.firstChild.append(el('span','small subtle',`${list(run.jobs).length} reported`));
+      if (!list(run.jobs).length) jobs.append(el('p','small subtle','Job information is not available yet.'));
+      for (const job of list(run.jobs)) {
+        const row = el('div','job'), info = el('div'); info.append(el('div','job-name',job.name || 'Unnamed job'));
+        if (job.started_at || job.completed_at) info.append(el('div','small subtle',`${formatted(job.started_at)} → ${job.completed_at ? formatted(job.completed_at) : 'Not completed'}`));
+        if (list(job.failed_steps).length) { const steps = el('ul','steps'); job.failed_steps.forEach(step=>steps.append(el('li','',step))); info.append(steps); }
+        row.append(info,badge(job.conclusion || 'running',job.conclusion || (job.completed_at ? 'Unknown' : job.started_at ? 'In progress' : 'Pending'))); jobs.append(row);
+      }
+      card.append(jobs); renderTests(run,card); renderAnalysis(run,card); root.replaceChildren(card);
+      [...root.querySelectorAll('details')].forEach((d,i)=>{d.dataset.testKey = `${key(run)}:${i}`; d.open = opened.has(d.dataset.testKey);});
+    }
+    function updateHealth() {
+      $('preview').hidden = !state.data?.demo;
+      const updated = date(state.data?.updated_at), stale = updated && Date.now()-updated.getTime() > 45*60000;
+      const problems = [];
+      if (state.error) problems.push(state.error + (state.data ? ' Showing the last successfully loaded results.' : ' No results have been loaded yet.'));
+      if (state.data && !updated) problems.push('The observer has not provided a data timestamp. Freshness cannot be verified.');
+      else if (stale) problems.push(`Observer data is older than 45 minutes (updated ${formatted(state.data.updated_at)}). Current activity may have changed.`);
+      $('notice').hidden = !problems.length; $('notice').textContent = problems.join(' ');
+      $('feed-status').textContent = state.busy ? 'Refreshing…' : state.data ? `${state.data.demo ? 'Preview' : stale || !updated || state.error ? 'Attention' : 'Observer connected'} · updated ${updated ? ago(state.data.updated_at) : 'time unavailable'}` : 'Observer unavailable · retrying every 30s';
+      $('refresh').disabled = state.busy;
+    }
+    function validData(data) {
+      return data && typeof data === 'object' && Array.isArray(data.runs) && data.runs.every(r=>r && typeof r === 'object' && Number.isSafeInteger(r.run_id) && r.run_id > 0 && Number.isSafeInteger(r.attempt) && r.attempt > 0);
+    }
+    async function refresh() {
+      if (state.busy) return;
+      state.busy = true; updateHealth();
+      const controller = new AbortController(), timeout = setTimeout(()=>controller.abort(),15000);
+      try {
+        const response = await fetch('/data.json',{cache:'no-store',signal:controller.signal,headers:{Accept:'application/json'}});
+        if (!response.ok) throw new Error(`Observer request failed (HTTP ${response.status}).`);
+        const data = await response.json();
+        if (!validData(data)) throw new Error('The observer returned an invalid data document.');
+        state.data = data; state.error = ''; state.lastSuccess = Date.now();
+        if (!state.selected && data.runs.length) state.selected = key(data.runs[0]);
+        renderLive(); renderHistory(); renderDetail();
+      } catch (error) {
+        state.error = error.name === 'AbortError' ? 'The observer request timed out.' : error instanceof SyntaxError ? 'The observer returned unreadable JSON.' : error.message === 'Failed to fetch' ? 'Cannot reach the observer.' : error.message;
+        if (!state.data) {
+          $('active-count').textContent = 'Unavailable'; $('live-runs').replaceChildren(empty('Current activity unavailable','The observer may still be publishing its first snapshot.'));
+          $('run-list').replaceChildren(empty('History unavailable','We will retry automatically. You can also refresh now.'));
+          $('run-detail').replaceChildren(empty('Waiting for the observer','No live results to display. Existing results will be preserved if a later refresh fails.'));
+        }
+      } finally { clearTimeout(timeout); state.busy = false; updateHealth(); }
+    }
+    function readHash() {
+      if (/^#run-\d+-a\d+$/.test(location.hash)) state.selected = location.hash.slice(1);
+    }
+    readHash();
+    window.addEventListener('hashchange',()=>{state.selected = null;readHash();if(state.data){if(!state.selected && state.data.runs.length)state.selected=key(state.data.runs[0]);renderHistory();renderDetail();}});
+    $('refresh').addEventListener('click',refresh);
+    $('context').addEventListener('change',renderHistory);
+    $('search').addEventListener('input',renderHistory);
+    refresh(); setInterval(refresh,30000);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden && (!state.lastSuccess || Date.now()-state.lastSuccess>30000))refresh();});
+  </script>
+</body>
+</html>

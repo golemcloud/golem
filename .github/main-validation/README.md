@@ -17,7 +17,9 @@ Today's CI triggers, required checks and full release preflight remain active.
   The later analysis agent reports failures without holding up validation.
 
 There are four jobs: `select`, `linux`, `apfs`, `result`. Selection and publication
-use `gh` directly in the workflow. This directory contains documentation only.
+use `gh` directly in the workflow. The independent reporting observer's prompt,
+helpers and setup instructions live in [observer/](observer/README.md); they do
+not control or execute validation.
 
 ## Inactive defaults and acceptance
 

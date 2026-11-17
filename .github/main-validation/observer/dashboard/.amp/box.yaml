@@ -1,0 +1,7 @@
+source: false
+artifacts:
+  - index.html
+  - server.py
+services:
+  web:
+    command: python3 server.py

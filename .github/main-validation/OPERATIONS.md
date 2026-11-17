@@ -45,36 +45,22 @@ failed attempts and recovered tests; checks without CTRF use the job log. An
 interrupted or missing result is never green. The named owner, Daniel Vigovszky,
 reads these manually until the analysis agent is accepted.
 
-## Analysis agent (not configured)
+## Analysis agent
 
-Use a new small Golem orb under Daniel's personal Amp account, separate from the
-daily benchmark orb. Follow that benchmark agent's schedule and Slack webhook
-mechanisms: a 30-minute schedule wakes this same thread; an incoming webhook
-posts to `#golem-dev-internal`. Resolve webhook credentials through Amp secrets,
-never the prompt or CI. No health issue, investigation orbs or reproduction
-builds are needed initially. Obtain authorization before setup or posting.
+[observer/PROMPT.md](observer/PROMPT.md) owns the reusable instructions.
+[observer/README.md](observer/README.md) documents account-independent setup,
+the 30-minute wake-up, credentials, state transfer and prompt updates. The helper
+scripts live beside the prompt. Keep receipts and seen markers in durable local
+state, not Git. Updating these files does not update an existing observer's
+checkout or schedule automatically.
 
-Proposed instructions for that thread:
-
-> Read newly finished `main-validation.yaml` runs in `golemcloud/golem` with `gh`,
-> including the exact source in the selection summary, job conclusions and CTRF
-> reports. When nothing is new, end with one short sentence. For each new failure,
-> report the source, failed tests/checks, recovered tests, run link and evidence
-> limits. Read `git log` and relevant `git show` diffs between the last comparable
-> green source and this failure. Rank credible suspect commits with confidence,
-> or say that no commit is a credible cause. Distinguish findings from hypotheses.
-> Analyze in this thread without investigation orbs or reproduction builds.
-> Post once per run through the configured Slack incoming webhook: a new failure
-> with analysis, a repeated failure in one line, or a recovery. Green runs without
-> recovery stay silent. Before posting, exclusively create a receipt named by
-> the run ID under `.amp/in/orb-backup/`; if it exists, inspect thread history and
-> delivery evidence instead of reposting. If delivery is uncertain, report that
-> uncertainty here. Never push, trigger workflows or change infrastructure from
-> this reporting task.
-
-Accept the agent on one failed and one green real run, including a repeated wake
-which must not double-post. `.github/tools/flaky-tests` still needs adaptation
-for this workflow and in-report retries before cutover.
+The current observer is configured under Daniel's personal Amp account in
+[its own thread](https://ampcode.com/threads/T-01a1e9ca-bfca-772d-aa93-7feaf0270dc1).
+It still uses a saved schedule prompt and scratch helpers until the repo-owned
+version is reviewed and deployed. It is not yet accepted on real validation runs.
+Accept one failed and one green run, including a repeated wake-up which must not
+double-post. `.github/tools/flaky-tests` also needs real report-artifact acceptance
+before cutover.
 
 ## Coordinated cutover (not performed)
 
