@@ -1,5 +1,6 @@
 ---
-import { text as t, paragraphs, lines, details } from "../../data/home-preview/golem-2";
+import { text as t, paragraphs, details } from "../../data/home-preview/golem-2";
+import PrimitiveExamples from "./PrimitiveExamples.astro";
 const calls = [1, 2, 3];
 const topics = [
   { id: "actor", title: "Actor lifetime and calls" },
@@ -118,20 +119,12 @@ const topics = [
             </div>
           </figure>
         )}
-        <div class="primitive-examples">
-          <p>Examples</p>
-          <ul>
-            {lines(t(2, kind === "Actors" ? "Actor examples" : "Function examples")).map(
-              (example) => (
-                <li>{example}</li>
-              )
-            )}
-          </ul>
-        </div>
       </article>
     ))
   }
 </div>
+
+<PrimitiveExamples />
 
 {
   topics.map(({ id, title }) => (
@@ -515,35 +508,6 @@ const topics = [
   .function-enclosure .primitive-symbol {
     font-size: 34px;
   }
-  .primitive-examples {
-    margin-top: 16px;
-  }
-  .primitive-examples > p {
-    margin: 0 0 9px;
-    font-size: 11px;
-    color: #59664f;
-  }
-  .primitive-examples ul {
-    display: flex;
-    gap: 12px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .primitive-examples li {
-    display: flex;
-    align-items: center;
-    padding: 0;
-    color: #344b31;
-    font-size: 13px;
-    line-height: 1.5;
-    white-space: nowrap;
-  }
-  .primitive-examples li + li::before {
-    content: "·";
-    margin-right: 12px;
-    color: #7d8b74;
-  }
   @media (max-width: 1100px) {
     .function-annotation {
       margin-left: 60px;
@@ -594,10 +558,6 @@ const topics = [
     .primitive-leader {
       display: none;
     }
-    .primitive-examples li {
-      font-size: 12px;
-      letter-spacing: -0.01em;
-    }
     .actor-flow {
       grid-template-columns: 58px 22px minmax(0, 1fr);
     }
@@ -636,8 +596,7 @@ const topics = [
     .primitive-leader path {
       stroke: CanvasText;
     }
-    .primitive-enclosure,
-    .primitive-examples li {
+    .primitive-enclosure {
       border-color: CanvasText;
     }
     .primitive-arrow {

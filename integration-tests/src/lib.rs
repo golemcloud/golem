@@ -14,6 +14,7 @@
 
 pub mod benchmarks;
 pub mod chaos;
+pub mod fault_matrix;
 pub mod invocation_session;
 pub mod mcp_client;
 
