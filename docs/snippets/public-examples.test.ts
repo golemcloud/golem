@@ -20,6 +20,9 @@ async function fences(version: string, file: string, language: string) {
 // These checks consume complete public fences, not copies or SDK mocks. They
 // check guest source types, not WASM compilation, host calls, or provider access.
 for (const version of ["next", "v1.6"]) {
+  // A frozen version documents the SDK release it shipped with, so only `next` is typechecked
+  // against the in-tree SDKs.
+  const typechecked = version === "next"
   for (const page of [
     "develop/ai.mdx",
     "develop/rpc.mdx",
@@ -27,41 +30,49 @@ for (const version of ["next", "v1.6"]) {
     "develop/forking.mdx",
     "develop/quotas.mdx",
   ]) {
-    test(`${version}/${page}: TypeScript and Effect examples typecheck against the in-tree SDKs`, async () => {
-      const blocks = (await fences(version, page, "typescript")).filter(code =>
-        page === "develop/forking.mdx"
-          ? code.includes("type RunResult")
-          : page === "develop/rpc.mdx"
-            ? code.includes("export const WeatherAgent = defineAgent(")
-            : page === "develop/reflection.mdx" || page === "develop/quotas.mdx"
-              ? code.includes("export ")
-              : code.includes("function askProvider(")
-      )
-      expect(blocks).toHaveLength(page === "develop/reflection.mdx" ? 4 : 2)
-      for (const code of blocks) {
-        expect(typecheckPublicExample(code)).toEqual([])
-      }
-    }, 60_000)
+    test.if(typechecked)(
+      `${version}/${page}: TypeScript and Effect examples typecheck against the in-tree SDKs`,
+      async () => {
+        const blocks = (await fences(version, page, "typescript")).filter(code =>
+          page === "develop/forking.mdx"
+            ? code.includes("type RunResult")
+            : page === "develop/rpc.mdx"
+              ? code.includes("export const WeatherAgent = defineAgent(")
+              : page === "develop/reflection.mdx" || page === "develop/quotas.mdx"
+                ? code.includes("export ")
+                : code.includes("function askProvider(")
+        )
+        expect(blocks).toHaveLength(page === "develop/reflection.mdx" ? 4 : 2)
+        for (const code of blocks) {
+          expect(typecheckPublicExample(code)).toEqual([])
+        }
+      },
+      60_000
+    )
   }
 
-  test(`${version}: SDK typechecking rejects removed APIs and incorrect RPC id types`, async () => {
-    const blocks = await fences(version, "develop/rpc.mdx", "typescript")
-    const plain = blocks.find(code => code.includes("from '@golemcloud/golem-ts-sdk'"))!
-    const effect = blocks.find(code => code.includes('from "@golemcloud/effect-golem"'))!
-    expect(plain).toContain('location: "London"')
-    expect(effect).toContain("WeatherAgent.client.get(")
-    const wrongId = plain.replace('location: "London"', "location: 123")
-    const removedApi = effect.replace(
-      "WeatherAgent.client.get(",
-      "WeatherAgent.client.removedPublicApi("
-    )
-    expect(typecheckPublicExample(wrongId).join("\n")).toContain(
-      "Type 'number' is not assignable to type 'string'"
-    )
-    expect(typecheckPublicExample(removedApi).join("\n")).toContain(
-      "Property 'removedPublicApi' does not exist"
-    )
-  }, 60_000)
+  test.if(typechecked)(
+    `${version}: SDK typechecking rejects removed APIs and incorrect RPC id types`,
+    async () => {
+      const blocks = await fences(version, "develop/rpc.mdx", "typescript")
+      const plain = blocks.find(code => code.includes("from '@golemcloud/golem-ts-sdk'"))!
+      const effect = blocks.find(code => code.includes('from "@golemcloud/effect-golem"'))!
+      expect(plain).toContain('location: "London"')
+      expect(effect).toContain("WeatherAgent.client.upsert(")
+      const wrongId = plain.replace('location: "London"', "location: 123")
+      const removedApi = effect.replace(
+        "WeatherAgent.client.upsert(",
+        "WeatherAgent.client.removedPublicApi("
+      )
+      expect(typecheckPublicExample(wrongId).join("\n")).toContain(
+        "Type 'number' is not assignable to type 'string'"
+      )
+      expect(typecheckPublicExample(removedApi).join("\n")).toContain(
+        "Property 'removedPublicApi' does not exist"
+      )
+    },
+    60_000
+  )
 
   test(`${version}: public record, tuple, list, map and flags REST examples parse to their documented wire shapes`, async () => {
     const blocks = await fences(version, "type-mapping.mdx", "json")

@@ -56,4 +56,5 @@ export default {
   "rest-api": "REST API",
   "stream-session-public-protocol-v1": "Streaming Protocol v1",
   "js-apis": "JavaScript APIs",
+  "migrating-to-2.0": "Migrating to 2.0",
 }

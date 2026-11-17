@@ -78,7 +78,7 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 Pass one native argument per user-supplied method parameter in signature order, excluding `self` and config parameters. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. Do not wrap all parameters in a JSON object. No-parameter methods take no arguments, not `'{}'`. `--format json` controls output only. Load `golem-invoke-agent-rust` for the string fallback and the different HTTP body rules. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
 
-The agent ID parameters and method arguments use **Rust syntax**:
+The constructor parameters in the key and the method arguments use **Rust syntax**:
 
 - Field names use `snake_case`
 - Options: `Some(value)` / `None`

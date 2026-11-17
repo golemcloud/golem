@@ -703,9 +703,9 @@ The host fills a `golem.Principal` input field; it is never bound from the path,
 
 When authentication is enabled, agent constructors and methods can optionally receive a `Principal` parameter containing information about the authenticated caller.
 
-## Phantom Agents
+## Agents without a key
 
-Endpoints can be served by **phantom agents** — separate instances with the same constructor parameters and an additional UUID. Without an explicit selector, `phantomAgent: true` creates a fresh phantom for each ordinary HTTP request. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel. Phantom identity is distinct from the agent's durable or ephemeral execution mode; a durable phantom can retain state and be addressed again by its UUID.
+By default, an endpoint is served by the **keyed agent** of the constructor parameters that the mount path captures. Without an explicit selector, `phantomAgent: true` instead creates a new agent **without a key** for each ordinary HTTP request: an agent with the same constructor parameters and a new agent ID. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel. A durable agent without a key can retain state and be addressed again by its agent ID.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
@@ -770,11 +770,11 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 </Tabs.Tab>
 </Tabs>
 
-### Selecting a known phantom UUID
+### Selecting an agent by its ID
 
-A mount can declare a path or query selector to address an exact phantom instead of choosing a fresh one. For example, `/decisions/d7/state?instance=dc7f9909-2975-42b3-9635-2f5ba7c73782` addresses that phantom of `DecisionAgent("d7")`. The UUID is scoped to the component and constructor parameters: using the same UUID with `d8` selects a different agent.
+A mount can declare a path or query selector to address an existing agent by its agent ID instead of the keyed agent. For example, `/decisions/d7/state?instance=dc7f9909-2975-82b3-9635-2f5ba7c73782` addresses the agent with that agent ID. The agent ID names one agent of the environment; it must be an agent of the mount's agent type.
 
-Selection is **not cloning**. If the selected UUID has not been used, Golem follows normal agent creation. To copy existing state, fork through the SDK or [Durable Streams fork operation](/next/invoke/making-custom-apis/durable-streams/forks), then select the resulting phantom UUID. Subsequent requests with the same constructor parameters and UUID reconnect to that instance.
+Selection **never creates** an agent. An unknown agent ID, or the ID of an agent of another type, is not found. To create an agent to select, create it with `create` from agent code or `golem agent create`, or copy existing state by forking through the SDK or the [Durable Streams fork operation](/next/invoke/making-custom-apis/durable-streams/forks), then select the resulting agent ID. Subsequent requests with the same agent ID reconnect to that agent.
 
 The following mount fragments declare an optional query selector. Omit the optional flag to make it required:
 
@@ -826,19 +826,19 @@ HTTP: &golem.Mount{
 </Tabs.Tab>
 </Tabs>
 
-For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`; in Go, use `golem.PhantomIDPath` instead of `golem.PhantomIDQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to phantom selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
+For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`; in Go, use `golem.PhantomIDPath` instead of `golem.PhantomIDQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to agent selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
 
 | Request | Result |
 | --- | --- |
-| Valid UUID supplied | Select that exact phantom. |
-| Optional selector omitted | Select the original agent, **even with `phantomAgent: true`**. |
+| Valid UUID supplied | Select the existing agent with that agent ID. |
+| Optional selector omitted | Select the keyed agent, **even with `phantomAgent: true`**. |
 | Required query selector omitted | `400 Bad Request`. |
 | Required path selector omitted | No matching route (`404`). |
 | Empty, malformed, or repeated query selector (even repeated identical UUIDs) | `400 Bad Request`. |
 
 Uppercase UUIDs are accepted and returned links use canonical lowercase spelling. A selector must belong to the mount; it cannot collide with endpoint inputs or protocol controls. Optional path expansion must not introduce ambiguous routes. Explicit selectors are supported only on durable, non-router mounts without filesystem exposure (including static bindings).
 
-Authentication and authorization run before selection; a UUID is an address, not a credential. Requests, conditional-response caches, streams and callbacks remain scoped to the selected identity. Without a declared selector, all existing original, fresh-phantom, ephemeral and Durable Streams session-selection policies remain unchanged.
+Authentication and authorization run before selection; a UUID is an address, not a credential. Requests, conditional-response caches, streams and callbacks remain scoped to the selected identity. Without a declared selector, the keyed-agent, new-agent-per-request, ephemeral and Durable Streams session-selection policies apply.
 
 ## Customizing Durable Stream Routes
 

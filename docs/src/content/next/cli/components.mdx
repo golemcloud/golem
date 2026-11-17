@@ -109,6 +109,6 @@ This workflow is supported by the `component redeploy-agents` command:
 golem component redeploy-agents example:component
 ```
 
-This command does not build or deploy code. It deletes and recreates **all** agents of the selected component using the currently deployed revision. Agent IDs, environment variables, and configuration are preserved, but agent state is lost.
+This command does not build or deploy code. It deletes and recreates **all** agents of the selected component using the currently deployed revision. Constructor parameters, environment variables, and configuration are preserved, but agent state is lost. A keyed agent keeps its agent ID; an agent without a key is recreated with a new agent ID, which the command reports.
 
 Omit the positional component name to use directory-based component selection.

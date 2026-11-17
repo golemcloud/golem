@@ -1,94 +1,79 @@
-# Phantom Agents in Scala
+# Multiple Agent Instances in Scala
 
-Phantom agents allow creating **multiple distinct agent instances** that share the same constructor parameters. Normally, an agent is uniquely identified by its constructor parameter values — calling `get` with the same parameters always returns the same agent. Phantom agents add an extra **phantom ID** (a UUID) to the identity, so you can have many independent instances with identical parameters.
+Every agent has an **agent ID**: a `golem.AgentId`, an opaque UUID that Golem issues when it creates the agent. An agent can also have a **key**: its agent type and constructor parameters. A keyed agent is unique per key — calling `upsert` with the same parameters always returns the same agent. An agent created **without a key** gets a new agent ID, so you can have many independent instances with identical constructor parameters. Such an agent is reachable only by its agent ID.
 
-## Agent ID Format
+## Addresses
 
-A phantom agent's ID appends the phantom UUID in square brackets:
-
-```
-agent-type(param1, param2)[a09f61a8-677a-40ea-9ebe-437a0df51749]
-```
-
-A non-phantom agent ID has no bracket suffix:
+On the CLI, a key addresses the keyed agent of the constructor parameters:
 
 ```
-agent-type(param1, param2)
+AgentType(param1, param2)
 ```
 
-## Creating and Addressing Phantom Agents (RPC)
+An agent ID addresses one agent, keyed or not:
 
-The native definition-derived Scala SDK client extends `AgentCompanionBase` and provides the following synchronous factories. This section and its UUID recipes describe native SDK clients, not CLI-generated bridges.
+```
+AgentType[a09f61a8-677a-40ea-9ebe-437a0df51749]
+a09f61a8-677a-40ea-9ebe-437a0df51749
+```
+
+The agent ID does not hold the agent type or the constructor parameters, so it cannot be computed offline: ask a client for it, or read it from agent metadata.
+
+## Creating and Addressing Agents (RPC)
+
+The native definition-derived Scala SDK client extends `AgentCompanionBase` and provides the following factories:
 
 | Method | Description |
 |--------|-------------|
-| `Client.get(params...)` | Get or create a **non-phantom** (durable) agent identified solely by its parameters |
-| `Client.newPhantom(params...)` | Select a fresh phantom invocation/instance according to the agent mode |
-| `Client.getPhantom(params..., phantom)` | Get or create a phantom agent with a **specific** UUID |
+| `Client.upsert(params...)` | A client of the **keyed** agent of the parameters; the host creates it when it is missing. Synchronous; throws `AgentRpcException` when the host rejects the client |
+| `Client.create(params..., keyed = false, <config>..., env = Map.empty)` | `Future` of a client of a **new** agent. Without `keyed` the agent has no key and a new agent ID; with `keyed = true` it is the keyed agent, and an existing one fails with `AgentRpcError.Conflict` |
+| `Client.getById(agentId)` | `Future` of a client of the **existing** agent with the ID. Never creates the agent; an unknown ID, or the ID of an agent of another type, fails with `AgentRpcError.NotFound` |
 
-**Note:** Ephemeral agents only get `getPhantom` and `newPhantom` — they do not have a `get` method.
+Every client has `agentId(): Future[AgentId]`. On a client of `upsert` the first call creates a missing agent.
+
+**Note:** Ephemeral agents only get `upsert` — every invocation runs on a new one-shot instance. They have no `create` or `getById`.
 
 ### Example (Durable Counter)
 
 ```scala
-import java.util.UUID
+import golem.AgentId
+import scala.concurrent.Future
 
-// Non-phantom: always the same agent for the same name
-val counter = CounterClient.get("shared")
+// Keyed: always the same agent for the same name
+val counter = CounterClient.upsert("shared")
 
-// New logical phantom proxy: instance creation happens on first invocation
-val phantom1 = CounterClient.newPhantom("shared")
-val phantom2 = CounterClient.newPhantom("shared")
-// phantom1 and phantom2 are different agents, both with name="shared"
+// New agents without a key: different agents, both with name="shared"
+val created1: Future[CounterRemote] = CounterClient.create("shared")
+val created2: Future[CounterRemote] = CounterClient.create("shared")
 
-// Reconnect to an existing phantom by its UUID
-val existingId: UUID = UUID.fromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-val samePhantom = CounterClient.getPhantom("shared", existingId)
+// Save the agent ID to reach the same agent again later
+val savedId: Future[AgentId] = created1.flatMap(_.agentId())
 
-// Call methods on the phantom
-phantom1.increment().map { result =>
+// Reconnect to an existing agent by its ID
+val same: Future[CounterRemote] = savedId.flatMap(id => CounterClient.getById(id))
+
+// Call methods on the created agent
+created1.flatMap(_.increment()).map { result =>
   println(s"counter value: $result")
 }
 ```
 
-### WithConfig Variants
+An `AgentId` can also be read from its text form with `AgentId.parse(text)`, which returns `Either[String, AgentId]`.
 
-If the agent has config fields, additional methods are generated (`getWithConfig` only for durable targets):
+### Config and Environment
 
-- `Client.getWithConfig(params..., configFields...)`
-- `Client.newPhantomWithConfig(params..., configFields...)`
-- `Client.getPhantomWithConfig(params..., phantom, configFields...)`
-
-Each generated config argument is positional `Option[T] = None`. Supply `Some(value)`
-to override a field, and `None` to retain its configured value.
-
-CLI-generated guest/JVM bridge clients do not extend `AgentCompanionBase`.
-Durable bridges expose `get`, `getPhantom`, and `newPhantom`; ephemeral bridges
-expose only `newPhantom`, a logical proxy whose final invocation identity is
-assigned on invocation. Guest factories are synchronous; external JVM factories
-return `Future`. See [`golem-call-from-external-scala`](/next/how-to-guides/scala/golem-call-from-external-scala).
-
-## Method Signature Differences
-
-Note that in the Scala SDK, `getPhantom` takes the phantom UUID as the **last** parameter (after the constructor parameters), while `newPhantom` takes only the constructor parameters:
+`create` takes the agent's local config fields as named `Option[T] = None` parameters, after `keyed`. Supply `Some(value)` to override a field, and `None` to retain its configured value. `env` adds environment variables to the ones the manifest defines; the caller's own environment is not copied. `upsert` takes no overrides: an agent it creates gets its provisioned config.
 
 ```scala
-// getPhantom: constructor params first, then phantom UUID
-CounterClient.getPhantom("counter-name", phantomUuid)
-
-// newPhantom: constructor params only
-CounterClient.newPhantom("counter-name")
-
-// For DURABLE agents, newPhantom delegates with a generated idempotency key:
-// def newPhantom(name: String): CounterRemote =
-//   getPhantom(name, HostApi.generateIdempotencyKey())
+// For an agent with a `maxCount` config field (path ["max", "count"] is named `maxCount` too)
+CounterClient.create("shared", keyed = true, maxCount = Some(10), env = Map("MODE" -> "test"))
 ```
+
+CLI-generated guest/JVM bridge clients do not extend `AgentCompanionBase`, but expose the same `upsert`, `create` and `getById` (ephemeral bridges expose only `upsert`). Guest `upsert` is synchronous; external JVM `create` and `getById` return `Future`. See [`golem-call-from-external-scala`](/next/how-to-guides/scala/golem-call-from-external-scala).
 
 ## Key Points
 
-- Phantom identity and durability mode are independent. Durable phantom agents persist just like regular durable agents; ephemeral invocations discard their memory. If the executor restarts while preparing an ephemeral invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
-- The phantom ID is a `java.util.UUID`.
-- For durable targets, `newPhantom` generates a UUID via `HostApi.generateIdempotencyKey()`. For ephemeral targets it resolves without a phantom override; invocation metadata supplies the actual identity. Factory construction is synchronous in both cases.
-- For durable targets, `getPhantom` with the same UUID and parameters addresses the same persistent agent. For ephemeral targets it selects an invocation identity, not reusable persistent state.
-- Phantom and non-phantom agents with the same constructor parameters are **different agents** — they do not share state.
-- Durable agents get `get`, `getPhantom`, and `newPhantom`; ephemeral agents get only `getPhantom` and `newPhantom`.
+- Keys and durability mode are independent. Agents without a key persist just like keyed durable agents; ephemeral invocations discard their memory. If the executor restarts while preparing an ephemeral invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
+- `create` without `keyed` makes a new agent on every call. Keep its agent ID if you need to reach it again.
+- A keyed agent and an agent without a key with the same constructor parameters are **different agents** — they do not share state.
+- Durable agents get `upsert`, `create` and `getById`; ephemeral agents get only `upsert`.

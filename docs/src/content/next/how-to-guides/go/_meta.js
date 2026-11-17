@@ -12,7 +12,7 @@ export default {
   "golem-configure-durability-go": "Configuring Agent Durability (Go)",
   "golem-add-cors-go": "Configuring CORS on Go HTTP Endpoints",
   "golem-retry-policies-go": "Configuring Semantic Retry Policies (Go)",
-  "golem-create-agent-instance-go": "Creating a Go Golem Agent Instance with `golem agent new`",
+  "golem-create-agent-instance-go": "Creating a Go Golem Agent Instance with `golem agent create`",
   "golem-stateless-agent-go": "Creating Ephemeral (Stateless) Agents (Go)",
   "golem-custom-snapshot-go": "Custom Snapshots in Go",
   "golem-define-tool-go": "Define a Golem Tool in Go",

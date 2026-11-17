@@ -226,7 +226,7 @@ control; a final clean run must print `ALL_OK`.
 | account_agent | drop `.unwrap()` after `.crm_find_customer(email)` | moonc: `Result[@tool.TypedToolInvocation[…], @tool.ToolError[…]] has no method collect` |
 | refund_policy (middleware) | `@api.await_promise(approval)` → `@api.get_promise(approval)` | moonc: type mismatch (`@api.PromiseResult` vs `Bytes` at `approved(verdict)`) |
 | dashboard_agent | `fn DashboardAgent::new(user : String)` → `(name : String)` | golem_sdk_tools: `AgentParseError` (mount variable `{user}` is not a constructor parameter) |
-| exports_router | `AnalystAgentClient::get(` → `AnalystAgent::get(` | moonc: `Type AnalystAgent has no method get` |
+| exports_router | `AnalystAgentClient::upsert(` → `AnalystAgent::upsert(` | moonc: `Type AnalystAgent has no method upsert` |
 | billing_agent | `caller : @common.Principal` → `caller : String` | moonc: `The value identifier Oidc is unbound` |
 | support_agent (secrets) | pass `self.config.stripe_key` (a `@config.Secret[String]`) straight to `RefundClient::refund` | moonc: type mismatch (`@config.Secret[String]` vs `@secrets.SecretHandle[String]`) |
 
@@ -242,7 +242,7 @@ message, so those six controls are identified by the failing
   `Map[String, Label]` result; `#derive.mount("/checkout/{order_id}")`;
   `@webhook.create`, `WebhookHandler::url`, `wait`,
   `WebhookRequestPayload::text`; generated same-component client
-  `MailerAgentClient::get(id).schedule_cancelable_remind(at)` →
+  `MailerAgentClient::upsert(id).schedule_cancelable_remind(at)` →
   `@agentHost.CancellationToken::cancel`; `@monotonicClock.wait_for(ns)`
   (WASI P3 clock, made durable by the worker executor,
   `golem-worker-executor/src/durable_host/p3/clocks.rs`);
@@ -315,7 +315,7 @@ message, so those six controls are identified by the failing
   `docs/src/content/v1.6/invoke/making-custom-apis/http-routers.mdx` and
   `golem_sdk_example1/golem_moonbit_examples/http_router.mbt:3-50`. The
   router calls the agent through the generated client
-  `AnalystAgentClient::get(chat)` / `export_csv(id) ->
+  `AnalystAgentClient::upsert(chat)` / `export_csv(id) ->
   @schema.AgentStream[Array[Byte]]`
   (`harness/artifacts_routers/golem_clients.mbt:11,97`), the router-to-agent
   form in the same doc ("Make the handler `pub async fn` before awaiting
@@ -635,8 +635,8 @@ parameter.
   check (`if (request.method !== 'GET' …)`), the path pattern
   (`request.path.match(path)`) and the 404 `return`; the split/length lines
   stand for the unhighlighted regex line. `empty()` and `header()` are
-  off-screen helpers, as in the TS prelude. `Analyst.client.get({ chat })
-  .exportCsv({ id })` is `AnalystAgentClient::get(chat.to_string())
+  off-screen helpers, as in the TS prelude. `Analyst.client.upsert({ chat })
+  .exportCsv({ id })` is `AnalystAgentClient::upsert(chat.to_string())
   .export_csv(id.to_string())` (highlight on the first line, as TS).
 - `artifacts/signin`: `{ auth: true }` is `#derive.mount_auth(true)`
   (highlighted, comment above); `caller: s.principal()` is the highlighted

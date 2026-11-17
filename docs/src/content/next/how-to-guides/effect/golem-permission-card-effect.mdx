@@ -96,9 +96,9 @@ const delegate = Effect.gen(function* () {
   Match on `_tag` to get the typed card. Use `walletScoped` to release the cards that are still
   held when the scope closes. During an invocation that received a scope card, the list also
   contains that scope card as a `Scope` entry if the agent holds `card:inspect`.
-- Build an install target with `Permissions.agentHolder(identity)` (for example from
-  `defineAgentClient(...).agentId(...)`) or `Permissions.Holder.agent(agentId)`. The host rejects
-  account and app holders with `not-permitted`.
+- Build an install target with `Permissions.Holder.agent(agentId)` from a typed `AgentId`, such
+  as `yield* remote.agentId` of a durable client or `yield* SelfAgentId.SelfAgentId`. The host
+  rejects account and app holders with `not-permitted`.
 
 ## Scope cards on agent calls
 
@@ -116,10 +116,10 @@ const scope = yield* Permissions.deriveScope(wallet.map((entry) => entry.card), 
   lowerPositive: [kvRead],
   upperPositive: [kvRead],
 })
-const reader = yield* Reader.client.get({ name: "reader" })
+const reader = yield* Reader.client.upsert({ name: "reader" })
 yield* reader.read.withScopeCard(scope)({ key: "key" })
 
-const scopedReader = yield* Reader.client.get({ name: "reader" }, { scopeCard: scope })
+const scopedReader = yield* Reader.client.upsert({ name: "reader" }, { scopeCard: scope })
 yield* scopedReader.read({ key: "key" })
 ```
 

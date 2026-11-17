@@ -31,7 +31,7 @@ impl WorkflowAgent for WorkflowAgentImpl {
 
         // Normally you would send this ID to some UI, email, etc.
         // For demo purposes, we'll just tell you where to send the approval
-        let mut approver = HumanAgentClient::get(approver);
+        let mut approver = HumanAgentClient::upsert(approver);
         approver
             .request_approval(self.id.clone(), approval_promise_id.clone())
             .await;
