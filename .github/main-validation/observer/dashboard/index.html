@@ -24,7 +24,13 @@
     .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric{padding:14px;background:var(--card);border:1px solid var(--line);border-radius:8px}.metric-value{font-size:27px;font-weight:600;letter-spacing:-1px;line-height:1.25;font-variant-numeric:tabular-nums}.metric-label{font-size:11px;color:var(--muted);margin-top:5px}.metric.failed .metric-value{color:var(--red)}.metric.recovered .metric-value{color:var(--teal)}.test-note{font-size:12px;color:var(--muted);margin-top:12px}.job{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}.job:first-child{padding-top:0}.job:last-child{border-bottom:0;padding-bottom:0}.job-name{font-size:13px;font-weight:600;overflow-wrap:anywhere}.steps{font-size:12px;color:var(--red);margin:6px 0 0;padding-left:18px}
     .analysis{background:linear-gradient(135deg,rgba(245,176,62,.045),transparent 70%),var(--white)}.analysis-summary{font-size:15px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.analysis-label{display:inline-flex;border:1px solid var(--accent-border);color:var(--accent);background:var(--accent-bg);border-radius:4px;font-family:var(--font-mono);font-size:9px;padding:3px 6px;letter-spacing:.08em;white-space:nowrap}.baseline{padding:12px 14px;border-left:2px solid var(--accent);background:var(--accent-bg);margin:16px 0;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.suspect{padding:14px 0;border-top:1px solid var(--line)}.suspect-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.confidence{font-family:var(--font-mono);font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}.suspect p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.limits{margin-top:16px;font-size:12px;color:var(--muted)}.limits ul{padding-left:18px;margin:7px 0 0}.limits li{white-space:pre-wrap;overflow-wrap:anywhere}
     .test-details{border:1px solid var(--line);border-radius:8px;margin-top:10px;overflow:hidden}.test-details summary{cursor:pointer;padding:14px;position:relative;overflow-wrap:anywhere;font-size:13px;font-weight:600}.test-details summary:hover{background:var(--hover)}.test-suite{display:block;margin:4px 0 0 17px;font-size:11px;font-weight:400;color:var(--muted)}.test-body{padding:0 14px 14px}.test-message{font:11px/1.7 var(--font-mono);background:#0d0d12;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;margin:8px 0}.attempts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0;font-size:11px}.report-name{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.recovered-group{margin-top:24px}.footer{display:flex;justify-content:space-between;gap:14px;border-top:1px solid var(--line);margin-top:32px;padding-top:20px;color:var(--muted);font-size:11px}.loading{padding:70px 24px;text-align:center}.loading .eyebrow{margin-bottom:10px}.loading h2{margin-bottom:10px}.selection-note{margin-top:12px;font-size:12px;color:var(--muted)}
-    .progress-counts{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.progress-counts span{border:1px solid var(--line);border-radius:5px;padding:5px 9px;font-size:12px}.lane{margin-top:20px}.lane h4{font:12px var(--font-mono);color:var(--accent);margin:0 0 10px;overflow-wrap:anywhere}.timeline-task{margin-bottom:12px}.task-caption{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;font-size:12px;overflow-wrap:anywhere}.task-track{height:12px;border-radius:3px;background:var(--card);position:relative;margin:5px 0}.task-bar{position:absolute;top:0;height:100%;min-width:2px;background:var(--muted);border-radius:3px}.task-bar.running{background:var(--blue)}.task-bar.passed{background:var(--teal)}.task-bar.failed,.task-bar.interrupted{background:var(--red)}.timeline-scale{display:flex;justify-content:space-between;gap:14px;font-size:11px;color:var(--muted);flex-wrap:wrap}.progress-active{font-size:13px;padding-left:18px;overflow-wrap:anywhere}.progress-stale{color:var(--amber)}
+    .task-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;white-space:nowrap;color:var(--muted)}.task-status svg{width:15px;height:15px;flex-shrink:0}.task-status.passed{color:var(--teal)}.task-status.running{color:var(--blue)}.task-status.failed{color:var(--red)}.task-status.blocked,.task-status.interrupted{color:var(--amber)}
+    .completion{padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:8px;margin:16px 0}.progress-counts{display:flex;gap:10px 18px;flex-wrap:wrap;align-items:center}.progress-counts strong{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}.completion-count{margin-left:auto;color:var(--muted);font-size:11px}.completion-track{display:flex;gap:min(2px,.25%);height:8px;margin:12px 0 8px}.completion-track span{flex:1;min-width:0;background:var(--border-strong);border-radius:1px}.completion-track .passed{background:var(--teal)}.completion-track .running{background:var(--blue)}.completion-track .failed{background:var(--red)}.completion-track .blocked,.completion-track .interrupted{background:var(--amber)}
+    .lane-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:16px 0}.lane-button{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:11px 12px;text-align:left;color:var(--ink);min-width:0}.lane-button:hover{background:var(--hover)}.lane-button[aria-pressed=true]{border-color:var(--accent);background:var(--accent-bg)}.lane-name{font-size:12px;font-weight:600;display:block;overflow-wrap:anywhere}.lane-meta{display:flex;gap:5px 9px;align-items:center;flex-wrap:wrap;margin-top:5px;font-size:10px;color:var(--muted)}.lane-meta .task-status{font-size:10px}.lane-meta svg{width:13px;height:13px}
+    .lane-panel{border:1px solid var(--line);border-radius:8px;overflow:hidden}.lane-heading{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px}.lane-heading h4{font-size:18px;letter-spacing:-.02em;margin:0}.lane-heading p{margin:4px 0 0}.lane-tasks{padding:0 16px}.progress-task{border-bottom:1px solid var(--line)}.progress-task:last-child{border:0}.progress-task summary{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:11px 0;list-style:none;cursor:pointer}.progress-task summary::-webkit-details-marker{display:none}.progress-task summary:hover{background:var(--hover)}.task-name{font-size:12px;font-weight:500;min-width:0;overflow-wrap:anywhere}.task-start{display:block;font-size:10px;font-weight:400;color:var(--muted);margin-top:2px}.task-duration{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}.task-result{display:flex;gap:10px;align-items:center}.task-chevron{width:12px;height:12px;color:var(--muted);flex-shrink:0}.progress-task[open] .task-chevron{transform:rotate(90deg)}.task-evidence{padding:0 0 14px;font-size:11px;color:var(--muted);line-height:1.9;overflow-wrap:anywhere}.task-evidence div{margin-top:3px}
+    .pending-tasks{border-top:1px solid var(--line)}.pending-tasks summary{cursor:pointer;padding:12px 16px;font-size:11px;color:var(--muted)}.pending-tasks summary:hover{background:var(--hover)}.pending-list{padding:0 16px 10px}.pending-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:9px 0;border-top:1px solid var(--line);font-size:12px}.pending-row>span:first-child{overflow-wrap:anywhere;min-width:0}.overlap-note{font-size:11px;color:var(--muted);margin:14px 0}.progress-timeline{border-top:1px solid var(--line);padding-top:12px}.progress-timeline>summary{font-size:12px;cursor:pointer;color:var(--muted)}.progress-timeline .lane{margin-top:16px}.progress-timeline h4{font-size:13px;margin:0 0 5px}.task-track{height:14px;border-radius:3px;background:var(--card);position:relative;margin:6px 0}.task-bar{position:absolute;top:0;height:100%;min-width:2px;background:var(--muted);border-radius:2px}.task-bar.running{background:var(--blue)}.task-bar.passed{background:var(--teal)}.task-bar.failed,.task-bar.interrupted{background:var(--red)}.timeline-scale{display:flex;justify-content:space-between;gap:14px;font-size:10px;color:var(--muted);flex-wrap:wrap;margin-top:14px}
+    .task-description{font-size:12px;font-weight:400;line-height:1.65;color:var(--ink);margin:0 0 10px;overflow-wrap:anywhere}.pending-task>.pending-row{padding:10px 0;list-style:none;color:var(--ink);font-size:12px}.pending-row::-webkit-details-marker{display:none}.pending-row::before{content:'›';color:var(--muted);flex-shrink:0}.pending-task[open]>.pending-row::before{transform:rotate(90deg)}.pending-row>span:first-child{flex:1}.pending-task>.task-description{padding-left:20px}
+    @media(max-width:450px){.lane-grid{gap:5px}.lane-button{padding:9px 8px}.lane-name{font-size:11px}.lane-meta{gap:4px}.lane-heading,.lane-tasks{padding-left:12px;padding-right:12px}.progress-task summary{gap:7px}.task-result{gap:5px}.task-status{font-size:10px}.completion{padding:12px}.completion-count{margin-left:0}.progress-counts{gap:8px 12px}.task-duration{font-size:10px}}
     @media(min-width:1200px){.run-panel{position:sticky;top:20px}}@media(max-width:1000px){.workspace{grid-template-columns:290px minmax(0,1fr);gap:16px}.shell{padding:28px 24px}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metadata{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-heading,.section{padding:20px}.live-card{align-items:flex-start;flex-direction:column;gap:10px}}
     @media(max-width:720px){.topbar{padding:16px 20px}.top-label,.separator{display:none}.repo{font-size:10px}.shell{padding:26px 16px}.page-heading{align-items:flex-start;flex-direction:column;gap:14px}.refresh-area{text-align:left;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.feed-status{margin:0}.live-grid{grid-template-columns:1fr}.live-card{flex-direction:row;align-items:center;padding:16px}.workspace{grid-template-columns:1fr}.run-list{max-height:300px}.panel-head{padding:16px}.filters{grid-template-columns:1fr 1fr}.run-button{padding:14px 16px}.detail-top{flex-wrap:wrap}.detail-heading,.section{padding:18px}.metadata{gap:14px}.metric-grid{gap:8px}.metric{padding:12px}.footer{flex-direction:column;gap:4px}.detail-links{gap:12px}.section-head{align-items:flex-start}.analysis-label{font-size:8px}h2{font-size:20px}}
     @media(prefers-reduced-motion:no-preference){button,a{transition:background-color .15s,border-color .15s}.loading{animation:arrive .3s ease-out}@keyframes arrive{from{opacity:.4}to{opacity:1}}}
@@ -50,7 +56,7 @@
   <script>
     'use strict';
     const $ = id => document.getElementById(id);
-    const state = { data: null, selected: null, busy: false, error: '', lastSuccess: null };
+    const state = { data: null, selected: null, busy: false, error: '', lastSuccess: null, lanes: new Map() };
     const labels = {green:'Passed',failure:'Failed','repeat-failure':'Repeat failure',recovery:'Recovered',incomplete:'Incomplete','no-selection':'Not selected',running:'Running'};
     const list = value => Array.isArray(value) ? value : [];
     const str = value => value == null ? '' : String(value);
@@ -138,61 +144,186 @@
       const d = date(value);
       return d ? d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'Unavailable';
     }
+    function taskStatus(status) {
+      const paths = {passed:'M5 12l4 4L19 6',running:'M12 7v5l3 2',pending:'M8 12h8',failed:'M8 8l8 8m0-8l-8 8',blocked:'M6 6l12 12',interrupted:'M9 7v10m6-10v10'};
+      const label = el('span',`task-status ${Object.hasOwn(paths,status) ? status : ''}`);
+      const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+      svg.setAttribute('viewBox','0 0 24 24'); svg.setAttribute('aria-hidden','true');
+      svg.setAttribute('fill','none'); svg.setAttribute('stroke','currentColor'); svg.setAttribute('stroke-width','1.7');
+      if (status !== 'passed') { const circle = document.createElementNS(svg.namespaceURI,'circle'); circle.setAttribute('cx','12'); circle.setAttribute('cy','12'); circle.setAttribute('r','9'); svg.append(circle); }
+      const path = document.createElementNS(svg.namespaceURI,'path'); path.setAttribute('d',paths[status] || paths.pending); svg.append(path);
+      label.append(svg,document.createTextNode(str(status).replace(/^./,c=>c.toUpperCase()))); return label;
+    }
+    function taskName(task) {
+      const names = {wit:'Generate WIT','main-validation-builtins':'Prepare built-in artifacts','main-validation-general-native':'Build native test binaries','unit-tests-and-checks':'Unit tests and checks','build-cli-test-bins':'Build CLI test binaries','main-validation-executor-native':'Build executor test binaries','main-validation-fixtures':'Build test components','main-validation-service-native':'Build service test binaries','validate-sdk-scala':'Validate Scala SDK','validate-sdk-ts':'Validate TypeScript SDK','validate-sdk-effect':'Validate Effect SDK','validate-sdk-moonbit':'Validate MoonBit SDK'};
+      return names[task.name] || (task.lane === 'service' ? `Service group ${task.name}` : task.lane === 'worker' ? `Worker ${task.name}` : task.name);
+    }
+    function taskDescription(task) {
+      const descriptions = {
+        prepare: {
+          wit:'Sync per-crate WebAssembly interface definitions from the canonical WIT dependencies.',
+          'main-validation-builtins':'Fetch built-in artifacts and validate their WebAssembly components.',
+          'main-validation-general-native':'Compile workspace binaries and tests, and record the binaries available to later test runs.',
+          'unit-tests-and-checks':'Run workspace unit tests and check generated APIs, documentation, WIT and shared contracts for drift.',
+          'build-cli-test-bins':'Build the Golem and CLI executables used by CLI integration tests.',
+          'validate-sdk-scala':'Check generated bindings, run Scala SDK tests, compile the sbt plugin and publish packages locally.',
+          'validate-sdk-ts':'Lint, format-check, build and test the TypeScript SDK, agent template and package contracts.',
+          'validate-sdk-effect':'Check types, lint, format, tests, templates, declarations and package contracts for the Effect SDK.',
+          'validate-sdk-moonbit':'Check generated MoonBit bindings and packages, then test the SDK and its tools.',
+          'main-validation-fixtures':'Build and check normal and benchmark test components, including streaming and agent-update fixtures.',
+          'main-validation-executor-native':'Compile executor test binaries in a separate target directory so service builds cannot replace them.'
+        },
+        'service-build': {
+          'main-validation-service-native':'Compile service and CLI integration-test binaries, and record their executable paths for both test lanes.'
+        },
+        worker: {
+          misc:'Test storage backends, oplog archives, agent extraction and service-specific executor behavior.',
+          group1:'Test worker APIs, scheduling, storage, HTTP, database calls and oplog behavior, excluding the separate group 5 cases.',
+          group2:'Test updates, transactions, observability, permissions, retry behavior and storage quotas.',
+          group3:'Test RPC, WASI, socket replay, filesystem snapshots and worker reverts.',
+          group4:'Test language SDK agents, durability, WebSockets, scalability and invocation context.',
+          group5:'Test interruption and reconstruction, host-call cancellation, resource limits and metering.',
+          'tool-streaming':'Test durable tool streams with bounded concurrency.'
+        },
+        service: {
+          '1':'Test worker and fork APIs, environment deletion and untagged integration cases with PostgreSQL.',
+          '2':'Test service APIs with PostgreSQL.',
+          '3':'Test worker and fork APIs and environment deletion with SQLite.',
+          '4':'Test service APIs with SQLite, plus streaming-session recovery and fault scenarios.',
+          '5':'Test registry, worker, shard-manager and shared service behavior, including child-process cleanup.',
+          '6-coordinated':'Test coordinated sharding scenarios across service instances.',
+          '6-rest':'Test the remaining sharding scenarios, excluding coordinated cases.',
+          '7':'Test invocation context, telemetry plugins and plugin integration.',
+          '8':'Test live agent configuration and secret changes with PostgreSQL.',
+          '9':'Test live agent configuration and secret changes with SQLite.',
+          '10':'Test custom APIs and quotas with PostgreSQL, plus HTTP-handler lifecycle behavior.',
+          '11':'Test custom APIs and quotas with SQLite.',
+          '12':'Test agent configuration with PostgreSQL.',
+          '13':'Test agent configuration with SQLite, plus memory billing.'
+        },
+        cli: {
+          agents:'Test CLI agent workflows and short streaming cases, excluding guest bridges and long streaming drivers.',
+          'agents-guest-bridge':'Test Rust, TypeScript and Go guest bridges through the CLI.',
+          'agents-guest-bridge-sources':'Test MCP, Effect, Scala and MoonBit guest-bridge sources through the CLI.',
+          'agents-streaming':'Run the two long generated streaming drivers through the CLI.',
+          bridge:'Test bridge generation for languages other than Rust.',
+          'bridge-rust':'Test Rust bridge generation.',
+          deploy:'Test component deployment and conformance through the CLI.',
+          'deploy-runtime':'Test runtime deployment workflows, including SSH, accounts, secrets, Bash and templates.',
+          core:'Test core application workflows and Git-based deployment differences.'
+        },
+        exclusive: {
+          'dev-tools-tests':'Run unit tests for the development-tools workspace.',
+          'check-shared-crates-versioning':'Check shared crate version stamping and SDK version boundaries.',
+          'check-configs':'Generate service configurations and check that committed files match.',
+          check:'Run Rust formatting and Clippy checks across the main workspace, development tools and JavaScript process bridge.',
+          'test-component-middleware-unit-tests':'Test audit, output-redaction and rate-limit middleware components.',
+          'validate-sdk-rust-check':'Check Rust SDK formatting, lint and test-target coverage, then run ordinary tests and documentation tests.',
+          'validate-sdk-rust-tool':'Run Rust SDK tool integration tests.',
+          'validate-sdk-rust-ui':'Check that invalid Rust SDK programs fail to compile with the expected diagnostics.',
+          'validate-sdk-go':'Check generated Go bindings, lint and test all three SDK modules, and vet and build the WebAssembly target.',
+          'validate-skill-harness':'Build, format-check and unit-test the skill harness without running LLM scenarios.',
+          'main-validation-schema':'Test release tooling, schema feature combinations and derive diagnostics, and build guest schemas and the client.',
+          'main-validation-bash':'Check and test the built-in Bash tool on native and WebAssembly targets, including pipelines and dependency-source policy.',
+          'main-validation-embedded':'Test registry behavior with embedded built-in artifacts.',
+          'main-validation-scala':'Run Scala SDK integration tests against live Golem services.',
+          'main-validation-xfs':'Run the managed-XFS loopback self-test and filesystem tests in a Lima VM, then remove the VM.',
+          'main-validation-docker':'Build the XFS quota daemon and check the Docker images.'
+        }
+      };
+      return descriptions[task.lane]?.[task.name] || 'No description is available for this task in this dashboard version.';
+    }
     function renderProgress(run, card) {
       const box = section('Validation progress'), p = run.progress;
-      if (!p) {
+      if (!p || !list(p.tasks).length) {
         box.append(el('p','small subtle','Task progress has not been published for this attempt.'));
       } else {
         const tasks = list(p.tasks), updated = date(p.updated_at), unfinished = tasks.some(t=>['pending','running'].includes(t.status));
         const stale = unfinished && (!updated || Date.now()-updated.getTime() > 120000);
-        box.append(el('p','',`Requested execution mode: ${p.mode}`),el('p',`small ${stale ? 'progress-stale' : 'subtle'}`,`${stale ? 'Stale progress · no update in over 2 minutes. ' : ''}Last task report: ${intervalTime(p.updated_at)}. Durations stop at that report.${unfinished ? ' Task activity may have changed.' : ''}`));
+        box.append(el('p','small subtle',`Requested mode: ${p.mode} · last task report ${intervalTime(p.updated_at)}. Durations stop at that report.`));
+        if (stale) box.append(el('p','notice','Progress is stale · no update in over 2 minutes. Showing the last report; task activity may have changed.'));
+        const count = (items,status)=>items.filter(t=>t.status === status).length;
+        const summary = el('div','completion');
         const counts = el('div','progress-counts');
-        for (const status of ['pending','running','passed','failed','blocked','interrupted']) counts.append(el('span','',`${tasks.filter(t=>t.status === status).length} ${status}`));
-        box.append(counts);
-        const running = tasks.filter(t=>t.status === 'running'), pending = tasks.filter(t=>t.status === 'pending');
-        box.append(el('p','small',`${pending.length} remaining to start · ${running.length} active at last report`));
-        if (running.length) {
-          const activeTasks = el('ul','progress-active');
-          for (const task of running) activeTasks.append(el('li','',`${task.name} · ${duration(updated-date(task.started_at))} elapsed · lane ${task.lane}`));
-          box.append(activeTasks);
+        for (const status of ['passed','failed','running','pending','blocked','interrupted']) {
+          if (!count(tasks,status) && !['passed','running','pending'].includes(status)) continue;
+          const item = el('span'); item.append(el('strong','',count(tasks,status)),document.createTextNode(' '),taskStatus(status)); counts.append(item);
         }
-        if (pending.length) {
-          const remaining = el('details','test-details'); remaining.append(el('summary','',`Remaining tasks · ${pending.length}`));
-          const names = el('ul','progress-active'); pending.forEach(t=>names.append(el('li','',`${t.name} · ${t.lane}`))); remaining.append(names); box.append(remaining);
+        counts.append(el('span','completion-count',`${count(tasks,'passed')} of ${tasks.length} passed`)); summary.append(counts);
+        const completion = el('div','completion-track'); completion.setAttribute('role','img');
+        completion.setAttribute('aria-label',`${tasks.length} planned tasks: ${['passed','failed','running','pending','blocked','interrupted'].map(s=>`${count(tasks,s)} ${s}`).join(', ')}`);
+        for (const task of tasks) { const segment = el('span',task.status); segment.title = `${taskName(task)} · ${task.status}`; completion.append(segment); }
+        summary.append(completion,el('p','small subtle','Each segment is one task, including pending work. Task counts do not estimate time remaining.')); box.append(summary);
+        const laneNames = {prepare:'Preparation',worker:'Worker tests','service-build':'Service build',service:'Service tests',cli:'CLI tests',exclusive:'Final checks'};
+        const lanes = [...new Set([...Object.keys(laneNames),...tasks.map(t=>t.lane)])].filter(lane=>tasks.some(t=>t.lane === lane));
+        const initial = tasks.find(t=>['failed','interrupted'].includes(t.status)) || tasks.find(t=>t.status === 'running');
+        const lane = lanes.includes(state.lanes.get(key(run))) ? state.lanes.get(key(run)) : initial?.lane || lanes[0];
+        state.lanes.set(key(run),lane);
+        const laneStatus = items=>items.some(t=>t.status === 'failed') ? 'failed' : items.some(t=>t.status === 'running') ? 'running' : items.some(t=>t.status === 'interrupted') ? 'interrupted' : items.some(t=>t.status === 'blocked') ? 'blocked' : items.every(t=>t.status === 'passed') ? 'passed' : 'pending';
+        const grid = el('div','lane-grid'); grid.setAttribute('aria-label','Execution lanes');
+        for (const name of lanes) {
+          const items = tasks.filter(t=>t.lane === name), button = el('button','lane-button'); button.type = 'button';
+          button.dataset.lane = name; button.setAttribute('aria-pressed',String(name === lane));
+          const meta = el('span','lane-meta'); meta.append(taskStatus(laneStatus(items)),el('span','',`${count(items,'passed')}/${items.length} passed`));
+          button.append(el('span','lane-name',laneNames[name] || name),meta);
+          button.addEventListener('click',()=>{state.lanes.set(key(run),name);renderDetail();[...$('run-detail').querySelectorAll('.lane-button')].find(b=>b.dataset.lane === name)?.focus({preventScroll:true});});
+          grid.append(button);
         }
-        const intervals = tasks.filter(t=>t.started_at).map(t=>({task:t,start:date(t.started_at).getTime(),end:date(t.completed_at || p.updated_at).getTime()}));
+        box.append(grid);
+        const laneTasks = tasks.filter(t=>t.lane === lane), panel = el('div','lane-panel'), head = el('div','lane-heading'), title = el('div');
+        title.append(el('h4','',laneNames[lane] || lane),el('p','small subtle',['passed','running','pending','failed','blocked','interrupted'].filter(s=>count(laneTasks,s)).map(s=>`${count(laneTasks,s)} ${s}`).join(' · ')));
+        head.append(title,el('span','small subtle','Start order')); panel.append(head);
+        const started = laneTasks.filter(t=>date(t.started_at)).sort((a,b)=>date(a.started_at)-date(b.started_at) || a.id.localeCompare(b.id));
+        const rows = el('div','lane-tasks');
+        for (const task of started) {
+          const details = el('details','progress-task'); details.dataset.testKey = `${key(run)}:task:${task.id}`;
+          const caption = el('summary'), name = el('span','task-name',taskName(task)); name.append(el('span','task-start',intervalTime(task.started_at)));
+          const result = el('span','task-result'); result.append(taskStatus(task.status));
+          const chevron = document.createElementNS('http://www.w3.org/2000/svg','svg'); chevron.setAttribute('class','task-chevron'); chevron.setAttribute('viewBox','0 0 12 12'); chevron.setAttribute('aria-hidden','true');
+          const path = document.createElementNS(chevron.namespaceURI,'path'); path.setAttribute('d','m4 2 4 4-4 4'); path.setAttribute('fill','none'); path.setAttribute('stroke','currentColor'); path.setAttribute('stroke-width','1.5'); chevron.append(path); result.append(chevron);
+          const end = date(task.completed_at) || updated;
+          caption.append(name,el('span','task-duration',end ? duration(end-date(task.started_at)) : 'Unavailable'),result); details.append(caption);
+          const evidence = el('div','task-evidence'); evidence.append(el('p','task-description',taskDescription(task)),el('code','',task.name),el('div','',`Started ${intervalTime(task.started_at)} · ${task.completed_at ? `finished ${intervalTime(task.completed_at)}` : `running at ${intervalTime(p.updated_at)}`}`));
+          evidence.append(el('div','',`${task.pid ? `PID ${task.pid}` : 'PID unavailable'}${task.exit_code != null ? ` · exit ${task.exit_code}` : ''}`),el('div','',`${task.status === 'running' ? 'Log in progress' : 'Retained log'}: ${task.log}`));
+          details.append(evidence); rows.append(details);
+        }
+        if (!started.length) rows.append(el('p','small subtle','No task has started in this lane.'));
+        panel.append(rows);
+        const waiting = laneTasks.filter(t=>!date(t.started_at)).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+        if (waiting.length) {
+          const queue = el('details','pending-tasks'); queue.dataset.testKey = `${key(run)}:queue:${lane}`;
+          queue.append(el('summary','',`${waiting.length} not started · show tasks`));
+          const list = el('div','pending-list');
+          for (const task of waiting) {
+            const row = el('details','pending-task'); row.dataset.testKey = `${key(run)}:task:${task.id}`;
+            const caption = el('summary','pending-row'); caption.append(el('span','',taskName(task)),taskStatus(task.status));
+            row.append(caption,el('p','task-description',taskDescription(task))); list.append(row);
+          }
+          queue.append(list); panel.append(queue);
+        }
+        box.append(panel);
+        const intervals = tasks.filter(t=>date(t.started_at) && date(t.completed_at || p.updated_at)).map(t=>({task:t,start:date(t.started_at).getTime(),end:date(t.completed_at || p.updated_at).getTime()}));
         const points = intervals.filter(i=>i.end > i.start).flatMap(i=>[[i.start,1],[i.end,-1]]).sort((a,b)=>a[0]-b[0] || a[1]-b[1]);
         let concurrent = 0, peak = 0;
         for (const [,delta] of points) { concurrent += delta; peak = Math.max(peak,concurrent); }
-        box.append(el('p','small subtle',`Measured overlapping lifetimes: peak ${peak} task${peak === 1 ? '' : 's'}. This shows process lifetime overlap, not CPU utilization. Requested parallel mode alone is not proof of parallel execution.`));
+        box.append(el('p','overlap-note',`Measured overlap: peak ${peak} task${peak === 1 ? '' : 's'} · process lifetimes, not CPU utilization. Requested parallel mode alone is not proof of parallel execution.`));
         if (intervals.length) {
           const origin = Math.min(...intervals.map(i=>i.start)), end = Math.max(origin,...intervals.map(i=>i.end)), span = Math.max(1,end-origin);
-          const scale = el('div','timeline-scale'); scale.append(el('span','',`Timeline begins ${intervalTime(new Date(origin).toISOString())}`),el('span','',`Ends ${intervalTime(new Date(end).toISOString())}`)); box.append(scale);
-          for (const lane of new Set(tasks.map(t=>t.lane))) {
-            const laneTasks = tasks.filter(t=>t.lane === lane), started = intervals.filter(i=>i.task.lane === lane);
-            const group = el('div','lane'); group.append(el('h4','',`Lane · ${lane}`));
-            group.append(el('div','small subtle',`${started.length} of ${laneTasks.length} started · ${laneTasks.filter(t=>t.status === 'running').length} active · ${laneTasks.filter(t=>t.status === 'passed').length} passed · ${laneTasks.filter(t=>['failed','interrupted'].includes(t.status)).length} failed or interrupted`));
+          const timeline = el('details','progress-timeline'); timeline.dataset.testKey = `${key(run)}:timeline`; timeline.append(el('summary','',`Execution timeline · ${duration(end-origin)} observed`));
+          const scale = el('div','timeline-scale'); scale.append(el('span','',intervalTime(new Date(origin).toISOString())),el('span','',intervalTime(new Date(end).toISOString()))); timeline.append(scale);
+          for (const name of lanes) {
+            const seen = intervals.filter(i=>i.task.lane === name).sort((a,b)=>a.start-b.start), group = el('div','lane'); group.append(el('h4','',laneNames[name] || name));
             const track = el('div','task-track'); track.setAttribute('aria-hidden','true');
-            for (const interval of started) {
+            for (const interval of seen) {
               const bar = el('span',`task-bar ${interval.task.status}`);
               bar.style.left = `${100*(interval.start-origin)/span}%`; bar.style.width = `${100*(interval.end-interval.start)/span}%`;
               bar.title = `${interval.task.name} · ${interval.task.status} · ${duration(interval.end-interval.start)}`;
               track.append(bar);
             }
             group.append(track);
-            const details = el('details','test-details'); details.append(el('summary','',`Task details · ${laneTasks.length}`));
-            for (const task of laneTasks) {
-              const row = el('div','timeline-task'), caption = el('div','task-caption');
-              caption.append(el('strong','',task.name),el('span','subtle',`${task.status}${task.started_at ? ` · ${duration(date(task.completed_at || p.updated_at)-date(task.started_at))}` : ''}`)); row.append(caption);
-              if (task.started_at) {
-                row.append(el('div','small subtle',`${intervalTime(task.started_at)} → ${task.completed_at ? intervalTime(task.completed_at) : `running as of ${intervalTime(p.updated_at)}`}${task.pid ? ` · PID ${task.pid}` : ''}`));
-              } else row.append(el('div','small subtle',task.completed_at ? `No process started · ${intervalTime(task.completed_at)}` : 'Not started'));
-              row.append(el('div','small subtle',`Artifact log: ${task.log}${task.exit_code != null ? ` · exit ${task.exit_code}` : ''}`));
-              details.append(row);
-            }
-            group.append(details);
-            box.append(group);
+            group.append(el('p','small subtle',seen.length ? seen.map(i=>`${taskName(i.task)} · ${duration(i.end-i.start)} · ${i.task.status}`).join('; ') : 'No recorded activity. No start time is predicted.')); timeline.append(group);
           }
+          box.append(timeline);
         }
       }
       box.append(el('p','small subtle','Full logs are retained in GitHub Actions artifacts, subject to repository access. Open the run on GitHub to download them. Raw logs are not published here.'));
@@ -248,8 +379,10 @@
       const root = $('run-detail');
       const run = state.data?.runs.find(r=>key(r) === state.selected);
       if (!run) { const placeholder = empty(state.selected ? 'This run is not in the available history' : 'Awaiting the first validation',state.selected ? 'Choose a run from history or current activity. The requested permalink may be outside the retained history.' : 'The observer has not published any validation runs yet. Progress, test results and failure analysis will appear here.'); placeholder.classList.add('detail-card'); root.replaceChildren(placeholder); return; }
-      // Preserve expanded failure messages across background refreshes.
+      // Preserve evidence by identity when task counts or the selected lane change.
       const opened = new Set([...root.querySelectorAll('details[open]')].map(d=>d.dataset.testKey));
+      const focusedLane = root.contains(document.activeElement) ? document.activeElement.dataset.lane : null;
+      const focusedSummary = root.contains(document.activeElement) && document.activeElement.tagName === 'SUMMARY' ? document.activeElement.parentElement.dataset.testKey : null;
       const card = el('article','detail-card'), heading = el('header','detail-heading'), top = el('div','detail-top'), title = el('div');
       title.append(el('div','eyebrow',contextName(run)),el('h2','detail-title',runName(run))); top.append(title,runBadge(run)); heading.append(top);
       const links = el('div','detail-links'); links.append(githubLink('View on GitHub ↗',run.url)); const permalink = el('a','','Permalink'); permalink.href = `#${key(run)}`; links.append(permalink); heading.append(links);
@@ -264,7 +397,13 @@
         row.append(info,badge(job.conclusion || 'running',job.conclusion || (job.completed_at ? 'Unknown' : job.started_at ? 'In progress' : 'Pending'))); jobs.append(row);
       }
       renderProgress(run,card); card.append(jobs); renderTests(run,card); renderAnalysis(run,card); root.replaceChildren(card);
-      [...root.querySelectorAll('details')].forEach((d,i)=>{d.dataset.testKey = `${key(run)}:${i}`; d.open = opened.has(d.dataset.testKey);});
+      let testIndex = 0;
+      for (const details of root.querySelectorAll('details')) {
+        details.dataset.testKey ||= `${key(run)}:test:${testIndex++}`;
+        details.open = opened.has(details.dataset.testKey);
+        if (focusedSummary === details.dataset.testKey) details.querySelector('summary').focus({preventScroll:true});
+      }
+      if (focusedLane) [...root.querySelectorAll('.lane-button')].find(b=>b.dataset.lane === focusedLane)?.focus({preventScroll:true});
     }
     function updateHealth() {
       $('preview').hidden = !state.data?.demo;
