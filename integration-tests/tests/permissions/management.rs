@@ -2182,12 +2182,14 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
                 )?,
             )
             .await?;
-            match receive(&mut live, false).await? {
-                (Outcome::Allowed(_), Some(_)) => {}
+            // The blocker is looked up under the key that the server
+            // accepted, not under the key of its request.
+            let accepted = match receive(&mut live, false).await? {
+                (Outcome::Allowed(_), Some(accepted)) => accepted.idempotency_key,
                 other => anyhow::bail!("the owner could not start its command: {other:?}"),
-            }
+            };
             seed.wait_until_the_script_runs(&marker).await?;
-            Some((live, key))
+            Some((live, accepted))
         }
         _ => None,
     };
