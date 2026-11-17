@@ -109,7 +109,7 @@ pub mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
 pub mod rpc;
-mod sockets;
+pub(crate) mod sockets;
 pub mod stream_bus;
 pub(crate) mod stream_outcome;
 pub mod stream_session;

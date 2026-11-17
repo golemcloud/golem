@@ -3289,6 +3289,22 @@ P2 UDP records explicit remote-address permission decisions in
 request holds the addresses; replay returns the recorded decision without consulting current
 permissions. Connected sends without an explicit address retain their stream's admission.
 
+The socket address policy (`durable_host/sockets/policy.rs`) is shared by P2 and P3. Before any
+grant check, `SocketPolicy::target` refuses cloud metadata and link-local destinations, and the
+executor's gRPC and HTTP ports and `agent_sockets.refused_ports` on loopback, unspecified and this
+host's own addresses. Operator authorization does not bypass it. Otherwise the target is a
+`NetworkResourcePattern::SocketAddress`: a grant with a wildcard host matches it only for an
+`AddressClass::Public` address that is not an address of this host (D28, `this_host`), while
+denials with a wildcard host still cover every address, and a denial of an IPv4 host covers the
+NAT64, 6to4 and IPv4-compatible forms that embed it. HTTP and WebSocket targets keep plain host
+matching and refuse IPv6 hosts. A refusal is recorded as the
+call's denial, like a grant denial (the P2 check call, or the `Start` of the P3 connect or send), so
+replay returns it. The Wasmtime `socket_addr_check`
+backstop refuses TCP listen, binds other than port 0 or loopback, and the refused destinations,
+from its arguments and the configuration only. The executor binds its gRPC and HTTP listeners
+before it creates any agent, so the configuration holds the bound ports. Tests:
+`tests/scope_cards/socket_policy.rs`.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
