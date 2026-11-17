@@ -74,16 +74,11 @@ describe('s.principal() marker', () => {
     expect(decoded.tag).toBe('anonymous');
   });
 
-  it('round-trips an AgentPrincipal (nested uuid/componentId/agentId)', () => {
+  it('round-trips an AgentPrincipal (nested agent ID uuid)', () => {
     const codec = compileSchema(s.principal());
     const input: Principal = sdkPrincipalFromHost({
       tag: 'agent',
-      val: {
-        agentId: {
-          componentId: { uuid: { highBits: 1n, lowBits: 2n } },
-          agentId: 'agent-abc',
-        },
-      },
+      val: { agentId: { uuid: { highBits: 1n, lowBits: 2n } } },
     });
 
     const wire = codec.toValue(input) as SchemaValue & { caseIndex: number };
@@ -93,8 +88,8 @@ describe('s.principal() marker', () => {
       { tag: 'record' }
     >;
     const agentId = agentPrincipal.fields[0] as Extract<SchemaValue, { tag: 'record' }>;
-    const componentId = agentId.fields[0] as Extract<SchemaValue, { tag: 'record' }>;
-    expect(componentId.fields[0]).toMatchObject({
+    expect(agentId.fields).toHaveLength(1);
+    expect(agentId.fields[0]).toMatchObject({
       tag: 'uuid',
       value: { highBits: 1n, lowBits: 2n },
     });
@@ -102,8 +97,7 @@ describe('s.principal() marker', () => {
     const decoded = codec.fromValue(wire) as Principal;
     expect(decoded.tag).toBe('agent');
     if (decoded.tag !== 'agent') throw new Error('unreachable');
-    expect(decoded.agentId.agentId).toBe('agent-abc');
-    expect(decoded.agentId.componentId.uuid).toEqual({ highBits: 1n, lowBits: 2n });
+    expect(decoded.agentId.uuid).toEqual({ highBits: 1n, lowBits: 2n });
   });
 
   it('round-trips a GolemUserPrincipal', () => {

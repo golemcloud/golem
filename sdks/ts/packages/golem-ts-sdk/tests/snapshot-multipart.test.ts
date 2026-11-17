@@ -4,8 +4,10 @@ import { Snapshot, SnapshotError } from '../src/snapshot';
 import { encodeMultipart, decodeMultipart, extractBoundary } from '../src/internal/multipart';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
+import { constructorParametersJson, selectSelfAgent } from './selfAgentTestSupport';
 
 const input = schemaValueToWit(v.record([]));
+const constructorParameters = constructorParametersJson(input);
 const bytes: Uint8Array = new Uint8Array([0, 255, 13, 10]);
 const principal = {
   tag: 'oidc',
@@ -21,7 +23,9 @@ const wireSnapshot = (
     {
       name: 'state',
       contentType: 'application/json',
-      body: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state, ...metadata })),
+      body: new TextEncoder().encode(
+        JSON.stringify({ version: 1, principal, constructorParameters, state, ...metadata }),
+      ),
     },
     ...extras,
   ]);
@@ -36,10 +40,7 @@ describe('explicit multipart snapshots', () => {
     async (mode) => {
       const payload = {
         promiseId: {
-          agentId: {
-            componentId: { uuid: { highBits: 18446744073709551615n, lowBits: 2n } },
-            agentId: 'Waiting("snapshot")',
-          },
+          agentId: { uuid: { highBits: 18446744073709551615n, lowBits: 2n } },
           fingerprint: { highBits: 9007199254740993n, lowBits: 18446744073709551615n },
           oplogIdx: 9007199254740993n,
         },
@@ -118,8 +119,7 @@ describe('explicit multipart snapshots', () => {
           }
           return sdk;
         };
-        (globalThis as { currentAgentId?: string }).currentAgentId =
-          `PromiseSnapshot(${JSON.stringify(input)})`;
+        selectSelfAgent('PromiseSnapshot');
         const initial = await register();
         const invocationContext = await import('golem:agent/invocation-context@2.0.0');
         vi.mocked(invocationContext.caller).mockReturnValueOnce({
@@ -182,8 +182,7 @@ describe('explicit multipart snapshots', () => {
         snapshotting: { state: z.object({ value: z.unknown() }) },
       })
       .implement({ init: () => ({ value: null }), methods: {} });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `MalformedBigInt(${JSON.stringify(input)})`;
+    selectSelfAgent('MalformedBigInt');
     await expect(
       sdk.loadSnapshot.load(
         wireSnapshot({ value: { $golemSnapshot: tag } }, [], { fileDatabases: {} }),
@@ -237,8 +236,7 @@ describe('explicit multipart snapshots', () => {
           },
         },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `MultipartIndex(${JSON.stringify(input)})`;
+    selectSelfAgent('MultipartIndex');
     await sdk.loadSnapshot.load(
       wireSnapshot({ revision: '17' }, [
         { name: 'part:index', contentType: 'Application/Octet-Stream', body: bytes },
@@ -254,6 +252,7 @@ describe('explicit multipart snapshots', () => {
     expect(JSON.parse(new TextDecoder().decode(parts[0].body))).toMatchObject({
       version: 1,
       principal,
+      constructorParameters,
       state: { revision: '17' },
     });
     expect(JSON.parse(new TextDecoder().decode(parts[0].body))).not.toHaveProperty('fileDatabases');
@@ -278,8 +277,7 @@ describe('explicit multipart snapshots', () => {
         methods: {},
         snapshot: { save: async () => ({ state: null, parts: new Map() }), load: async () => ({}) },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `NullParts(${JSON.stringify(input)})`;
+    selectSelfAgent('NullParts');
     await sdk.loadSnapshot.load(wireSnapshot(null));
     const saved = await sdk.saveSnapshot.save();
     expect(saved.mimeType).toMatch(/^multipart\/mixed;/);
@@ -312,11 +310,12 @@ describe('explicit multipart snapshots', () => {
           },
         },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `FailureParts(${JSON.stringify(input)})`;
+    selectSelfAgent('FailureParts');
     for (const snapshot of [
       {
-        payload: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state: null })),
+        payload: new TextEncoder().encode(
+          JSON.stringify({ version: 1, principal, constructorParameters, state: null }),
+        ),
         mimeType: 'application/json',
       },
       wireSnapshot(null, [{ name: 'db:main', contentType: 'application/x-sqlite3', body: bytes }]),
@@ -359,8 +358,7 @@ describe('explicit multipart snapshots', () => {
           load,
         },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `MalformedParts(${JSON.stringify(input)})`;
+    selectSelfAgent('MalformedParts');
     for (const body of [
       new TextEncoder().encode(
         '{"version":1,"version":1,"principal":{"tag":"anonymous"},"state":null}',
@@ -390,8 +388,7 @@ describe('explicit multipart snapshots', () => {
         snapshotting: { state: z.object({ count: z.number() }) },
       })
       .implement({ init: () => ({ count: 0 }), methods: {} });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `SimpleParts(${JSON.stringify(input)})`;
+    selectSelfAgent('SimpleParts');
     await expect(
       sdk.loadSnapshot.load(
         wireSnapshot({ count: 3 }, [
@@ -411,8 +408,7 @@ describe('explicit multipart snapshots', () => {
         snapshotting: { state: z.object({ count: z.number() }) },
       })
       .implement({ init: () => ({ count: 0 }), methods: {} });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `TypedInventoryParts(${JSON.stringify(input)})`;
+    selectSelfAgent('TypedInventoryParts');
     await expect(sdk.loadSnapshot.load(wireSnapshot({ count: 3 }))).rejects.toContain(
       "missing 'fileDatabases'",
     );
@@ -448,8 +444,7 @@ describe('explicit multipart snapshots', () => {
           load: () => ({}),
         },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `SaveValidationParts(${JSON.stringify(input)})`;
+    selectSelfAgent('SaveValidationParts');
     await sdk.loadSnapshot.load(wireSnapshot(null));
     for (const invalid of [undefined, NaN, Infinity, new Uint8Array(), { x: undefined }]) {
       state = invalid;
@@ -482,8 +477,7 @@ describe('explicit multipart snapshots', () => {
       methods: {},
       snapshot: { save: () => ({ state: null, parts: new Map() }) },
     } as never);
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `IncompleteParts(${JSON.stringify(input)})`;
+    selectSelfAgent('IncompleteParts');
     await expect(sdk.loadSnapshot.load(wireSnapshot(null))).rejects.toContain(
       'snapshot.save and snapshot.load',
     );
@@ -493,8 +487,7 @@ describe('explicit multipart snapshots', () => {
       methods: {},
       snapshotting: { state: z.null(), multipart: { state: z.null() } },
     } as never);
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `ConflictingParts(${JSON.stringify(input)})`;
+    selectSelfAgent('ConflictingParts');
     await expect(sdk.loadSnapshot.load(wireSnapshot(null))).rejects.toContain('mutually exclusive');
     for (const [i, multipart] of [
       undefined,
@@ -511,8 +504,7 @@ describe('explicit multipart snapshots', () => {
           methods: {},
           snapshot: { save: () => bytes, load: () => ({}) },
         } as never);
-      (globalThis as { currentAgentId?: string }).currentAgentId =
-        `${name}(${JSON.stringify(input)})`;
+      selectSelfAgent(name);
       await expect(sdk.loadSnapshot.load(wireSnapshot(null))).rejects.toContain(
         'Standard Schema state validator',
       );
@@ -550,8 +542,7 @@ describe('explicit multipart snapshots', () => {
           load: (saved) => ({ counter: saved.state.revision }),
         },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `MutatingParts(${JSON.stringify(input)})`;
+    selectSelfAgent('MutatingParts');
     await sdk.loadSnapshot.load(wireSnapshot({ revision: '17' }));
     for (let i = 0; i < 2; i++) {
       const saved = await sdk.saveSnapshot.save();
@@ -576,8 +567,7 @@ describe('explicit multipart snapshots', () => {
         methods: {},
         snapshot: { save: () => ({ state: null, parts: new Map() }), load },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `PrincipalParts(${JSON.stringify(input)})`;
+    selectSelfAgent('PrincipalParts');
     const invalid: unknown[] = [
       null,
       [],
@@ -607,7 +597,9 @@ describe('explicit multipart snapshots', () => {
         {
           name: 'state',
           contentType: 'application/json',
-          body: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state: null })),
+          body: new TextEncoder().encode(
+            JSON.stringify({ version: 1, principal, constructorParameters, state: null }),
+          ),
         },
       ]);
       await expect(
@@ -656,8 +648,7 @@ describe('explicit multipart snapshots', () => {
             });
           return sdk;
         };
-        (globalThis as { currentAgentId?: string }).currentAgentId =
-          `DollarDbParts(${JSON.stringify(input)})`;
+        selectSelfAgent('DollarDbParts');
         const initial = await register();
         await initial.golemAgent200Guest.initialize('DollarDbParts', input);
         const snapshot = await initial.saveSnapshot.save();

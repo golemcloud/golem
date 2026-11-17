@@ -1156,9 +1156,7 @@ const PRINCIPAL_TAGS = ['oidc', 'agent', 'golem-user', 'anonymous'];
 
 // --- graph type builders (no recursion: everything is built inline) ---
 const uuidType = (): SchemaType => t.uuid();
-const componentIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
-const agentIdType = (): SchemaType =>
-  t.record([field('componentId', componentIdType()), field('agentId', t.string())]);
+const agentIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
 const accountIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
 const oidcType = (): SchemaType =>
   t.record([
@@ -1196,12 +1194,10 @@ function uuidFromValue(sv: SchemaValue): HostUuid {
 }
 
 function agentIdToValue(a: HostAgentId): SchemaValue {
-  return v.record([v.record([uuidToValue(a.componentId.uuid)]), v.string(a.agentId)]);
+  return v.record([uuidToValue(a.uuid)]);
 }
 function agentIdFromValue(sv: SchemaValue): HostAgentId {
-  const f = recFields(sv);
-  const uuid = uuidFromValue(recFields(f[0])[0]);
-  return { componentId: { uuid }, agentId: strOf(f[1]) };
+  return { uuid: uuidFromValue(recFields(sv)[0]) };
 }
 
 function accountIdToValue(a: HostAccountId): SchemaValue {

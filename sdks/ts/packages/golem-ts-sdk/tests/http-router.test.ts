@@ -33,6 +33,7 @@ import { getAllAgentTypes, getAgentType } from '../src/reflection';
 import * as http from '../src/http';
 import { webRequest, webResponse, withRawHeaders } from '../src/httpRouterWeb';
 import { createServer, Server, ServerResponse, nodeHttpHandler } from '../src/nodeHttp';
+import { constructorParametersJson, selectSelfAgent } from './selfAgentTestSupport';
 
 const corpus = JSON.parse(
   readFileSync(
@@ -408,8 +409,7 @@ it.each([
         headers: [],
         body: AgentStream.from({ [Symbol.asyncIterator]: () => ({ next: pull, return: close }) }),
       }));
-    (globalThis as any).currentAgentId =
-      `${name}(${JSON.stringify(schemaValueToWit(v.record([])))})`;
+    selectSelfAgent(name);
     const initiated = await AgentInitiatorRegistry.lookup(name)!.initiate(v.record([]) as never, {
       tag: 'anonymous',
     });
@@ -440,7 +440,6 @@ it('tooling-router-catalog and tooling-name-not-kind: callable reflection filter
   });
   const registered = ['OrdinaryLookingName', 'HttpRouterLookingName'].map((name) => ({
     agentType: get(name),
-    implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
   }));
   const all = vi.spyOn(agentHost, 'getAllAgentTypes').mockReturnValue(registered);
   const one = vi
@@ -498,8 +497,7 @@ it.each(['header', 'status'] as const)(
         headers: invalid === 'header' ? [{ name: 'x-test', value: new Uint8Array([13]) }] : [],
         body: AgentStream.from({ [Symbol.asyncIterator]: () => ({ next: pull, return: release }) }),
       }));
-    (globalThis as any).currentAgentId =
-      `${name}(${JSON.stringify(schemaValueToWit(v.record([])))})`;
+    selectSelfAgent(name);
     const initiated = await AgentInitiatorRegistry.lookup(name)!.initiate(v.record([]) as never, {
       tag: 'anonymous',
     });
@@ -531,7 +529,7 @@ it('invalid Web headers dispose the unpolled output and input, preserving the he
           headers: { 'x-test': '\u0001' },
         }),
     );
-  (globalThis as any).currentAgentId = `${name}(${JSON.stringify(schemaValueToWit(v.record([])))})`;
+  selectSelfAgent(name);
   const initiated = await AgentInitiatorRegistry.lookup(name)!.initiate(v.record([]) as never, {
     tag: 'anonymous',
   });
@@ -1223,7 +1221,7 @@ it('invalid raw header override disposes the Web response body', async () => {
         { name: 'x-test', value: new Uint8Array([13]) },
       ]),
     );
-  (globalThis as any).currentAgentId = `${name}(${JSON.stringify(schemaValueToWit(v.record([])))})`;
+  selectSelfAgent(name);
   const initiated = await AgentInitiatorRegistry.lookup(name)!.initiate(v.record([]) as never, {
     tag: 'anonymous',
   });

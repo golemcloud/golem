@@ -16,6 +16,7 @@ import { componentPlugin, discoverCapabilities } from '../scripts/component.mjs'
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
 
 const nativeRequire = createRequire(import.meta.url);
+const COUNTER_AGENT_ID = '00000007-0000-8000-8000-000000000021';
 const fixtures = path.resolve('tests/components');
 const richToolContract = JSON.parse(
   fs.readFileSync(path.resolve('../../../../test-data/gol-40/rich-tool-conformance-v1.json')),
@@ -113,13 +114,21 @@ function instantiate(code, overrides = {}, format = 'cjs') {
   const module = { exports: {} };
   const host = {
     DatabaseSync: class {},
-    getEnvironment: () => [['GOLEM_AGENT_ID', 'Counter()']],
-    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' } }),
-    parseAgentId: () => [
-      'Counter',
-      { graph: { typeNodes: [], defs: [], root: 0 }, value: unit },
-      undefined,
+    getEnvironment: () => [
+      ['GOLEM_AGENT_ID', COUNTER_AGENT_ID],
+      ['GOLEM_AGENT_TYPE', 'Counter'],
     ],
+    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' } }),
+    parseUuid: (uuid) => {
+      const hex = uuid.replace(/-/g, '');
+      return { highBits: BigInt(`0x${hex.slice(0, 16)}`), lowBits: BigInt(`0x${hex.slice(16)}`) };
+    },
+    uuidToString: ({ highBits, lowBits }) => {
+      const hex = [highBits, lowBits]
+        .map((bits) => BigInt.asUintN(64, bits).toString(16).padStart(16, '0'))
+        .join('');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    },
     ...overrides,
   };
   new Function('require', 'module', 'exports', code)(
@@ -758,7 +767,6 @@ describe('component exports', () => {
     let title;
     let principal = { tag: 'anonymous' };
     const runtime = await instantiate(output.code, {
-      makeAgentId: () => 'Counter()',
       caller: () => ({ original: principal, immediate: principal }),
       getConfigValue(path, graph) {
         expect(graph.typeNodes.length).toBeGreaterThan(0);
@@ -793,10 +801,14 @@ describe('component exports', () => {
         root: 0,
       }),
       WasmRpc: class {
+        static upsert(agentTypeName, input) {
+          calls.push({ upsert: agentTypeName, input });
+          return new this();
+        }
         asyncInvokeAndAwait(method, input) {
           calls.push({ method, input });
           return {
-            metadata: hostInvocationMetadata('Counter()'),
+            metadata: hostInvocationMetadata(COUNTER_AGENT_ID),
             future: {
               get: async () => ({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 }),
               cancel() {},
@@ -865,6 +877,7 @@ describe('component exports', () => {
     });
     expect(remote).toEqual({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 });
     expect(calls).toEqual([
+      { upsert: 'Counter', input: expect.objectContaining({ valueNodes: expect.any(Array) }) },
       {
         method: 'scalar',
         input: {
@@ -1173,6 +1186,7 @@ describe('component exports', () => {
         expect(JSON.parse(new TextDecoder().decode(snapshot.payload))).toEqual({
           version: 1,
           principal: { tag: 'anonymous' },
+          constructorParameters: unit,
           state: { count: 18 },
           fileDatabases: {},
         });

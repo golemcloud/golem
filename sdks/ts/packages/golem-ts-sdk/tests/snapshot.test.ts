@@ -10,14 +10,17 @@ import { schemaValueToWit, v } from '../src/internal/schema-model';
 import type { Principal } from '../src/principal';
 import type { ResolvedAgent, SnapshotTransport } from '../src/internal/resolvedAgent';
 import type { SnapshotDatabases } from '../src/internal/databaseSnapshot';
+import { constructorParametersJson, selectSelfAgent, SELF_AGENT_ID } from './selfAgentTestSupport';
 
 type Resolved = ResolvedAgent;
+
+const databaseParameters = constructorParametersJson(v.record([v.string('database')]));
 
 async function initiate(name: string): Promise<Resolved> {
   // id is `{ name: z.string() }` → a one-field record.
   const idValue = v.record([v.string('c1')]);
   // The self-agent-id embeds a JSON WIT value tree (mirrors the mocked makeAgentId).
-  (globalThis as any).currentAgentId = `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
+  selectSelfAgent(name);
   const initiator = AgentInitiatorRegistry.lookup(name);
   if (!initiator) throw new Error(`${name} not registered`);
   const res = await initiator.initiate(schemaValueToWit(idValue), { tag: 'anonymous' });
@@ -27,7 +30,7 @@ async function initiate(name: string): Promise<Resolved> {
 
 async function restore(name: string, data: Uint8Array): Promise<Resolved> {
   const idValue = v.record([v.string('c1')]);
-  (globalThis as any).currentAgentId = `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
+  selectSelfAgent(name);
   const initiator = AgentInitiatorRegistry.lookup(name);
   if (!initiator) throw new Error(`${name} not registered`);
   const res = await initiator.loadSnapshot(
@@ -173,7 +176,7 @@ defineAgent({
         JSON.stringify({
           count: this.count,
           principal: this.getPrincipal().tag,
-          agentId: this.getId().value,
+          agentId: this.getId().toString(),
         }),
       );
     },
@@ -263,7 +266,7 @@ defineAgent({
 });
 
 describe('snapshot — typed state', () => {
-  it.each(['config', 'getId', 'getPhantomId', 'getPrincipal'])(
+  it.each(['config', 'getId', 'getPrincipal'])(
     'rejects the reserved top-level state field %s during initialization and restoration',
     async (key) => {
       const message = JSON.stringify(`State field "${key}" is reserved by the SDK`).slice(1, -1);
@@ -311,7 +314,6 @@ describe('snapshot — typed state', () => {
     const data = {
       config: 'user config',
       getId: 'id',
-      getPhantomId: 'phantom',
       getPrincipal: 'user',
     };
     const name = 'NestedReservedState';
@@ -323,7 +325,6 @@ describe('snapshot — typed state', () => {
           data: z.object({
             config: z.string(),
             getId: z.string(),
-            getPhantomId: z.string(),
             getPrincipal: z.string(),
           }),
         }),
@@ -423,11 +424,11 @@ describe('snapshot — custom save/load', () => {
     expect(separationRestoreCount).toBe(1);
     expect(restoredPrincipal).toEqual({ tag: 'anonymous' });
     expect(restoredId).toEqual({ name: 'c1' });
-    expect((restoredAgentId as { value: string }).value).toContain('SnapSeparatedFactories(');
+    expect(String(restoredAgentId)).toBe(SELF_AGENT_ID);
     expect(Object.getOwnPropertyDescriptor(restoredConfig, 'greeting')?.get).toBeTypeOf('function');
     const saved = jsonOf(simpleSnapshot(await restored.saveSnapshot()).data);
     expect(saved).toMatchObject({ count: 12, principal: 'anonymous' });
-    expect(saved.agentId).toContain('SnapSeparatedFactories(');
+    expect(saved.agentId).toBe(SELF_AGENT_ID);
 
     await initiate('SnapSeparatedFactories');
     expect(separationInitCount).toBe(1);
@@ -522,8 +523,7 @@ async function isolate() {
   ]);
   const idValue = v.record([v.string('database')]);
   const select = (name: string) => {
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
+    selectSelfAgent(name);
   };
   const initiateIsolated = async (name: string) => {
     select(name);
@@ -637,6 +637,7 @@ describe('snapshot — multipart databases', () => {
           JSON.stringify({
             version: 1,
             principal: { tag: 'anonymous' },
+            constructorParameters: databaseParameters,
             state: { count: 17 },
             fileDatabases: {},
           }),
@@ -897,7 +898,12 @@ describe('snapshot — in-memory and file-backed databases', () => {
         name: 'state',
         contentType: 'application/json',
         body: new TextEncoder().encode(
-          JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state: null }),
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            constructorParameters: databaseParameters,
+            state: null,
+          }),
         ),
       },
     ]);
@@ -1019,6 +1025,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
     const envelope = JSON.stringify({
       version: 1,
       principal: { tag: 'anonymous' },
+      constructorParameters: databaseParameters,
       state: { count: 1 },
       fileDatabases: saved.fileDatabases,
     });
@@ -1180,6 +1187,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
     const envelope = {
       version: 1,
       principal: { tag: 'anonymous' },
+      constructorParameters: databaseParameters,
       state: { count: 5 },
       fileDatabases: { fileDb: '/data/app.db' },
     };
@@ -1225,6 +1233,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
           JSON.stringify({
             version: 1,
             principal: { tag: 'anonymous' },
+            constructorParameters: databaseParameters,
             state: { count: 5 },
             fileDatabases: { fileDb: '/data/app.db' },
           }),
@@ -1256,6 +1265,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
     const envelope = {
       version: 1,
       principal: { tag: 'anonymous' },
+      constructorParameters: databaseParameters,
       state: { count: 6 },
       fileDatabases: { fileDb: '/data/app.db' },
     };
@@ -1324,6 +1334,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         JSON.stringify({
           version: 1,
           principal: { tag: 'anonymous' },
+          constructorParameters: databaseParameters,
           state: { count: 7 },
           fileDatabases: { fileDb: '/data/app.db' },
         }),
@@ -1377,6 +1388,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
             JSON.stringify({
               version: 1,
               principal: { tag: 'anonymous' },
+              constructorParameters: databaseParameters,
               state: { count: 9 },
               fileDatabases: { fileDb: '/data/app.db' },
             }),
@@ -1416,6 +1428,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         JSON.stringify({
           version: 1,
           principal: { tag: 'anonymous' },
+          constructorParameters: databaseParameters,
           state: { count: 8 },
           fileDatabases: {},
         }),
@@ -1453,6 +1466,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         JSON.stringify({
           version: 1,
           principal: { tag: 'anonymous' },
+          constructorParameters: databaseParameters,
           state: { count: 3 },
           fileDatabases: { fileDb: '/data/app.db' },
         }),
@@ -1495,6 +1509,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         JSON.stringify({
           version: 1,
           principal: { tag: 'anonymous' },
+          constructorParameters: databaseParameters,
           state: { count: 8 },
           fileDatabases: {},
         }),
@@ -1533,6 +1548,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
           JSON.stringify({
             version: 1,
             principal: { tag: 'anonymous' },
+            constructorParameters: databaseParameters,
             state: { count: 8 },
             fileDatabases: {},
           }),
@@ -1568,6 +1584,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         JSON.stringify({
           version: 1,
           principal: { tag: 'anonymous' },
+          constructorParameters: databaseParameters,
           state: { count: 8 },
           fileDatabases: {},
         }),
@@ -1606,6 +1623,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         JSON.stringify({
           version: 1,
           principal: { tag: 'anonymous' },
+          constructorParameters: databaseParameters,
           state: { count: 8 },
           fileDatabases: {},
         }),

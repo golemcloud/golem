@@ -748,12 +748,12 @@ describe('public bridge runtime', () => {
   });
 
   it('wraps malformed raw agent output with agent and method context', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata('example'),
+      metadata: hostInvocationMetadata(),
       future: {
         get: vi.fn().mockResolvedValue({ tag: 'not-a-schema-value' }),
         cancel: vi.fn(),
@@ -817,12 +817,12 @@ describe('public bridge runtime', () => {
       },
     },
   ])('maps $raw.tag agent RPC failures to the public cause model', async ({ raw, mapped }) => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata('example'),
+      metadata: hostInvocationMetadata(),
       future: {
         get: vi.fn().mockRejectedValue(raw),
         cancel: vi.fn(),
@@ -836,28 +836,28 @@ describe('public bridge runtime', () => {
   });
 
   it('returns scheduled invocation metadata when requested', () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       scheduleInvocation: ReturnType<typeof vi.fn>;
     };
-    const receipt = { metadata: hostInvocationMetadata('example') };
+    const receipt = { metadata: hostInvocationMetadata() };
     rpc.scheduleInvocation.mockReturnValue(receipt);
     const at = { seconds: 1n, nanoseconds: 0 };
 
     const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
-    expect(scheduled).toStrictEqual({ metadata: sdkInvocationMetadata('example') });
+    expect(scheduled).toStrictEqual({ metadata: sdkInvocationMetadata() });
     expect(scheduled).not.toBe(receipt);
     expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 
   it('returns unit output from an awaited agent invocation', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata('example'),
+      metadata: hostInvocationMetadata(),
       future: {
         get: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn(),
@@ -868,12 +868,12 @@ describe('public bridge runtime', () => {
   });
 
   it('passes a recursively nested native stream to an awaited agent invocation', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata('example'),
+      metadata: hostInvocationMetadata(),
       future: {
         get: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn(),
@@ -897,8 +897,8 @@ describe('public bridge runtime', () => {
   });
 
   it('aborts during native wrapping before starting RPC and disposes the wrapped input', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const dispose = vi.fn();
@@ -991,8 +991,8 @@ describe('public bridge runtime', () => {
   });
 
   it('checks the scope card before moving argument cards and gives them back on early failure', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const card = permissionCardFromRaw(fakeRawCard({ id: 'argument-card' }));
@@ -1030,8 +1030,8 @@ describe('public bridge runtime', () => {
   });
 
   it('disposes all still-owned WIT resources after partial RPC start lowering fails', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const resources = Array.from({ length: 4 }, () => ({
@@ -1078,8 +1078,8 @@ describe('public bridge runtime', () => {
   it.each([false, true])(
     'cleans prewrapped forwarded inputs only when RPC start fails (%s)',
     async (fails) => {
-      const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-      const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+      const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
         asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
       };
       const dispose = vi.fn();
@@ -1091,7 +1091,7 @@ describe('public bridge runtime', () => {
       rpc.asyncInvokeAndAwait.mockImplementation(() => {
         if (fails) throw reason;
         return {
-          metadata: hostInvocationMetadata('example'),
+          metadata: hostInvocationMetadata(),
           future: { get: async () => undefined, cancel: vi.fn() },
         };
       });
@@ -1109,8 +1109,8 @@ describe('public bridge runtime', () => {
   it.each(['invoke', 'schedule'] as const)(
     'rejects native streams at the non-awaited %s boundary',
     (boundary) => {
-      const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-      const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+      const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
         invoke: ReturnType<typeof vi.fn>;
         scheduleInvocation: ReturnType<typeof vi.fn>;
       };
@@ -1129,15 +1129,15 @@ describe('public bridge runtime', () => {
   );
 
   it('cancels an agent future when the caller aborts', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const controller = new AbortController();
     const cancel = vi.fn();
     const get = vi.fn().mockReturnValue(new Promise<never>(() => {}));
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata('example'),
+      metadata: hostInvocationMetadata(),
       future: {
         get,
         cancel,

@@ -15,7 +15,7 @@
 import { Result } from 'golem:agent/host@2.0.0';
 import { AgentError, AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree } from 'golem:core/types@2.0.0';
-import { ParsedAgentId } from '../agentId';
+import type { AgentId } from '../agentId';
 import type { MultipartPart } from './multipart';
 
 /** Unenveloped transport: principal metadata is added once by the guest. */
@@ -42,7 +42,7 @@ export type SnapshotTransport =
  * (`src/agent/runtime.ts` `ResolvedAgentImpl`).
  */
 export interface ResolvedAgent {
-  getId(): ParsedAgentId;
+  getId(): AgentId;
   getAgentType(): AgentType;
   invoke(
     methodName: string,

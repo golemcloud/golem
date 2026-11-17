@@ -22,12 +22,13 @@ import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0'
 import type { ExtendedCommandBody } from './internal/tool';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { getRawSelfAgentId } from './host/hostapi';
+import { selfAgentTypeName } from './bridge/agent';
 import { AgentInitiator } from './internal/agentInitiator';
 import { encodeMultipart, decodeMultipart, extractBoundary } from './internal/multipart';
 import { normalizeContentType, SnapshotError, validatePartName } from './snapshot';
 import type { SnapshotPart } from './snapshot';
 import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
+import { decodeConstructorParameters, encodeConstructorParameters } from './internal/snapshotState';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
@@ -54,12 +55,7 @@ export type {
 } from './invocationId';
 export { Datetime } from './datetime';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
-export { ParsedAgentId } from './agentId';
-export type {
-  AgentClientBindOptions,
-  ParsedAgentIdCreateOptions,
-  ParsedAgentIdParts,
-} from './agentId';
+export { AgentId } from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
@@ -215,13 +211,14 @@ export type {
   ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
-  PhantomClientDetails,
   RemoteAgentError,
+  RemoteAgentIdAccessor,
   RemoteCallErrorCause,
   RemoteCallOptions,
   RemoteClientOptions,
   RemoteClient,
   RemoteClientFactory,
+  RemoteCreateOptions,
 } from './client';
 export {
   golemTool010ToolMiddlewareGuest,
@@ -247,11 +244,17 @@ export {
   getAgentType as getReflectedAgentType,
   getToolType as getReflectedToolType,
 } from './reflection';
-export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
+export type {
+  ReflectedCreateOptions,
+  ReflectedCreateValueOptions,
+  ReflectedInvocation,
+} from './reflection';
 export type { CollectedToolInvocation, StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
-let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;
+let initializedAgent:
+  | { agent: ResolvedAgent; principal: Principal; constructorParameters: SchemaValueTree }
+  | undefined;
 
 interface GolemAgentGuest {
   initialize(agentTypeName: string, input: SchemaValueTree): Promise<void>;
@@ -306,7 +309,7 @@ async function initialize(agentTypeName: string, input: SchemaValueTree): Promis
   const initiateResult = await initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
-    initializedAgent = { agent: initiateResult.val, principal };
+    initializedAgent = { agent: initiateResult.val, principal, constructorParameters: input };
   } else {
     throw initiateResult.val;
   }
@@ -753,10 +756,7 @@ function serializePrincipal(p: Principal): object {
     case 'agent':
       return {
         tag: 'agent',
-        val: {
-          componentId: uuidToString(p.val.agentId.componentId.uuid),
-          agentId: p.val.agentId.agentId,
-        },
+        val: { agentId: uuidToString(p.val.agentId.uuid) },
       };
     case 'golem-user':
       return {
@@ -790,10 +790,7 @@ function deserializePrincipal(obj: any, strict = false): Principal {
       if (obj.val === null || typeof obj.val !== 'object' || Array.isArray(obj.val))
         throw new SnapshotError('invalid snapshot principal value');
       const val = obj.val;
-      if (
-        obj.tag === 'agent' &&
-        (typeof val.componentId !== 'string' || typeof val.agentId !== 'string')
-      )
+      if (obj.tag === 'agent' && typeof val.agentId !== 'string')
         throw new SnapshotError('invalid agent principal');
       if (obj.tag === 'golem-user' && typeof val.accountId !== 'string')
         throw new SnapshotError('invalid golem-user principal');
@@ -824,12 +821,7 @@ function deserializePrincipal(obj: any, strict = false): Principal {
     case 'agent':
       return {
         tag: 'agent',
-        val: {
-          agentId: {
-            componentId: { uuid: parseUuid(obj.val.componentId) },
-            agentId: obj.val.agentId,
-          },
-        },
+        val: { agentId: { uuid: parseUuid(obj.val.agentId) } },
       };
     case 'golem-user':
       return {
@@ -874,11 +866,13 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   const transport = await initializedAgent.agent.saveSnapshot();
   const principal = initializedAgent.principal;
   const serializedPrincipal = serializePrincipal(principal);
+  const constructorParameters = encodeConstructorParameters(initializedAgent.constructorParameters);
 
   if (transport.kind === 'multipart') {
     const envelope = {
       version: 1,
       principal: serializedPrincipal,
+      constructorParameters,
       state: transport.state,
       ...(transport.fileDatabases === undefined ? {} : { fileDatabases: transport.fileDatabases }),
     };
@@ -900,6 +894,7 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     const envelope = {
       version: 1,
       principal: serializedPrincipal,
+      constructorParameters,
       state,
       fileDatabases: transport.fileDatabases,
     };
@@ -908,17 +903,18 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
       mimeType: 'application/json',
     };
   } else {
-    // Binary snapshot: version-2 binary envelope with principal
-    const principalJson = JSON.stringify(serializedPrincipal);
-    const principalBytes = new TextEncoder().encode(principalJson);
+    // Binary snapshot: version-3 binary envelope with a JSON header of the principal and the
+    // constructor parameters
+    const headerJson = JSON.stringify({ principal: serializedPrincipal, constructorParameters });
+    const headerBytes = new TextEncoder().encode(headerJson);
 
-    const totalLength = 1 + 4 + principalBytes.length + transport.data.length;
+    const totalLength = 1 + 4 + headerBytes.length + transport.data.length;
     const fullSnapshot = new Uint8Array(totalLength);
     const view = new DataView(fullSnapshot.buffer);
-    view.setUint8(0, 2); // version
-    view.setUint32(1, principalBytes.length, false); // big-endian
-    fullSnapshot.set(principalBytes, 5);
-    fullSnapshot.set(transport.data, 5 + principalBytes.length);
+    view.setUint8(0, 3); // version
+    view.setUint32(1, headerBytes.length, false); // big-endian
+    fullSnapshot.set(headerBytes, 5);
+    fullSnapshot.set(transport.data, 5 + headerBytes.length);
 
     return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
   }
@@ -931,7 +927,10 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsedWire();
+  const agentTypeName = selfAgentTypeName();
+  if (agentTypeName === undefined) {
+    throw "GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE";
+  }
   const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
   if (registrationError) {
     // The snapshot WIT interface returns `result<_, string>`, not AgentError.
@@ -941,6 +940,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
+  let agentParameters: SchemaValueTree;
   let databases: SnapshotDatabases | undefined = { inMemory: [], fileDatabases: {} };
   const userParts = new Map<string, SnapshotPart>();
 
@@ -982,6 +982,9 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     if (!Object.hasOwn(envelope, 'principal')) {
       throw `${description} missing 'principal' field`;
     }
+    if (!Object.hasOwn(envelope, 'constructorParameters')) {
+      throw `${description} missing 'constructorParameters' field`;
+    }
     if (!Object.hasOwn(envelope, 'state')) {
       throw `${description} missing 'state' field`;
     }
@@ -1003,6 +1006,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       throw new SnapshotError('state part must be application/json');
     const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part', true);
     principal = deserializePrincipal(envelope.principal, true);
+    agentParameters = decodeConstructorParameters(envelope.constructorParameters);
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'multipart/mixed';
@@ -1028,6 +1032,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
     principal = deserializePrincipal(envelope.principal);
+    agentParameters = decodeConstructorParameters(envelope.constructorParameters);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
     databases = decodeSnapshotDatabases([], envelope, 'JSON snapshot');
@@ -1039,20 +1044,21 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const version = view.getUint8(0);
 
-    if (version === 1) {
-      agentSnapshot = bytes.slice(1);
-      principal = { tag: 'anonymous' };
-    } else if (version === 2) {
+    if (version === 3) {
       if (bytes.byteLength < 5) {
-        throw `Version 2 snapshot too short for principal length`;
+        throw `Version 3 snapshot too short for header length`;
       }
-      const principalLen = view.getUint32(1, false); // big-endian
-      if (principalLen > bytes.byteLength - 5) {
-        throw `Version 2 snapshot too short for principal data`;
+      const headerLen = view.getUint32(1, false); // big-endian
+      if (headerLen > bytes.byteLength - 5) {
+        throw `Version 3 snapshot too short for header data`;
       }
-      const principalBytes = bytes.slice(5, 5 + principalLen);
-      principal = deserializePrincipal(JSON.parse(new TextDecoder().decode(principalBytes)));
-      agentSnapshot = bytes.slice(5 + principalLen);
+      const header = JSON.parse(new TextDecoder().decode(bytes.slice(5, 5 + headerLen)));
+      if (header === null || typeof header !== 'object' || Array.isArray(header)) {
+        throw `Version 3 snapshot header must be a JSON object`;
+      }
+      principal = deserializePrincipal(header.principal);
+      agentParameters = decodeConstructorParameters(header.constructorParameters);
+      agentSnapshot = bytes.slice(5 + headerLen);
     } else {
       throw `Unsupported snapshot version ${version}`;
     }
@@ -1074,7 +1080,11 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   );
 
   if (initiateResult.tag === 'ok') {
-    initializedAgent = { agent: initiateResult.val, principal };
+    initializedAgent = {
+      agent: initiateResult.val,
+      principal,
+      constructorParameters: agentParameters,
+    };
   } else {
     // Throwing a String because the load WIT function returns result<_, string>
     let errorString = 'Failed to construct agent';
