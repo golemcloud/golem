@@ -630,22 +630,34 @@ pub(super) fn calculate_invocation_results(
     );
     let mut requests = requests;
 
-    fold_invocation_result_entries(&mut requests, deleted_regions, entries, |key, position| {
-        // A permission-denied `Error` names its cancelled request only when the cancellation was
-        // folded with it; otherwise the earlier fold has recorded the request.
-        let request = position.request.or_else(|| {
-            invocation_results
-                .position(key)
-                .and_then(|known| known.request)
-        });
-        invocation_results.insert(
-            *key,
-            InvocationResultPosition {
-                terminal: position.terminal,
-                request,
-            },
-        )
-    });
+    fold_invocation_result_entries(
+        &mut requests,
+        deleted_regions,
+        entries,
+        |key, position, withdrawal| {
+            // A withdrawal never replaces a result the membership holds. A key that only the
+            // Bloom filter may contain still records its withdrawal: the recent results must
+            // hold every result after the oldest one they keep, so the persisted index can
+            // answer a miss from them.
+            if withdrawal && invocation_results.contains_key(key) {
+                return;
+            }
+            // A permission-denied `Error` names its cancelled request only when the cancellation was
+            // folded with it; otherwise the earlier fold has recorded the request.
+            let request = position.request.or_else(|| {
+                invocation_results
+                    .position(key)
+                    .and_then(|known| known.request)
+            });
+            invocation_results.insert(
+                *key,
+                InvocationResultPosition {
+                    terminal: position.terminal,
+                    request,
+                },
+            )
+        },
+    );
 
     (invocation_results, requests)
 }
@@ -661,6 +673,11 @@ pub struct InvocationRequests {
     /// The last invocation cancelled before it started, with its `PendingAgentInvocation` entry.
     /// A permission-denied `Error` can follow the cancellation and name the same invocation.
     pub cancelled: Option<(InvocationId, OplogIndex)>,
+    /// The last invocation cancelled again while it was neither pending nor running: its
+    /// rejection pair was written after a user cancellation had withdrawn it, and that
+    /// cancellation stays its result. Kept across folds, and in the status as
+    /// `AgentStatusRecord::withdrawn_again`, so a split pair is attributed the same.
+    pub withdrawn_again: Option<InvocationId>,
 }
 
 impl InvocationRequests {
@@ -679,6 +696,7 @@ impl InvocationRequests {
                 })
                 .collect(),
             cancelled: None,
+            withdrawn_again: status.withdrawn_again,
         }
     }
 
@@ -699,15 +717,20 @@ impl InvocationRequests {
 ///
 /// `AgentInvocationFinished` entries name their invocation, so they are attributed by that name
 /// and not by their position. An invocation `Error` is attributed to the invocation it names only
-/// while that invocation runs, or when it is the agent's `PermissionDenied` rejection of a
-/// cancelled pending invocation. A retry error of a background task that outlives its invocation, or of an
-/// entity body, therefore never replaces a finished result. `Exited` names no invocation and is
-/// attributed to the running one.
+/// while that invocation runs, or when it is the agent's `InvalidRequest` or `PermissionDenied`
+/// rejection of a cancelled pending invocation. A retry error of a background task that outlives
+/// its invocation, or of an entity body, therefore never replaces a finished result. `Exited`
+/// names no invocation and is attributed to the running one.
+///
+/// `observe_result` is told whether the result is a withdrawal, a `CancelPendingInvocation`. A
+/// withdrawal is the result of its invocation only when the invocation has no result yet: the
+/// invocation loop also withdraws a queued duplicate of an invocation that already has one. The
+/// fold does not know the results of earlier folds, so `observe_result` decides this.
 pub(crate) fn fold_invocation_result_entries(
     requests: &mut InvocationRequests,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    mut observe_result: impl FnMut(&InvocationId, InvocationResultPosition),
+    mut observe_result: impl FnMut(&InvocationId, InvocationResultPosition, bool),
 ) {
     for (oplog_idx, entry) in entries {
         // Pending requests follow `calculate_pending_invocations`, which keeps them in deleted
@@ -744,7 +767,11 @@ pub(crate) fn fold_invocation_result_entries(
                 entity_parent_start_index: None,
                 ..
             } => {
-                observe_result(invocation_id, position(requests.request_of(invocation_id)));
+                observe_result(
+                    invocation_id,
+                    position(requests.request_of(invocation_id)),
+                    false,
+                );
                 if requests.current.as_ref() == Some(invocation_id) {
                     requests.current = None;
                     requests.current_started_at = None;
@@ -752,8 +779,9 @@ pub(crate) fn fold_invocation_result_entries(
             }
             OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
                 if requests.current.as_ref() != Some(invocation_id) {
-                    observe_result(invocation_id, position(pending_request));
+                    observe_result(invocation_id, position(pending_request), true);
                     requests.cancelled = pending_request.map(|request| (*invocation_id, request));
+                    requests.withdrawn_again = pending_request.is_none().then_some(*invocation_id);
                 }
             }
             OplogEntry::Error {
@@ -764,13 +792,25 @@ pub(crate) fn fold_invocation_result_entries(
                 ..
             } if requests.current.as_ref() == Some(invocation_id)
                 || (entity_parent_start_index.is_none()
-                    && matches!(error, AgentError::PermissionDenied(_))) =>
+                    && requests.withdrawn_again.as_ref() != Some(invocation_id)
+                    && matches!(
+                        error,
+                        AgentError::InvalidRequest(_) | AgentError::PermissionDenied(_)
+                    )) =>
             {
-                observe_result(invocation_id, position(requests.request_of(invocation_id)));
+                observe_result(
+                    invocation_id,
+                    position(requests.request_of(invocation_id)),
+                    false,
+                );
             }
             OplogEntry::Exited { .. } => {
                 if let Some(idempotency_key) = &requests.current {
-                    observe_result(idempotency_key, position(requests.current_started_at));
+                    observe_result(
+                        idempotency_key,
+                        position(requests.current_started_at),
+                        false,
+                    );
                 }
             }
             _ => {}

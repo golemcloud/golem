@@ -164,6 +164,9 @@ where
                     output.invocation_status = Some(InvocationStatus::Complete);
                     response = output;
                 }
+                LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled)) => {
+                    response.invocation_status = Some(InvocationStatus::Cancelled)
+                }
                 LookupResult::Complete(Err(error)) => return Err(error),
                 LookupResult::Pending => {
                     response.invocation_status = Some(InvocationStatus::Pending)

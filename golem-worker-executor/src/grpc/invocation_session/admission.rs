@@ -118,6 +118,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await?;
                     match worker.lookup_invocation_result(&ik).await {
                         crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                        crate::model::LookupResult::Complete(Err(
+                            WorkerExecutorError::InvocationCancelled,
+                        )) => InvocationStatus::Cancelled,
                         crate::model::LookupResult::Complete(Err(err)) => return Err(err),
                         crate::model::LookupResult::Pending => InvocationStatus::Pending,
                         crate::model::LookupResult::New

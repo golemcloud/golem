@@ -1854,6 +1854,21 @@ fn reconstructed_permission_denial_keeps_its_executor_error_type() {
 }
 
 #[test]
+fn cancelled_result_is_a_typed_cancellation_and_not_an_invalid_request() {
+    let key = InvocationId(Uuid::new_v4());
+    let lookup = lookup_result_from_cached_result(
+        &AgentStatusRecord::default(),
+        &key,
+        InvocationResult::Cancelled,
+    );
+
+    assert!(matches!(
+        lookup,
+        LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
+    ));
+}
+
+#[test]
 fn invocation_rejection_fails_only_the_rejected_pending_key() {
     let rejected = InvocationId(Uuid::new_v4());
     let still_pending = InvocationId(Uuid::new_v4());

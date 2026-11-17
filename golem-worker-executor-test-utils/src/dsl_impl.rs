@@ -207,10 +207,13 @@ impl TestWorkerExecutor {
                         )
                         .map(|reason| reason.as_str_name())
                         .unwrap_or("UNKNOWN");
-                    terminal = Some(Err(anyhow!(
-                        "Agent invocation rejected ({reason}): {}",
-                        rejected.error
-                    )));
+                    terminal = Some(Err(match &rejected.worker_error {
+                        Some(worker_error) => anyhow!(
+                            "Agent invocation rejected ({reason}): {} ({worker_error:?})",
+                            rejected.error
+                        ),
+                        None => anyhow!("Agent invocation rejected ({reason}): {}", rejected.error),
+                    }));
                 }
                 Some(invocation_response::Response::Result(invocation_result)) => {
                     result = Some(invocation_result);

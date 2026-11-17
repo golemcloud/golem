@@ -5595,6 +5595,7 @@ components:
       - unknown
       - pending
       - complete
+      - cancelled
     JsonSnapshotData:
       type: object
       title: JsonSnapshotData

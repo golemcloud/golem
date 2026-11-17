@@ -17821,6 +17821,7 @@ components:
       - unknown
       - pending
       - complete
+      - cancelled
     JsonSnapshotData:
       title: JsonSnapshotData
       type: object

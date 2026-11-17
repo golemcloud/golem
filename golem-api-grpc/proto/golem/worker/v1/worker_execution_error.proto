@@ -42,6 +42,8 @@ message WorkerExecutionError {
     ComponentServiceRefused component_service_refused = 30;
     CreateIdempotencyKeyConflict create_idempotency_key_conflict = 31;
     StaleCursor stale_cursor = 32;
+    InvocationCancelled invocation_cancelled = 33;
+    CannotCancelRunningInvocation cannot_cancel_running_invocation = 34;
   }
 }
 
@@ -97,6 +99,10 @@ message AgentAlreadyExists {
 message CreateIdempotencyKeyConflict {
   AgentId agent_id = 1;
 }
+
+message InvocationCancelled {}
+
+message CannotCancelRunningInvocation {}
 
 message AgentCreationFailed {
   AgentId agent_id = 1;

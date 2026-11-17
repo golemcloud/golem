@@ -31,6 +31,7 @@ pub mod agent_sdk_ts;
 pub mod api;
 mod blob_mutation_storage;
 pub mod blobstore;
+mod cancel_rejection;
 pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;

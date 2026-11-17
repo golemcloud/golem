@@ -698,14 +698,47 @@ impl WorkerService for DefaultWorkerService {
                         &mut advanced.requests,
                         &status.deleted_regions,
                         &entries,
-                        |key, position| {
-                            mappings.insert(*key, position);
+                        |key, position, withdrawal| {
+                            if !(withdrawal && mappings.contains_key(key)) {
+                                mappings.insert(*key, (position, withdrawal));
+                            }
                         },
                     );
                     advanced.covered_through = *entries.keys().max().unwrap();
 
+                    // A withdrawal never replaces a result that an earlier chunk indexed.
+                    let withdrawals: Vec<InvocationId> = mappings
+                        .iter()
+                        .filter(|(_, (_, withdrawal))| *withdrawal)
+                        .map(|(key, _)| *key)
+                        .collect();
+                    for key in withdrawals {
+                        let indexed = self
+                            .key_value_storage
+                            .with_entity(
+                                "worker",
+                                "read_invocation_result_index",
+                                "invocation_result",
+                            )
+                            .get_raw(namespace.clone(), &invocation_result_index_field(&key))
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                        let indexed = indexed
+                            .map(|value| deserialize::<PersistedInvocationResult>(&value))
+                            .transpose()
+                            .map_err(WorkerExecutorError::runtime)?;
+                        if indexed.is_some_and(|indexed| {
+                            indexed.revert_generation == advanced.revert_generation
+                                && !status
+                                    .deleted_regions
+                                    .is_in_deleted_region(indexed.position.terminal)
+                        }) {
+                            mappings.remove(&key);
+                        }
+                    }
+
                     let mut fields = Vec::with_capacity(mappings.len() + 1);
-                    for (key, position) in mappings {
+                    for (key, (position, _)) in mappings {
                         fields.push((
                             invocation_result_index_field(&key),
                             serialize(&PersistedInvocationResult {

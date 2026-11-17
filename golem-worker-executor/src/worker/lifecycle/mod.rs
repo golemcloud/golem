@@ -1093,15 +1093,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ) {
             return Ok(false);
         }
-        self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+        let withdrawn = self
+            .withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
             .await?;
+        drop(instance_guard);
+        self.publish_cancelled(&withdrawn);
         Ok(true)
     }
 
+    /// Cancels an invocation that has not started. The decision is taken under the instance
+    /// lock, so a start that wins the race is reported as `Running`, never as a cancel. Waiters
+    /// of a withdrawn invocation are woken with `InvocationCancelled`.
     pub async fn cancel_invocation(
         &self,
         idempotency_key: InvocationId,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<CancelInvocationOutcome, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
         if instance_guard.ensure_not_deleting().is_err() {
@@ -1116,25 +1122,65 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .iter()
             .any(|pending| pending.has_idempotency_key(&idempotency_key))
         {
-            return Ok(());
+            return Ok(
+                if status.current_idempotency_key.as_ref() == Some(&idempotency_key) {
+                    CancelInvocationOutcome::Running
+                } else {
+                    CancelInvocationOutcome::NotPending
+                },
+            );
         }
 
-        self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+        let withdrawn = self
+            .withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
             .await?;
 
         drop(instance_guard);
+        self.publish_cancelled(&withdrawn);
+        Ok(CancelInvocationOutcome::Withdrawn)
+    }
+
+    /// Removes a queued entry whose invocation already has a result, without reporting a cancel:
+    /// its waiters keep the existing result.
+    pub(in crate::worker) async fn discard_pending_duplicate(
+        &self,
+        idempotency_key: InvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+        if instance_guard.ensure_not_deleting().is_err() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot cancel invocation on a deleting worker",
+            ));
+        };
+        let status = self.get_repaired_status().await?;
+        if status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&idempotency_key))
+        {
+            self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+                .await?;
+        }
         Ok(())
     }
 
+    fn publish_cancelled(&self, withdrawn: &[InvocationId]) {
+        for key in withdrawn {
+            self.publish_completion(key, Err(WorkerExecutorError::InvocationCancelled));
+        }
+    }
+
     /// Withdraws validated pending work while its instance is locked against starting. A scheduled
-    /// method on a never-started ephemeral target also owns the constructor reservation.
+    /// method on a never-started ephemeral target also owns the constructor reservation. Returns
+    /// the withdrawn keys, after their cancellation is committed.
     async fn withdraw_pending_invocation(
         &self,
         instance_guard: &tokio::sync::MutexGuard<'_, WorkerLifecycle>,
         status: &AgentStatusRecord,
         idempotency_key: InvocationId,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<Vec<InvocationId>, WorkerExecutorError> {
         let initialization_key = self.initialization_idempotency_key();
+        let mut withdrawn = Vec::new();
         if self.agent_mode() == AgentMode::Ephemeral
             && !status.ephemeral_execution_begun
             && status.pending_invocations.iter().any(|pending| {
@@ -1147,6 +1193,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             self.add_to_oplog(OplogEntry::cancel_pending_invocation(initialization_key))
                 .await?;
+            withdrawn.push(initialization_key);
         }
         self.add_and_commit_oplog_internal(
             instance_guard,
@@ -1154,7 +1201,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some(WorkerCommand::WorkAvailable),
         )
         .await?;
-        Ok(())
+        withdrawn.push(idempotency_key);
+        Ok(withdrawn)
     }
     pub(in crate::worker) async fn revert_to_last_oplog_index(
         self: &Arc<Self>,
@@ -1380,6 +1428,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Revert changes observable state, invalidate cached results.
             self.bump_read_only_cache_epoch();
 
+            let mut cancelled_by_cut = Vec::new();
             if last_known_status.has_durable_stream_history {
                 let identity = (
                     &self.owned_agent_id,
@@ -1402,6 +1451,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     _ => WorkerExecutorError::runtime(error.to_string()),
                 })?;
+                let mut cut_cancelled = Vec::new();
                 let mut entries = vec![
                     DurableStreamOplogRecord::InlineEntry(OplogEntry::revert(
                         dropped_region.clone(),
@@ -1432,12 +1482,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         entries.push(DurableStreamOplogRecord::InlineEntry(
                             OplogEntry::cancel_pending_invocation(*key),
                         ));
+                        cut_cancelled.push(*key);
                     }
                 }
                 self.oplog
                     .add_durable_stream_batch(Box::new(move |_| entries))
                     .await
                     .map_err(|error| self.retire_if_fenced(error))?;
+                cancelled_by_cut = cut_cancelled;
             } else {
                 // Through the fence-aware helper: a revert is a write like any other, and if the
                 // shard has a new owner this must surface rather than be discarded.
@@ -1451,6 +1503,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
             self.hydrated_invocation_results.write().await.clear();
             self.current_component.store(Arc::new(restored_component));
+            self.publish_cancelled(&cancelled_by_cut);
             Ok(reverted)
         }
     }
@@ -1571,3 +1624,14 @@ pub mod deletion;
 pub mod retirement;
 pub mod state;
 pub mod stop;
+
+/// What `Worker::cancel_invocation` decided under the instance lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelInvocationOutcome {
+    /// The pending or scheduled invocation was withdrawn; its outcome is `cancelled`.
+    Withdrawn,
+    /// The invocation is running; cancelling it is not supported yet.
+    Running,
+    /// The invocation is neither pending nor running: it is finished or unknown.
+    NotPending,
+}

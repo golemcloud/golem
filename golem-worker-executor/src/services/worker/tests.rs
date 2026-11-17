@@ -3307,3 +3307,137 @@ fn batch(cursor: &str, examined_keys: u64) -> ScanPage {
         examined_keys,
     }
 }
+
+#[test]
+async fn invocation_result_index_keeps_a_result_when_a_later_chunk_withdraws_its_duplicate() {
+    let key = idempotency_key("duplicate");
+    let mut entries = invocation_entries(&[key]);
+    entries.insert(
+        OplogIndex::from_u64(4),
+        OplogEntry::pending_agent_invocation(
+            None,
+            key,
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            })),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+    entries.insert(
+        OplogIndex::from_u64(5),
+        OplogEntry::cancel_pending_invocation(key),
+    );
+    // Chunks of two entries: the result is indexed before the chunk that withdraws the duplicate.
+    let (service, _oplog, owned_agent_id) = index_test_service(entries);
+    let status = invocation_status(5, 0, &[], 0, DeletedRegions::new());
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .lookup_invocation_result_index(
+                &owned_agent_id,
+                invocation_index_fingerprint(),
+                &status,
+                &key,
+            )
+            .await
+            .unwrap(),
+        InvocationResultIndexLookup::Found(result_at(3))
+    );
+}
+
+#[test]
+async fn a_user_cancellation_of_a_bloom_positive_key_is_not_a_definitive_index_miss() {
+    let first = idempotency_key("bf-first");
+    let second = idempotency_key("bf-second");
+    let third = idempotency_key("bf-third");
+    let cancelled = idempotency_key("bf-cancelled");
+    let mut entries = invocation_entries(&[first, second, third]);
+    entries.insert(
+        OplogIndex::from_u64(8),
+        OplogEntry::pending_agent_invocation(
+            None,
+            cancelled,
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            })),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+    entries.insert(
+        OplogIndex::from_u64(9),
+        OplogEntry::cancel_pending_invocation(cancelled),
+    );
+    let (service, _oplog, owned_agent_id) = index_test_service(entries.clone());
+
+    // One Bloom bit: every key is a positive. One recent entry: only the last result is exact.
+    let mut invocation_results = InvocationResultMembership::new(1, 1, 1);
+    invocation_results.insert(first, result_at(3));
+    invocation_results.insert(second, result_at(5));
+    invocation_results.insert(third, result_at(7));
+    assert!(!invocation_results.is_exact_complete());
+    let before_cancel = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(8),
+        invocation_results,
+        pending_invocations: vec![PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            not_before: None,
+            oplog_index: OplogIndex::from_u64(8),
+            idempotency_key: Some(cancelled),
+            manual_update_target_revision: None,
+        }],
+        ..AgentStatusRecord::default()
+    };
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &before_cancel,
+        )
+        .await
+        .unwrap();
+
+    // The user cancellation is folded into the status as the executor does it.
+    let after_cancel = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        before_cancel,
+        BTreeMap::from([(
+            OplogIndex::from_u64(9),
+            entries[&OplogIndex::from_u64(9)].clone(),
+        )]),
+        &golem_common::model::RetryConfig::default(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(after_cancel.pending_invocations.is_empty());
+    assert!(after_cancel.invocation_results.might_contain(&cancelled));
+
+    let lookup = service
+        .lookup_invocation_result_index(
+            &owned_agent_id,
+            invocation_index_fingerprint(),
+            &after_cancel,
+            &cancelled,
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        lookup,
+        InvocationResultIndexLookup::DefinitiveMiss,
+        "the committed cancellation at 9 must not be reported as a definitive miss"
+    );
+}

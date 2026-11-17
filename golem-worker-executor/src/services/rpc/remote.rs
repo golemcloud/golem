@@ -621,7 +621,15 @@ async fn confirm_terminal_response_is_last(
     }
 }
 
-fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
+pub(super) fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
+    // A reused key of a cancelled invocation is rejected before acceptance; it keeps the
+    // permanent `cancelled` error of a finished one.
+    if let Some(worker_error) = &rejected.worker_error
+        && let Ok(error @ WorkerExecutorError::InvocationCancelled) =
+            WorkerExecutorError::try_from(worker_error.clone())
+    {
+        return error.into();
+    }
     match InvocationRejectionReason::try_from(rejected.reason)
         .unwrap_or(InvocationRejectionReason::Internal)
     {

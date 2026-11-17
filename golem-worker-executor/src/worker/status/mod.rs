@@ -452,6 +452,7 @@ fn update_status_with_precomputed_regions(
         pending_durable_stream_cancellations,
         current_idempotency_key: requests.current,
         current_invocation_started_at: requests.current_started_at,
+        withdrawn_again: requests.withdrawn_again,
         component_revision,
         component_size,
         owned_resources,

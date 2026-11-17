@@ -524,6 +524,12 @@ impl ForwardingOplogState {
                                     );
                                     break;
                                 }
+                                Ok(InvocationStatus::Cancelled) => {
+                                    tracing::warn!(
+                                        "Plugin {grant_id}: invocation cancelled for batch [{batch_start}..{batch_end}]"
+                                    );
+                                    break;
+                                }
                                 Ok(_) => {
                                     // Still pending — continue polling
                                 }

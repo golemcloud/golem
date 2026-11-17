@@ -609,6 +609,9 @@ pub struct AgentStatusRecord {
     pub current_idempotency_key: Option<InvocationId>,
     /// The `AgentInvocationStarted` entry of `current_idempotency_key`.
     pub current_invocation_started_at: Option<OplogIndex>,
+    /// The last invocation cancelled again while it was neither pending nor running. A rejection
+    /// `Error` that follows it in a later fold does not replace its earlier cancellation.
+    pub withdrawn_again: Option<InvocationId>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -683,6 +686,7 @@ impl Default for AgentStatusRecord {
             pending_durable_stream_cancellations: HashMap::new(),
             current_idempotency_key: None,
             current_invocation_started_at: None,
+            withdrawn_again: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,

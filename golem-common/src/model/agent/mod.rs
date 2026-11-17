@@ -406,6 +406,8 @@ pub enum InvocationStatus {
     Pending,
     /// The invocation has completed (successfully or with an error).
     Complete,
+    /// The invocation was cancelled before it started.
+    Cancelled,
 }
 
 impl AgentId {

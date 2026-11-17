@@ -847,16 +847,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let decision = terminal_decision;
 
         let entity_parent_start_index = self.entity_parent_start_index();
-        let permission_denial_persisted = if let (
+        // A rejected invocation is recorded as its cancellation followed by the rejection error,
+        // so the status fold keeps the rejection as its result even when it never started.
+        let rejection_persisted = if let (
             Some(idempotency_key),
             TrapType::Error {
-                error: AgentError::PermissionDenied(error),
-                retry_from,
-                ..
+                error, retry_from, ..
             },
         ) = (&current_idempotency_key, trap_type)
+            && trap_type.is_invocation_rejection()
         {
-            let denial_persisted = self
+            let rejection_recorded = self
                 .state
                 .oplog
                 .add_pair(
@@ -871,7 +872,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                                 entity_parent_start_index,
                                 OplogErrorKind::Invocation,
                                 Some(invocation_id),
-                                AgentError::PermissionDenied(error),
+                                error,
                                 retry_from,
                                 retry_policy_state,
                                 None,
@@ -881,7 +882,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     }),
                 )
                 .await;
-            if let Err(error) = denial_persisted {
+            if let Err(error) = rejection_recorded {
                 if let OplogError::Fenced(fence) = error {
                     // The shard moved while this failure was being recorded. The fence retires the
                     // agent exactly as the `ShardLost` arm above does: nothing further may be
@@ -925,10 +926,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // The oplog is the new owner's; a stale writer must leave no trace in it.
             TrapType::Interrupt(InterruptKind::ShardLost) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
-            TrapType::Error {
-                error: AgentError::PermissionDenied(_),
-                ..
-            } if permission_denial_persisted => None,
+            TrapType::Error { .. } if rejection_persisted => None,
             TrapType::Error { .. } if trap_type.is_invocation_rejection() => {
                 current_idempotency_key.map(OplogEntry::cancel_pending_invocation)
             }

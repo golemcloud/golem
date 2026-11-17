@@ -35,7 +35,6 @@ use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
-use golem_common::model::InvocationResultPosition;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::application::ApplicationId;
@@ -64,6 +63,7 @@ use golem_common::model::{
     PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
     SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
 };
+use golem_common::model::{InvocationResultMembership, InvocationResultPosition};
 use golem_common::read_only_lock;
 use golem_common::resource_runtime::ResourceTypeId;
 use golem_common::schema::IntoTypedSchemaValue;
@@ -2065,7 +2065,7 @@ fn recovery_errors_are_not_invocation_results() {
         &mut requests,
         &DeletedRegions::default(),
         &entries,
-        |key, position| results.push((*key, position)),
+        |key, position, _| results.push((*key, position)),
     );
 
     assert!(results.is_empty());
@@ -2118,7 +2118,7 @@ fn fold_results(
         &mut requests,
         &DeletedRegions::default(),
         &entries,
-        |key, position| results.push((*key, position)),
+        |key, position, _| results.push((*key, position)),
     );
     (results, requests.current)
 }
@@ -2226,6 +2226,29 @@ fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_anoth
         vec![(denied, result(3, Some(1))), (denied, result(5, Some(1))),]
     );
     assert_eq!(current, Some(running));
+}
+
+#[test]
+fn invalid_request_rejection_before_start_is_a_failure_and_not_a_cancellation() {
+    let rejected = InvocationId(Uuid::new_v4());
+
+    // The rejection is raised before `AgentInvocationStarted`, so the cancellation is observed as
+    // a result first. The error that follows it must replace it.
+    let (results, current) = fold_results(vec![
+        pending_invocation_entry(&rejected),
+        OplogEntry::cancel_pending_invocation(rejected),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(rejected),
+            AgentError::InvalidRequest("Agent method not found".to_string()),
+            OplogIndex::INITIAL,
+            None,
+        ),
+    ]);
+
+    assert_eq!(results.last(), Some(&(rejected, result(3, Some(1)))));
+    assert_eq!(current, None);
 }
 
 #[test]
@@ -9608,4 +9631,164 @@ mod update_entry_sequences {
             })?;
         }
     }
+}
+
+#[test]
+fn rejection_after_a_user_cancellation_stays_cancelled_when_the_fold_splits_the_pair() {
+    let cancelled = InvocationId(Uuid::new_v4());
+    let entries = vec![
+        pending_invocation_entry(&cancelled),
+        OplogEntry::cancel_pending_invocation(cancelled),
+        OplogEntry::cancel_pending_invocation(cancelled),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(cancelled),
+            AgentError::InvalidRequest("Agent method 'gone' not found".to_string()),
+            OplogIndex::INITIAL,
+            None,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(offset, entry)| (OplogIndex::from_u64(offset as u64 + 1), entry))
+    .collect::<Vec<_>>();
+
+    // One fold per entry, carrying the requests between them like a chunked catch-up.
+    let mut requests = InvocationRequests::default();
+    let mut results = Vec::new();
+    for (index, entry) in entries {
+        fold_invocation_result_entries(
+            &mut requests,
+            &DeletedRegions::default(),
+            &BTreeMap::from([(index, entry)]),
+            |key, position, _| results.push((*key, position)),
+        );
+    }
+
+    assert!(
+        results
+            .iter()
+            .all(|(_, position)| position.terminal != OplogIndex::from_u64(4)),
+        "the late rejection must not become the result: {results:?}"
+    );
+}
+
+#[test]
+fn rejection_after_a_user_cancellation_keeps_the_cancellation_as_the_result() {
+    let cancelled = InvocationId(Uuid::new_v4());
+
+    // The invocation loop dequeued the invocation before the user cancelled it, and its lowering
+    // then failed: the rejection pair follows the committed cancellation.
+    let (results, _current) = fold_results(vec![
+        pending_invocation_entry(&cancelled),
+        OplogEntry::cancel_pending_invocation(cancelled),
+        OplogEntry::cancel_pending_invocation(cancelled),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(cancelled),
+            AgentError::InvalidRequest("Agent method 'gone' not found".to_string()),
+            OplogIndex::INITIAL,
+            None,
+        ),
+    ]);
+
+    assert!(
+        results
+            .iter()
+            .all(|(_, position)| position.terminal != OplogIndex::from_u64(4)),
+        "the late rejection must not become the result: {results:?}"
+    );
+    assert_eq!(results.last().map(|(key, _)| *key), Some(cancelled));
+}
+
+#[test]
+fn withdrawing_a_queued_duplicate_keeps_the_finished_result() {
+    let key = InvocationId(Uuid::new_v4());
+    let entries = [
+        pending_invocation_entry(&key),
+        started_invocation(&key),
+        finished_invocation(&key),
+        pending_invocation_entry(&key),
+        OplogEntry::cancel_pending_invocation(key),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(offset, entry)| (OplogIndex::from_u64(offset as u64 + 1), entry))
+    .collect::<Vec<_>>();
+
+    // The duplicate is withdrawn in a later fold than the one that found the result.
+    let mut results = InvocationResultMembership::default();
+    let mut requests = InvocationRequests::default();
+    for (index, entry) in entries {
+        (results, requests) = super::fields::calculate_invocation_results(
+            results,
+            requests,
+            &DeletedRegions::default(),
+            &BTreeMap::from([(index, entry)]),
+        );
+    }
+
+    assert_eq!(results.get(&key), Some(&OplogIndex::from_u64(3)));
+}
+
+// Status reconstruction folds the oplog in chunks, so a chunk boundary can split a rejection pair.
+#[test]
+fn a_split_status_fold_keeps_the_user_cancellation_over_a_late_rejection() {
+    let cancelled = InvocationId(Uuid::new_v4());
+    let entries: BTreeMap<OplogIndex, OplogEntry> = [
+        pending_invocation_entry(&cancelled),
+        OplogEntry::cancel_pending_invocation(cancelled),
+        OplogEntry::cancel_pending_invocation(cancelled),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(cancelled),
+            AgentError::InvalidRequest("Agent method 'gone' not found".to_string()),
+            OplogIndex::INITIAL,
+            None,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(offset, entry)| (OplogIndex::from_u64(offset as u64 + 2), entry))
+    .collect();
+    let baseline = AgentStatusRecord {
+        oplog_idx: OplogIndex::INITIAL,
+        ..AgentStatusRecord::default()
+    };
+
+    let whole = update_status_with_new_entries(
+        AgentMode::Durable,
+        baseline.clone(),
+        entries.clone(),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        whole.invocation_results.get(&cancelled),
+        Some(&OplogIndex::from_u64(3))
+    );
+
+    // The chunk boundary falls between the two entries of the rejection pair.
+    let (first, second): (BTreeMap<_, _>, BTreeMap<_, _>) = entries
+        .into_iter()
+        .partition(|(index, _)| *index <= OplogIndex::from_u64(4));
+    let split = update_status_with_new_entries(
+        AgentMode::Durable,
+        baseline,
+        first,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    let split =
+        update_status_with_new_entries(AgentMode::Durable, split, second, &RetryConfig::default())
+            .unwrap();
+
+    assert_eq!(
+        split.invocation_results.get(&cancelled),
+        Some(&OplogIndex::from_u64(3)),
+        "the user cancellation at 3 must stay the result; the late rejection at 5 replaced it"
+    );
 }

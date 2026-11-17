@@ -252,10 +252,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "Constructor exited before initialization completed",
                 )),
                 OplogEntry::CancelPendingInvocation { .. } => {
-                    Err(WorkerExecutorError::invalid_request(format!(
-                        "Initialization of agent {} was cancelled before execution",
-                        self.agent_id()
-                    )))
+                    Err(WorkerExecutorError::InvocationCancelled)
                 }
                 _ => Err(WorkerExecutorError::oplog_failed(
                     self.agent_id(),
@@ -455,6 +452,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             return;
         }
+        // A rejection of an invocation that a user cancellation had already withdrawn: the
+        // committed cancellation stays its result, and its waiters were told so.
+        if trap_type.is_invocation_rejection()
+            && self.has_committed_cancellation(&status, key).await
+        {
+            self.external_invocation_origins.write().await.remove(key);
+            return;
+        }
         let mut map = self.hydrated_invocation_results.write().await;
         // Co-pending fail-fast results exist only in this bounded warm cache. Once evicted, a
         // poller sees the same `Pending` state that reconstructing this status from the oplog does.
@@ -480,6 +485,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut origins = self.external_invocation_origins.write().await;
         for key in &keys_to_fail {
             origins.remove(key);
+        }
+    }
+    /// Whether the committed result of `key` is a cancellation, resolved like a lookup: from the
+    /// recent results, else from the persisted result index or the oplog.
+    async fn has_committed_cancellation(
+        &self,
+        status: &AgentStatusRecord,
+        key: &InvocationId,
+    ) -> bool {
+        let terminal = if let Some(position) = status.invocation_results.position(key) {
+            Some(position.terminal)
+        } else if status.invocation_results.is_exact_complete()
+            || !status.invocation_results.might_contain(key)
+        {
+            None
+        } else {
+            self.resolve_old_invocation_result_index(status, key)
+                .await
+                .ok()
+                .flatten()
+                .map(|position| position.terminal)
+        };
+        match terminal {
+            Some(terminal) => matches!(
+                self.oplog.read(terminal).await,
+                Ok(OplogEntry::CancelPendingInvocation { .. })
+            ),
+            None => false,
         }
     }
     pub(crate) async fn store_invocation_resuming(&self, key: &InvocationId) {
@@ -830,8 +863,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &mut requests,
                 &status.deleted_regions,
                 &entries,
-                |candidate, position| {
-                    if candidate == key {
+                |candidate, position, withdrawal| {
+                    if candidate == key && !(withdrawal && result.is_some()) {
                         result = Some(position);
                     }
                 },
@@ -919,9 +952,9 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
     result: InvocationResult,
 ) -> LookupResult {
     match result {
-        InvocationResult::Cancelled => LookupResult::Complete(Err(
-            WorkerExecutorError::invalid_request("Invocation was cancelled before execution"),
-        )),
+        InvocationResult::Cancelled => {
+            LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
+        }
         InvocationResult::Cached {
             result: Ok(values), ..
         } => LookupResult::Complete(Ok(values)),
@@ -974,6 +1007,18 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
                 }),
             ..
         } => LookupResult::Complete(Err(WorkerExecutorError::permission_denied(details))),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult::Trap {
+                    trap_type:
+                        TrapType::Error {
+                            error: AgentError::InvalidRequest(details),
+                            ..
+                        },
+                    ..
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::invalid_request(details))),
         InvocationResult::Cached {
             result:
                 Err(FailedInvocationResult::Trap {
