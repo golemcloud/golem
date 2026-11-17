@@ -19,7 +19,6 @@ use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
-use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
@@ -39,16 +38,6 @@ use std::time::Duration;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceConfig {
     pub environment: String,
-    /// The installation's Golem issuer: the issuer of the identities of its agents, tools and
-    /// accounts. An https URL on its own host, or a `urn:golem:issuer:<uuid>` value that Golem
-    /// generated. Required: without it, the service refuses to start. Every worker service and
-    /// executor of one installation must use the same value. It is not the issuer of invocation
-    /// session tokens (`invocation_session_tokens.issuer`).
-    #[serde(
-        default,
-        deserialize_with = "golem_common::model::golem_issuer::deserialize_setting"
-    )]
-    pub golem_issuer: Option<GolemIssuer>,
     pub tracing: TracingConfig,
     pub gateway_session_storage: SessionStoreConfig,
     pub blob_storage: BlobStorageConfig,
@@ -118,25 +107,10 @@ impl WorkerServiceConfig {
     }
 }
 
-impl WorkerServiceConfig {
-    /// Settles the installation's Golem issuer: the configured value, or an error when none is
-    /// configured. Every process of one installation needs the same issuer, so a standalone
-    /// worker service never invents one. The field holds the result afterwards.
-    pub fn resolve_golem_issuer(&mut self) -> anyhow::Result<GolemIssuer> {
-        let resolved = GolemIssuer::required(self.golem_issuer.take())?;
-        self.golem_issuer = Some(resolved.clone());
-        Ok(resolved)
-    }
-}
-
 impl SafeDisplay for WorkerServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "environment: {}", self.environment);
-        let _ = match &self.golem_issuer {
-            Some(golem_issuer) => writeln!(&mut result, "golem issuer: {golem_issuer}"),
-            None => writeln!(&mut result, "golem issuer: not configured"),
-        };
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
         let _ = writeln!(&mut result, "blob storage:");
@@ -277,7 +251,6 @@ impl Default for WorkerServiceConfig {
     fn default() -> Self {
         Self {
             environment: "local".to_string(),
-            golem_issuer: None,
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
             blob_storage: BlobStorageConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
@@ -1491,104 +1464,6 @@ mod tests {
                     .contains("route_resolver.trusted_ingress_addresses"),
                 "{error}"
             );
-            Ok(())
-        });
-    }
-
-    #[test]
-    fn the_golem_issuer_is_read_from_the_environment_and_a_plain_http_issuer_is_refused() {
-        Jail::expect_with(|jail| {
-            with_worker_service_config_file(jail)?;
-            let config: WorkerServiceConfig =
-                make_worker_service_config_loader().figment().extract()?;
-            assert_eq!(config.golem_issuer, None);
-
-            jail.set_env("GOLEM__GOLEM_ISSUER", "https://id.acme.example");
-            let config: WorkerServiceConfig =
-                make_worker_service_config_loader().figment().extract()?;
-            assert_eq!(
-                config.golem_issuer,
-                Some("https://id.acme.example".parse().unwrap())
-            );
-
-            jail.set_env("GOLEM__GOLEM_ISSUER", "http://id.acme.example");
-            let error = make_worker_service_config_loader()
-                .figment()
-                .extract::<WorkerServiceConfig>()
-                .expect_err("a plain http issuer must not load")
-                .to_string();
-            assert!(error.to_lowercase().contains("golem_issuer"), "{error}");
-            assert!(error.contains("http://id.acme.example"), "{error}");
-            Ok(())
-        });
-    }
-
-    #[test]
-    fn resolve_golem_issuer_refuses_to_start_without_an_issuer() {
-        let mut config = WorkerServiceConfig::default();
-        let error = config.resolve_golem_issuer().unwrap_err();
-        assert!(error.to_string().contains("golem_issuer"), "{error}");
-        assert_eq!(config.golem_issuer, None);
-    }
-
-    #[test]
-    fn resolve_golem_issuer_keeps_a_configured_value() {
-        let configured: golem_common::model::golem_issuer::GolemIssuer =
-            "https://id.acme.example".parse().unwrap();
-        let mut config = WorkerServiceConfig {
-            golem_issuer: Some(configured.clone()),
-            ..WorkerServiceConfig::default()
-        };
-        let resolved = config.resolve_golem_issuer().unwrap();
-        assert_eq!(resolved, configured);
-        assert_eq!(config.golem_issuer, Some(configured));
-    }
-
-    #[test]
-    fn the_golem_issuer_is_read_from_toml() {
-        Jail::expect_with(|jail| {
-            with_worker_service_config_file(jail)?;
-            let config: WorkerServiceConfig = make_worker_service_config_loader()
-                .figment()
-                .merge(Toml::string(
-                    r#"golem_issuer = "https://id.acme.example/golem""#,
-                ))
-                .extract()?;
-            assert_eq!(
-                config.golem_issuer,
-                Some("https://id.acme.example/golem".parse().unwrap())
-            );
-
-            let error = make_worker_service_config_loader()
-                .figment()
-                .merge(Toml::string(r#"golem_issuer = "http://id.acme.example""#))
-                .extract::<WorkerServiceConfig>()
-                .expect_err("a plain http issuer must not load")
-                .to_string();
-            assert!(error.to_lowercase().contains("golem_issuer"), "{error}");
-            Ok(())
-        });
-    }
-
-    #[test]
-    fn an_empty_or_blank_golem_issuer_counts_as_not_set() {
-        for value in ["", "   "] {
-            Jail::expect_with(|jail| {
-                with_worker_service_config_file(jail)?;
-                jail.set_env("GOLEM__GOLEM_ISSUER", value);
-                let config: WorkerServiceConfig =
-                    make_worker_service_config_loader().figment().extract()?;
-                assert_eq!(config.golem_issuer, None, "env value {value:?}");
-                Ok(())
-            });
-        }
-        Jail::expect_with(|jail| {
-            with_worker_service_config_file(jail)?;
-            let config: WorkerServiceConfig = make_worker_service_config_loader()
-                .figment()
-                .merge(Toml::string(r#"golem_issuer = """#))
-                .extract()?;
-            assert_eq!(config.golem_issuer, None);
             Ok(())
         });
     }

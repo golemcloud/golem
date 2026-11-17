@@ -395,6 +395,53 @@ fn caller_with_512_kib_claims_round_trips_byte_for_byte_through_desert() {
 }
 
 #[test]
+fn a_caller_with_equal_roles_stores_its_claims_once_in_the_oplog_encoding() {
+    use super::test_support::{agent_principal, user_principal};
+    use super::{Caller, Claims, Principal, UserPrincipal};
+
+    let padding = "x".repeat(64 * 1024);
+    let json = format!("{{\"sub\":\"user-1\",\"padding\":\"{padding}\"}}");
+    let Principal::User(user) = user_principal() else {
+        unreachable!()
+    };
+    let user = Principal::User(UserPrincipal {
+        claims: Claims::from_json(json).unwrap(),
+        ..user
+    });
+
+    let same = Caller::entry(user.clone());
+    let same_bytes = desert_rust::serialize_to_byte_vec(&same).unwrap();
+    assert!(
+        same_bytes.len() < 64 * 1024 + 1024,
+        "equal roles wrote {} bytes: the claims are stored more than once",
+        same_bytes.len()
+    );
+    let decoded: Caller = desert_rust::deserialize(&same_bytes).unwrap();
+    assert_eq!(decoded, same);
+    assert!(decoded.original.same_record(&decoded.immediate));
+
+    // Different roles are both kept.
+    let different = Caller {
+        original: user.clone(),
+        immediate: agent_principal(),
+        tokens: vec![],
+    };
+    let different_bytes = desert_rust::serialize_to_byte_vec(&different).unwrap();
+    let decoded: Caller = desert_rust::deserialize(&different_bytes).unwrap();
+    assert_eq!(decoded, different);
+
+    // The same user as the immediate caller and another user as the original stay two records.
+    let swapped = Caller {
+        original: agent_principal(),
+        immediate: user,
+        tokens: vec![],
+    };
+    let swapped_bytes = desert_rust::serialize_to_byte_vec(&swapped).unwrap();
+    let decoded: Caller = desert_rust::deserialize(&swapped_bytes).unwrap();
+    assert_eq!(decoded, swapped);
+}
+
+#[test]
 fn recorded_callers_are_equal_only_when_every_field_is_the_same_record() {
     use super::test_support::{every_principal, sample_caller, user_principal};
     use super::{Caller, Claims, Principal, UserPrincipal};

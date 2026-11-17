@@ -13,6 +13,10 @@ import {
 } from "../src/InvocationContext.js"
 import { callerFromHost, lazyInvocationContext } from "../src/internal/invocationContext.js"
 import {
+  InvocationContextClient,
+  provideInvocationContext,
+} from "../src/host/InvocationContextClient.js"
+import {
   accountPrincipal,
   agentPrincipal,
   anonymousPrincipal,
@@ -113,6 +117,45 @@ describe("InvocationContext", () => {
     expect(reads).toBe(1)
     expect(second).toBe(first)
   })
+
+  it("refuses a first read after the call has ended and keeps a value read during the call", () => {
+    let reads = 0
+    const context = lazyInvocationContext(() => {
+      reads += 1
+      return host
+    })
+    const first = context.caller
+    context.end()
+    expect(context.caller).toBe(first)
+    expect(reads).toBe(1)
+
+    const late = lazyInvocationContext(() => host)
+    late.end()
+    expect(() => late.caller).toThrow(/belongs to a call that has ended/)
+  })
+
+  it.effect("ends the context when the call that provided it returns", () =>
+    Effect.gen(function* () {
+      let kept: unknown
+      let reads = 0
+      const client = InvocationContextClient.of({
+        caller: () => {
+          reads += 1
+          return host
+        },
+      })
+      yield* Effect.gen(function* () {
+        kept = yield* InvocationContext
+      }).pipe(provideInvocationContext, Effect.provideService(InvocationContextClient, client))
+      expect(reads).toBe(0)
+      expect(() => (kept as { caller: unknown }).caller).toThrow(/belongs to a call that has ended/)
+      const during = yield* Effect.gen(function* () {
+        const ctx = yield* InvocationContext
+        return ctx.caller.original.kind
+      }).pipe(provideInvocationContext, Effect.provideService(InvocationContextClient, client))
+      expect(during).toBe("user")
+    }),
+  )
 
   it.effect("is a service that a test can provide", () =>
     Effect.gen(function* () {

@@ -20,7 +20,6 @@ use crate::well_known_secrets::{
     accounts_with_well_known_token, check_exposure, revoke_well_known_token,
 };
 use anyhow::Context;
-use golem_common::model::golem_issuer::{GOLEM_ISSUER_FILE_NAME, GolemIssuer};
 use golem_component_compilation_service::config::ServerConfig as ComponentCompilationServiceConfig;
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{ComponentCompilationConfig, RegistryServiceConfig};
@@ -78,9 +77,6 @@ pub async fn launch_golem_services(
             )
         })?;
 
-    // The one place that resolves the installation's issuer: both services take it as an argument.
-    let golem_issuer = resolve_golem_issuer(config)?;
-
     let uses_local_registry_db = config.uses_local_registry_db();
     if uses_local_registry_db {
         preflight_registry_db_compat(&config.data_dir)
@@ -105,8 +101,7 @@ pub async fn launch_golem_services(
         "Golem server is starting, requests are answered with 503 Service Unavailable until it is ready"
     );
 
-    let started_components =
-        start_components(config, &golem_issuer, &startup_progress, &mut join_set).await?;
+    let started_components = start_components(config, &startup_progress, &mut join_set).await?;
 
     if accounts_with_well_known_token(config).is_empty()
         && revoke_well_known_token(&started_components.registry_service.endpoint).await?
@@ -153,7 +148,6 @@ async fn write_startup_ports_file(path: &Path, ports: &StartupPorts) -> anyhow::
 
 async fn start_components(
     config: &GolemServerConfig,
-    golem_issuer: &GolemIssuer,
     startup_progress: &StartupProgress,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
@@ -179,19 +173,13 @@ async fn start_components(
         run_shard_manager(shard_manager_config(config, &registry_service), join_set).await?;
 
     let worker_service = run_worker_service(
-        worker_service_config(config, golem_issuer, &shard_manager, &registry_service),
+        worker_service_config(config, &shard_manager, &registry_service),
         join_set,
     )
     .await?;
 
     let worker_executor = run_worker_executor(
-        worker_executor_config(
-            config,
-            golem_issuer,
-            &shard_manager,
-            &registry_service,
-            &worker_service,
-        ),
+        worker_executor_config(config, &shard_manager, &registry_service, &worker_service),
         join_set,
     )
     .await?;
@@ -210,7 +198,11 @@ fn registry_service_config(
     component_compilation_service: &golem_component_compilation_service::RunDetails,
 ) -> RegistryServiceConfig {
     let reserved_domains = config.reserved_domains();
+    let golem_issuer = config.golem_issuer.clone();
     let mut config = config.registry_service.clone();
+    // Only the registry gets the configured issuer: it keeps the issuer in its database, and the
+    // worker service and the executor ask the registry for it.
+    config.golem_issuer = golem_issuer;
     config.domain_registration.reserved_domains = reserved_domains;
     if let ComponentCompilationConfig::Enabled(compilation) = &mut config.component_compilation {
         compilation.host = INTERNAL_HOST.to_string();
@@ -231,12 +223,10 @@ fn shard_manager_config(
 
 fn worker_service_config(
     config: &GolemServerConfig,
-    golem_issuer: &GolemIssuer,
     shard_manager: &golem_shard_manager::RunDetails,
     registry_service: &golem_registry_service::SingleExecutableRunDetails,
 ) -> WorkerServiceConfig {
     let mut config = config.worker_service.clone();
-    config.golem_issuer = Some(golem_issuer.clone());
     config.shard_manager.host = INTERNAL_HOST.to_string();
     config.shard_manager.port = shard_manager.grpc_port;
     config.registry_service.host = INTERNAL_HOST.to_string();
@@ -246,13 +236,11 @@ fn worker_service_config(
 
 fn worker_executor_config(
     config: &GolemServerConfig,
-    golem_issuer: &GolemIssuer,
     shard_manager: &golem_shard_manager::RunDetails,
     registry_service: &golem_registry_service::SingleExecutableRunDetails,
     worker_service: &golem_worker_service::TrafficReadyEndpoints,
 ) -> WorkerExecutorConfig {
     let mut config = config.worker_executor.clone();
-    config.golem_issuer = Some(golem_issuer.clone());
     config.shard_manager.host = INTERNAL_HOST.to_string();
     config.shard_manager.port = shard_manager.grpc_port;
     config.registry_service.host = INTERNAL_HOST.to_string();
@@ -330,88 +318,29 @@ async fn run_worker_service(
         .await
 }
 
-/// The configured issuer, or the one kept in the data directory, which is generated and stored
-/// on the first start so that every later start of the same data directory has the same issuer.
-fn resolve_golem_issuer(config: &GolemServerConfig) -> anyhow::Result<GolemIssuer> {
-    let file = config.data_dir.join(GOLEM_ISSUER_FILE_NAME);
-    GolemIssuer::persisted(config.golem_issuer.clone(), &file).map_err(anyhow::Error::from)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_worker_service::ingress::TrustedIngress;
-    use poem::{EndpointExt, endpoint::make_sync};
     use test_r::test;
 
-    fn endpoint() -> poem::endpoint::BoxEndpoint<'static> {
-        make_sync(|_| poem::Response::default()).boxed()
-    }
-
     #[test]
-    fn the_worker_service_and_the_executor_are_built_with_the_issuer_they_are_given() {
-        let config = GolemServerConfig::for_data_dir(Path::new("/data")).unwrap();
-        assert_eq!(config.worker_service.golem_issuer, None);
-        assert_eq!(config.worker_executor.golem_issuer, None);
-
-        let issuer: GolemIssuer = "https://id.acme.example".parse().unwrap();
-        let shard_manager = golem_shard_manager::RunDetails {
+    fn only_the_registry_gets_the_configured_issuer() {
+        let mut config = GolemServerConfig::for_data_dir(Path::new("/data")).unwrap();
+        let compilation = golem_component_compilation_service::RunDetails {
             http_port: 1,
             grpc_port: 2,
-            leadership: None,
-            stop: None,
         };
-        let registry_service = golem_registry_service::SingleExecutableRunDetails {
-            grpc_port: 3,
-            endpoint: endpoint(),
-        };
-        let worker_service = golem_worker_service::TrafficReadyEndpoints {
-            grpc_port: 4,
-            custom_request_port: 5,
-            mcp_port: 6,
-            api_endpoint: endpoint(),
-            public_endpoint: endpoint(),
-            trusted_ingress: TrustedIngress::default(),
-        };
-
-        let service_config =
-            worker_service_config(&config, &issuer, &shard_manager, &registry_service);
-        let executor_config = worker_executor_config(
-            &config,
-            &issuer,
-            &shard_manager,
-            &registry_service,
-            &worker_service,
+        assert_eq!(
+            registry_service_config(&config, &compilation).golem_issuer,
+            None
         );
-        assert_eq!(service_config.golem_issuer, Some(issuer.clone()));
-        assert_eq!(executor_config.golem_issuer, Some(issuer));
-    }
 
-    #[test]
-    fn two_starts_with_the_same_data_directory_have_the_same_issuer() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = GolemServerConfig::for_data_dir(dir.path()).unwrap();
-        let first = resolve_golem_issuer(&config).unwrap();
-        let second = resolve_golem_issuer(&config).unwrap();
-        assert!(first.is_generated());
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn a_configured_issuer_is_used_and_not_written_to_the_data_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = GolemServerConfig::for_data_dir(dir.path()).unwrap();
-        let configured: GolemIssuer = "https://id.acme.example".parse().unwrap();
-        config.golem_issuer = Some(configured.clone());
-        assert_eq!(resolve_golem_issuer(&config).unwrap(), configured);
-        assert!(!dir.path().join(GOLEM_ISSUER_FILE_NAME).exists());
-    }
-
-    #[test]
-    fn an_invalid_issuer_file_stops_the_start() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = GolemServerConfig::for_data_dir(dir.path()).unwrap();
-        std::fs::write(dir.path().join(GOLEM_ISSUER_FILE_NAME), "garbage").unwrap();
-        assert!(resolve_golem_issuer(&config).is_err());
+        let issuer: golem_common::model::golem_issuer::GolemIssuer =
+            "https://id.acme.example".parse().unwrap();
+        config.golem_issuer = Some(issuer.clone());
+        assert_eq!(
+            registry_service_config(&config, &compilation).golem_issuer,
+            Some(issuer)
+        );
     }
 }

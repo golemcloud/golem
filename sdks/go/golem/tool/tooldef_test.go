@@ -736,10 +736,24 @@ type BadArgs struct {
 
 type SingleArgs struct{ Name string }
 
+type LiveFieldArgs struct{ Who golem.Principal }
+
+type LiveBoundArgs struct{ Who golem.Caller }
+
+type LiveListArgs struct{ Who []golem.Principal }
+
+type LiveOptionArgs struct {
+	Who golem.Option[golem.TokenProvenance]
+}
+
 type EmbedArgs struct {
 	VcsGlobals
 	Name string
 }
+
+// liveValueRefusal is the start of the shared message that refuses a principal or a caller in a
+// tool signature.
+const liveValueRefusal = "Principal and Caller cannot appear in a method, constructor or tool signature"
 
 func TestToolDeclarationErrors(t *testing.T) {
 	cases := map[string]struct {
@@ -750,6 +764,34 @@ func TestToolDeclarationErrors(t *testing.T) {
 			c := tool.Command[SingleArgs, string]("x", nil)
 			_ = c.Handle(func(*Context, SingleArgs) (string, error) { return "", nil })
 		}, "field Name is not bound"},
+		"live value in an unbound parameter": {func(tool *Definition[Tst]) {
+			c := tool.Command[LiveFieldArgs, string]("x", nil)
+			_ = c.Handle(func(*Context, LiveFieldArgs) (string, error) { return "", nil })
+		}, liveValueRefusal},
+		"live value in a bound parameter": {func(tool *Definition[Tst]) {
+			c := tool.Command[LiveBoundArgs, string]("x", func(a *LiveBoundArgs, s *CommandSpec) {
+				s.Positional(&a.Who)
+			})
+			_ = c.Handle(func(*Context, LiveBoundArgs) (string, error) { return "", nil })
+		}, liveValueRefusal},
+		"live value in a list parameter": {func(tool *Definition[Tst]) {
+			c := tool.Command[LiveListArgs, string]("x", func(a *LiveListArgs, s *CommandSpec) {
+				s.Tail(&a.Who)
+			})
+			_ = c.Handle(func(*Context, LiveListArgs) (string, error) { return "", nil })
+		}, liveValueRefusal},
+		"live value in an optional parameter": {func(tool *Definition[Tst]) {
+			c := tool.Command[LiveOptionArgs, string]("x", func(a *LiveOptionArgs, s *CommandSpec) {
+				s.Option(&a.Who)
+			})
+			_ = c.Handle(func(*Context, LiveOptionArgs) (string, error) { return "", nil })
+		}, liveValueRefusal},
+		"live value as the result": {func(tool *Definition[Tst]) {
+			c := tool.Command[SingleArgs, golem.Caller]("x", func(a *SingleArgs, s *CommandSpec) {
+				s.Option(&a.Name)
+			})
+			_ = c.Handle(func(*Context, SingleArgs) (golem.Caller, error) { return golem.AnonymousCaller(), nil })
+		}, liveValueRefusal},
 		"bound twice": {func(tool *Definition[Tst]) {
 			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&a.Name)

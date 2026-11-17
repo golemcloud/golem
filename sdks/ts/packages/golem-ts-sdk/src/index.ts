@@ -29,7 +29,7 @@ import type { SnapshotPart } from './snapshot';
 import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
-import { currentInvocationContext } from './caller';
+import { currentInvocationContext, type EndableInvocationContext } from './caller';
 import { validateLegacySnapshotPrincipal } from './internal/legacySnapshotPrincipal';
 import {
   encodeDeclaredToolErrorPayload,
@@ -312,7 +312,13 @@ async function initialize(agentTypeName: string, input: SchemaValueTree): Promis
     );
   }
 
-  const initiateResult = await initiator.initiate(input, currentInvocationContext());
+  const context = currentInvocationContext();
+  let initiateResult;
+  try {
+    initiateResult = await initiator.initiate(input, context);
+  } finally {
+    context.end();
+  }
 
   if (initiateResult.tag === 'ok') {
     initializedAgent = { agent: initiateResult.val };
@@ -328,7 +334,13 @@ async function invokeAgent(
   if (!initializedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
-  const result = await initializedAgent.agent.invoke(methodName, input, currentInvocationContext());
+  const context = currentInvocationContext();
+  let result;
+  try {
+    result = await initializedAgent.agent.invoke(methodName, input, context);
+  } finally {
+    context.end();
+  }
 
   if (result.tag === 'ok') {
     return result.val;
@@ -363,6 +375,7 @@ async function invokeTool(
   stdout: ToolOutputWriter | undefined,
   stderr: ToolOutputWriter | undefined,
 ): Promise<InvocationResult> {
+  let invocation: EndableInvocationContext | undefined;
   let inputAdapter: ToolInputStreamAdapter | undefined;
   let stdoutAdapter: ToolOutputStreamAdapter | undefined;
   let stderrAdapter: ToolOutputStreamAdapter | undefined;
@@ -387,10 +400,11 @@ async function invokeTool(
     const body = resolved.command.body;
     if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
 
-    const invocation = currentInvocationContext();
+    invocation = currentInvocationContext();
+    const invocationContext = invocation;
     const context: Record<string, unknown> = {
       get caller() {
-        return invocation.caller;
+        return invocationContext.caller;
       },
     };
     if (body.stdin) {
@@ -438,6 +452,7 @@ async function invokeTool(
     await Promise.allSettled(outputFinishes);
     throw error;
   } finally {
+    invocation?.end();
     for (const writer of [stdout, stderr]) {
       try {
         (writer as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
@@ -954,14 +969,20 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = await initiator.loadSnapshot(
-    agentParameters,
-    currentInvocationContext(),
-    agentSnapshot,
-    agentSnapshotMimeType,
-    databases,
-    userParts,
-  );
+  const context = currentInvocationContext();
+  let initiateResult;
+  try {
+    initiateResult = await initiator.loadSnapshot(
+      agentParameters,
+      context,
+      agentSnapshot,
+      agentSnapshotMimeType,
+      databases,
+      userParts,
+    );
+  } finally {
+    context.end();
+  }
 
   if (initiateResult.tag === 'ok') {
     initializedAgent = { agent: initiateResult.val };

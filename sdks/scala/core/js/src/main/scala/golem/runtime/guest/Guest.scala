@@ -126,6 +126,15 @@ object Guest {
       methodName.substring(start, methodName.length - 1)
     } else methodName
 
+  /**
+   * Ends the context of a call when its future completes, however it completes.
+   */
+  private def endWhenDone[A](context: golem.InvocationContext, call: Future[A]): Future[A] =
+    call.transform { result =>
+      context.end()
+      result
+    }
+
   private def initialize(agentTypeName: String, input: js.Dynamic): js.Promise[Unit] =
     if (!js.isUndefined(resolved)) {
       js.Promise.reject(customError("Agent is already initialized in this container")).asInstanceOf[js.Promise[Unit]]
@@ -151,7 +160,7 @@ object Guest {
                 case js.JavaScriptException(err) if isJsAgentError(err) =>
                   Future.failed(scala.scalajs.js.JavaScriptException(err))
               }
-          FutureInterop.toPromise(initFuture).asInstanceOf[js.Promise[Unit]]
+          FutureInterop.toPromise(endWhenDone(context, initFuture)).asInstanceOf[js.Promise[Unit]]
       }
     }
 
@@ -176,12 +185,15 @@ object Guest {
         }
       val resultPromise: js.Promise[js.Any] =
         FutureInterop.toPromise(
-          FutureInterop
-            .fromPromise(r.defn.invokeAny(r.instance, mn, input.asInstanceOf[JsSchemaValueTree], context))
-            .map {
-              case Some(tree) => tree.asInstanceOf[js.Any]
-              case None       => js.undefined
-            }
+          endWhenDone(
+            context,
+            FutureInterop
+              .fromPromise(r.defn.invokeAny(r.instance, mn, input.asInstanceOf[JsSchemaValueTree], context))
+              .map {
+                case Some(tree) => tree.asInstanceOf[js.Any]
+                case None       => js.undefined
+              }
+          )
         )
       resultPromise.`catch`[js.Any](onRejected)
     }
@@ -207,6 +219,7 @@ object Guest {
     val scalaStdin     = stdin.toOption.map(new JsToolInputStream(_))
     var scalaStdout    = Option.empty[JsToolOutputStream]
     var scalaStderr    = Option.empty[JsToolOutputStream]
+    var toolContext    = Option.empty[golem.InvocationContext]
     val invoked        =
       try {
         val decodedInput =
@@ -238,6 +251,7 @@ object Guest {
                     )
                   case Some(_) =>
                     val context = InvocationContextHost.current()
+                    toolContext = Some(context)
                     scalaStdout = stdout.toOption.map(new JsToolOutputStream(_))
                     scalaStderr = stderr.toOption.map(new JsToolOutputStream(_))
                     invoker(path, in, scalaStdin, scalaStdout, scalaStderr, context)
@@ -252,6 +266,7 @@ object Guest {
     // wire-encoded `tool-error`; a failed Future (user code error) propagates as
     // an unhandled rejection so it becomes a WASM trap.
     val completed = invoked.transformWith { invocationResult =>
+      toolContext.foreach(_.end())
       val encoded = Future.fromTry(invocationResult).flatMap {
         case Right(res) =>
           res.result match {

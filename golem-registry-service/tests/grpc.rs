@@ -69,6 +69,17 @@ async fn start_registry() -> (
     JoinSet<Result<(), anyhow::Error>>,
     u16,
 ) {
+    start_registry_with_issuer(None).await
+}
+
+async fn start_registry_with_issuer(
+    golem_issuer: Option<golem_common::model::golem_issuer::GolemIssuer>,
+) -> (
+    TempDir,
+    DbSqliteConfig,
+    JoinSet<Result<(), anyhow::Error>>,
+    u16,
+) {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_config = DbSqliteConfig {
         database: temp_dir
@@ -80,6 +91,7 @@ async fn start_registry() -> (
         foreign_keys: true,
     };
     let config = RegistryServiceConfig {
+        golem_issuer,
         grpc: golem_registry_service::config::GrpcApiConfig {
             port: 0,
             ..Default::default()
@@ -105,6 +117,31 @@ fn registry_client(port: u16) -> GrpcRegistryService {
         port,
         ..Default::default()
     })
+}
+
+#[test]
+#[timeout("120s")]
+async fn every_client_gets_the_one_generated_golem_issuer_of_the_registry() {
+    let (_temp_dir, _db_config, _join_set, port) = start_registry().await;
+    let first = registry_client(port).get_golem_issuer().await.unwrap();
+    assert!(first.is_generated());
+    assert_eq!(
+        registry_client(port).get_golem_issuer().await.unwrap(),
+        first
+    );
+}
+
+#[test]
+#[timeout("120s")]
+async fn a_configured_golem_issuer_is_what_the_registry_gives() {
+    let configured: golem_common::model::golem_issuer::GolemIssuer =
+        "https://id.acme.example".parse().unwrap();
+    let (_temp_dir, _db_config, _join_set, port) =
+        start_registry_with_issuer(Some(configured.clone())).await;
+    assert_eq!(
+        registry_client(port).get_golem_issuer().await.unwrap(),
+        configured
+    );
 }
 
 #[test]

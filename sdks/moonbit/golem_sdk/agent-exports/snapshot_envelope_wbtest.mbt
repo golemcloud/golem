@@ -113,3 +113,44 @@ test "binary snapshot envelope preserves versions 1, 2 and 3" {
   let restored_state = parse_snapshot_envelope(binary_snapshot(payload))
   assert_eq(restored_state, @agents.SnapshotData::Binary(b"*"))
 }
+
+///|
+test "the JSON snapshot writer builds a version 2 envelope that the reader accepts" {
+  let state = b"{\"value\":42}"
+  let payload = json_snapshot_envelope(state)
+  let text = @utf8.decode(Bytes::from_fixedarray(payload))
+  assert_true(text.contains("\"version\":2"))
+  assert_false(text.contains("\"version\":1"))
+  assert_false(text.contains("principal"))
+  assert_eq(
+    parse_snapshot_envelope(json_snapshot_from(payload)),
+    @agents.SnapshotData::Json(state),
+  )
+}
+
+///|
+fn json_snapshot_from(payload : FixedArray[Byte]) -> @host.Snapshot {
+  { payload, mime_type: "application/json", }
+}
+
+///|
+test "the binary snapshot writer puts the byte 0x03 before the state" {
+  let state = b"\x01\x02\x03"
+  let payload = binary_snapshot_envelope(state)
+  assert_eq(payload.length(), 4)
+  assert_eq(payload[0], b'\x03')
+  assert_eq(payload[1], b'\x01')
+  assert_eq(payload[2], b'\x02')
+  assert_eq(payload[3], b'\x03')
+  assert_eq(
+    parse_snapshot_envelope(binary_snapshot(payload)),
+    @agents.SnapshotData::Binary(state),
+  )
+}
+
+///|
+test "the binary snapshot writer wraps an empty state" {
+  let payload = binary_snapshot_envelope(b"")
+  assert_eq(payload.length(), 1)
+  assert_eq(payload[0], b'\x03')
+}

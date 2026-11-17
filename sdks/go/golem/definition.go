@@ -76,7 +76,10 @@ func init() {
 	link.TypedValueWit = func(v any) types.TypedSchemaValue { return v.(TypedValue).wit }
 	link.AgentError = agentErrorToGo
 	link.TrapPanic = trapRegionPanic
-	link.Caller = func() any { return lazyCaller() }
+	link.Caller = func() (any, func()) {
+		read, end := lazyCaller()
+		return read, end
+	}
 	link.LocalAgentTypes = func() ([]common.AgentType, error) {
 		found, errs := defs.discover()
 		if len(errs) > 0 {

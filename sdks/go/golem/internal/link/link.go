@@ -60,8 +60,9 @@ var (
 	// TypedValueWit unwraps a golem.TypedValue.
 	TypedValueWit func(any) types.TypedSchemaValue
 	// Caller returns a function that reads the caller of the running invocation
-	// as a golem.Caller on its first call: a func() golem.Caller, as any.
-	Caller func() any
+	// as a golem.Caller on its first call (a func() golem.Caller, as any), and a
+	// function that ends the call, after which a first read panics.
+	Caller func() (read any, end func())
 	// AgentError converts a host agent-error into a *golem.AgentError.
 	AgentError func(common.AgentError) error
 	// RemoteCallError converts a host rpc-error into a *golem.RemoteCallError.

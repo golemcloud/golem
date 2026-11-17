@@ -594,6 +594,29 @@ pub async fn test_runtime_card_creation_rejects_system_cards(deps: &Deps) {
     ));
 }
 
+pub async fn test_installation_golem_issuer_is_stored_once(deps: &Deps) {
+    assert_eq!(deps.installation_repo.get().await.unwrap(), None);
+
+    let stored = deps
+        .installation_repo
+        .store_golem_issuer_if_absent("urn:golem:issuer:2f0d5c3e-6a41-4f6b-9d7e-8c1a3b5e7f90")
+        .await
+        .unwrap();
+    assert_eq!(
+        stored.golem_issuer,
+        "urn:golem:issuer:2f0d5c3e-6a41-4f6b-9d7e-8c1a3b5e7f90"
+    );
+
+    // A second value does not replace the first one, and the caller gets the stored value.
+    let second = deps
+        .installation_repo
+        .store_golem_issuer_if_absent("https://id.acme.example")
+        .await
+        .unwrap();
+    assert_eq!(second, stored);
+    assert_eq!(deps.installation_repo.get().await.unwrap(), Some(stored));
+}
+
 pub async fn test_runtime_card_creation_requires_system_auth(deps: &Deps) {
     let services = environment_service_deps(deps);
     let auth = AuthCtx::agent_with_effective_surface(

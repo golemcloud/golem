@@ -104,6 +104,11 @@ services:
 
       GOLEM__HTTP_PORT: ${REGISTRY_SERVICE_HTTP_PORT}
       GOLEM__GRPC__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
+      # GOLEM_ISSUER is optional: the installation's https issuer. The registry keeps the issuer in
+      # its database, and the worker service and every executor ask the registry for it. Empty
+      # means the registry generates one at its first start and reuses it afterwards. A value that
+      # differs from the stored one stops the registry.
+      GOLEM__GOLEM_ISSUER: ${GOLEM_ISSUER:-}
 
       GOLEM__CORS_ORIGIN_REGEX: ${CORS_ORIGIN_REGEX}
       GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN: ${ADMIN_TOKEN}
@@ -174,9 +179,6 @@ services:
 
       GOLEM__CUSTOM_REQUEST_PORT: ${WORKER_SERVICE_CUSTOM_REQUEST_PORT}
       GOLEM__MCP_PORT: ${WORKER_SERVICE_MCP_PORT}
-      # GOLEM_ISSUER is required: the installation's https issuer. The worker service and every
-      # executor need the same value, and they refuse to start without it.
-      GOLEM__GOLEM_ISSUER: ${GOLEM_ISSUER:?set GOLEM_ISSUER to the installation's https issuer}
       GOLEM__PORT: ${WORKER_SERVICE_HTTP_PORT}
       GOLEM__GRPC__PORT: ${WORKER_SERVICE_GRPC_PORT}
 
@@ -240,9 +242,6 @@ services:
       RUST_BACKTRACE: 1
       RUST_LOG: info
 
-      # GOLEM_ISSUER is required: the installation's https issuer. The worker service and every
-      # executor need the same value, and they refuse to start without it.
-      GOLEM__GOLEM_ISSUER: ${GOLEM_ISSUER:?set GOLEM_ISSUER to the installation's https issuer}
       GOLEM__HTTP_PORT: ${WORKER_EXECUTOR_HTTP_PORT}
       GOLEM__GRPC__PORT: ${WORKER_EXECUTOR_GRPC_PORT}
 

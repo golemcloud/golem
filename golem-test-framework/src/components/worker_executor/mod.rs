@@ -123,7 +123,6 @@ async fn env_vars(
 ) -> HashMap<String, String> {
     let mut env = EnvVarBuilder::golem_service(verbosity)
         .with_str("ENVIRONMENT", "local")
-        .with_str("GOLEM__GOLEM_ISSUER", crate::components::TEST_GOLEM_ISSUER)
         .with_str("WASMTIME_BACKTRACE_DETAILS", "1")
         .with_str(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",

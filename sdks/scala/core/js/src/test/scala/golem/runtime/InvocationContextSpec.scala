@@ -252,6 +252,28 @@ object InvocationContextSpec extends ZIOSpecDefault {
         ctx.caller
         ctx.caller
         assertTrue(before == 0, reads == 1)
+      },
+      test("a context read during its call keeps that caller after the call ends") {
+        var current = "A"
+        val ctx     = InvocationContext.lazily {
+          Caller(
+            userPrincipal,
+            Principal.User(PrincipalRef("https://auth.example.com", current), "{}", java.time.Instant.EPOCH)
+          )
+        }
+        val first = ctx.caller
+        current = "B"
+        ctx.end()
+        assertTrue(ctx.caller eq first)
+      },
+      test("a context first read after its call ended refuses") {
+        val ctx = InvocationContext.lazily(Caller.anonymous)
+        ctx.end()
+        val refused = scala.util.Try(ctx.caller)
+        assertTrue(
+          refused.isFailure,
+          refused.failed.get.getMessage.contains("belongs to a call that has ended")
+        )
       }
     ),
 

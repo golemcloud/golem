@@ -12,7 +12,7 @@ import { AgentHostClient } from "../host/AgentHostClient.js"
 import { decodeAgentId } from "./agentIdentity.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "../host/HostLive.js"
-import { currentInvocationContext } from "../host/InvocationContextClient.js"
+import { provideInvocationContext } from "../host/InvocationContextClient.js"
 import { SqliteHostExtClient } from "../host/SqliteHostExtClient.js"
 import {
   HttpRouteError,
@@ -1102,7 +1102,7 @@ const initAgentInstance = async (
       const produced = compiled.impl.methods(state)
       const handlers = Effect.isEffect(produced) ? yield* produced : produced
       return { state, handlers }
-    }).pipe(Effect.provideServiceEffect(InvocationContext, currentInvocationContext))
+    }).pipe(provideInvocationContext)
     if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
       program = (program as Effect.Effect<unknown, unknown, never>).pipe(
         // The config class is a Context.Service tag (Self/Identifier
@@ -1201,9 +1201,7 @@ export const dispatchInvoke = async (
     handler,
     input,
   ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
-  program = program.pipe(
-    Effect.provideServiceEffect(InvocationContext, currentInvocationContext),
-  ) as typeof program
+  program = program.pipe(provideInvocationContext) as typeof program
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
     const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     program = program.pipe(
@@ -1429,7 +1427,7 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
  */
 const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): Promise<unknown> => {
   let saveProgram = Effect.suspend(() => compiled.impl.snapshot!.save(agent.state)).pipe(
-    Effect.provideServiceEffect(InvocationContext, currentInvocationContext),
+    provideInvocationContext,
     Effect.scoped,
   ) as Effect.Effect<unknown, unknown, never>
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {

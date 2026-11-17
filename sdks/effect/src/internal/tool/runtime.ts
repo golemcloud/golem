@@ -172,6 +172,7 @@ export async function invokeRegistered(
         .decodeInput(input)
         .pipe(Effect.mapError((cause) => asError({ tag: "invalid-input", val: String(cause) })))
       const context = yield* currentInvocationContext
+      yield* Effect.addFinalizer(() => Effect.sync(context.end))
       const invocation = handler(decoded, {
         get caller() {
           return context.caller

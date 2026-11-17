@@ -122,7 +122,10 @@ object ToolMiddlewareGuest {
                 )
             }
             FutureInterop.toPromise(
-              invocation.flatMap {
+              invocation.transform { result =>
+                decoded.context.end()
+                result
+              }.flatMap {
                 case Right(result) => forwardOutputs(result, outputTargets)
                 case Left(error)   =>
                   settleTargets(outputTargets).flatMap(_ =>

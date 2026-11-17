@@ -796,115 +796,28 @@ fn filesystem_snapshots_enabled_config_hides_the_key() {
 }
 
 #[test]
-fn the_golem_issuer_is_read_from_toml_and_a_plain_http_issuer_is_refused() {
-    use figment::Figment;
-    use figment::providers::{Format, Serialized, Toml};
-
-    let load = |toml: &str| {
-        Figment::new()
-            .merge(Serialized::defaults(GolemConfig::default()))
-            .merge(Toml::string(toml))
-            .extract::<GolemConfig>()
-    };
-
-    assert_eq!(load("").unwrap().golem_issuer, None);
-    assert_eq!(
-        load(r#"golem_issuer = "https://id.acme.example""#)
-            .unwrap()
-            .golem_issuer,
-        Some("https://id.acme.example".parse().unwrap())
-    );
-    let error = load(r#"golem_issuer = "http://id.acme.example""#)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("golem_issuer"), "{error}");
-    assert!(error.contains("http://id.acme.example"), "{error}");
-}
-
-#[test]
-fn resolve_golem_issuer_refuses_to_start_without_an_issuer() {
-    let mut config = GolemConfig::default();
-    let error = config.resolve_golem_issuer().unwrap_err();
-    assert!(error.to_string().contains("golem_issuer"), "{error}");
-    assert_eq!(config.golem_issuer, None);
-}
-
-#[test]
-fn resolve_golem_issuer_keeps_a_configured_value() {
-    let configured: golem_common::model::golem_issuer::GolemIssuer =
-        "https://id.acme.example".parse().unwrap();
-    let mut config = GolemConfig {
-        golem_issuer: Some(configured.clone()),
-        ..GolemConfig::default()
-    };
-    let resolved = config.resolve_golem_issuer().unwrap();
-    assert_eq!(resolved, configured);
-    assert_eq!(config.golem_issuer, Some(configured));
-}
-
-#[test]
-fn the_golem_issuer_is_read_through_the_loader_from_toml_and_the_environment() {
+fn the_golem_issuer_is_not_a_configuration_key_of_the_executor() {
     use figment::Jail;
-    use figment::providers::{Format, Toml};
     use golem_common::config::env_config_provider;
 
     Jail::expect_with(|jail| {
         jail.clear_env();
-        let from_toml = super::make_config_loader()
-            .default_figment()
-            .merge(Toml::string(
-                r#"golem_issuer = "https://id.acme.example/golem""#,
-            ))
-            .extract::<GolemConfig>()?;
-        assert_eq!(
-            from_toml.golem_issuer,
-            Some("https://id.acme.example/golem".parse().unwrap())
-        );
-
         jail.set_env("GOLEM__GOLEM_ISSUER", "https://id.acme.example");
-        let from_env = super::make_config_loader()
+        let config = super::make_config_loader()
             .default_figment()
             .merge(env_config_provider())
             .extract::<GolemConfig>()?;
-        assert_eq!(
-            from_env.golem_issuer,
-            Some("https://id.acme.example".parse().unwrap())
-        );
-
-        jail.set_env("GOLEM__GOLEM_ISSUER", "http://id.acme.example");
-        let error = super::make_config_loader()
-            .default_figment()
-            .merge(env_config_provider())
-            .extract::<GolemConfig>()
-            .expect_err("a plain http issuer must not load")
-            .to_string();
-        assert!(error.to_lowercase().contains("golem_issuer"), "{error}");
+        // The registry service gives the issuer at start, whatever the environment says.
+        assert_eq!(config.golem_issuer, None);
         Ok(())
     });
 }
 
 #[test]
-fn an_empty_or_blank_golem_issuer_counts_as_not_set() {
-    use figment::Jail;
-    use figment::providers::{Format, Toml};
-    use golem_common::config::env_config_provider;
-
-    for value in ["", "   "] {
-        Jail::expect_with(|jail| {
-            jail.clear_env();
-            jail.set_env("GOLEM__GOLEM_ISSUER", value);
-            let config = super::make_config_loader()
-                .default_figment()
-                .merge(env_config_provider())
-                .extract::<GolemConfig>()?;
-            assert_eq!(config.golem_issuer, None, "env value {value:?}");
-            Ok(())
-        });
-    }
-    let config = super::make_config_loader()
-        .default_figment()
-        .merge(Toml::string(r#"golem_issuer = """#))
-        .extract::<GolemConfig>()
-        .unwrap();
-    assert_eq!(config.golem_issuer, None);
+fn set_golem_issuer_keeps_the_value_that_the_registry_gave() {
+    let issuer: golem_common::model::golem_issuer::GolemIssuer =
+        "https://id.acme.example".parse().unwrap();
+    let mut config = GolemConfig::default();
+    config.set_golem_issuer(issuer.clone());
+    assert_eq!(config.resolved_golem_issuer(), &issuer);
 }

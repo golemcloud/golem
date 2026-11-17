@@ -468,22 +468,29 @@ pub fn Caller::from_wit(c : @common.Caller) -> Caller {
 
 ///|
 /// What the host tells an invocation about itself. The host is asked for the caller on first
-/// use, and the answer is kept for the rest of the invocation.
+/// use, during the call, and the answer is kept for the rest of the invocation. Once the call
+/// has ended the host holds another invocation's caller, so a context that has not read it by
+/// then refuses to, and a context that has keeps the value it read.
 pub struct InvocationContext {
   priv mut cached : Caller?
+  priv mut ended : Bool
   priv read : () -> Caller
 }
 
 ///|
 /// The context of the running invocation, read from the host on first use.
 pub fn InvocationContext::current() -> InvocationContext {
-  { cached: None, read: () => Caller::from_wit(@invocationContext.caller()), }
+  {
+    cached: None,
+    ended: false,
+    read: () => Caller::from_wit(@invocationContext.caller()),
+  }
 }
 
 ///|
 /// The context of an invocation made by `caller`.
 pub fn InvocationContext::from_caller(caller : Caller) -> InvocationContext {
-  { cached: Some(caller), read: () => caller, }
+  { cached: Some(caller), ended: false, read: () => caller, }
 }
 
 ///|
@@ -493,14 +500,39 @@ pub fn InvocationContext::anonymous() -> InvocationContext {
 }
 
 ///|
-/// Who caused the running invocation.
-pub fn InvocationContext::caller(self : InvocationContext) -> Caller {
+/// Marks the call as over: the SDK calls it when the invocation returns.
+pub fn InvocationContext::end(self : InvocationContext) -> Unit {
+  self.ended = true
+}
+
+///|
+/// The text of the refusal of a first read after the call has ended.
+let invocation_context_ended : String = "this InvocationContext belongs to a call that has ended; store ctx.caller().original.principal_ref() instead"
+
+///|
+/// Who caused the running invocation, or the refusal text when the call has ended and the caller
+/// was never read.
+pub fn InvocationContext::caller_or_ended(
+  self : InvocationContext,
+) -> Result[Caller, String] {
   match self.cached {
-    Some(c) => c
-    None => {
-      let c = (self.read)()
-      self.cached = Some(c)
-      c
-    }
+    Some(c) => Ok(c)
+    None =>
+      if self.ended {
+        Err(invocation_context_ended)
+      } else {
+        let c = (self.read)()
+        self.cached = Some(c)
+        Ok(c)
+      }
+  }
+}
+
+///|
+/// Who caused the running invocation. A first read after the call has ended aborts.
+pub fn InvocationContext::caller(self : InvocationContext) -> Caller {
+  match self.caller_or_ended() {
+    Ok(c) => c
+    Err(message) => abort(message)
   }
 }

@@ -498,8 +498,8 @@ fn is_cacheable_method(method: &Method) -> bool {
 /// Insert the cache headers for a read-only `AgentMethod` response into the
 /// given header map: `Cache-Control`, optionally `ETag` (when the cache policy
 /// supports HTTP revalidation), and `Vary` for every header that influences
-/// the response (the headers that carry a credential for a public response,
-/// plus any header-bound method parameters).
+/// the response (the headers that carry a credential, for public and private
+/// answers alike, plus any header-bound method parameters).
 #[allow(clippy::too_many_arguments)]
 fn add_read_only_cache_headers(
     headers: &mut http::HeaderMap,
@@ -543,16 +543,16 @@ fn add_read_only_cache_headers(
         );
     }
 
-    // A public response may be served by a shared cache to any request, so it varies on every
-    // header that can carry a credential, which then makes the response private. The headers
-    // that method parameters are bound to vary the response as well.
-    if visibility == CacheVisibility::Public {
-        for name in ["Authorization", "Cookie", "Golem-Token"]
-            .into_iter()
-            .chain(session_header)
-        {
-            add_vary_header(headers, name);
-        }
+    // Every answer varies on every header that can carry a credential: a public answer may be
+    // served by a shared cache to any request, and a private answer may be kept by a browser
+    // cache that another session of the same browser then asks, so neither is selected for a
+    // request with a different credential. The headers that method parameters are bound to vary
+    // the response as well.
+    for name in ["Authorization", "Cookie", "Golem-Token"]
+        .into_iter()
+        .chain(session_header)
+    {
+        add_vary_header(headers, name);
     }
     for param in &behaviour.method_parameters {
         if let MethodParameter::Header { header_name, .. } = param {
@@ -876,5 +876,145 @@ mod tests {
         .unwrap();
         assert_eq!(other.agent_id, other_component.agent_id);
         assert_ne!(other, other_component);
+    }
+
+    /// Ana signs in on a `SessionFromHeader` route and reads a read-only method; then Ben uses the
+    /// same browser. RFC 9111 4.1: a stored response is selected for a later request only when
+    /// every request header that `Vary` names has the same value, so a private response must
+    /// vary on the session header, and the validator of a response is never accepted for
+    /// another session.
+    #[test]
+    async fn a_private_response_is_never_reused_for_another_session() {
+        use golem_common::model::agent::{CachePolicy, CachePolicyTtl};
+        use golem_service_base::custom_api::{RouteSecurity, SessionFromHeaderRouteSecurity};
+
+        let mut route = test_route(1, "/profile", Some("GET"), "typed");
+        route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+            header_name: "X-Session".into(),
+        });
+        let resolver = test_resolver(vec![route]);
+        let route_request = poem::Request::builder()
+            .uri("/profile".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let resolved = resolver
+            .resolve_matching_route(&route_request)
+            .await
+            .unwrap();
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(behaviour) =
+            &resolved.route.behavior
+        else {
+            panic!("expected an agent route");
+        };
+        let agent_id = AgentId {
+            component_id: behaviour.component_id,
+            agent_id: "agent1()".to_string(),
+        };
+        let fingerprint = AgentFingerprint(Uuid::nil());
+        let index = OplogIndex::from_u64(7);
+        let user = |subject: &str| {
+            Caller::entry(Principal::User(UserPrincipal {
+                pair: Pair::new(
+                    "https://login.acme.example/".to_string(),
+                    subject.to_string(),
+                ),
+                claims: Claims::from_json("{}".to_string()).unwrap(),
+                authenticated_at: Timestamp::from(0u64),
+            }))
+        };
+        let session = |value: &'static str| {
+            let mut headers = http::HeaderMap::new();
+            headers.insert("x-session", http::HeaderValue::from_static(value));
+            headers
+        };
+
+        let mut failures = Vec::new();
+        for cache_policy in [
+            CachePolicy::UntilWrite(golem_schema::Empty {}),
+            CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 60_000_000_000,
+            }),
+        ] {
+            let read_only = ReadOnlyConfig { cache_policy };
+            let ana_request = session("session-of-ana");
+            let ben_request = session("session-of-ben");
+            let mut ana_response = http::HeaderMap::new();
+            add_read_only_cache_headers(
+                &mut ana_response,
+                &agent_id,
+                Some(index),
+                Some(fingerprint),
+                &read_only,
+                behaviour,
+                &resolved,
+                &user("ana"),
+                &ana_request,
+            );
+            let vary = ana_response
+                .get(http::header::VARY)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            let reusable_for_ben = vary
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .all(|name| ana_request.get(name) == ben_request.get(name));
+            // Ben's conditional request with Ana's ETag: the validator holds no caller, so the
+            // worker service answers 304 without invoking the agent for Ben.
+            let etag = ana_response
+                .get(http::header::ETAG)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            let ben_gets_304 = if_none_match_hits(
+                &parse_if_none_match_entries(&etag),
+                &agent_id,
+                fingerprint,
+                index,
+            );
+            println!(
+                "{:?}: cache-control={:?} vary={vary:?} ana's stored response reusable for ben={reusable_for_ben} ben's revalidation gets 304={ben_gets_304}",
+                read_only.cache_policy,
+                ana_response.get(http::header::CACHE_CONTROL),
+            );
+            if reusable_for_ben {
+                failures.push(format!("{:?}", read_only.cache_policy));
+            }
+
+            // A public answer (anonymous, no credential) and a private one name the same
+            // credential headers.
+            let mut public_response = http::HeaderMap::new();
+            add_read_only_cache_headers(
+                &mut public_response,
+                &agent_id,
+                Some(index),
+                Some(fingerprint),
+                &read_only,
+                behaviour,
+                &resolved,
+                &Caller::anonymous(),
+                &http::HeaderMap::new(),
+            );
+            for response in [&ana_response, &public_response] {
+                let vary = response
+                    .get(http::header::VARY)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                for name in ["authorization", "cookie", "golem-token", "x-session"] {
+                    assert!(
+                        vary.split(',').any(|entry| entry.trim() == name),
+                        "{:?}: Vary {vary:?} must name {name}",
+                        read_only.cache_policy
+                    );
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "Ana's private response can be served to Ben by the browser cache for {failures:?}"
+        );
     }
 }

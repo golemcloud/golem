@@ -105,6 +105,7 @@ pub const REFERENCE_DATA_DIR: &str = "/var/lib/golem";
 /// service's one to both APIs. Any layer that sets one of them is rejected.
 const LAUNCHER_OWNED_KEYS: &[&str] = &[
     "registry_service.tracing",
+    "registry_service.golem_issuer",
     "registry_service.http_port",
     "registry_service.grpc.port",
     "registry_service.component_compilation.config.host",
@@ -147,10 +148,12 @@ pub struct GolemServerConfig {
     pub data_dir: PathBuf,
     /// File to write the bound ports to as JSON once the server has started.
     pub ports_file: Option<PathBuf>,
-    /// The installation's Golem issuer, for the worker service and the executor: an https URL on
-    /// its own host, or a `urn:golem:issuer:<uuid>` value that Golem generated. Without it, the
-    /// first start generates a value and keeps it in the data directory (`golem-issuer`), and
-    /// every later start with that data directory reuses it. An empty value counts as not set.
+    /// The installation's Golem issuer: an https URL on its own host, or a
+    /// `urn:golem:issuer:<uuid>` value that Golem generated. It goes to the registry service
+    /// only: the registry keeps the issuer in its database, and the worker service and the
+    /// executor ask the registry for it. Without it, the first start generates a value and stores
+    /// it in the registry database, so every later start with that database uses the same one. A
+    /// value that differs from the stored one stops the start. An empty value counts as not set.
     #[serde(
         default,
         deserialize_with = "golem_common::model::golem_issuer::deserialize_setting"
@@ -2267,7 +2270,7 @@ mod tests {
 
     #[test]
     fn the_golem_issuer_of_one_service_is_rejected() {
-        for service in ["worker_service", "worker_executor"] {
+        for service in ["registry_service", "worker_service", "worker_executor"] {
             Jail::expect_with(|jail| {
                 let variable = format!("GOLEM__{}__GOLEM_ISSUER", service.to_uppercase());
                 jail.set_env(&variable, "https://id.acme.example");

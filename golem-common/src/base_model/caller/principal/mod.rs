@@ -407,12 +407,53 @@ pub struct TokenProvenance {
 /// credential.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Caller {
     pub original: Principal,
     pub immediate: Principal,
     pub tokens: Vec<TokenProvenance>,
+}
+
+/// The stored form of a [`Caller`]: the immediate principal is absent when it is the same record
+/// as the original one, so that the claims of an entry-point caller are stored once.
+#[cfg(feature = "full")]
+#[derive(desert_rust::BinaryCodec)]
+#[desert(evolution())]
+struct CallerRecord {
+    original: Principal,
+    immediate: Option<Principal>,
+    tokens: Vec<TokenProvenance>,
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for Caller {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::BinarySerializer::serialize(
+            &CallerRecord {
+                original: self.original.clone(),
+                immediate: (!self.original.same_record(&self.immediate))
+                    .then(|| self.immediate.clone()),
+                tokens: self.tokens.clone(),
+            },
+            context,
+        )
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for Caller {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let record: CallerRecord = desert_rust::BinaryDeserializer::deserialize(context)?;
+        Ok(Self {
+            immediate: record.immediate.unwrap_or_else(|| record.original.clone()),
+            original: record.original,
+            tokens: record.tokens,
+        })
+    }
 }
 
 impl Caller {

@@ -1277,6 +1277,34 @@ mod caller_protobuf_tests {
     }
 
     #[test]
+    fn caller_protobuf_writes_equal_roles_once() {
+        use crate::base_model::caller::test_support::{agent_principal, every_principal};
+
+        for principal in every_principal() {
+            let same: proto::Caller = Caller::entry(principal.clone()).into();
+            assert!(same.immediate.is_none(), "{principal:?}");
+            assert_eq!(Caller::try_from(same).unwrap(), Caller::entry(principal));
+        }
+
+        let different = Caller {
+            original: every_principal().remove(0),
+            immediate: agent_principal(),
+            tokens: vec![],
+        };
+        let wire: proto::Caller = different.clone().into();
+        assert!(wire.immediate.is_some());
+        assert_eq!(Caller::try_from(wire).unwrap(), different);
+
+        // A sender that spells out an immediate principal equal to the original is accepted.
+        let spelled = proto::Caller {
+            original: Some(every_principal().remove(0).into()),
+            immediate: Some(every_principal().remove(0).into()),
+            tokens: vec![],
+        };
+        assert!(Caller::try_from(spelled).is_ok());
+    }
+
+    #[test]
     fn caller_protobuf_refuses_a_token_without_an_id() {
         let mut wire: proto::Caller = Caller {
             tokens: vec![TokenProvenance {
@@ -1299,9 +1327,11 @@ mod caller_protobuf_tests {
         without_original.original = None;
         assert!(Caller::try_from(without_original).is_err());
 
+        // An absent immediate principal is the same as the original one.
         let mut without_immediate = valid.clone();
         without_immediate.immediate = None;
-        assert!(Caller::try_from(without_immediate).is_err());
+        let decoded = Caller::try_from(without_immediate).unwrap();
+        assert!(decoded.immediate.same_record(&decoded.original));
 
         let mut bad_claims = valid.clone();
         let Some(proto::principal::Value::User(user)) =
@@ -1336,5 +1366,54 @@ mod caller_protobuf_tests {
             tokens: vec![],
         };
         assert!(Caller::try_from(empty_principal).is_err());
+    }
+}
+
+/// A protobuf caller whose user `authenticated_at` the oplog codec cannot hold.
+mod caller_authenticated_at_tests {
+    use crate::base_model::caller::Caller;
+    use crate::base_model::caller::test_support::sample_caller;
+    use golem_api_grpc::proto::golem::component as proto;
+    use test_r::test;
+
+    fn with_authenticated_at(seconds: i64, nanos: i32) -> proto::Caller {
+        let mut wire: proto::Caller = sample_caller().into();
+        let Some(proto::principal::Value::User(user)) = wire
+            .original
+            .as_mut()
+            .and_then(|principal| principal.value.as_mut())
+        else {
+            panic!("the sample caller starts with a user");
+        };
+        user.authenticated_at = Some(prost_types::Timestamp { seconds, nanos });
+        wire
+    }
+
+    /// The executor decodes every incoming caller with this conversion (`extract_caller`). A
+    /// value out of range must be refused as "does not decode", not panic: release builds use
+    /// `panic = "abort"`, so a panic ends the whole executor process.
+    #[test]
+    fn an_out_of_range_authenticated_at_is_refused_not_a_panic() {
+        for (seconds, nanos) in [
+            (-1, 0),
+            (0, -1),
+            (0, 1_000_000_000),
+            (i64::MAX, 0),
+            (253_402_300_800, 0),
+        ] {
+            let result = Caller::try_from(with_authenticated_at(seconds, nanos));
+            assert!(result.is_err(), "{seconds}/{nanos} decoded: {result:?}");
+        }
+        assert!(Caller::try_from(with_authenticated_at(253_402_300_799, 999_999_999)).is_ok());
+    }
+
+    /// A caller decoded from protobuf must be the same record after the desert round trip that
+    /// every oplog payload makes, or a retry is refused and replay sees another value.
+    #[test]
+    fn a_sub_millisecond_authenticated_at_survives_the_oplog_codec() {
+        let caller = Caller::try_from(with_authenticated_at(1_767_323_045, 678_123_456)).unwrap();
+        let bytes = desert_rust::serialize_to_byte_vec(&caller).unwrap();
+        let recorded: Caller = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(recorded, caller, "the recorded caller is another record");
     }
 }

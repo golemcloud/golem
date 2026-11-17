@@ -30,7 +30,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest,
     GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
-    GetDeployedComponentMetadataRequest, GetMcpRuntimeCredentialRequest,
+    GetDeployedComponentMetadataRequest, GetGolemIssuerRequest, GetMcpRuntimeCredentialRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
     ReportMcpResourceUnauthorizedRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
@@ -42,9 +42,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
-    get_mcp_runtime_credential_response, get_resource_definition_by_id_response,
-    get_resource_definition_by_name_response, get_resource_limits_response,
-    get_tool_deployment_state_response, mcp_runtime_credential,
+    get_golem_issuer_response, get_mcp_runtime_credential_response,
+    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
+    get_resource_limits_response, get_tool_deployment_state_response, mcp_runtime_credential,
     report_mcp_resource_unauthorized_response, resolve_agent_type_by_names_response,
     resolve_component_response, resolve_mcp_import_response, revoke_card_response,
     update_worker_connection_limit_response,
@@ -65,6 +65,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::ToolDeploymentState;
@@ -146,6 +147,15 @@ pub trait RegistryService: Send + Sync {
         &self,
         token: &TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError>;
+
+    // installation api
+
+    /// The Golem issuer of the installation, which the registry keeps in its database.
+    async fn get_golem_issuer(&self) -> Result<GolemIssuer, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_golem_issuer is not supported by this registry service",
+        ))
+    }
 
     // limits api
     async fn get_resource_limits(
@@ -598,6 +608,30 @@ impl RegistryService for GrpcRegistryService {
                 Ok(auth_ctx)
             }
             Some(authenticate_token_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_golem_issuer(&self) -> Result<GolemIssuer, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_golem_issuer", move |client| {
+                Box::pin(client.get_golem_issuer(GetGolemIssuerRequest {}))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_golem_issuer_response::Result::Success(payload)) => {
+                payload.golem_issuer.parse().map_err(
+                    |error: golem_common::model::golem_issuer::GolemIssuerError| {
+                        RegistryServiceError::internal_client_error(format!(
+                            "the registry returned an invalid Golem issuer: {error}"
+                        ))
+                    },
+                )
+            }
+            Some(get_golem_issuer_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

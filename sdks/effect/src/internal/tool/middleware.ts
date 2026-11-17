@@ -856,6 +856,7 @@ export const toolMiddlewareGuest = {
     let cleanupPromise: Promise<void> | undefined
     const cleanup = (primary?: unknown): Promise<void> =>
       (cleanupPromise ??= (async () => {
+        invocationContext.end()
         await Promise.allSettled(admitted)
         const ownershipResult = await Promise.allSettled([ownership.dispose()])
         for (const observer of observers) releaseObserver(observer)

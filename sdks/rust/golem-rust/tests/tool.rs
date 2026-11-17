@@ -1891,6 +1891,124 @@ async fn audit(
         );
     }
 
+    const LIVE_VALUE_REFUSAL: &str =
+        "Principal and Caller cannot appear in a method, constructor or tool signature";
+
+    fn assert_build_refuses_live_value(name: &str, source: &str) {
+        let output = cargo_build_tool_crate(name, source);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "a live value in a tool signature must not build:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(LIVE_VALUE_REFUSAL),
+            "the build must fail with the shared message:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn build_refuses_a_principal_parameter_of_a_tool() {
+        assert_build_refuses_live_value(
+            "live-value-tool-parameter",
+            r#"
+use golem_rust::agentic::Principal;
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait BadTool {
+    fn run(&self, who: Principal) -> String;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _who: Principal) -> String {
+        String::new()
+    }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn build_refuses_a_caller_result_of_a_tool() {
+        assert_build_refuses_live_value(
+            "live-value-tool-result",
+            r#"
+use golem_rust::agentic::Caller;
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait BadTool {
+    fn run(&self, name: String) -> Caller;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _name: String) -> Caller {
+        Caller::anonymous()
+    }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn build_refuses_a_principal_nested_in_a_map_parameter_of_a_tool() {
+        assert_build_refuses_live_value(
+            "live-value-tool-map",
+            r#"
+use golem_rust::agentic::Principal;
+use golem_rust::{tool_definition, tool_implementation};
+use std::collections::HashMap;
+
+#[tool_definition]
+trait BadTool {
+    fn run(&self, who: HashMap<String, Principal>) -> String;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _who: HashMap<String, Principal>) -> String {
+        String::new()
+    }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn build_refuses_a_shared_caller_result_of_a_tool() {
+        assert_build_refuses_live_value(
+            "live-value-tool-arc",
+            r#"
+use golem_rust::agentic::Caller;
+use golem_rust::{tool_definition, tool_implementation};
+use std::sync::Arc;
+
+#[tool_definition]
+trait BadTool {
+    fn run(&self, name: String) -> Arc<Caller>;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _name: String) -> Arc<Caller> {
+        Arc::new(Caller::anonymous())
+    }
+}
+"#,
+        );
+    }
+
     #[test]
     fn multilevel_subtree_suppresses_inherited_globals_at_depth() {
         let tool = __golem_tool_descriptor_for_Outer(&mut ToolBuildCtx::new())
@@ -8417,6 +8535,10 @@ impl BadTool for BadToolImpl {
 
     fn cargo_check_tool_crate(name: &str, source: &str) -> std::process::Output {
         cargo_tool_crate(name, source, "check")
+    }
+
+    fn cargo_build_tool_crate(name: &str, source: &str) -> std::process::Output {
+        cargo_tool_crate(name, source, "build")
     }
 
     fn cargo_test_tool_crate(name: &str, source: &str) -> std::process::Output {

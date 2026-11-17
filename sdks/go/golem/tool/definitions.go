@@ -43,8 +43,11 @@ func typedValue(w types.TypedSchemaValue) golem.TypedValue {
 func witOf(v golem.TypedValue) types.TypedSchemaValue { return link.TypedValueWit(v) }
 
 // currentCaller returns a function that reads the caller of the running
-// invocation on its first call.
-func currentCaller() func() golem.Caller { return link.Caller().(func() golem.Caller) }
+// invocation on its first call, and a function that ends the call.
+func currentCaller() (func() golem.Caller, func()) {
+	read, end := link.Caller()
+	return read.(func() golem.Caller), end
+}
 
 // misplacedCaller is the build-time refusal of a live value in a command's arguments.
 const misplacedCaller = "Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.Caller() (golem.Caller), and store ctx.Caller().Original.Ref() as a PrincipalRef."

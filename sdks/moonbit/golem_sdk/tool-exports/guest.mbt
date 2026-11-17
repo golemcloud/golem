@@ -24,6 +24,7 @@ pub async fn invoke(
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
   let context = @tool.InvocationContext::current()
+  defer context.end()
   let stdin = stdin.map(source => @tool.byte_stream(source))
   match
     @tool.validate_tool_outputs(

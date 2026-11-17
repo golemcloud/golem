@@ -576,7 +576,8 @@ mod tests {
     }
 
     /// H4: an anonymous request without credentials is cacheable by shared caches (CDNs), so the
-    /// response is `public` and varies on every header that can carry a credential.
+    /// response is `public`. Its `Vary` is added by `add_read_only_cache_headers`, which the unit test
+    /// `a_private_response_is_never_reused_for_another_session` covers.
     #[test]
     fn h4_anonymous_request_without_credentials_is_public_with_vary() {
         let read_only = public_no_cache();
@@ -586,15 +587,6 @@ mod tests {
         assert_eq!(
             build_cache_control_value(&read_only, visibility, false),
             "public, no-cache"
-        );
-
-        let mut headers = http::HeaderMap::new();
-        for name in ["Authorization", "Cookie", "Golem-Token", "x-session"] {
-            add_vary_header(&mut headers, name);
-        }
-        assert_eq!(
-            headers.get(header::VARY).unwrap(),
-            "Authorization, Cookie, Golem-Token, x-session"
         );
     }
 

@@ -586,12 +586,37 @@ impl TryFrom<golem_api_grpc::proto::golem::component::UserPrincipal> for UserPri
             pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
             claims: Claims::from_json(value.claims)
                 .map_err(|error| format!("Invalid field: claims: {error}"))?,
-            authenticated_at: value
-                .authenticated_at
-                .ok_or_else(|| missing("authenticated_at"))?
-                .into(),
+            authenticated_at: authenticated_at_from_protobuf(
+                value
+                    .authenticated_at
+                    .ok_or_else(|| missing("authenticated_at"))?,
+            )?,
         })
     }
+}
+
+/// The last millisecond of year 9999: the latest instant that a `Timestamp` can add to the epoch
+/// without overflowing the date.
+const LAST_REPRESENTABLE_MILLISECOND: u64 = 253_402_300_799_999;
+
+/// A checked, millisecond-precision conversion of the time a user authenticated at. A value out
+/// of range is refused instead of panicking, and sub-millisecond precision is dropped, because the
+/// oplog keeps whole milliseconds and the decoded caller must be the record that is recorded.
+fn authenticated_at_from_protobuf(
+    value: prost_types::Timestamp,
+) -> Result<crate::base_model::Timestamp, String> {
+    let invalid = || "Invalid field: authenticated_at".to_string();
+    let seconds = u64::try_from(value.seconds).map_err(|_| invalid())?;
+    let nanos = u32::try_from(value.nanos).map_err(|_| invalid())?;
+    if nanos >= 1_000_000_000 {
+        return Err(invalid());
+    }
+    let millis = seconds
+        .checked_mul(1000)
+        .and_then(|millis| millis.checked_add(u64::from(nanos / 1_000_000)))
+        .filter(|millis| *millis <= LAST_REPRESENTABLE_MILLISECOND)
+        .ok_or_else(invalid)?;
+    Ok(crate::base_model::Timestamp::from(millis))
 }
 
 impl From<UserPrincipal> for golem_api_grpc::proto::golem::component::UserPrincipal {
@@ -764,15 +789,17 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Caller> for Caller {
     fn try_from(
         value: golem_api_grpc::proto::golem::component::Caller,
     ) -> Result<Self, Self::Error> {
+        let original: Principal = value
+            .original
+            .ok_or_else(|| missing("original"))?
+            .try_into()?;
         Ok(Self {
-            original: value
-                .original
-                .ok_or_else(|| missing("original"))?
-                .try_into()?,
-            immediate: value
-                .immediate
-                .ok_or_else(|| missing("immediate"))?
-                .try_into()?,
+            // An absent immediate principal is the same as the original one.
+            immediate: match value.immediate {
+                Some(immediate) => immediate.try_into()?,
+                None => original.clone(),
+            },
+            original,
             tokens: value
                 .tokens
                 .into_iter()
@@ -785,8 +812,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Caller> for Caller {
 impl From<Caller> for golem_api_grpc::proto::golem::component::Caller {
     fn from(value: Caller) -> Self {
         Self {
+            // The immediate principal is left out when it is the same as the original one.
+            immediate: (!value.original.same_record(&value.immediate))
+                .then(|| value.immediate.into()),
             original: Some(value.original.into()),
-            immediate: Some(value.immediate.into()),
             tokens: value.tokens.into_iter().map(Into::into).collect(),
         }
     }

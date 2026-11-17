@@ -181,6 +181,7 @@ message TokenProvenance {
 
 message Caller {
   Principal original = 1;
+  // Absent when the immediate principal is the same as the original one.
   Principal immediate = 2;
   repeated TokenProvenance tokens = 3;
 }

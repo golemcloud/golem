@@ -33,7 +33,8 @@ import (
 // input or result, nor a field of one. Store ctx.Caller().Original.Ref() — a
 // [PrincipalRef] — instead.
 //
-// The host is asked for the caller only when Caller is first called.
+// The host is asked for the caller only when Caller is first called, and
+// only during the call: a context kept past its call panics on a first read.
 
 // PrincipalRef is the identity of one principal: an issuer and a subject.
 //
@@ -486,19 +487,29 @@ func isLiveValueType(t reflect.Type) bool {
 const misplacedCaller = "Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.Caller() (golem.Caller), and store ctx.Caller().Original.Ref() as a PrincipalRef."
 
 // lazyCaller returns a function that asks the host for the caller on its first
-// call and remembers the answer. Reading is deferred because it allocates, and
-// an allocation can start a garbage collection whose clock reads record in the
-// oplog: an invocation that never looks at its caller never pays for it.
-func lazyCaller() func() Caller {
+// call and remembers the answer, and a function that ends the call. Reading is
+// deferred because it allocates, and an allocation can start a garbage
+// collection whose clock reads record in the oplog: an invocation that never
+// looks at its caller never pays for it. Once the call has ended the host holds
+// another invocation's caller, so a first read after that panics, and a caller
+// read during the call stays what it was.
+func lazyCaller() (read func() Caller, end func()) {
 	var c Caller
-	var read bool
-	return func() Caller {
-		if !read {
-			c, read = callerFromWit(currentCaller()), true
+	var have, ended bool
+	read = func() Caller {
+		if !have {
+			if ended {
+				panic(callerEnded)
+			}
+			c, have = callerFromWit(currentCaller()), true
 		}
 		return c
 	}
+	return read, func() { ended = true }
 }
+
+// callerEnded is the panic of a first read of the caller after the call ended.
+const callerEnded = "this context belongs to a call that has ended; store ctx.Caller().Original.Ref() instead"
 
 // callerOf reads a lazy caller, which is anonymous where there is no invocation.
 func callerOf(read func() Caller) Caller {

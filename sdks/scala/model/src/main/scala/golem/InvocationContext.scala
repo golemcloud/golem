@@ -271,12 +271,32 @@ object Caller {
  * `InvocationContext` parameter. It is not part of the input schema and callers
  * never supply it.
  *
- * The host is asked for the caller on first use only.
+ * The host is asked for the caller on first use only, and only during the call:
+ * once the call has ended the host holds another invocation's caller, so a
+ * context that has not read it by then refuses to, and a context that has keeps
+ * the value it read.
  */
 final class InvocationContext private (read: () => Caller) {
+  private var value: Caller  = null
+  private var ended: Boolean = false
 
-  /** Who caused the running invocation. Read from the host on first use. */
-  lazy val caller: Caller = read()
+  /**
+   * Who caused the running invocation. Read from the host on first use, during
+   * the call; a first read after the call has ended throws.
+   */
+  def caller: Caller = {
+    if (value == null) {
+      if (ended)
+        throw new IllegalStateException(
+          "this InvocationContext belongs to a call that has ended; store ctx.caller.original.ref instead"
+        )
+      value = read()
+    }
+    value
+  }
+
+  /** Marks the call as over: the SDK calls it when the invocation returns. */
+  private[golem] def end(): Unit = ended = true
 
   override def toString: String = "InvocationContext"
 }

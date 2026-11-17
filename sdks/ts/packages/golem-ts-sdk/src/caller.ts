@@ -360,7 +360,7 @@ export class Caller {
  * tool middleware.
  */
 export interface InvocationContext {
-  /** Who caused the running invocation. Read from the host on first use. */
+  /** Who caused the running invocation. Read from the host on first use, during the call: a context whose call has ended refuses a first read. */
   readonly caller: Caller;
 }
 
@@ -392,16 +392,35 @@ export function callerFromHost(host: HostCaller): Caller {
   );
 }
 
+/** An invocation context that the SDK ends when its call returns. */
+export interface EndableInvocationContext extends InvocationContext {
+  /** Marks the call as over. A first read of the caller after this throws. */
+  end(): void;
+}
+
 /**
  * The context of the running invocation. The host is asked for the caller on first use, and the
- * answer is kept for the rest of the invocation.
+ * answer is kept for the rest of the invocation. Once the call has ended the host holds another
+ * invocation's caller, so a context that has not read it by then refuses to, and a context that
+ * has keeps the value it read.
  */
-export function currentInvocationContext(): InvocationContext {
+export function currentInvocationContext(): EndableInvocationContext {
   let caller: Caller | undefined;
+  let ended = false;
   return {
     get caller(): Caller {
-      caller ??= callerFromHost(hostCaller());
+      if (caller === undefined) {
+        if (ended) {
+          throw new Error(
+            'this InvocationContext belongs to a call that has ended; store ctx.caller.original.ref instead',
+          );
+        }
+        caller = callerFromHost(hostCaller());
+      }
       return caller;
+    },
+    end(): void {
+      ended = true;
     },
   };
 }

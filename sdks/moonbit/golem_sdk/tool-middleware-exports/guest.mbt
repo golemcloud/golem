@@ -35,17 +35,10 @@ pub async fn invoke_tool_middleware(
   let underlying = @toolMiddleware.UnderlyingTool::from_wit(
     wrapped, background_group,
   )
+  let context = @caller.InvocationContext::current()
+  defer context.end()
   @toolMiddleware.invoke_registered_tool_middleware_wire(
-    middleware_name,
-    tool_name,
-    tool_metadata,
-    parameters,
-    command_path,
-    input,
-    stdin,
-    stdout,
-    stderr,
-    @caller.InvocationContext::current(),
-    underlying,
+    middleware_name, tool_name, tool_metadata, parameters, command_path, input, stdin,
+    stdout, stderr, context, underlying,
   )
 }

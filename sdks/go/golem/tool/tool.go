@@ -171,9 +171,11 @@ func init() {
 		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
+		caller, end := currentCaller()
+		defer end()
 		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
 			hostOutputs{stdout: hostOutput(stdout), stderr: hostOutput(toolExports.Stderr(stderr))},
-			currentCaller())
+			caller)
 	}
 
 	mwExports.Exports.DiscoverToolMiddlewares = func() witTypes.Result[[]toolCommon.ToolMiddleware, types.ToolError] {
@@ -211,6 +213,8 @@ func init() {
 		// The input's cards are this component's: the ones no decode took or
 		// call sent go back to the host however the invocation ends.
 		defer engine.ReleaseCardsIn(input.Value.ValueNodes, link.ReleaseCard)
+		caller, end := currentCaller()
+		defer end()
 		return defs.invokeMiddleware(middlewareName, &middlewareInvocation{
 			toolName:    toolName,
 			tool:        toolMetadata,
@@ -220,7 +224,7 @@ func init() {
 			stdin:       newToolStdin(toolExports.Stdin(stdin)),
 			stdout:      newToolOutput("stdout", hostOutput(toolExports.Stdout(stdout))),
 			stderr:      newToolOutput("stderr", hostOutput(toolExports.Stderr(stderr))),
-			caller:      currentCaller(),
+			caller:      caller,
 			under:       newUnderlyingLayer(wrapped),
 		})
 	}

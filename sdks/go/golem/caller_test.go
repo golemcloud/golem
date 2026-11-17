@@ -216,7 +216,8 @@ func TestAContextReadsItsCallerLazily(t *testing.T) {
 		return common.Caller{Original: witUser("u-1", "{}"), Immediate: witAgent()}
 	}
 	t.Cleanup(func() { currentCaller = prev })
-	ctx := &Context[liveState]{caller: lazyCaller()}
+	read, _ := lazyCaller()
+	ctx := &Context[liveState]{caller: read}
 	if reads != 0 {
 		t.Fatal("the host was read before the caller was used")
 	}
@@ -226,4 +227,39 @@ func TestAContextReadsItsCallerLazily(t *testing.T) {
 	if (&Context[liveState]{}).Caller().Original.Kind() != KindAnonymous {
 		t.Error("a context without an invocation is not anonymous")
 	}
+}
+
+func TestAContextRefusesAFirstReadAfterItsCallEnded(t *testing.T) {
+	var current = "A"
+	prev := currentCaller
+	currentCaller = func() common.Caller {
+		return common.Caller{Original: witUser(current, "{}"), Immediate: witAgent()}
+	}
+	t.Cleanup(func() { currentCaller = prev })
+	subject := func(c Caller) string {
+		ref, _ := c.Original.Ref()
+		return ref.Subject
+	}
+
+	// A context read during its call gives that call's caller.
+	read, end := lazyCaller()
+	if got := subject(read()); got != "A" {
+		t.Errorf("read during the call = %q", got)
+	}
+	// A context read during its call keeps the first value, even after the call.
+	current = "B"
+	end()
+	if got := subject(read()); got != "A" {
+		t.Errorf("read after the call = %q, want the first value", got)
+	}
+
+	// A context first read after its call ended refuses.
+	late, lateEnd := lazyCaller()
+	lateEnd()
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(r.(string), "belongs to a call that has ended") {
+			t.Errorf("a first read after the call ended did not refuse: %v", r)
+		}
+	}()
+	late()
 }

@@ -104,3 +104,53 @@ test "an invocation context keeps the caller it was made with" {
     PrincipalKind::Anonymous,
   )
 }
+
+///|
+test "a context read during its call keeps that caller after the call ends" {
+  let reads : Ref[Int32] = { val: 0, }
+  let context : InvocationContext = {
+    cached: None,
+    ended: false,
+    read: () => {
+      reads.val += 1
+      Caller::anonymous()
+    },
+  }
+  assert_eq(reads.val, 0)
+  match context.caller_or_ended() {
+    Ok(caller) => assert_eq(caller.original.kind(), PrincipalKind::Anonymous)
+    Err(message) => fail(message)
+  }
+  context.end()
+  match context.caller_or_ended() {
+    Ok(caller) => assert_eq(caller.original.kind(), PrincipalKind::Anonymous)
+    Err(message) => fail(message)
+  }
+  assert_eq(reads.val, 1)
+}
+
+///|
+test "a context first read after its call ended refuses" {
+  let reads : Ref[Int32] = { val: 0, }
+  let context : InvocationContext = {
+    cached: None,
+    ended: false,
+    read: () => {
+      reads.val += 1
+      Caller::anonymous()
+    },
+  }
+  context.end()
+  match context.caller_or_ended() {
+    Ok(_) => fail("a first read after the call ended must refuse")
+    Err(message) => assert_eq(message, invocation_context_ended)
+  }
+  assert_eq(reads.val, 0)
+}
+
+///|
+test "a context made from a caller never refuses" {
+  let context = InvocationContext::anonymous()
+  context.end()
+  assert_eq(context.caller().original.kind(), PrincipalKind::Anonymous)
+}

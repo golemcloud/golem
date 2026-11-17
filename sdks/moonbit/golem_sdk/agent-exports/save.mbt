@@ -4,6 +4,28 @@ priv suberror SnapshotSaveError {
 } derive(Debug)
 
 ///|
+/// The version 2 JSON envelope: {"version":2,"state":<state>}.
+fn json_snapshot_envelope(state_bytes : Bytes) -> FixedArray[Byte] {
+  let state_str = @utf8.decode(state_bytes)
+  let state_json = @json.parse(state_str) catch { _ => Json::string(state_str) }
+  let envelope : Map[String, Json] = Map([])
+  envelope["version"] = Json::number(2.0)
+  envelope["state"] = state_json
+  let envelope_str = Json::object(envelope).stringify()
+  @utf8.encode(envelope_str).to_fixedarray()
+}
+
+///|
+/// The version 3 binary envelope: the byte 0x03, then the state.
+fn binary_snapshot_envelope(state_bytes : Bytes) -> FixedArray[Byte] {
+  let result = FixedArray::make(1 + state_bytes.length(), b'\x03')
+  for i in 0..<state_bytes.length() {
+    result[1 + i] = state_bytes[i]
+  }
+  result
+}
+
+///|
 /// Saves the component's state into a snapshot with a versioned envelope.
 /// JSON path: {"version":2, "state":<json>}
 /// Binary path: [0x03][state_bytes]
@@ -27,27 +49,17 @@ pub async fn save(
       match (instance.snapshottable, instance.snapshot_format) {
         (Some(s), Some(@agents.SnapshotFormat::Json)) => {
           let state_bytes = s.save_snapshot()
-          let state_str = @utf8.decode(state_bytes)
-          let state_json = @json.parse(state_str) catch {
-            _ => Json::string(state_str)
-          }
-          let envelope : Map[String, Json] = Map([])
-          envelope["version"] = Json::number(2.0)
-          envelope["state"] = state_json
-          let envelope_str = Json::object(envelope).stringify()
-          let envelope_bytes = @utf8.encode(envelope_str)
           {
-            payload: envelope_bytes.to_fixedarray(),
+            payload: json_snapshot_envelope(state_bytes),
             mime_type: "application/json",
           }
         }
         (Some(s), Some(@agents.SnapshotFormat::Binary)) => {
           let state_bytes = s.save_snapshot()
-          let result = FixedArray::make(1 + state_bytes.length(), b'\x03')
-          for i in 0..<state_bytes.length() {
-            result[1 + i] = state_bytes[i]
+          {
+            payload: binary_snapshot_envelope(state_bytes),
+            mime_type: "application/octet-stream",
           }
-          { payload: result, mime_type: "application/octet-stream", }
         }
         (Some(s), None) => {
           let data = s.save_snapshot()

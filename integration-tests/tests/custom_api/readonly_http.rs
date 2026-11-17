@@ -302,6 +302,19 @@ async fn h4_token_bearing_request_is_private_no_cache(
         "a request that carries a credential must get `private, no-cache`"
     );
 
+    let vary = response
+        .headers()
+        .get_all(VARY)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(",")
+        .to_ascii_lowercase();
+    assert!(
+        vary.split(',').any(|name| name.trim() == "authorization"),
+        "a private answer must vary on Authorization, got {vary:?}"
+    );
+
     Ok(())
 }
 

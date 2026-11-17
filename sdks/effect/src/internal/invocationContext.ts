@@ -44,18 +44,41 @@ export const callerFromHost = (host: AgentCommon.Caller): Caller =>
   )
 
 /**
- * A context whose caller is read from the host on first use and kept for the rest of the
- * invocation.
+ * An invocation context that the SDK ends when its call returns.
  *
  * @internal
  * @since 2.0.0
  */
-export const lazyInvocationContext = (read: () => AgentCommon.Caller): InvocationContextShape => {
+export interface EndableInvocationContext extends InvocationContextShape {
+  /** Marks the call as over. A first read of the caller after this throws. */
+  readonly end: () => void
+}
+
+/**
+ * A context whose caller is read from the host on first use and kept for the rest of the
+ * invocation. Once the call has ended the host holds another invocation's caller, so a context
+ * that has not read it by then refuses to, and one that has keeps the value it read.
+ *
+ * @internal
+ * @since 2.0.0
+ */
+export const lazyInvocationContext = (read: () => AgentCommon.Caller): EndableInvocationContext => {
   let caller: Caller | undefined
+  let ended = false
   return {
     get caller(): Caller {
-      caller ??= callerFromHost(read())
+      if (caller === undefined) {
+        if (ended) {
+          throw new Error(
+            "this InvocationContext belongs to a call that has ended; store ctx.caller.original.ref instead",
+          )
+        }
+        caller = callerFromHost(read())
+      }
       return caller
+    },
+    end: () => {
+      ended = true
     },
   }
 }

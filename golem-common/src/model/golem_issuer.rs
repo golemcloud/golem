@@ -16,7 +16,8 @@
 //! accounts, and of their identity proofs.
 //!
 //! The identifier is an `https` URL, or `urn:golem:issuer:<uuid>` when the operator sets none and
-//! `golem server run` generates one and keeps it in its data directory. An outside receiver can fetch keys only from an `https` issuer.
+//! the registry service generates one and keeps it in its database. An outside receiver can fetch
+//! keys only from an `https` issuer.
 //!
 //! Identities compare their issuer byte for byte, so the parser accepts each identifier in one
 //! spelling only.
@@ -51,16 +52,11 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::net::Ipv4Addr;
-use std::path::Path;
 use std::str::FromStr;
-use tracing::info;
 use url::Url;
 use uuid::Uuid;
 
 pub const GENERATED_GOLEM_ISSUER_PREFIX: &str = "urn:golem:issuer:";
-
-/// The file in the data directory that keeps the issuer `golem server run` generated.
-pub const GOLEM_ISSUER_FILE_NAME: &str = "golem-issuer";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GolemIssuer(String);
@@ -72,56 +68,6 @@ impl GolemIssuer {
             "{GENERATED_GOLEM_ISSUER_PREFIX}{}",
             Uuid::new_v4().hyphenated()
         ))
-    }
-
-    /// The configured issuer, or an error when none is configured.
-    ///
-    /// For a service that cannot keep a generated issuer: every process of one installation must
-    /// hold the same value, so a value one process generated for itself is never right.
-    pub fn required(configured: Option<GolemIssuer>) -> Result<Self, GolemIssuerError> {
-        configured.ok_or(GolemIssuerError::NotConfigured)
-    }
-
-    /// The configured issuer, or the one stored in `file`, or a new one that is stored in `file`.
-    ///
-    /// A configured value wins and nothing is written. An existing file that cannot be read or
-    /// does not hold a valid issuer is an error, and is never replaced: a silent new issuer
-    /// would change the identity of every agent of the installation.
-    pub fn persisted(
-        configured: Option<GolemIssuer>,
-        file: &Path,
-    ) -> Result<Self, GolemIssuerError> {
-        if let Some(configured) = configured {
-            return Ok(configured);
-        }
-        match std::fs::read_to_string(file) {
-            Ok(text) => text.trim().parse().map_err(|error: GolemIssuerError| {
-                GolemIssuerError::InvalidFile {
-                    file: file.display().to_string(),
-                    reason: error.to_string(),
-                }
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let generated = Self::generate();
-                std::fs::write(file, format!("{generated}\n")).map_err(|error| {
-                    GolemIssuerError::UnreadableFile {
-                        file: file.display().to_string(),
-                        reason: error.to_string(),
-                    }
-                })?;
-                info!(
-                    "No Golem issuer is configured (golem_issuer), so {generated} was generated \
-                     and stored in {}. Identity proofs to outside receivers need an https issuer: \
-                     set golem_issuer to an https URL on its own host",
-                    file.display()
-                );
-                Ok(generated)
-            }
-            Err(error) => Err(GolemIssuerError::UnreadableFile {
-                file: file.display().to_string(),
-                reason: error.to_string(),
-            }),
-        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -376,14 +322,6 @@ pub fn deserialize_setting<'de, D: Deserializer<'de>>(
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum GolemIssuerError {
-    #[error(
-        "no Golem issuer is configured: set golem_issuer (GOLEM__GOLEM_ISSUER) to the same value on every worker service and worker executor of the installation, an https URL on its own host"
-    )]
-    NotConfigured,
-    #[error("the Golem issuer file {file} cannot be read or written: {reason}")]
-    UnreadableFile { file: String, reason: String },
-    #[error("the Golem issuer file {file} does not hold a valid issuer: {reason}")]
-    InvalidFile { file: String, reason: String },
     #[error("the Golem issuer {0:?} is neither an https URL nor urn:golem:issuer:<uuid>")]
     Unsupported(String),
     #[error(
@@ -461,79 +399,6 @@ mod tests {
         let configured: GolemIssuer = generated.as_str().parse().unwrap();
         assert_eq!(configured, generated);
         assert!(configured.is_generated());
-    }
-
-    #[test]
-    fn no_value_is_refused_for_a_service_that_cannot_persist_one() {
-        let error = GolemIssuer::required(None).unwrap_err();
-        assert_eq!(error, GolemIssuerError::NotConfigured);
-        assert!(error.to_string().contains("golem_issuer"), "{error}");
-    }
-
-    #[test]
-    fn a_configured_value_is_kept_by_required() {
-        let configured: GolemIssuer = "https://id.acme.example".parse().unwrap();
-        assert_eq!(
-            GolemIssuer::required(Some(configured.clone())).unwrap(),
-            configured
-        );
-    }
-
-    #[test]
-    fn a_persisted_issuer_is_reused_at_the_next_start() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join(GOLEM_ISSUER_FILE_NAME);
-        let first = GolemIssuer::persisted(None, &file).unwrap();
-        assert!(first.is_generated());
-        assert!(file.exists());
-        let second = GolemIssuer::persisted(None, &file).unwrap();
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn a_configured_issuer_wins_and_is_not_written() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join(GOLEM_ISSUER_FILE_NAME);
-        let configured: GolemIssuer = "https://id.acme.example".parse().unwrap();
-        let issuer = GolemIssuer::persisted(Some(configured.clone()), &file).unwrap();
-        assert_eq!(issuer, configured);
-        assert!(!file.exists());
-    }
-
-    #[test]
-    fn a_configured_issuer_wins_over_an_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join(GOLEM_ISSUER_FILE_NAME);
-        let stored = GolemIssuer::persisted(None, &file).unwrap();
-        let configured: GolemIssuer = "https://id.acme.example".parse().unwrap();
-        let issuer = GolemIssuer::persisted(Some(configured.clone()), &file).unwrap();
-        assert_eq!(issuer, configured);
-        assert_eq!(GolemIssuer::persisted(None, &file).unwrap(), stored);
-    }
-
-    #[test]
-    fn an_invalid_issuer_file_is_a_startup_error_and_is_left_alone() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join(GOLEM_ISSUER_FILE_NAME);
-        std::fs::write(&file, "not an issuer").unwrap();
-        let error = GolemIssuer::persisted(None, &file).unwrap_err();
-        assert!(
-            matches!(error, GolemIssuerError::InvalidFile { .. }),
-            "{error}"
-        );
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "not an issuer");
-    }
-
-    #[test]
-    fn an_unreadable_issuer_file_is_a_startup_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join(GOLEM_ISSUER_FILE_NAME);
-        std::fs::create_dir(&file).unwrap();
-        let error = GolemIssuer::persisted(None, &file).unwrap_err();
-        assert!(
-            matches!(error, GolemIssuerError::UnreadableFile { .. }),
-            "{error}"
-        );
     }
 
     #[test]

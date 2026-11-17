@@ -87,6 +87,24 @@ mod caller_decoding {
             "{error}"
         );
 
+        let mut out_of_range_time = valid.clone();
+        let Some(proto::principal::Value::User(user)) = out_of_range_time
+            .original
+            .as_mut()
+            .and_then(|principal| principal.value.as_mut())
+        else {
+            panic!("the sample caller starts with a user");
+        };
+        user.authenticated_at = Some(prost_types::Timestamp {
+            seconds: -1,
+            nanos: 0,
+        });
+        let error = extract_caller(&Some(out_of_range_time)).unwrap_err();
+        assert!(
+            error.to_string().contains("caller does not decode"),
+            "{error}"
+        );
+
         let mut empty_principal = valid;
         empty_principal.immediate = Some(proto::Principal { value: None });
         let error = extract_caller(&Some(empty_principal)).unwrap_err();

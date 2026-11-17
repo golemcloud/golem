@@ -38,6 +38,7 @@ use golem_common::poem::{
     PrometheusExporter,
 };
 use golem_service_base::body_limit::RequestBodyLimit;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::http_server;
 use golem_service_base::model::auth::with_json_auth_errors;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -53,13 +54,14 @@ use tracing::{Instrument, info};
 /// The OpenAPI specification of the worker service, for `--dump-openapi-yaml`.
 ///
 /// The dump builds the services from the default configuration and never serves a request, so
-/// it uses a throwaway issuer instead of requiring the installation's.
+/// it uses a throwaway issuer instead of asking the registry for the installation's.
 pub async fn openapi_yaml() -> anyhow::Result<String> {
-    let config = WorkerServiceConfig {
-        golem_issuer: Some(golem_common::model::golem_issuer::GolemIssuer::generate()),
-        ..WorkerServiceConfig::default()
-    };
-    let services = Services::new(&config).await?;
+    let config = WorkerServiceConfig::default();
+    let services = Services::new(
+        &config,
+        golem_common::model::golem_issuer::GolemIssuer::generate(),
+    )
+    .await?;
     Ok(api::make_open_api_service(&services).spec_yaml())
 }
 
@@ -71,12 +73,10 @@ mod transport_test_support;
 
 #[cfg(test)]
 mod openapi_dump_tests {
-    use crate::config::WorkerServiceConfig;
     use test_r::test;
 
     #[test]
     async fn the_openapi_dump_needs_no_golem_issuer() {
-        assert_eq!(WorkerServiceConfig::default().golem_issuer, None);
         let yaml = crate::openapi_yaml().await.expect("dump");
         assert!(yaml.contains("openapi"), "{yaml}");
     }
@@ -110,14 +110,19 @@ pub struct WorkerService {
 
 impl WorkerService {
     pub async fn new(
-        mut config: WorkerServiceConfig,
+        config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
         config.validate_http_limits().map_err(anyhow::Error::msg)?;
-        // Resolve before building the services, so the kept configuration and
-        // `Services::golem_issuer` hold the same value.
-        config.resolve_golem_issuer()?;
-        let services: Services = Services::new(&config).await?;
+        // The installation's Golem issuer lives in the registry database; every service of the
+        // installation asks the registry for it.
+        let golem_issuer = GrpcRegistryService::new(&config.registry_service)
+            .get_golem_issuer()
+            .await
+            .context(
+                "Failed to get the Golem issuer of the installation from the registry service",
+            )?;
+        let services: Services = Services::new(&config, golem_issuer).await?;
 
         Ok(Self {
             config,
