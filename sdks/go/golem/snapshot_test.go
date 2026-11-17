@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -37,7 +38,7 @@ func (s *snapCustomState) Load(b []byte) error   { s.count = int64(b[0]); return
 // state into dst, returning the principal it carried.
 func restore(t *testing.T, dst any, snap host.Snapshot) Principal {
 	t.Helper()
-	principal, state, err := splitSnapshot(snap)
+	principal, _, state, err := splitSnapshot(snap)
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
@@ -47,11 +48,13 @@ func restore(t *testing.T, dst any, snap host.Snapshot) Principal {
 	return principal
 }
 
+var snapConstructor = json.RawMessage(`{"kind":"record","value":[]}`)
+
 var snapPrincipal = OidcPrincipal{Sub: "u-1", Issuer: "https://id.example", Email: Some("a@example.com"), Claims: "{}"}
 
 func TestSnapshotViaSnapshotter(t *testing.T) {
 	src := &snapCustomState{count: 42}
-	snap, err := saveState(src, snapPrincipal)
+	snap, err := saveState(src, snapPrincipal, snapConstructor)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -73,7 +76,7 @@ func TestSnapshotReflectiveDefaultCoversExportedFields(t *testing.T) {
 		Region string
 	}
 	src := &State{Total: 7, Region: "eu"}
-	snap, err := saveState(src, snapPrincipal)
+	snap, err := saveState(src, snapPrincipal, snapConstructor)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -93,11 +96,11 @@ func TestSnapshotReflectiveDefaultCoversExportedFields(t *testing.T) {
 // to reflection and are NOT captured.
 func TestSnapshotReflectiveDefaultDropsUnexportedFields(t *testing.T) {
 	src := &struct{ count int64 }{count: 99}
-	snap, err := saveState(src, snapPrincipal)
+	snap, err := saveState(src, snapPrincipal, snapConstructor)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	_, state, err := splitSnapshot(snap)
+	_, _, state, err := splitSnapshot(snap)
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
@@ -160,17 +163,17 @@ func TestSnapshotPolicyMapsToWit(t *testing.T) {
 	}
 }
 
-// TestLoadWithoutReadableAgentIDNamesTheCardGrant — a snapshot load on an
-// instance that cannot read GOLEM_AGENT_ID fails with an error that names the
+// TestLoadWithoutReadableAgentTypeNamesTheCardGrant — a snapshot load on an
+// instance that cannot read GOLEM_AGENT_TYPE fails with an error that names the
 // card grant the agent needs.
-func TestLoadWithoutReadableAgentIDNamesTheCardGrant(t *testing.T) {
-	prevID, prevActive := selfAgentID, active
-	selfAgentID = func() string { return "" }
+func TestLoadWithoutReadableAgentTypeNamesTheCardGrant(t *testing.T) {
+	prevEnv, prevActive := selfEnv, active
+	selfEnv = func(string) string { return "" }
 	active = nil
-	t.Cleanup(func() { selfAgentID, active = prevID, prevActive })
+	t.Cleanup(func() { selfEnv, active = prevEnv, prevActive })
 
 	res := loadExports.Load(host.Snapshot{MimeType: "application/json"})
-	want := "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
+	want := "GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE"
 	if !res.IsErr() || res.Err() != want {
 		t.Fatalf("load = %+v, want the error %q", res, want)
 	}
@@ -187,9 +190,9 @@ type rState struct {
 // the OnRestore hook; the constructor, whose effects are already in the
 // history the snapshot replaces, does not run.
 func TestRestoreSkipsTheConstructor(t *testing.T) {
-	prev := selfAgentID
-	selfAgentID = func() string { return `R("ada")` }
-	t.Cleanup(func() { selfAgentID = prev })
+	prev := selfEnv
+	selfEnv = func(string) string { return "00000007-0000-8000-8000-000000000004" }
+	t.Cleanup(func() { selfEnv = prev })
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[restoreID, NoConfig](d, Spec{Name: "R"})
 		constructed := 0
@@ -198,17 +201,17 @@ func TestRestoreSkipsTheConstructor(t *testing.T) {
 			return &rState{Count: 100}
 		}), false)
 		impl.OnRestore(func(ic *InitContext[restoreID, rState, NoConfig], s *rState) error {
-			s.greeting = "hello " + ic.ID().Name + " from " + ic.AgentID()
+			s.greeting = "hello " + ic.ID().Name + " from " + ic.AgentID().String()
 			return nil
 		})
 		impl.Handle(def.Method[Unit, int64]("count"), func(ctx *Context[rState], _ Unit) int64 { return ctx.State.Count })
 		noDefErrs(t, d)
 
-		snap, err := saveState(&rState{Count: 7, greeting: "lost"}, snapPrincipal)
+		snap, err := saveState(&rState{Count: 7, greeting: "lost"}, snapPrincipal, snapConstructor)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, state, err := splitSnapshot(snap)
+		_, _, state, err := splitSnapshot(snap)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,7 +225,7 @@ func TestRestoreSkipsTheConstructor(t *testing.T) {
 		if constructed != 0 {
 			t.Errorf("the constructor ran %d times on restore", constructed)
 		}
-		if s.Count != 7 || s.greeting != `hello ada from R("ada")` {
+		if s.Count != 7 || s.greeting != "hello ada from 00000007-0000-8000-8000-000000000004" {
 			t.Errorf("restored state = %+v", *s)
 		}
 	})
@@ -238,8 +241,8 @@ func TestRestoreHookErrorFailsTheRestore(t *testing.T) {
 		impl.OnRestore(func(*InitContext[restoreID, rState, NoConfig], *rState) error {
 			return errors.New("dependency gone")
 		})
-		snap, _ := saveState(&rState{}, snapPrincipal)
-		_, state, _ := splitSnapshot(snap)
+		snap, _ := saveState(&rState{}, snapPrincipal, snapConstructor)
+		_, _, state, _ := splitSnapshot(snap)
 		_, err := restoreState(d.agents["R"], reflect.ValueOf(restoreID{}), snapPrincipal, state)
 		if err == nil || !strings.Contains(err.Error(), "dependency gone") {
 			t.Fatalf("err = %v", err)

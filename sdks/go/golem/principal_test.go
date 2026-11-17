@@ -95,7 +95,7 @@ func TestPrincipalsReachTheAgent(t *testing.T) {
 		inst := &instance{def: e, principal: creator}
 		inst.state = e.newState(idVal, creator)
 
-		out, err := e.methods["charge"].invoke(inst, AgentPrincipal{AgentID: AgentID{AgentID: "Caller()"}}, params(types.MakeSchemaValueNodeS64Value(5)))
+		out, err := e.methods["charge"].invoke(inst, AgentPrincipal{AgentID: AgentIDFromUUID(UUID{2})}, params(types.MakeSchemaValueNodeS64Value(5)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func TestCallersNeverSendThePrincipal(t *testing.T) {
 func TestPrincipalConvertsFromTheHost(t *testing.T) {
 	for _, p := range []Principal{
 		OidcPrincipal{Sub: "s", Issuer: "i", Email: Some("e"), EmailVerified: Some(true), Claims: "{}"},
-		AgentPrincipal{AgentID: AgentID{ComponentID: UUID{1}, AgentID: "A()"}},
+		AgentPrincipal{AgentID: AgentIDFromUUID(UUID{1})},
 		GolemUserPrincipal{AccountID: UUID{2}},
 		AnonymousPrincipal{},
 	} {

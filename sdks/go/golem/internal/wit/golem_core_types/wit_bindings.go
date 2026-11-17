@@ -339,12 +339,11 @@ type ComponentId struct {
 	Uuid Uuid
 }
 
-// Represents a Golem agent
+// Represents a Golem agent: an RFC 9562 version 8 UUID that Golem issues. Its first
+// 32 bits are the agent type's type ID. It holds no component and no environment;
+// an agent ID names an agent within one environment.
 type AgentId struct {
-	// Identifies the component the agent belongs to
-	ComponentId ComponentId
-	// String representation of the agent ID (agent type and constructor parameters)
-	AgentId string
+	Uuid Uuid
 }
 
 const (
@@ -384,7 +383,7 @@ func MakeInvocationOwnerTool(value string) InvocationOwner {
 	return InvocationOwner{InvocationOwnerTool, value}
 }
 
-// Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's `agent-id` string without the component.
+// Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's agent ID as a UUID.
 type InvocationId struct {
 	Owner InvocationOwner
 	Id    Uuid

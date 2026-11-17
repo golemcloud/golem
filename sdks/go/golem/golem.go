@@ -45,10 +45,11 @@
 //	    })
 //	}
 //
-// Another agent calls it through the definition — [AgentDefinition.Get] returns a
-// client, and the method descriptor carries the call:
+// Another agent calls it through the definition — [AgentDefinition.Upsert]
+// returns a client of the keyed agent of the constructor parameters, and the
+// method descriptor carries the call:
 //
-//	client := counteragent.Agent.Get(counteragent.CounterID{Name: "c1"})
+//	client := counteragent.Agent.Upsert(counteragent.CounterID{Name: "c1"})
 //	n, err := counteragent.Add.Call(client, counteragent.AddIn{By: 5})
 //
 // Method descriptors are package-level values so the same value drives the
@@ -203,12 +204,12 @@ type Context[S any] struct {
 	principal Principal
 }
 
-// AgentID returns the raw id of the running agent. It is read from the host on
-// each call, so a copy made by [ForkSelf] sees its own id. The id comes from
+// AgentID returns the ID of the running agent. It is read from the host on
+// each call, so a copy made by [ForkSelf] sees its own ID. The ID comes from
 // the GOLEM_AGENT_ID environment variable, which the agent can read only when
 // its permission card allows env(?agent) @ ?agent : read : GOLEM_AGENT_ID;
-// without that grant AgentID returns "".
-func (c *Context[S]) AgentID() string { return selfAgentID() }
+// without that grant AgentID returns the zero AgentID.
+func (c *Context[S]) AgentID() AgentID { return selfAgentID() }
 
 // Principal returns the principal the agent was initialized with. The
 // principal of the current invocation is a [Principal] field of the method's
@@ -232,18 +233,19 @@ func (c *InitContext[Id, S, Cfg]) Principal() Principal { return c.principal }
 // ID returns the constructor parameters the agent instance was created with.
 func (c *InitContext[Id, S, Cfg]) ID() Id { return c.id }
 
-// AgentID returns the raw id of the agent being initialized, read from the host.
-// The id comes from the GOLEM_AGENT_ID environment variable, which the agent can
+// AgentID returns the ID of the agent being initialized, read from the host.
+// The ID comes from the GOLEM_AGENT_ID environment variable, which the agent can
 // read only when its permission card allows
 // env(?agent) @ ?agent : read : GOLEM_AGENT_ID; without that grant AgentID
-// returns "".
-func (c *InitContext[Id, S, Cfg]) AgentID() string { return selfAgentID() }
+// returns the zero AgentID.
+func (c *InitContext[Id, S, Cfg]) AgentID() AgentID { return selfAgentID() }
 
 // AgentDefinition is the state-free handle returned by [DefineAgent] /
 // [DefineConfiguredAgent]. Id is the constructor parameter type, which doubles as
 // the agent's type-level identity; Cfg is the agent's config struct ([NoConfig]
 // for a config-less agent). It carries no state type: callers obtain a client
-// with [AgentDefinition.Get] and never depend on how the target stores state.
+// with [AgentDefinition.Upsert], [AgentDefinition.Create] or
+// [AgentDefinition.GetByID] and never depend on how the target stores state.
 // The behaviour (and the private state) is attached separately with
 // [AgentDefinition.Implement].
 type AgentDefinition[Id any, Cfg any] struct{ name string }

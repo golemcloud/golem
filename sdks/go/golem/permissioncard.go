@@ -35,7 +35,7 @@ import (
 //	type ForwardIn struct{ Card golem.PermissionCard }
 //
 //	var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.PermissionCard {
-//	    return Accept.MustCall(Receiver.Get(ReceiverID{Name: "target"}), AcceptIn{Card: in.Card})
+//	    return Accept.MustCall(Receiver.Upsert(ReceiverID{Name: "target"}), AcceptIn{Card: in.Card})
 //	})
 //
 // The card types are not convertible into each other. A receiver decodes a

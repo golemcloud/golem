@@ -276,12 +276,15 @@ type fakeRPC struct {
 	cancelled bool
 	noID      bool
 	scope     witTypes.Option[*types.PermissionCard]
+	idAsks    int
 }
 
+var greeterID = golem.AgentIDFromUUID(golem.UUID{0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x80, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04})
+
 var fakeID = golem.InvocationMetadata{
-	AgentID: "Greeter(\"ada\")",
+	AgentID: greeterID,
 	InvocationID: golem.InvocationID{
-		AgentID: "Greeter(\"ada\")",
+		AgentID: greeterID,
 		UUID:    golem.UUID{0x0b, 0x9f, 0x3d, 0x9e, 0x5f, 0x43, 0x4c, 0x3a, 0x9e, 0x7c, 0x0d, 0x6f, 0x1f, 0x2a, 0x3b, 0x4c},
 	},
 }
@@ -309,6 +312,11 @@ func (f *fakeRPC) trigger(method string, _ types.SchemaValueTree) (golem.Invocat
 	return fakeID, f.err
 }
 
+func (f *fakeRPC) agentID() (golem.AgentID, error) {
+	f.idAsks++
+	return greeterID, f.err
+}
+
 func (f *fakeRPC) schedule(_ time.Time, method string, _ types.SchemaValueTree) (*golem.ScheduledInvocation, error) {
 	f.gotMethod, f.gotForm = method, "schedule"
 	return &golem.ScheduledInvocation{Metadata: fakeID}, f.err
@@ -327,7 +335,7 @@ func greetResult(t *testing.T, r AgentType, value string) types.SchemaValueTree 
 func TestReflectedClientCallsAndDecodes(t *testing.T) {
 	r := snapshotOf(t)
 	rpc := &fakeRPC{tree: greetResult(t, r, "hi hi"), has: true}
-	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
+	client := &AgentClient{agentType: r, id: knownAgentID(greeterID), rpc: rpc}
 
 	got, id, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 2})
 	if err != nil {
@@ -353,7 +361,7 @@ func TestReflectedClientCallsAndDecodes(t *testing.T) {
 func TestReflectedClientsSendNoScopeCardUnlessOneIsAttached(t *testing.T) {
 	r := snapshotOf(t)
 	rpc := &fakeRPC{tree: greetResult(t, r, "hi"), has: true}
-	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
+	client := &AgentClient{agentType: r, id: knownAgentID(greeterID), rpc: rpc}
 	rpc.scope = witTypes.Some(&types.PermissionCard{})
 	if _, _, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1}); err != nil || rpc.scope.IsSome() {
 		t.Errorf("the call sent a scope card: %v", err)
@@ -363,7 +371,7 @@ func TestReflectedClientsSendNoScopeCardUnlessOneIsAttached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
-	dynamic := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+	dynamic := &DynamicAgentClient{agentID: greeterID, rpc: rpc}
 	rpc.scope = witTypes.Some(&types.PermissionCard{})
 	if _, err := dynamic.CallAsync("greet", input); err != nil || rpc.scope.IsSome() {
 		t.Errorf("the dynamic call sent a scope card: %v", err)
@@ -436,11 +444,74 @@ func TestDiscoveryOffTarget(t *testing.T) {
 		t.Error("discovery found an agent type off-target")
 	}
 	r := snapshotOf(t)
-	if _, err := r.Get(map[string]any{"name": "ada"}); err == nil {
-		t.Error("Get succeeded off-target")
+	if _, err := r.Upsert(map[string]any{"name": "ada"}); err == nil {
+		t.Error("Upsert succeeded off-target")
 	}
-	if _, err := r.Bind("Greeter(\"ada\")"); err == nil {
-		t.Error("Bind succeeded off-target")
+	if _, err := r.Create(map[string]any{"name": "ada"}, Keyed()); err == nil {
+		t.Error("Create succeeded off-target")
+	}
+	if _, err := r.GetByID(greeterID); err == nil {
+		t.Error("GetByID succeeded off-target")
+	}
+	if _, err := r.LookupID(map[string]any{"name": "ada"}); err == nil {
+		t.Error("LookupID succeeded off-target")
+	}
+}
+
+// TestReflectedClientAsksTheHostForItsIDOnce — a client of Upsert learns its
+// ID from the host on the first AgentID, and its copies share what it learned;
+// a client that knows its ID never asks.
+func TestReflectedClientAsksTheHostForItsIDOnce(t *testing.T) {
+	r := snapshotOf(t)
+	rpc := &fakeRPC{}
+	client := &AgentClient{agentType: r, id: &agentIDCell{}, rpc: rpc}
+	if got := client.target(); got != r.Name() {
+		t.Errorf("an unknown ID names the target %q", got)
+	}
+	copied := *client
+	for _, c := range []*AgentClient{&copied, client} {
+		if id, err := c.AgentID(); err != nil || id != greeterID {
+			t.Fatalf("AgentID = %v, %v", id, err)
+		}
+	}
+	if rpc.idAsks != 1 || client.target() != greeterID.String() {
+		t.Fatalf("asked %d times, target %q", rpc.idAsks, client.target())
+	}
+	known := &AgentClient{agentType: r, id: knownAgentID(greeterID), rpc: &fakeRPC{}}
+	if id, err := known.AgentID(); err != nil || id != greeterID || known.rpc.(*fakeRPC).idAsks != 0 {
+		t.Fatalf("a known ID was asked for: %v, %v", id, err)
+	}
+	failing := &AgentClient{agentType: r, id: &agentIDCell{}, rpc: &fakeRPC{err: errors.New("denied")}}
+	if _, err := failing.AgentID(); err == nil {
+		t.Fatal("a host failure was lost")
+	}
+}
+
+// TestReflectedCreateOptionsReachTheHost — Keyed, the checked configuration
+// and the environment variables are the host's create options.
+func TestReflectedCreateOptionsReachTheHost(t *testing.T) {
+	r := snapshotNamed(t, "Cfg")
+	for _, keyed := range []bool{false, true} {
+		opts := []CreateOpt{WithConfigJSON([]string{"greeting"}, "hello"), WithEnv("MODE", "test"), WithEnv("LEVEL", "2")}
+		if keyed {
+			opts = append(opts, Keyed())
+		}
+		options, err := r.createOptions(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if options.Keyed != keyed || len(options.AgentConfig) != 1 || !slices.Equal(options.AgentConfig[0].Path, []string{"greeting"}) {
+			t.Errorf("keyed=%v: options = %+v", keyed, options)
+		}
+		if !slices.Equal(options.Env, []witTypes.Tuple2[string, string]{{F0: "MODE", F1: "test"}, {F0: "LEVEL", F1: "2"}}) {
+			t.Errorf("env = %v", options.Env)
+		}
+	}
+	if options, err := r.createOptions(nil); err != nil || options.Keyed || options.AgentConfig != nil || options.Env != nil {
+		t.Errorf("no options gave %+v, %v", options, err)
+	}
+	if _, err := r.createOptions([]CreateOpt{WithConfigJSON([]string{"greting"}, "typo")}); err == nil {
+		t.Error("an undeclared config path was accepted")
 	}
 }
 
@@ -455,7 +526,7 @@ func TestDynamicAgentClientCallsWithPackedValues(t *testing.T) {
 		t.Fatalf("PackJSON: %v", err)
 	}
 	rpc := &fakeRPC{tree: greetResult(t, r, "hi"), has: true}
-	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+	client := &DynamicAgentClient{agentID: greeterID, rpc: rpc}
 
 	got, id, err := client.Call("greet", input)
 	if err != nil {
@@ -473,15 +544,12 @@ func TestDynamicAgentClientCallsWithPackedValues(t *testing.T) {
 	}
 }
 
-func TestBindingOffTarget(t *testing.T) {
-	if _, err := BindAgentID("anything"); err == nil {
-		t.Error("binding an agent id succeeded off-target")
+func TestGetByIDOffTarget(t *testing.T) {
+	if _, err := GetByID(greeterID); err == nil {
+		t.Error("getting an agent by ID succeeded off-target")
 	}
-	if _, err := ParseRawAgentID("anything"); err == nil {
-		t.Error("parsing an agent id succeeded off-target")
-	}
-	if _, err := MakeAgentID("Greeter", golem.TypedValue{}, golem.None[golem.UUID]()); err == nil {
-		t.Error("making an agent id succeeded off-target")
+	if _, found := DiscoverAgentTypeByID(greeterID); found {
+		t.Error("discovery by ID found an agent type off-target")
 	}
 }
 
@@ -541,7 +609,7 @@ func TestReflectedConfigOverridesAreChecked(t *testing.T) {
 func TestAPendingCallIsCancelledOrAwaited(t *testing.T) {
 	r := snapshotOf(t)
 	rpc := &fakeRPC{tree: greetResult(t, r, "hi"), has: true}
-	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
+	client := &AgentClient{agentType: r, id: knownAgentID(greeterID), rpc: rpc}
 
 	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
 	if err != nil || p.Metadata == nil || *p.Metadata != fakeID {
@@ -568,7 +636,7 @@ func TestARejectedCallHasNoIdentity(t *testing.T) {
 	r := snapshotOf(t)
 	denied := errors.New("denied")
 	rpc := &fakeRPC{noID: true, err: denied}
-	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
+	client := &AgentClient{agentType: r, id: knownAgentID(greeterID), rpc: rpc}
 
 	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
 	if err != nil || p.Metadata != nil {
@@ -608,7 +676,7 @@ func TestARejectedCallHasNoIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
-	dynamic := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+	dynamic := &DynamicAgentClient{agentID: greeterID, rpc: rpc}
 	if got, id, err := dynamic.Call("greet", input); !errors.As(err, &rce) || rce.Kind != golem.RemoteProtocolError || id != nil || got.IsSome() {
 		t.Errorf("a dynamic call without an identity gave %v, id %v, %v; want a protocol error", got, id, err)
 	}

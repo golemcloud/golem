@@ -87,7 +87,7 @@ func (s MultipartSnapshot) RequirePart(name, contentType string) ([]byte, error)
 
 // The wire form is multipart/mixed, shared by every SDK
 // (test-data/snapshot-multipart/README.md): one "state" part with the
-// {"version":1,"principal":…,"state":…} envelope, and one "part:<name>" part
+// {"version":1,"principal":…,"constructor":…,"state":…} envelope, and one "part:<name>" part
 // per user part.
 const (
 	multipartMIME         = "multipart/mixed"
@@ -293,9 +293,10 @@ func dispositionName(v string) (string, bool) {
 	return value, true
 }
 
-// encodeMultipart frames a multipart snapshot with the principal and returns
-// the payload and its MIME type.
-func encodeMultipart(snap MultipartSnapshot, principal []byte) ([]byte, string, error) {
+// encodeMultipart frames a multipart snapshot with the principal and the wire
+// JSON of the constructor parameters, and returns the payload and its MIME
+// type.
+func encodeMultipart(snap MultipartSnapshot, principal, constructor []byte) ([]byte, string, error) {
 	state := snap.State
 	if state == nil {
 		state = json.RawMessage("null")
@@ -303,7 +304,7 @@ func encodeMultipart(snap MultipartSnapshot, principal []byte) ([]byte, string, 
 	if !json.Valid(state) {
 		return nil, "", errors.New("golem: the multipart snapshot's state is not valid JSON")
 	}
-	envelope := slices.Concat([]byte(`{"version":1,"principal":`), principal, []byte(`,"state":`), state, []byte("}"))
+	envelope := slices.Concat([]byte(`{"version":1,"principal":`), principal, []byte(`,"constructor":`), constructor, []byte(`,"state":`), state, []byte("}"))
 	type framed struct {
 		name, contentType string
 		body              []byte
@@ -354,30 +355,34 @@ func encodeMultipart(snap MultipartSnapshot, principal []byte) ([]byte, string, 
 
 var errInvalidMultipart = errors.New("golem: invalid multipart snapshot")
 
-// decodeMultipart reads a multipart snapshot and the principal JSON it carries.
-func decodeMultipart(data []byte, mime string) (json.RawMessage, MultipartSnapshot, error) {
+// decodeMultipart reads a multipart snapshot and the principal and
+// constructor JSON it carries.
+func decodeMultipart(data []byte, mime string) (principal, constructor json.RawMessage, _ MultipartSnapshot, _ error) {
+	fail := func(err error) (json.RawMessage, json.RawMessage, MultipartSnapshot, error) {
+		return nil, nil, MultipartSnapshot{}, err
+	}
 	boundary, ok := extractBoundary(mime)
 	if !ok {
-		return nil, MultipartSnapshot{}, errInvalidMultipart
+		return fail(errInvalidMultipart)
 	}
 	parts, ok := parseParts(boundary, data)
 	if !ok {
-		return nil, MultipartSnapshot{}, errInvalidMultipart
+		return fail(errInvalidMultipart)
 	}
 	i := slices.IndexFunc(parts, func(p wirePart) bool { return p.name == multipartStatePart })
 	if i < 0 || parts[i].contentType != snapshotJSONMIME {
-		return nil, MultipartSnapshot{}, errInvalidMultipart
+		return fail(errInvalidMultipart)
 	}
 	envelope, err := uniqueObjectFields(parts[i].body)
 	if err != nil {
-		return nil, MultipartSnapshot{}, fmt.Errorf("golem: the multipart envelope: %w", err)
+		return fail(fmt.Errorf("golem: the multipart envelope: %w", err))
 	}
-	if string(envelope["version"]) != "1" || envelope["principal"] == nil || envelope["state"] == nil {
-		return nil, MultipartSnapshot{}, errors.New("golem: the multipart envelope needs version 1, a principal and a state")
+	if string(envelope["version"]) != "1" || envelope["principal"] == nil || envelope["constructor"] == nil || envelope["state"] == nil {
+		return fail(errors.New("golem: the multipart envelope needs version 1, a principal, a constructor and a state"))
 	}
-	principal := envelope["principal"]
+	principal, constructor = envelope["principal"], envelope["constructor"]
 	if _, err := uniqueObjectFields(principal); err != nil {
-		return nil, MultipartSnapshot{}, fmt.Errorf("golem: the multipart principal: %w", err)
+		return fail(fmt.Errorf("golem: the multipart principal: %w", err))
 	}
 	snap := MultipartSnapshot{State: envelope["state"], Parts: map[string]SnapshotPart{}}
 	for _, p := range parts {
@@ -386,15 +391,15 @@ func decodeMultipart(data []byte, mime string) (json.RawMessage, MultipartSnapsh
 		}
 		name, ok := strings.CutPrefix(p.name, multipartUserPrefix)
 		if !ok || !validPartName(name) {
-			return nil, MultipartSnapshot{}, errInvalidMultipart
+			return fail(errInvalidMultipart)
 		}
 		ct, err := normalizeContentType(p.contentType)
 		if err != nil {
-			return nil, MultipartSnapshot{}, fmt.Errorf("golem: %w", err)
+			return fail(fmt.Errorf("golem: %w", err))
 		}
 		snap.Parts[name] = SnapshotPart{Bytes: p.body, ContentType: ct}
 	}
-	return principal, snap, nil
+	return principal, constructor, snap, nil
 }
 
 // uniqueObjectFields reads a UTF-8 JSON object into its raw fields, rejecting

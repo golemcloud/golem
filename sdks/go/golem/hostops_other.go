@@ -27,9 +27,9 @@ import (
 // for them. Tests install a fake.
 var hostOps agentHost = noHost{}
 
-// selfAgentID off the wasm target reads the process environment; tests may
+// selfEnv off the wasm target reads the process environment; tests may
 // replace it.
-var selfAgentID = func() string { return os.Getenv(agentIDEnvVar) }
+var selfEnv = os.Getenv
 
 // immediateCaller off the wasm target is anonymous; tests may replace it.
 var immediateCaller = func() common.Principal { return common.MakePrincipalAnonymous() }

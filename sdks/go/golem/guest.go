@@ -168,7 +168,8 @@ func beginAgent(agentType string, input types.SchemaValueTree, principal Princip
 	if err := decodeParams(input, e.idFields, idVal, principal); err != nil {
 		return fail(common.MakeAgentErrorInvalidInput(err.Error()))
 	}
-	inst := &instance{def: e, principal: principal}
+	ctor, ctorErr := snapshotConstructor(input)
+	inst := &instance{def: e, principal: principal, constructor: ctor, constructorErr: ctorErr}
 	active = inst
 	return inst, idVal, witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
 }
@@ -244,7 +245,10 @@ func init() {
 		if active == nil {
 			panic(fmt.Errorf("golem: save-snapshot before initialize"))
 		}
-		snap, err := saveState(active.state, active.principal)
+		if active.constructorErr != nil {
+			panic(fmt.Errorf("golem: snapshot save failed: %w", active.constructorErr))
+		}
+		snap, err := saveState(active.state, active.principal, active.constructor)
 		if err != nil {
 			panic(fmt.Errorf("golem: snapshot save failed: %w", err))
 		}
@@ -254,21 +258,21 @@ func init() {
 	loadExports.Exports.Load = func(snap apihost.Snapshot) witTypes.Result[witTypes.Unit, string] {
 		// Snapshot recovery runs on a FRESH instance: the host does not call
 		// initialize first, it hands us the snapshot and expects the agent to
-		// come back on its own, without its constructor running again. The agent's identity comes from GOLEM_AGENT_ID;
-		// parsing it through the host yields the type name and constructor
-		// parameters, which is exactly what initialize needs.
+		// come back on its own, without its constructor running again. The
+		// agent type comes from GOLEM_AGENT_TYPE, and the constructor parameters
+		// from the snapshot, which is exactly what initialize needs.
 		if active != nil {
 			return witTypes.Err[witTypes.Unit]("agent already initialized")
 		}
-		agentID := selfAgentID()
-		if agentID == "" {
-			return witTypes.Err[witTypes.Unit](agentIDNotReadable)
+		agentType := selfEnv(agentTypeEnvVar)
+		if agentType == "" {
+			return witTypes.Err[witTypes.Unit](envVarNotReadable(agentTypeEnvVar))
 		}
-		agentType, ctorParams, err := parseRestoreIdentity(agentID)
+		principal, ctorJSON, state, err := splitSnapshot(snap)
 		if err != nil {
-			return witTypes.Err[witTypes.Unit]("parsing " + agentIDEnvVar + ": " + err.Error())
+			return witTypes.Err[witTypes.Unit](err.Error())
 		}
-		principal, state, err := splitSnapshot(snap)
+		ctorParams, err := restoredConstructor(ctorJSON)
 		if err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}

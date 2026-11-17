@@ -107,7 +107,7 @@ func principalToWit(p Principal) common.Principal {
 			Claims: p.Claims,
 		})
 	case AgentPrincipal:
-		return common.MakePrincipalAgent(common.AgentPrincipal{AgentId: p.AgentID.toWit()})
+		return common.MakePrincipalAgent(common.AgentPrincipal{AgentId: agentIDToWit(p.AgentID)})
 	case GolemUserPrincipal:
 		return common.MakePrincipalGolemUser(common.GolemUserPrincipal{
 			AccountId: types.AccountId{Uuid: uuidToWit(p.AccountID)},

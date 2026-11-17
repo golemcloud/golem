@@ -44,7 +44,6 @@ type TypedSchemaValue = golem_core_types.TypedSchemaValue
 type MetadataEnvelope = golem_core_types.MetadataEnvelope
 type AgentId = golem_core_types.AgentId
 type AccountId = golem_core_types.AccountId
-type ComponentId = golem_core_types.ComponentId
 type HttpRouteMode = golem_core_http.HttpRouteMode
 type DurableStreamRouteOptions = golem_core_http.DurableStreamRouteOptions
 type ConcreteHttpMethod = golem_core_http.HttpMethod
@@ -551,10 +550,9 @@ type AgentType struct {
 	Config         []AgentConfigDeclaration
 }
 
-// Associates an agent type with a component that implements it
+// An agent type deployed in the current environment
 type RegisteredAgentType struct {
-	AgentType     AgentType
-	ImplementedBy golem_core_types.ComponentId
+	AgentType AgentType
 }
 
 type TypedAgentConfigValue struct {
