@@ -88,6 +88,7 @@ async fn prepare(executor: &TestWorkerExecutor, agent: &AgentId) -> anyhow::Resu
             environment_id: Some(executor.context.default_environment_id.into()),
             ignore_already_existing: true,
             auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })
         .await?

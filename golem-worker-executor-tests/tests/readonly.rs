@@ -1603,12 +1603,35 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
 
-    // Warm target cache so an embedded get_count would hit without the
-    // slow_increment enqueue invalidating it.
-    let _ = executor
-        .invoke_and_await_agent(&component, &target_agent_id, "get_count", data_value!())
-        .await?;
-    wait_for_cache_hit(&executor, &component, &target_agent_id, &target_worker_id).await?;
+    // Warm the target cache as the same caller that reads over RPC later: a cached result is
+    // served only to the caller it was computed for. The embedded get_count then hits the cache
+    // without the slow_increment enqueue invalidating it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let before = executor.oplog_max_index(&target_worker_id).await?;
+        let warm = executor
+            .invoke_and_await_agent(
+                &component,
+                &caller_agent_id,
+                "read_via_rpc",
+                data_value!(target_str.clone()),
+            )
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(warm, 0);
+        let entries = executor
+            .get_oplog(&target_worker_id, OplogIndex::INITIAL)
+            .await?;
+        let (started, _) = count_agent_invocation_pair_since(&entries, before);
+        if started == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected an RPC read-only cache hit within 5s for the calling agent"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     let result = tokio::time::timeout(
         Duration::from_secs(5),

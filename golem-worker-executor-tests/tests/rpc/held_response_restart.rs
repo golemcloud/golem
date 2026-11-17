@@ -748,7 +748,11 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
         golem_common::model::oplog::CreateRequestKind::GetOrCreate
     );
     assert_eq!(create_requests[0].idempotency_key, activations[0].clone());
-    assert_eq!(create_requests[0].caller, callers::agent(caller.clone()));
+    let caller_fingerprint = executor.get_worker_metadata(&caller).await?.fingerprint;
+    assert_eq!(
+        create_requests[0].caller,
+        callers::agent_in(caller.clone(), caller_fingerprint, component.environment_id)
+    );
     let initializations = executor
         .get_oplog(&target, OplogIndex::INITIAL)
         .await?

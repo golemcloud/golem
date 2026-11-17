@@ -50,11 +50,37 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
+/// The OpenAPI specification of the worker service, for `--dump-openapi-yaml`.
+///
+/// The dump builds the services from the default configuration and never serves a request, so
+/// it uses a throwaway issuer instead of requiring the installation's.
+pub async fn openapi_yaml() -> anyhow::Result<String> {
+    let config = WorkerServiceConfig {
+        golem_issuer: Some(golem_common::model::golem_issuer::GolemIssuer::generate()),
+        ..WorkerServiceConfig::default()
+    };
+    let services = Services::new(&config).await?;
+    Ok(api::make_open_api_service(&services).spec_yaml())
+}
+
 #[cfg(test)]
 test_r::enable!();
 
 #[cfg(test)]
 mod transport_test_support;
+
+#[cfg(test)]
+mod openapi_dump_tests {
+    use crate::config::WorkerServiceConfig;
+    use test_r::test;
+
+    #[test]
+    async fn the_openapi_dump_needs_no_golem_issuer() {
+        assert_eq!(WorkerServiceConfig::default().golem_issuer, None);
+        let yaml = crate::openapi_yaml().await.expect("dump");
+        assert!(yaml.contains("openapi"), "{yaml}");
+    }
+}
 
 pub struct RunDetails {
     pub http_port: u16,

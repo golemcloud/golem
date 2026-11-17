@@ -9098,6 +9098,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
                         seconds: at.timestamp(),
                         nanos: at.timestamp_subsec_nanos() as i32,
                     }),
+                    caller: Some(callers::anonymous().into()),
                     ..Default::default()
                 })),
             };
@@ -12114,6 +12115,7 @@ async fn send_increment(
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
         expected_callee_fingerprint: fingerprint.map(|fingerprint| fingerprint.0.into()),
         request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let result = tokio::time::timeout(
@@ -12366,6 +12368,7 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
                     ..Default::default()
                 },
             ),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         };
     let answer = |result: anyhow::Result<_>| match result {

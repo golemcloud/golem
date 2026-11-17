@@ -81,6 +81,28 @@ pub fn agent(agent_id: AgentId) -> Caller {
     Caller::entry(agent_principal(agent_id))
 }
 
+/// An agent with its real incarnation and environment, in both roles: what the executor records
+/// when the agent itself is the caller.
+pub fn agent_in(
+    agent_id: AgentId,
+    fingerprint: AgentFingerprint,
+    environment_id: EnvironmentId,
+) -> Caller {
+    let agent_type = agent_id
+        .agent_id
+        .split('(')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    Caller::entry(Principal::Agent(AgentPrincipal::of_agent(
+        GOLEM_ISSUER.to_string(),
+        agent_id,
+        fingerprint,
+        AgentTypeName(agent_type),
+        environment_id,
+    )))
+}
+
 /// The display text that every SDK gives a user principal: its kind and its pair.
 pub fn user_text(issuer: &str, subject: &str) -> String {
     format!("user (\"{issuer}\",\"{subject}\")")

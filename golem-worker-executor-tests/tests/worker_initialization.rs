@@ -88,6 +88,7 @@ async fn warm_get_or_create_does_not_wait_for_oplog_maintenance(
             environment_id: Some(metadata.environment_id.into()),
             ignore_already_existing: true,
             auth_ctx: Some(AuthCtx::System.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         }),
     )
@@ -212,6 +213,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
         freshness_disposition: ProtoFreshness::KnownFresh as i32,
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let invalid = executor
@@ -405,6 +407,7 @@ async fn grpc_create_waits_for_prepared_constructor(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let prepared = executor
@@ -601,6 +604,7 @@ async fn grpc_create_keeps_startup_failure_out_of_constructor_results(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     // Acquisition and constructor reservation succeed before the runtime's component get fails.
@@ -739,6 +743,7 @@ async fn grpc_create_reports_recorded_constructor_failure(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let context = executor.context.clone();
@@ -840,6 +845,7 @@ async fn grpc_create_keeps_constructor_success_after_a_later_method_failure(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let response = executor
@@ -910,6 +916,7 @@ async fn grpc_create_reports_constructor_exit_without_restarting_it(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let mut history = None;
@@ -999,6 +1006,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let prepared = executor
@@ -1171,6 +1179,7 @@ async fn grpc_create_joins_an_initialized_fork_with_the_source_constructor_key(
             ignore_already_existing: true,
             auth_ctx: Some(AuthCtx::System.into()),
             idempotency_key: Some(IdempotencyKey::fresh().into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })
         .await?
@@ -1671,6 +1680,7 @@ async fn grpc_create_reports_typed_conflicts_and_keeps_the_winner(
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
         env: [("OWNER".into(), "winner".into())].into(),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let first = executor

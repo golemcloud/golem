@@ -469,7 +469,7 @@ async fn slot_fork_refuses_a_missing_caller(
             source_agent_id: Some(source_id.into()),
             target_agent_id: Some(target_id.into()),
             environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
+            auth_ctx: Some(golem_service_base::model::auth::AuthCtx::System.into()),
             caller: None,
             ..Default::default()
         })

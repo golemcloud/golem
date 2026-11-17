@@ -142,6 +142,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
             component_owner_account_id: Some(context.account_id.into()),
             environment_id: Some(context.default_environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
             ..Default::default()
         })
         .await?

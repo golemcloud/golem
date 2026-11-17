@@ -333,6 +333,7 @@ impl InvocationSession {
                 environment_id: Some(component.environment_id.into()),
                 mode: AgentInvocationMode::Await as i32,
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
+                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
                 ..Default::default()
             })),
         };

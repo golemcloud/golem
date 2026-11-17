@@ -257,6 +257,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
                     )
                     .into(),
                 ),
+                caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
                 ..Default::default()
             })),
         };

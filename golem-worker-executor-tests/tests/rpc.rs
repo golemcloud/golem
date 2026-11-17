@@ -1678,6 +1678,7 @@ async fn invalid_start_is_rejected_before_acceptance(
                 }),
                 idempotency_key: Some(IdempotencyKey::fresh().into()),
                 auth_ctx: None,
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             })),
         })
@@ -1745,6 +1746,7 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -1924,6 +1926,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                 component_owner_account_id: Some(component.account_id.into()),
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
                 expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             },
         )
@@ -2049,6 +2052,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                         expected_epoch: accepted.epoch,
                         operation: ResumeOperation::Resume as i32,
                         auth_ctx: Some(executor.auth_ctx().into()),
+                        caller: Some(callers::anonymous().into()),
                         ..Default::default()
                     })),
                 })
@@ -2363,6 +2367,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -2626,6 +2631,7 @@ async fn output_prefix_survives_autonomous_suspension(
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -3128,6 +3134,7 @@ async fn interrupt_output_producer_after_result(
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -3440,6 +3447,7 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -4087,6 +4095,7 @@ async fn streaming_output_resume_restores_exact_cursors(
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -4771,6 +4780,7 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -5097,6 +5107,7 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -5180,6 +5191,7 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -5729,6 +5741,7 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -6451,6 +6464,7 @@ async fn consumed_input_boundary(
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -6887,6 +6901,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
                     as i32,
             attempt_id,
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -7253,6 +7268,7 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -7899,6 +7915,7 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
                     max_forks_per_second: 100,
                     max_copied_bytes: 64 * 1024 * 1024,
                     route_scope: "[\"environment\",\"1\",\"route\"]".into(),
+                    caller: Some(callers::anonymous().into()),
                     ..Default::default()
                 })
                 .await?
@@ -8319,6 +8336,7 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
             component_owner_account_id: Some(component.account_id.into()),
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -8466,6 +8484,7 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
         component_owner_account_id: Some(component.account_id.into()),
         attempt_id: Some(uuid::Uuid::new_v4().into()),
         expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let request = InvocationRequest {
@@ -8571,6 +8590,7 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_epoch: accepted.epoch,
             operation: ResumeOperation::Resume as i32,
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -8774,6 +8794,7 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
             component_owner_account_id: Some(component.account_id.into()),
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -9172,6 +9193,7 @@ async fn typescript_streaming_guest_abi_e2e(
                     as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })),
     };
@@ -9419,6 +9441,7 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
                     mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                     attempt_id: Some(uuid::Uuid::new_v4().into()),
                     expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                    caller: Some(callers::anonymous().into()),
                     ..Default::default()
                 })),
             };

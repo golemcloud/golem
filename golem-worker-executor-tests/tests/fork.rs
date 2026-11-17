@@ -978,6 +978,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
             method_name: Some("echo".into()),
             input: Some(input),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         }),
     };
@@ -1185,6 +1186,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         max_forks_per_session: 1,
         max_forks_per_second: 100,
         max_copied_bytes: 64 * 1024 * 1024,
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let mut too_large = request.clone();
@@ -1668,6 +1670,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 idempotency_key: Some(IdempotencyKey::new(concurrent_session.clone()).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -1702,6 +1705,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         max_forks_per_session: 1,
         max_forks_per_second: 100,
         max_copied_bytes: 64 * 1024 * 1024,
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let new_target = || {
@@ -1769,6 +1773,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             idempotency_key: Some(IdempotencyKey::new(expired_session.clone()).into()),
             method_name: Some("echo".into()),
             input: Some(input),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         }),
     };
@@ -1885,6 +1890,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 idempotency_key: Some(IdempotencyKey::new(restart_session).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -2000,6 +2006,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
                 idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -2191,6 +2198,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
                 idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -2440,9 +2448,14 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         golem_common::model::oplog::CreateRequestKind::Fork
     );
     assert_eq!(child_requests[0].idempotency_key, None);
+    let source_fingerprint = executor.get_worker_metadata(&source_id).await?.fingerprint;
     assert_eq!(
         child_requests[0].caller,
-        callers::agent(source_id.clone()),
+        callers::agent_in(
+            source_id.clone(),
+            source_fingerprint,
+            component.environment_id
+        ),
         "the child records the forking agent, not the request that created the source"
     );
     let result = executor
@@ -2586,6 +2599,7 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
                 idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -2608,6 +2622,7 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
         max_forks_per_session: 1,
         max_forks_per_second: 100,
         max_copied_bytes: 64 * 1024 * 1024,
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let mut too_large = request.clone();

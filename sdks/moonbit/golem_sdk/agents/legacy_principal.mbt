@@ -8,11 +8,6 @@ pub suberror JsonCodecError {
 pub extend JsonCodecError with Debug::{to_repr}
 
 ///|
-fn uuid_to_json_string(uuid : @types.Uuid) -> String {
-  @schema.Uuid::from_wit(uuid).to_string()
-}
-
-///|
 fn uuid_from_json_string(s : String) -> @types.Uuid raise JsonCodecError {
   @schema.Uuid::parse(s).to_wit() catch {
     @schema.UuidParseError(message) => raise JsonCodecError(message)
