@@ -3,7 +3,7 @@ use super::super::{
     FutureToolInvokeGet, ToolExecution, ToolExecutionState, capable_result_await_cohort,
 };
 use super::*;
-use crate::preview2::golem::tool::host::ByteStreamFailure;
+use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure};
 use crate::services::active_agents::MemoryGrant;
 use golem_common::model::AgentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -198,6 +198,7 @@ fn tool_execution(
         filesystem: FilesystemCapability::Capable,
         operation,
         cancellable: true,
+        replay_cancel_stdin: false,
         state: Mutex::new(ToolExecutionState {
             result: None,
             failure: None,
@@ -2405,7 +2406,7 @@ async fn ancestor_cancellation_preserves_selected_descendants_but_cancels_their_
     let pending = accept_provisional(owner.create(pending_context), 5);
     let sibling = accept_provisional(owner.create(context()), 6);
     let executions = [&child, &selected, &pending, &sibling]
-        .map(|operation| ToolExecution::new(operation.clone(), true, None));
+        .map(|operation| ToolExecution::new(operation.clone(), true, false, None));
     for execution in &executions {
         execution
             .operation
@@ -2429,6 +2430,61 @@ async fn ancestor_cancellation_preserves_selected_descendants_but_cancels_their_
         sibling.winner_if_active(),
         Some(ToolOperationWinner::Open)
     ));
+
+    for (index, (cancellable, replay_cancel_stdin)) in
+        [(true, false), (false, false), (false, true)]
+            .into_iter()
+            .enumerate()
+    {
+        let mut late_context = context();
+        late_context.parent = OwnerInvocationId::Entity(selected.invocation_id().unwrap());
+        let late = accept_provisional(owner.create(late_context), 7 + index as u64);
+        let (_source, stdin, observer) = attachment_pair(16, AttachmentMemory::inert());
+        assert!(late.attach(Some(stdin.controller()), None, None));
+        let execution = ToolExecution::new(late.clone(), cancellable, replay_cancel_stdin, None);
+        if late.register_execution(Arc::downgrade(&execution)).unwrap() {
+            execution.cancel();
+        }
+        assert!(
+            matches!(
+                (observer.terminal(), cancellable || replay_cancel_stdin),
+                (
+                    Some(ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled)),
+                    true
+                ) | (None, false)
+            ),
+            "late descendants inherit cancellation through a selected parent, unless their recorded terminal was End"
+        );
+    }
+
+    for (index, cancelled) in [false, true].into_iter().enumerate() {
+        let ancestor = accept_provisional(owner.create(context()), 10 + index as u64 * 2);
+        let ancestor_execution = ToolExecution::new(ancestor.clone(), false, cancelled, None);
+        ancestor
+            .register_execution(Arc::downgrade(&ancestor_execution))
+            .unwrap();
+        ancestor_execution.cancel();
+
+        let mut late_context = context();
+        late_context.parent = OwnerInvocationId::Entity(ancestor.invocation_id().unwrap());
+        let late = accept_provisional(owner.create(late_context), 11 + index as u64 * 2);
+        let (_source, stdin, observer) = attachment_pair(16, AttachmentMemory::inert());
+        assert!(late.attach(Some(stdin.controller()), None, None));
+        let execution = ToolExecution::new(late.clone(), false, true, None);
+        if late.register_execution(Arc::downgrade(&execution)).unwrap() {
+            execution.cancel();
+        }
+        assert!(
+            matches!(
+                (observer.terminal(), cancelled),
+                (
+                    Some(ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled)),
+                    true
+                ) | (None, false)
+            ),
+            "only a recorded Cancelled ancestor propagates a completed replay cancellation"
+        );
+    }
 }
 
 #[test]

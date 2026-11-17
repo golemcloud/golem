@@ -351,6 +351,7 @@ async fn claim_rejected_tool_reconstruction(
         ReplayStartClaimOutcome::Claimed { handle, .. } => handle,
         ReplayStartClaimOutcome::ReplayEnded
         | ReplayStartClaimOutcome::DeletedRegion
+        | ReplayStartClaimOutcome::Abandoned
         | ReplayStartClaimOutcome::StoreAlreadyLive => {
             panic!("expected rejected tool reconstruction Start")
         }
@@ -6062,6 +6063,85 @@ async fn identity_claim_does_not_scan_past_delivery_marker() {
 
 #[test]
 #[test_r::timeout("10s")]
+async fn abandoned_claim_releases_only_an_unrecorded_start_behind_delivery() {
+    for recorded in [false, true] {
+        let mut later = start_now();
+        let OplogEntry::Start { invocation_id, .. } = &mut later else {
+            unreachable!()
+        };
+        *invocation_id = Some(test_invocation_id(if recorded { 7 } else { 8 }));
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start_now(),
+            end_for(2, 42),
+            delivered_for(2),
+            later,
+            end_for(5, 43),
+        ])
+        .await;
+        let first = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        rs.await_resolution(first).await.unwrap();
+        let position = rs.last_replayed_index();
+        let abandoned = tokio_util::sync::CancellationToken::new();
+        let claim = StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .with_invocation_id(Some(test_invocation_id(7)));
+        let pending = rs.claim_start_for_store_with_admission(
+            claim,
+            false,
+            |_, _| {},
+            None,
+            Some(abandoned.clone()),
+        );
+        tokio::pin!(pending);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), pending.as_mut())
+                .await
+                .is_err()
+        );
+        abandoned.cancel();
+        if !recorded {
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), pending.as_mut())
+                    .await
+                    .expect("an abandoned unrecorded claim must not wait for guest delivery")
+                    .unwrap(),
+                ReplayStartClaimOutcome::Abandoned
+            ));
+            assert_eq!(rs.last_replayed_index(), position);
+            continue;
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), pending.as_mut())
+                .await
+                .is_err(),
+            "a recorded Start must still be claimed after its caller disappears"
+        );
+        let barrier = rs
+            .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4), None)
+            .await
+            .unwrap();
+        barrier.acknowledge();
+        let ReplayStartClaimOutcome::Claimed { handle, .. } = pending.await.unwrap() else {
+            panic!("a recorded claim must survive caller abandonment");
+        };
+        assert_eq!(handle.start_idx(), OplogIndex::from_u64(5));
+        rs.await_resolution(handle).await.unwrap();
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
 async fn claim_adopts_retained_start_behind_its_own_delivery_marker() {
     // [RecoverySucceeded, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5), Delivered(B=3) at 6,
     // Delivered(A=2) at 7]. Draining A's terminal retains B together with its End and parks the
@@ -8315,7 +8395,9 @@ async fn store_live_claim_adopts_retained_start_or_reports_store_already_live() 
                 handle.start_idx()
             )
         }
-        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
+        ReplayStartClaimOutcome::ReplayEnded
+        | ReplayStartClaimOutcome::DeletedRegion
+        | ReplayStartClaimOutcome::Abandoned => {
             panic!("expected StoreAlreadyLive")
         }
     }
@@ -8369,7 +8451,9 @@ async fn store_live_claim_adopts_retained_start_or_reports_store_already_live() 
         ReplayStartClaimOutcome::StoreAlreadyLive => {
             panic!("a matching unclaimed Start ahead of the cursor must be claimed, not skipped")
         }
-        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
+        ReplayStartClaimOutcome::ReplayEnded
+        | ReplayStartClaimOutcome::DeletedRegion
+        | ReplayStartClaimOutcome::Abandoned => {
             panic!("expected Claimed")
         }
     }
@@ -8427,7 +8511,9 @@ async fn store_already_live_claim_reports_replay_ended_once_the_cursor_reaches_t
                 handle.start_idx()
             )
         }
-        ReplayStartClaimOutcome::StoreAlreadyLive | ReplayStartClaimOutcome::DeletedRegion => {
+        ReplayStartClaimOutcome::StoreAlreadyLive
+        | ReplayStartClaimOutcome::DeletedRegion
+        | ReplayStartClaimOutcome::Abandoned => {
             panic!("expected ReplayEnded")
         }
     }
@@ -13536,6 +13622,7 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
                     false,
                     |_, _| {},
                     Some((operation, "clock".to_string())),
+                    None,
                 )
                 .await
         }));
@@ -13673,6 +13760,7 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
                     false,
                     |_, _| {},
                     Some((operation.clone(), "wrong-clock".into())),
+                    None,
                 )
                 .await
                 .err()
@@ -13687,6 +13775,7 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
                 false,
                 |_, _| {},
                 Some((operation.clone(), "clock".into())),
+                None,
             )
             .await
             .unwrap()
@@ -13719,6 +13808,7 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
             false,
             |_, _| {},
             Some((operation.clone(), "clock".into())),
+            None,
         );
         tokio::pin!(next_demand);
         assert!(
@@ -13786,6 +13876,7 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
                     false,
                     |_, _| {},
                     Some((operation.clone(), "clock".into())),
+                    None,
                 )
                 .await
                 .err()
@@ -13883,6 +13974,7 @@ async fn disposal_refusal_without_collection_preserves_nested_calls() {
                 false,
                 |_, _| {},
                 Some((operation.clone(), "nested-call".into())),
+                None,
             ),
         )
         .await
@@ -13919,6 +14011,7 @@ async fn disposal_refusal_without_collection_preserves_nested_calls() {
                 false,
                 |_, _| {},
                 Some((operation.clone(), "nested-call".into())),
+                None,
             ),
         )
         .await

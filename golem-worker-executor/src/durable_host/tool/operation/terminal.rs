@@ -182,6 +182,29 @@ impl OwnerToolOperation {
         true
     }
 
+    pub(in crate::durable_host::tool) fn cancel_unjournaled_stdin(&self) {
+        let stdin = {
+            let state = self.owner.state.lock().unwrap();
+            if !state.phase.is_open() || self.admission_refusal.lock().unwrap().historical_observed
+            {
+                return;
+            }
+            state.operations.get(&self.id).and_then(|operation| {
+                matches!(
+                    operation.state.winner(),
+                    ToolOperationWinner::Open | ToolOperationWinner::SelectingCancelled
+                )
+                .then(|| operation.stdin.clone())
+                .flatten()
+            })
+        };
+        if let Some(stdin) = stdin
+            && stdin.observer().identity().is_none()
+        {
+            let _ = stdin.cancel();
+        }
+    }
+
     pub(crate) fn begin_ordinary(&self) -> bool {
         let mut state = self.owner.state.lock().unwrap();
         if !state.phase.is_open() {

@@ -729,8 +729,20 @@ impl CursorTx<'_> {
                 .await?;
             return Ok(StartClaimAttempt::Claimed(handle, Box::new(entry)));
         }
+        let delivery_block = || {
+            if claim.expected_invocation_id().is_some_and(|invocation_id| {
+                !self.retained_start_with_invocation_id(invocation_id)
+                    && self
+                        .unclaimed_start_ahead(invocation_id, |_| true)
+                        .is_none()
+            }) {
+                BlockedOn::UnrecordedStart
+            } else {
+                BlockedOn::CursorProgress
+            }
+        };
         if self.blocked_on_completion_delivery {
-            return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
+            return Ok(StartClaimAttempt::Blocked(delivery_block()));
         }
 
         // The head belongs to someone else: find the first not-yet-claimed matching `Start` ahead
@@ -766,8 +778,9 @@ impl CursorTx<'_> {
                 Ok(StartClaimAttempt::Claimed(handle, entry))
             }
             StartAhead::Blocked => {
+                let blocked = delivery_block();
                 self.blocked_on_completion_delivery = true;
-                Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress))
+                Ok(StartClaimAttempt::Blocked(blocked))
             }
             StartAhead::Missing => Ok(StartClaimAttempt::Missing),
         }

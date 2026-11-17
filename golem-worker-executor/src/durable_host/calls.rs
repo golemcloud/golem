@@ -112,6 +112,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     |_, _| {},
                     self.entity_tool_operation()
                         .map(|operation| (operation, scope_name.to_string())),
+                    None,
                 )
                 .await?
             {
@@ -129,6 +130,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         expected,
                         "matching Start belongs to a deleted replay region".to_string(),
                     ));
+                }
+                ReplayStartClaimOutcome::Abandoned => {
+                    unreachable!("transaction claims do not support abandonment")
                 }
                 outcome @ (ReplayStartClaimOutcome::ReplayEnded
                 | ReplayStartClaimOutcome::StoreAlreadyLive) => {

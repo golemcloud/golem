@@ -3407,6 +3407,37 @@ impl NativeTestTool for NativeTestToolImpl {
             .map_err(|_| anyhow!("native effect counter did not reach {expected}"))?;
         }
 
+        if matches!(mode.as_str(), "cancel-stdin" | "cancel-stdin-finish") {
+            let stdout = stdout.as_mut().expect("cancel-stdin stdout");
+            stdout
+                .write(ctx, b"native:started".to_vec())
+                .await
+                .map_err(anyhow::Error::msg)?;
+            let input = stdin.as_mut().expect("cancel-stdin input").read(ctx).await;
+            let error = input
+                .expect("cancelled stdin failure")
+                .expect_err("stdin must fail");
+            assert!(
+                error.contains("Cancelled"),
+                "unexpected stdin failure: {error}"
+            );
+            if mode == "cancel-stdin" && is_live {
+                // Complete without a final call after cancellation wins. Reconstruction
+                // still attempts that call, but must stop at the recorded cancellation.
+                cancellation.cancelled().await;
+                return Ok(());
+            }
+            tracing::debug!(mode, is_live, "Attempting cancelled stdin fixture finish");
+            if let Err(error) = stdout.finish(ctx).await {
+                anyhow::ensure!(
+                    error
+                        == "StreamWriteError::Closed(ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled))",
+                    "unexpected final writer failure: {error}"
+                );
+            }
+            return Ok(());
+        }
+
         if mode == "wait-cancel" {
             if let Some(stdout) = &mut stdout {
                 stdout

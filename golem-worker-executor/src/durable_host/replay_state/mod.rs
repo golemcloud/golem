@@ -163,6 +163,9 @@ enum MissingStart {
 enum BlockedOn {
     /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim.
     CursorProgress,
+    /// The delivery boundary must move, but no unclaimed Start has this invocation identity.
+    /// An abandoned caller can stop this wait without leaving a recorded call unclaimed.
+    UnrecordedStart,
     /// No matching `Start` was found, but the entry at the cursor head belongs to an entity body
     /// that is still active. The body, or the supervisor that drains its recorded terminal, can
     /// still consume that entry, so the missing `Start` is decided only after the cursor moves or
@@ -174,7 +177,7 @@ enum BlockedOn {
 impl BlockedOn {
     async fn wait(self, progress: std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>) {
         match self {
-            Self::CursorProgress => progress.await,
+            Self::CursorProgress | Self::UnrecordedStart => progress.await,
             Self::ActiveBody(mut bodies) => {
                 tokio::select! {
                     _ = progress => {}

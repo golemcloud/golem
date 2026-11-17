@@ -282,6 +282,8 @@ pub(crate) enum ReplayStartClaimOutcome {
     },
     ReplayEnded,
     DeletedRegion,
+    /// The caller disappeared while waiting at a delivery boundary with no recorded Start.
+    Abandoned,
     /// No matching `Start` remains, but the issuing Store already continued live locally (an
     /// incomplete entity past a deleted region or a replay target that grew after it went live)
     /// while the shared cursor still replays other owners' records. The call is a new live call of
@@ -396,6 +398,9 @@ impl ReplayState {
                     "matching Start belongs to a deleted replay region".to_string(),
                 ))
             }
+            ReplayStartClaimOutcome::Abandoned => {
+                unreachable!("strict claims do not support abandonment")
+            }
             ReplayStartClaimOutcome::StoreAlreadyLive => {
                 unreachable!("strict claims are never issued on behalf of a live Store")
             }
@@ -439,7 +444,7 @@ impl ReplayState {
         store_live: bool,
         on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
-        self.claim_start_for_store_with_admission(claim, store_live, on_claim, None)
+        self.claim_start_for_store_with_admission(claim, store_live, on_claim, None, None)
             .await
     }
 
@@ -449,6 +454,7 @@ impl ReplayState {
         store_live: bool,
         on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
         admission: Option<AdmissionRefusal>,
+        abandoned: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
         enum Missing {
             ReplayEnded,
@@ -540,11 +546,18 @@ impl ReplayState {
                 }
                 None => {}
             }
-            self.wait_while_blocked(
-                blocked.expect("an undecided Start claim is blocked"),
-                progress,
-            )
-            .await?;
+            let blocked = blocked.expect("an undecided Start claim is blocked");
+            if matches!(blocked, BlockedOn::UnrecordedStart)
+                && let Some(abandoned) = &abandoned
+            {
+                tokio::select! {
+                    biased;
+                    result = self.wait_while_blocked(blocked, progress) => result?,
+                    () = abandoned.cancelled() => return Ok(ReplayStartClaimOutcome::Abandoned),
+                }
+            } else {
+                self.wait_while_blocked(blocked, progress).await?;
+            }
         }
     }
 
@@ -673,6 +686,9 @@ impl ReplayState {
                 }))
             }
             ReplayStartClaimOutcome::ReplayEnded => Ok(CustomStartClaimOutcome::ReplayEnded),
+            ReplayStartClaimOutcome::Abandoned => {
+                unreachable!("custom invocation claims do not support abandonment")
+            }
             ReplayStartClaimOutcome::DeletedRegion | ReplayStartClaimOutcome::StoreAlreadyLive => {
                 Ok(CustomStartClaimOutcome::StoreAlreadyLive)
             }

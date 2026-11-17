@@ -240,6 +240,243 @@ async fn completed_entity_writer_disposal_replays_its_attachment_terminals(
 
 #[test]
 #[timeout("2m")]
+async fn cancelled_open_stdin_replays_with_and_without_a_final_writer_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogEntry;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+
+    for finish in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let environment_state = Arc::new(TestEnvironmentStateService::default());
+        let mut streaming = native_streaming_tool_metadata();
+        streaming.commands.nodes[0].name = "native-streaming".to_string();
+        let overrides = TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            configure: Some(Arc::new(|config| {
+                config.oplog.default_snapshotting =
+                    golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, caller)
+            .store()
+            .await?;
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            component.id,
+            component.revision,
+            Some(native_deployment_state(
+                context.account_id,
+                "ToolStreamingCaller",
+                streaming,
+                native_test_tool_metadata(),
+            )),
+        );
+        let agent = agent_id!("ToolStreamingCaller", "cancel-open-stdin");
+        let worker = executor.start_agent(&component.id, agent.clone()).await?;
+        let closed: bool = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "cancel_open_tool_stdin",
+                data_value!(
+                    "native-streaming".to_string(),
+                    if finish {
+                        "cancel-stdin-finish".to_string()
+                    } else {
+                        "cancel-stdin".to_string()
+                    }
+                ),
+            )
+            .await?
+            .into_typed()?;
+        assert!(closed);
+        let before = executor.stored_oplog(&worker).await;
+        assert_eq!(
+            before
+                .iter()
+                .filter(|entry| matches!(
+                    entry,
+                    OplogEntry::Start {
+                        function_name: HostFunctionName::GolemToolOutputFinish,
+                        ..
+                    }
+                ))
+                .count(),
+            usize::from(finish),
+            "the fixture must retain exactly the selected final-writer-call history"
+        );
+        let entity_start = before
+            .iter()
+            .enumerate()
+            .find_map(|(index, entry)| {
+                matches!(
+                    entry,
+                    OplogEntry::Start {
+                        function_name: HostFunctionName::GolemEntityInvoke,
+                        ..
+                    }
+                )
+                .then_some(OplogIndex::from_u64(index as u64 + 1))
+            })
+            .expect("native tool entity Start");
+        assert!(before.iter().any(|entry| matches!(
+            entry,
+            OplogEntry::Cancelled {
+                start_index,
+                partial: Some(_),
+                ..
+            } if *start_index == entity_start
+        )));
+        let effects = |entries: &[OplogEntry]| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry,
+                        OplogEntry::Start { .. } | OplogEntry::ToolAttachmentControl { .. }
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let probe: String = executor
+            .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let after = executor.stored_oplog(&worker).await;
+        assert_eq!(&after[..before.len()], before.as_slice());
+        assert_eq!(effects(&after), effects(&before));
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn cancelled_nested_independent_stdin_replays_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogEntry;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "cancel-nested-open-stdin");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let closed: bool = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "cancel_open_tool_stdin",
+            data_value!(
+                "streaming".to_string(),
+                "nested-independent-stdin".to_string()
+            ),
+        )
+        .await?
+        .into_typed()?;
+    assert!(closed);
+    let before = executor.stored_oplog(&worker).await;
+    let entity_starts = before
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            matches!(
+                entry,
+                OplogEntry::Start {
+                    function_name: HostFunctionName::GolemEntityInvoke,
+                    ..
+                }
+            )
+            .then_some(OplogIndex::from_u64(index as u64 + 1))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entity_starts.len(), 2);
+    for entity_start in entity_starts {
+        assert!(before.iter().any(|entry| matches!(
+            entry,
+            OplogEntry::Cancelled { start_index, .. } if *start_index == entity_start
+        )));
+    }
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let probe: String = executor
+        .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(probe, "replayed");
+    let after = executor.stored_oplog(&worker).await;
+    assert_eq!(&after[..before.len()], before.as_slice());
+    let effects = |entries: &[OplogEntry]| {
+        entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    OplogEntry::Start { .. } | OplogEntry::ToolAttachmentControl { .. }
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(effects(&after), effects(&before));
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
 async fn cancelled_stdin_disposal_replay_consumes_historical_finish(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
