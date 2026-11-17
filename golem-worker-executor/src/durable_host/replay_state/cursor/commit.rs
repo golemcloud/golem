@@ -310,7 +310,11 @@ impl CursorTx<'_> {
                     wallet.record_derivation(*entity_parent_start_index, card.as_ref().clone())?;
                 }
             }
-            OplogEntry::AgentInvocationFinished { .. } => {
+            OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationFailed {
+                entity_parent_start_index: None,
+                ..
+            } => {
                 if let Some(wallet) = &self.cursor.wallet {
                     wallet.finish_replayed_invocation();
                 }

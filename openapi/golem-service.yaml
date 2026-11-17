@@ -18721,6 +18721,7 @@ components:
           Cancelled: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
+          AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -18779,6 +18780,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -18890,6 +18892,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#ActivatePluginParams'
+    PublicOplogEntry_r#AgentInvocationFailedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInvocationFailed
+            type: string
+            enum:
+            - AgentInvocationFailed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#AgentInvocationFailedParams'
     PublicOplogEntry_r#AgentInvocationFinishedParams:
       allOf:
       - type: object
@@ -22368,6 +22382,26 @@ components:
       required:
       - timestamp
       - plugin
+    r#AgentInvocationFailedParams:
+      title: r#AgentInvocationFailedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        error:
+          type: string
+        startIndex:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - invocationId
+      - error
+      - startIndex
     r#AgentInvocationFinishedParams:
       title: r#AgentInvocationFinishedParams
       type: object

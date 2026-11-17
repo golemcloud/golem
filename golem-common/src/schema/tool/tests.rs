@@ -791,6 +791,59 @@ fn unresolved_default_formatter_is_rejected() {
     )));
 }
 
+/// A tool `exit-probe` whose `fail` subcommand declares the error case `failed`
+/// with the given exit code.
+fn tool_with_error_exit_code(exit_code: u8) -> Tool {
+    let mut parent = root("exit-probe");
+    parent.subcommands = vec![CommandIndex(1)];
+    let mut body = empty_body();
+    body.errors = vec![ErrorCase {
+        name: "failed".to_string(),
+        doc: Doc::default(),
+        kind: ErrorKind::RuntimeError,
+        exit_code,
+        payload: None,
+    }];
+    let mut fail = root("fail");
+    fail.body = Some(body);
+    Tool {
+        version: "1.0.0".to_string(),
+        requires_filesystem: false,
+        commands: CommandTree {
+            nodes: vec![parent, fail],
+        },
+        schema: SchemaGraph::empty(),
+    }
+}
+
+#[test]
+fn error_case_with_exit_code_zero_is_rejected() {
+    let errors = validate_tool(&tool_with_error_exit_code(0)).unwrap_err();
+    assert_eq!(
+        errors,
+        vec![ToolValidationError::ZeroErrorExitCode {
+            command: "fail".to_string(),
+            error: "failed".to_string(),
+        }]
+    );
+    assert_eq!(
+        errors[0].to_string(),
+        "error case \"failed\" in command \"fail\" has exit code 0, which means success; \
+         a declared error needs an exit code from 1 to 255"
+    );
+}
+
+#[test]
+fn error_case_with_non_zero_exit_code_is_accepted() {
+    for exit_code in [1, 124, 128, 255] {
+        assert_eq!(
+            validate_tool(&tool_with_error_exit_code(exit_code)),
+            Ok(()),
+            "exit code {exit_code}"
+        );
+    }
+}
+
 #[test]
 fn verbatim_tail_without_separator_is_rejected() {
     let mut body = empty_body();

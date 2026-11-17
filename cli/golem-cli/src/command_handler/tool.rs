@@ -24,9 +24,7 @@ use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
 use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
-use crate::log::{
-    LogColorize, end_for_closed_output, eprint_line, is_closed_pipe, log_action, print_text,
-};
+use crate::log::{LogColorize, end_for_closed_output, eprint_line, is_closed_pipe, log_action};
 use crate::model::agent::RawAgentId;
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
@@ -35,7 +33,7 @@ use crate::model::environment::{
 };
 use crate::model::format::Format;
 use crate::model::tool_deployment::{DeployedToolListView, DeployedToolView};
-use crate::model::tool_invoke::{ToolInvocationSessionView, ToolInvokeView};
+use crate::model::tool_invoke::{ToolInvocationSessionView, ToolInvokeHelpView, ToolInvokeView};
 use crate::model::tool_middleware::*;
 use crate::model::tool_release::{ToolReleaseListView, ToolReleaseView};
 use anyhow::{anyhow, bail};
@@ -407,8 +405,10 @@ impl ToolCommandHandler {
                 .map_err(anyhow::Error::msg)?
             {
                 arguments::ParsedToolArguments::Help(help) => {
-                    print_text(help);
-                    return Ok(());
+                    return self
+                        .ctx
+                        .log_handler()
+                        .log_output(ToolInvokeHelpView { help });
                 }
                 arguments::ParsedToolArguments::Invoke {
                     command_path,

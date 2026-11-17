@@ -22,7 +22,7 @@ use super::component_object_store::ComponentObjectStore;
 use super::deployment::DeploymentService;
 use super::environment::EnvironmentService;
 use crate::repo::component::ComponentRepo;
-use crate::repo::model::component::ComponentAuthExtRevisionRecord;
+use crate::repo::model::component::{ComponentAuthExtRevisionRecord, ComponentExactRevisionRecord};
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use futures::stream::BoxStream;
@@ -179,23 +179,72 @@ impl ComponentService {
         &self,
         component_id: ComponentId,
         revision: ComponentRevision,
-        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
+        let record = self
+            .get_authorized_revision_record(component_id, revision, auth)
+            .await?;
+        if record.record.component.revision.audit.deleted {
+            return Err(ComponentError::ComponentNotFound(component_id));
+        }
+        self.component_from_revision_record(record.record).await
+    }
+
+    pub(crate) async fn get_source_component_revision(
+        &self,
+        component_id: ComponentId,
+        revision: ComponentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Component, ComponentError> {
+        let record = self
+            .get_authorized_revision_record(component_id, revision, auth)
+            .await?;
+        if record.component_deleted_at.is_some()
+            || record.record.component.revision.audit.deleted
+            || record
+                .latest_deletion_revision
+                .is_some_and(|deleted_revision| {
+                    record.record.component.revision.revision_id <= deleted_revision
+                })
+        {
+            return Err(ComponentError::ComponentNotFound(component_id));
+        }
+        self.component_from_revision_record(record.record).await
+    }
+
+    /// Internal historical reads and owner attribution also accept deletion tombstones.
+    pub(crate) async fn get_internal_component_revision(
+        &self,
+        component_id: ComponentId,
+        revision: ComponentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Component, ComponentError> {
+        let record = self
+            .get_authorized_revision_record(component_id, revision, auth)
+            .await?;
+        self.component_from_revision_record(record.record).await
+    }
+
+    async fn get_authorized_revision_record(
+        &self,
+        component_id: ComponentId,
+        revision: ComponentRevision,
+        auth: &AuthCtx,
+    ) -> Result<ComponentExactRevisionRecord, ComponentError> {
         info!(component_id = %component_id, "Get component revision");
 
         let record = self
             .component_repo
-            .get_by_id_and_revision(component_id.0, revision.into(), include_deleted)
+            .get_by_id_and_revision(component_id.0, revision.into())
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = environment_from_component_record(&record)?;
+        let environment = environment_from_component_record(&record.record)?;
 
         authorize_component_permission(
             auth,
             &environment,
-            &ComponentName(record.component.name.clone()),
+            &ComponentName(record.record.component.name.clone()),
             ComponentVerb::View,
             ComponentResourcePattern::Revision {
                 revision: revision.into(),
@@ -203,10 +252,17 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
+        Ok(record)
+    }
+
+    async fn component_from_revision_record(
+        &self,
+        record: ComponentAuthExtRevisionRecord,
+    ) -> Result<Component, ComponentError> {
         let mut component = record.try_into_model()?;
         let type_ids = self
             .deployment_service
-            .list_environment_type_ids(environment.id)
+            .list_environment_type_ids(component.environment_id)
             .await?;
         component.metadata = with_environment_type_ids(&component.metadata, &type_ids);
         Ok(component)
@@ -499,19 +555,36 @@ impl ComponentService {
         &self,
         component_id: ComponentId,
         revision: ComponentRevision,
-        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let component = self
-            .get_component_revision(component_id, revision, include_deleted, auth)
+            .get_component_revision(component_id, revision, auth)
             .await?;
+        self.download_revision_wasm(component).await
+    }
 
+    pub(crate) async fn download_internal_component_wasm(
+        &self,
+        component_id: ComponentId,
+        revision: ComponentRevision,
+        auth: &AuthCtx,
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
+        let component = self
+            .get_internal_component_revision(component_id, revision, auth)
+            .await?;
+        self.download_revision_wasm(component).await
+    }
+
+    async fn download_revision_wasm(
+        &self,
+        component: Component,
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         // A revision whose binary the store no longer holds is not found: every later download
         // gets the same answer, so a caller must not retry it.
         self.object_store
             .get_stream(component.environment_id, &component.object_store_key)
             .await?
-            .ok_or(ComponentError::ComponentNotFound(component_id))
+            .ok_or(ComponentError::ComponentNotFound(component.id))
     }
 }
 
