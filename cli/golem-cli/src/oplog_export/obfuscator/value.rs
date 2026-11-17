@@ -25,6 +25,7 @@ use crate::oplog_export::model::{
     ReportNode, ReportToken, ScalarKind, ScalarNode, StrNode, TextNode, TupleNode,
     TypeDescriptionNode,
 };
+use golem_common::model::AgentId;
 use golem_common::model::oplog::types::{
     FileSystemError, PermissionCardDeriveError, PermissionCardRevokeError, SecretRevealError,
     SerializableHostFailureKind, SerializableHttpErrorCode, SerializableHttpMethod,
@@ -34,7 +35,6 @@ use golem_common::model::oplog::types::{
     SerializableSocketError, SerializableStreamError, SerializableToolRpcError,
     SerializableWebsocketError,
 };
-use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::{
     FromSchema, IntoSchema, NamedFieldType, RegisteredAgentTypeSchema, ResultSpec,
     ResultValuePayload, SchemaGraph, SchemaType, SchemaValue, TypeId, TypedSchemaValue,
@@ -64,7 +64,6 @@ pub(super) enum Region {
 /// The schema type IDs that the rules look for.
 pub(super) struct KnownIds {
     pub agent_id: TypeId,
-    pub agent_fingerprint: TypeId,
     pub schema_value: TypeId,
     pub typed_schema_value: TypeId,
     pub schema_graph: TypeId,
@@ -78,7 +77,6 @@ pub(super) struct KnownIds {
 
 pub(super) static KNOWN_IDS: LazyLock<KnownIds> = LazyLock::new(|| KnownIds {
     agent_id: <AgentId as IntoSchema>::type_id(),
-    agent_fingerprint: <AgentFingerprint as IntoSchema>::type_id(),
     schema_value: <SchemaValue as IntoSchema>::type_id(),
     typed_schema_value: <TypedSchemaValue as IntoSchema>::type_id(),
     schema_graph: <SchemaGraph as IntoSchema>::type_id(),
@@ -182,15 +180,6 @@ impl<'r, 'a> Walker<'r, 'a> {
                 Ok(inner) => self.schemaless(&inner, Region::Customer),
                 Err(_) => self.schemaless(value, Region::Customer),
             };
-        }
-
-        // A fingerprint that Golem writes is Golem metadata. In a customer value or an error
-        // subtree it stays a token.
-        if matches!(region, Region::Trusted | Region::Golem)
-            && has_id(&ids.agent_fingerprint)
-            && let Ok(fingerprint) = AgentFingerprint::from_value(value)
-        {
-            return text(fingerprint.0.to_string());
         }
 
         let mut region = region;
