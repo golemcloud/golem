@@ -77,14 +77,27 @@ pub struct Mode {
     pub requests: &'static [Request],
 }
 
-/// An argument that selects a mode or conditions a request: given at all,
-/// or given with one of these values among its values.
+/// A condition on one clap argument, by its ID, that selects a mode or
+/// conditions a request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Selector {
+pub enum Selector {
+    /// The argument is given.
+    Given(&'static str),
+    /// The argument is given with one of these values among its values.
+    Value(&'static str, &'static [&'static str]),
+    /// The tool's argument parser (`golem_schema::tool::argv::parse`) answers
+    /// the argument's values with the tool's help, not with an invocation.
+    /// A help flag after `--`, or as the value of an option, is not help.
+    ToolHelp(&'static str),
+}
+
+impl Selector {
     /// The clap argument ID.
-    pub arg: &'static str,
-    /// Empty when the argument only has to be given.
-    pub values: &'static [&'static str],
+    pub const fn arg(&self) -> &'static str {
+        match self {
+            Selector::Given(arg) | Selector::Value(arg, _) | Selector::ToolHelp(arg) => arg,
+        }
+    }
 }
 
 /// One server request of a mode, which is one operation and one decision.
@@ -442,11 +455,11 @@ macro_rules! one_mode {
 }
 
 const fn arg(arg: &'static str) -> Selector {
-    Selector { arg, values: &[] }
+    Selector::Given(arg)
 }
 
 const fn arg_is(arg: &'static str, values: &'static [&'static str]) -> Selector {
-    Selector { arg, values }
+    Selector::Value(arg, values)
 }
 
 const VIEW: Part = agent(A::View, R::None);
@@ -461,9 +474,6 @@ const TOOL_VIEW: Part = pending(PendingVerb::ToolView, Tool, R::None);
 /// an agent the caller may not see looks unknown before the tool is named.
 const DESCRIBE_HOSTED: &[Part] = &[VIEW, TOOL_VIEW];
 const DESCRIBE_STANDALONE: &[Part] = &[TOOL_VIEW];
-/// The flags for which the tool's argument parser answers with the tool's
-/// help (`golem_schema::schema::tool::argv`).
-const HELP: &[&str] = &["--help", "-h"];
 /// A tool that reads static `File` config fields also needs the tool-wide
 /// `invoke : *` (5.3).
 const STATIC_FILE_CONFIG: Option<Extra> = Some(Extra {
@@ -510,25 +520,36 @@ const FOLLOW_ENTRIES: Request = conditional(
     &[oplog(R::OplogEntry)],
 );
 const AWAIT_UPDATE: Request = conditional(Follow, When::With(&[arg("await")]), &[VIEW]);
-/// The requests of an `ssh` command: the description of its tool, the start,
-/// the stop through stdin, the read of the agent's state, and, when the user
-/// or the CLI stops waiting, the cancellation and the lookup of a result
-/// that finished meanwhile. `state_read` says when the command reads the
-/// agent's state.
-const fn ssh_command(state_read: When) -> [Request; 6] {
-    [
-        request(Prepare, DESCRIBE_HOSTED),
-        tool_start(EXEC),
-        conditional(Input, When::StoppedThroughStdin, &[SEND_TO_ACCEPTED]),
-        conditional(Follow, state_read, &[VIEW]),
-        conditional(Cancel, When::Stopped, &[CANCEL_ACCEPTED]),
-        conditional(Follow, When::StoppedWithoutResult, &[READ_ACCEPTED]),
-    ]
-}
-/// A session reads the agent's state next to each command.
-const SSH_SESSION_COMMAND: &[Request] = &ssh_command(When::Always);
-/// A script reads it only to report a command whose outcome is unknown.
-const SSH_SCRIPT_COMMAND: &[Request] = &ssh_command(When::OutcomeUnknown);
+const SSH_STOP: Request = conditional(Input, When::StoppedThroughStdin, &[SEND_TO_ACCEPTED]);
+const SSH_CANCEL: Request = conditional(Cancel, When::Stopped, &[CANCEL_ACCEPTED]);
+/// The lookup of the result of a stopped command whose session ended without
+/// it.
+const SSH_LOOKUP: Request = conditional(Follow, When::StoppedWithoutResult, &[READ_ACCEPTED]);
+/// The read of the agent's state that reports a command whose outcome is
+/// unknown, after the lookup found no result.
+const SSH_UNKNOWN_OUTCOME: Request = conditional(Follow, When::OutcomeUnknown, &[VIEW]);
+/// The requests of one command of an `ssh` session: the description of its
+/// tool, the read of the agent's state at the prompt or next to the start,
+/// the start, and the requests when the user or the CLI stops waiting.
+const SSH_SESSION_COMMAND: &[Request] = &[
+    request(Prepare, DESCRIBE_HOSTED),
+    request(Follow, &[VIEW]),
+    tool_start(EXEC),
+    SSH_STOP,
+    SSH_CANCEL,
+    SSH_LOOKUP,
+    SSH_UNKNOWN_OUTCOME,
+];
+/// The requests of an `ssh -c` script, which reads the agent's state only to
+/// report an unknown outcome.
+const SSH_SCRIPT_COMMAND: &[Request] = &[
+    request(Prepare, DESCRIBE_HOSTED),
+    tool_start(EXEC),
+    SSH_STOP,
+    SSH_CANCEL,
+    SSH_LOOKUP,
+    SSH_UNKNOWN_OUTCOME,
+];
 const RESUME_SESSION: &[Request] = &[
     PREPARE_AGENT,
     OUTPUT_CONNECTION,
@@ -1043,7 +1064,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
     // `-`; the raw output flags write to stdout or to host files. The CLI
     // resolves an `--agent` and its component without reading the agent's
     // metadata. The help modes apply when the tool's argument parser answers
-    // with the tool's help, for either of its help flags (`HELP`).
+    // the tool's arguments with its help.
     CommandRow {
         path: &["tool", "invoke"],
         modes: &[
@@ -1072,13 +1093,13 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
             // The tool's help is its description alone.
             Mode {
                 name: "hosted-help",
-                selected_by: &[arg("agent"), arg_is("tool_args", HELP)],
+                selected_by: &[arg("agent"), Selector::ToolHelp("tool_args")],
                 class: ManagementRead,
                 requests: &[operation(DESCRIBE_HOSTED)],
             },
             Mode {
                 name: "standalone-help",
-                selected_by: &[arg("component"), arg_is("tool_args", HELP)],
+                selected_by: &[arg("component"), Selector::ToolHelp("tool_args")],
                 class: ManagementRead,
                 requests: &[operation(DESCRIBE_STANDALONE)],
             },
@@ -1312,20 +1333,48 @@ mod test {
         problems: &mut Vec<String>,
     ) {
         for selector in selectors {
-            let Some(arg) = command.get_arguments().find(|a| a.get_id() == selector.arg) else {
-                problems.push(format!("{at} {what} no argument `{}`", selector.arg));
+            let Some(arg) = command
+                .get_arguments()
+                .find(|a| a.get_id() == selector.arg())
+            else {
+                problems.push(format!("{at} {what} no argument `{}`", selector.arg()));
+                continue;
+            };
+            let Selector::Value(_, values) = selector else {
                 continue;
             };
             let possible = arg.get_possible_values();
-            for value in selector.values {
+            for value in *values {
                 if !possible.is_empty() && !possible.iter().any(|v| v.matches(value, false)) {
                     problems.push(format!(
                         "{at} {what} `{}` with a value it does not take: `{value}`",
-                        selector.arg
+                        selector.arg()
                     ));
                 }
             }
         }
+    }
+
+    /// `Selector::ToolHelp` is the parser's answer, not a search for a help
+    /// flag: `--help` and `-h` are help, and the same token after `--` is a
+    /// literal argument of an invocation.
+    #[test]
+    fn tool_help_is_what_the_argument_parser_answers() {
+        let tool: golem_common::schema::tool::Tool =
+            serde_json::from_str(include_str!("command_handler/ssh/bash-0.3.0.json")).unwrap();
+        let parse = |args: &[&str]| {
+            golem_schema::tool::argv::parse(
+                &tool,
+                &args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
+            )
+            .unwrap()
+        };
+        use golem_schema::tool::argv::ParsedToolArguments::{Help, Invoke};
+        assert!(matches!(parse(&["--help"]), Help(_)));
+        assert!(matches!(parse(&["-h"]), Help(_)));
+        assert!(matches!(parse(&["run", "--help"]), Help(_)));
+        assert!(matches!(parse(&["run", "--", "--help"]), Invoke { .. }));
+        assert!(matches!(parse(&["run", "--", "-h"]), Invoke { .. }));
     }
 
     /// A pending verb names a verb that the class catalog does not have. When

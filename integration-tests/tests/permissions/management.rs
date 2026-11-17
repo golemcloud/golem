@@ -71,8 +71,9 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::invocation_session_public::PublicErrorCode;
 use golem_common::model::invocation_session_public::{
-    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicNativeToolTarget,
-    PublicResumeOperation, PublicServerMessage, PublicTypedValue,
+    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicInvocationOutcome,
+    PublicInvocationResult, PublicNativeToolTarget, PublicResumeOperation, PublicServerMessage,
+    PublicTypedValue,
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::plugin_registration::{
@@ -80,8 +81,10 @@ use golem_common::model::plugin_registration::{
 };
 use golem_common::model::{AgentId, AgentStatus};
 use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::external::ExternalTypedSchemaValue;
 use golem_common::schema::public_json::{PublicSchemaValueError, encode_public_schema_value};
 use golem_common::{agent_id, data_value};
+use golem_schema::tool::argv::ParsedToolArguments;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -171,6 +174,9 @@ enum Fixture {
     Repository,
     /// A `FileReadWrite` agent with `/foo.txt`.
     Files,
+    /// A `SnapshotCounter` agent of `it:agent-counters`, which saves and
+    /// loads snapshots, so that a manual update reaches the next revision.
+    Snapshot,
     /// An agent that hosts the built-in `bash` tool. Remaining GOL-1403 work:
     /// the suite has no fixture that grants the built-in `bash` release to an
     /// environment and binds it to an agent type yet.
@@ -337,28 +343,32 @@ const SSH_LOOKUP: ExpectedRequest = expected(
     "follow if stopped-without-result: invocation read @invocation:accepted",
     &[INVOCATION_READ],
 );
-/// The agent's state, which a session reads next to each command. Without
-/// `view` its denial is the denial of the description before it, which makes
-/// the same `agent : view` read of the same agent and stops the command;
-/// `agent get` covers this read on its own.
+/// The read of the agent's state that reports a stopped command whose
+/// outcome is unknown, after the lookup found no result.
+const SSH_UNKNOWN_OUTCOME: ExpectedRequest = expected(
+    "follow if outcome-unknown: agent view @agent",
+    &[VIEW_DENIED],
+);
+/// A session reads the agent's state at its prompt, next to each command.
+/// Without `view` the description before it already looks unknown and stops
+/// the command; `agent get` covers this read on its own.
 const SSH_SESSION: &[ExpectedRequest] = &[
     SSH_DESCRIBE,
+    expected("follow: agent view @agent", &[VIEW_DENIED]),
     SSH_START,
     SSH_STOP,
-    expected("follow: agent view @agent", &[VIEW_DENIED]),
     SSH_CANCEL,
     SSH_LOOKUP,
+    SSH_UNKNOWN_OUTCOME,
 ];
+/// A script reads the agent's state only for an unknown outcome.
 const SSH_SCRIPT: &[ExpectedRequest] = &[
     SSH_DESCRIBE,
     SSH_START,
     SSH_STOP,
-    expected(
-        "follow if outcome-unknown: agent view @agent",
-        &[VIEW_DENIED],
-    ),
     SSH_CANCEL,
     SSH_LOOKUP,
+    SSH_UNKNOWN_OUTCOME,
 ];
 const OPLOG_ENTRIES: ExpectedRequest = expected(
     "follow without omit_payloads: oplog read @agent [oplog-entry]",
@@ -551,21 +561,24 @@ const CASES: &[Case] = &[
     ),
     // On a never-live fork this is the restricted snapshot-migration
     // rehearsal of D12; its admission is pending (see the module docs).
-    selected(
-        "mode=manual",
-        case(
-            &["agent", "update"],
-            "manual",
-            ManagementControl,
-            &[
-                PREPARE,
-                expected(
-                    "operation: agent update-revision @agent | marked: agent replay @agent",
-                    &[control("update-revision", "")],
-                ),
-                AWAIT_UPDATE,
-            ],
-            Effect::Updated,
+    on(
+        Fixture::Snapshot,
+        selected(
+            "mode=manual",
+            case(
+                &["agent", "update"],
+                "manual",
+                ManagementControl,
+                &[
+                    PREPARE,
+                    expected(
+                        "operation: agent update-revision @agent | marked: agent replay @agent",
+                        &[control("update-revision", "")],
+                    ),
+                    AWAIT_UPDATE,
+                ],
+                Effect::Updated,
+            ),
         ),
     ),
     case(
@@ -807,7 +820,7 @@ const CASES: &[Case] = &[
     on(
         Fixture::BashTool,
         selected(
-            "agent, tool_args=--help|-h",
+            "agent, tool_args=tool-help",
             case(
                 &["tool", "invoke"],
                 "hosted-help",
@@ -823,7 +836,7 @@ const CASES: &[Case] = &[
     on(
         Fixture::BashTool,
         selected(
-            "component, tool_args=--help|-h",
+            "component, tool_args=tool-help",
             case(
                 &["tool", "invoke"],
                 "standalone-help",
@@ -874,7 +887,7 @@ const PENDING_REQUESTS: &[(&[&str], &str, usize, &str)] = &[
     (
         &["ssh"],
         "session",
-        2,
+        3,
         "remaining GOL-1403 work: the stop through the stdin stream binding of a tool invocation, with `Fixture::BashTool`",
     ),
     (
@@ -969,9 +982,10 @@ fn spell_selectors(selectors: &[Selector], separator: &str) -> String {
     }
     selectors
         .iter()
-        .map(|selector| match selector.values {
-            [] => selector.arg.to_string(),
-            values => format!("{}={}", selector.arg, values.join("|")),
+        .map(|selector| match selector {
+            Selector::Given(arg) => arg.to_string(),
+            Selector::Value(arg, values) => format!("{arg}={}", values.join("|")),
+            Selector::ToolHelp(arg) => format!("{arg}=tool-help"),
         })
         .collect::<Vec<_>>()
         .join(separator)
@@ -1123,6 +1137,7 @@ macro_rules! in_order {
 
 const AGENT_TYPE: &str = "Repository";
 const METHOD: &str = "add";
+const SNAPSHOT_AGENT_TYPE: &str = "SnapshotCounter";
 /// The item that the owner adds after the target starts.
 const SEED_ITEM: &str = "seed-item";
 /// The item that a caller's invocation adds.
@@ -1156,9 +1171,9 @@ struct Seed {
     /// The session token of an invocation of the target that the owner
     /// started.
     session_token: String,
-    /// When set, the requests on the invocation that a command started
-    /// address this missing invocation of the target instead.
-    missing_invocation: Option<String>,
+    /// When set, the request at this trace position addresses this missing
+    /// invocation of the target instead of the one that the command started.
+    missing_invocation: Option<(usize, String)>,
 }
 
 impl Seed {
@@ -1233,6 +1248,15 @@ impl Seed {
                     .await?;
                 (component, "FileReadWrite")
             }
+            Fixture::Snapshot => {
+                let component = owner
+                    .component(&env.id, "it_agent_counters_release")
+                    .name("it:agent-counters")
+                    .unique()
+                    .store()
+                    .await?;
+                (component, SNAPSHOT_AGENT_TYPE)
+            }
             Fixture::BashTool => anyhow::bail!(
                 "pending, remaining GOL-1403 work: a fixture that grants the built-in `bash` release to the environment and binds it to an agent type"
             ),
@@ -1262,6 +1286,12 @@ impl Seed {
             session_token: String::new(),
             missing_invocation: None,
         };
+        if fixture == Fixture::Snapshot {
+            // A manual update carries this state over through a snapshot.
+            seed.owner
+                .invoke_and_await_agent(&seed.component, &seed.target, "increment", data_value!())
+                .await?;
+        }
         if fixture == Fixture::Repository {
             seed.session_token =
                 match start_session(&seed, &seed.owner, "session-item", false).await? {
@@ -1311,14 +1341,31 @@ impl Seed {
         }
     }
 
-    /// The same seed and agent, addressing invocations of it that do not
-    /// exist.
+    /// The same seed and agent, addressing scheduled invocations of it that
+    /// do not exist.
     fn with_unknown_invocation(&self) -> Self {
         Self {
             scheduled_invocation: uuid::Uuid::new_v4().to_string(),
             other_scheduled_invocation: uuid::Uuid::new_v4().to_string(),
-            missing_invocation: Some(uuid::Uuid::new_v4().to_string()),
             ..self.same()
+        }
+    }
+
+    /// As `with_unknown_invocation`, and the request at trace `position`
+    /// addresses a missing invocation of the agent instead of the one that
+    /// the command started. The requests before it stay valid.
+    fn with_unknown_invocation_at(&self, position: usize) -> Self {
+        Self {
+            missing_invocation: Some((position, uuid::Uuid::new_v4().to_string())),
+            ..self.with_unknown_invocation()
+        }
+    }
+
+    /// The invocation that the request at trace `position` addresses.
+    fn addressed(&self, position: usize, accepted: &str) -> String {
+        match &self.missing_invocation {
+            Some((missing_at, missing)) if *missing_at == position => missing.clone(),
+            _ => accepted.to_string(),
         }
     }
 
@@ -1596,12 +1643,20 @@ struct Accepted {
 
 /// Opens an invocation session with one start or resume, and returns whether
 /// the server accepted it. With `until_result`, an accepted outcome carries
-/// the invocation's result instead of the acceptance.
+/// the invocation's successful result instead of the acceptance.
 async fn session(
     user: &User,
     operation: PublicClientMessage,
     until_result: bool,
 ) -> anyhow::Result<(Outcome, Option<Accepted>)> {
+    let mut session = open_session(user, operation).await?;
+    receive(&mut session, until_result).await
+}
+
+async fn open_session(
+    user: &User,
+    operation: PublicClientMessage,
+) -> anyhow::Result<InvocationSession> {
     let service = user.deps.worker_service();
     let requests = SessionRequests {
         url: format!(
@@ -1611,7 +1666,7 @@ async fn session(
         ),
         token: user.token.secret().to_string(),
     };
-    let mut session = InvocationSession::open(
+    Ok(InvocationSession::open(
         Arc::new(requests),
         None,
         ReconnectPolicy::Within(Duration::from_secs(30)),
@@ -1625,8 +1680,19 @@ async fn session(
         false,
         Arc::new(()),
     )
-    .await?;
+    .await?)
+}
+
+/// Receives the session's frames until its operation is rejected, accepted
+/// or, with `until_result`, finished. A failed invocation is an error of the
+/// test: a positive case needs the invocation's success, and a denial is a
+/// rejection.
+async fn receive(
+    session: &mut InvocationSession,
+    until_result: bool,
+) -> anyhow::Result<(Outcome, Option<Accepted>)> {
     let mut accepted = None;
+    let mut result = None;
     loop {
         let mut frame = session.receive().await?;
         let message = frame.frame().clone();
@@ -1652,11 +1718,25 @@ async fn session(
                 }
                 accepted = Some(invocation);
             }
-            ServerFrame::Message(
-                result @ (PublicServerMessage::InvocationResult { .. }
-                | PublicServerMessage::InvocationFinished { .. }),
-            ) if accepted.is_some() => {
-                return Ok((Outcome::Allowed(format!("{result:?}")), accepted));
+            ServerFrame::Message(PublicServerMessage::InvocationResult {
+                result: invocation_result,
+                ..
+            }) if accepted.is_some() => {
+                if let PublicInvocationResult::ToolFailure { .. } = *invocation_result {
+                    anyhow::bail!("the invocation failed: {invocation_result:?}");
+                }
+                result = Some(format!("{invocation_result:?}"));
+            }
+            ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. })
+                if accepted.is_some() =>
+            {
+                return match outcome {
+                    PublicInvocationOutcome::Success => Ok((
+                        Outcome::Allowed(result.unwrap_or_else(|| "Success".to_string())),
+                        accepted,
+                    )),
+                    failure => anyhow::bail!("the invocation failed: {failure:?}"),
+                };
             }
             ServerFrame::Message(PublicServerMessage::InvocationRejected {
                 code,
@@ -1755,10 +1835,31 @@ async fn connect(seed: &Seed) -> anyhow::Result<Outcome> {
     }
 }
 
+/// The script that a command runs to its result.
+const SCRIPT: &str = "true";
+/// The script of a command that the user stops before its result.
+const LONG_SCRIPT: &str = "sleep 600";
+
+/// The typed input of the built-in `bash` tool's `run` for `script`, as
+/// `golem ssh` builds it: `run -- <script>`, parsed against the pinned
+/// definition that the CLI checks the hosted tool against. The parser fills
+/// in `cwd` and `timeout` with their defaults and leaves `stdin` unbound.
+fn run_input(script: &str) -> anyhow::Result<TypedSchemaValue> {
+    let tool: golem_common::schema::tool::Tool = serde_json::from_str(include_str!(
+        "../../../cli/golem-cli/src/command_handler/ssh/bash-0.3.0.json"
+    ))?;
+    let argv = ["run", "--", script].map(str::to_string);
+    match golem_schema::tool::argv::parse(&tool, &argv).map_err(anyhow::Error::msg)? {
+        ParsedToolArguments::Invoke { input, .. } => Ok(*input),
+        ParsedToolArguments::Help(_) => anyhow::bail!("`run` answered with its help"),
+    }
+}
+
 fn tool_start(
     seed: &Seed,
     target: PublicNativeToolTarget,
     idempotency_key: &str,
+    script: &str,
 ) -> anyhow::Result<PublicClientMessage> {
     Ok(PublicClientMessage::ToolStart {
         attempt_id: uuid::Uuid::new_v4(),
@@ -1768,7 +1869,9 @@ fn tool_start(
         tool_name: TOOL.to_string(),
         command_path: vec!["run".to_string()],
         target,
-        input: Box::new(PublicTypedValue::try_from(data_value!()).map_err(anyhow::Error::msg)?),
+        input: Box::new(
+            PublicTypedValue::try_from(run_input(script)?).map_err(anyhow::Error::msg)?,
+        ),
         stdin: false,
         stdout: false,
         stderr: false,
@@ -1783,24 +1886,32 @@ fn hosted_target(seed: &Seed) -> PublicNativeToolTarget {
     }
 }
 
+/// A lookup names only the invocation's key; every other mode carries the
+/// input of `run`.
 fn tool_request(
     seed: &Seed,
     hosted: bool,
     mode: NativeToolInvocationMode,
     idempotency_key: &str,
-) -> NativeToolInvocationRequest {
-    NativeToolInvocationRequest {
+) -> anyhow::Result<NativeToolInvocationRequest> {
+    let input = match mode {
+        NativeToolInvocationMode::Lookup => None,
+        _ => Some(
+            ExternalTypedSchemaValue::try_from(run_input(SCRIPT)?).map_err(anyhow::Error::msg)?,
+        ),
+    };
+    Ok(NativeToolInvocationRequest {
         app_name: seed.application.clone(),
         env_name: seed.environment.clone(),
         agent_id: hosted.then(|| seed.target_id.clone()),
         component_id: (!hosted).then_some(seed.component.id.0),
         tool_name: TOOL.to_string(),
         command_path: vec!["run".to_string()],
-        input: None,
+        input,
         mode,
         schedule_at: None,
         idempotency_key: Some(idempotency_key.to_string()),
-    }
+    })
 }
 
 // ── The requests ────────────────────────────────────────────────────────
@@ -1936,7 +2047,7 @@ async fn invoke_tool(
         seed.agent()
             .invoke_tool(
                 Some(idempotency_key),
-                &tool_request(seed, hosted, mode, idempotency_key),
+                &tool_request(seed, hosted, mode, idempotency_key)?,
             )
             .await,
     )
@@ -1953,58 +2064,89 @@ async fn cancel(seed: &Seed, idempotency_key: &str) -> anyhow::Result<Outcome> {
 /// What the user, or the CLI, does to a running `ssh` command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stop {
-    /// Nothing: the command runs to its result.
+    /// Nothing: the command runs `SCRIPT` to its result.
     None,
-    /// The command is stopped and the accepted invocation cancelled.
+    /// The user stops `LONG_SCRIPT` before its result, and the CLI cancels
+    /// the accepted invocation while the session is open.
     Cancel,
-    /// The command is stopped, and its session ends without the result, so
-    /// the CLI also looks the result up.
+    /// As `Cancel`, and the session ends without the result, so the CLI
+    /// looks it up: `STOPPED_SCRIPT` finishes within the CLI's wait.
     CancelAndLookUp,
+    /// As `CancelAndLookUp`, but `LONG_SCRIPT` has no result within the wait,
+    /// so the outcome is unknown and the CLI reads the agent's state to
+    /// report it.
+    OutcomeUnknown,
 }
 
-/// One command of an `ssh` session or script: the description, the start
-/// through the session up to the result, the read of the agent's state when
-/// `state_read`, and the requests of `stop` on the accepted invocation, or on
-/// `Seed::missing_invocation` when it is set.
-async fn ssh_command(seed: &Seed, state_read: bool, stop: Stop) -> anyhow::Result<Trace> {
+/// The script of a command that the user stops and that finishes within
+/// the CLI's wait for its result.
+const STOPPED_SCRIPT: &str = "sleep 3";
+/// How long the CLI waits for the result of a stopped command
+/// (`CANCEL_WAIT` of `golem ssh`).
+const RESULT_WAIT: Duration = Duration::from_secs(5);
+/// A lookup that is still waiting when the CLI gives up on it. A denial
+/// answers at once.
+const NO_RESULT: &str = "no result within the wait";
+
+/// One command of an `ssh` session (`session`) or script: the description,
+/// the read of the agent's state at a session's prompt, the start, and then
+/// what `stop` does on the accepted invocation. The request at the trace
+/// position that `Seed::missing_invocation` names addresses that missing
+/// invocation of the agent instead.
+async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<Trace> {
     let mut trace = Trace::default();
     trace.push(Step::Request(describe(seed, true).await?));
     if trace.stopped {
         return Ok(trace);
     }
-    let key = uuid::Uuid::new_v4().to_string();
-    let (started, accepted) = session(
-        &seed.caller,
-        tool_start(seed, hosted_target(seed), &key)?,
-        true,
-    )
-    .await?;
-    trace.push(Step::Request(started));
-    if trace.stopped {
-        return Ok(trace);
-    }
-    if state_read {
+    if session {
         // The state read is best effort: a denial does not stop the command.
         trace.outcomes.push(match metadata(seed).await? {
             Step::Request(outcome) | Step::Prepare(outcome) => outcome,
         });
     }
-    let addressed = match &seed.missing_invocation {
-        Some(missing) => missing.clone(),
-        None => {
-            accepted
-                .expect("an accepted start has its key")
-                .idempotency_key
-        }
+    let script = match stop {
+        Stop::None => SCRIPT,
+        Stop::CancelAndLookUp => STOPPED_SCRIPT,
+        Stop::Cancel | Stop::OutcomeUnknown => LONG_SCRIPT,
     };
-    if stop != Stop::None {
-        trace.push(Step::Request(cancel(seed, &addressed).await?));
+    let key = uuid::Uuid::new_v4().to_string();
+    let mut live = open_session(
+        &seed.caller,
+        tool_start(seed, hosted_target(seed), &key, script)?,
+    )
+    .await?;
+    let (started, accepted) = receive(&mut live, stop == Stop::None).await?;
+    trace.push(Step::Request(started));
+    if trace.stopped || stop == Stop::None {
+        return Ok(trace);
     }
-    if stop == Stop::CancelAndLookUp && !trace.stopped {
-        trace.push(Step::Request(
-            invoke_tool(seed, true, NativeToolInvocationMode::Lookup, &addressed).await?,
-        ));
+    let accepted = accepted
+        .expect("an accepted start has its key")
+        .idempotency_key;
+    let cancelled = cancel(seed, &seed.addressed(trace.outcomes.len(), &accepted)).await?;
+    trace.push(Step::Request(cancelled));
+    if trace.stopped || stop == Stop::Cancel {
+        return Ok(trace);
     }
+    let addressed = seed.addressed(trace.outcomes.len(), &accepted);
+    let looked_up = match tokio::time::timeout(
+        RESULT_WAIT,
+        invoke_tool(seed, true, NativeToolInvocationMode::Lookup, &addressed),
+    )
+    .await
+    {
+        Ok(outcome) => outcome?,
+        Err(_) => Outcome::Allowed(NO_RESULT.to_string()),
+    };
+    let found = matches!(&looked_up, Outcome::Allowed(result) if result != NO_RESULT);
+    // Without a result, also after a denied lookup, the CLI reports an
+    // unknown outcome with the agent's state.
+    trace.outcomes.push(looked_up);
+    if !found {
+        trace.push(metadata(seed).await?);
+    }
+    drop(live);
     Ok(trace)
 }
 
@@ -2017,20 +2159,34 @@ struct Adapter {
     variant: &'static str,
     /// The indexes of the mode's requests that the adapter makes, in order.
     makes: &'static [usize],
+    /// The effect of this variant, when it differs from the case's.
+    effect: Option<Effect>,
     run: Run,
 }
 
 macro_rules! adapter {
-    ([$($segment:literal),+], $mode:literal, $variant:literal, [$($index:literal),+], |$seed:ident| $body:expr) => {
+    ([$($segment:literal),+], $mode:literal, $variant:literal, [$($index:literal),+], $(effect: $effect:expr,)? |$seed:ident| $body:expr) => {
         Adapter {
             path: &[$($segment),+],
             mode: $mode,
             variant: $variant,
             makes: &[$($index),+],
+            effect: adapter!(@effect $($effect)?),
             run: |$seed| Box::pin(async move { $body }),
         }
     };
+    (@effect) => {
+        None
+    };
+    (@effect $effect:expr) => {
+        Some($effect)
+    };
 }
+
+/// A stopped `ssh` command started its invocation and has no result to
+/// read. What the stop does to the running `bash` process is the tool's,
+/// not a decision of a grant.
+const STOPPED: Effect = Effect::Reads("InvocationAccepted");
 
 const ADAPTERS: &[Adapter] = &[
     // The CLI reads the metadata of the agent that it creates and goes on
@@ -2478,21 +2634,35 @@ const ADAPTERS: &[Adapter] = &[
             .await?,
         )
     ),
-    adapter!(["ssh"], "session", "runs", [0, 1, 3], |seed| ssh_command(
+    adapter!(["ssh"], "session", "runs", [0, 1, 2], |seed| ssh_command(
         seed,
         true,
         Stop::None
     )
     .await),
-    adapter!(["ssh"], "session", "stopped", [0, 1, 3, 4], |seed| {
-        ssh_command(seed, true, Stop::Cancel).await
-    }),
+    adapter!(
+        ["ssh"],
+        "session",
+        "stopped",
+        [0, 1, 2, 4],
+        effect: STOPPED,
+        |seed| ssh_command(seed, true, Stop::Cancel).await
+    ),
     adapter!(
         ["ssh"],
         "session",
         "stopped-without-result",
-        [0, 1, 3, 4, 5],
+        [0, 1, 2, 4, 5],
+        effect: STOPPED,
         |seed| ssh_command(seed, true, Stop::CancelAndLookUp).await
+    ),
+    adapter!(
+        ["ssh"],
+        "session",
+        "outcome-unknown",
+        [0, 1, 2, 4, 5, 6],
+        effect: STOPPED,
+        |seed| ssh_command(seed, true, Stop::OutcomeUnknown).await
     ),
     adapter!(["ssh"], "script", "runs", [0, 1], |seed| ssh_command(
         seed,
@@ -2500,22 +2670,29 @@ const ADAPTERS: &[Adapter] = &[
         Stop::None
     )
     .await),
-    // A script reads the agent's state only to report an unknown outcome.
-    adapter!(["ssh"], "script", "outcome-unknown", [0, 1, 3], |seed| {
-        ssh_command(seed, true, Stop::None).await
-    }),
-    adapter!(["ssh"], "script", "stopped", [0, 1, 4], |seed| ssh_command(
-        seed,
-        false,
-        Stop::Cancel
-    )
-    .await),
+    adapter!(
+        ["ssh"],
+        "script",
+        "stopped",
+        [0, 1, 3],
+        effect: STOPPED,
+        |seed| ssh_command(seed, false, Stop::Cancel).await
+    ),
     adapter!(
         ["ssh"],
         "script",
         "stopped-without-result",
-        [0, 1, 4, 5],
+        [0, 1, 3, 4],
+        effect: STOPPED,
         |seed| ssh_command(seed, false, Stop::CancelAndLookUp).await
+    ),
+    adapter!(
+        ["ssh"],
+        "script",
+        "outcome-unknown",
+        [0, 1, 3, 4, 5],
+        effect: STOPPED,
+        |seed| ssh_command(seed, false, Stop::OutcomeUnknown).await
     ),
     adapter!(
         ["tool", "invoke"],
@@ -2835,9 +3012,10 @@ async fn check_effect(
         .iter()
         .position(|index| *index == operation)
         .expect("every adapter makes the operation");
+    let effect = adapter.effect.unwrap_or(case.effect);
     let effect_happened = |after: &Observation| {
         let target = |observation: &Observation| observation.target.clone();
-        match case.effect {
+        match effect {
             Effect::Reads(_) | Effect::Pending(_) => true,
             Effect::Created => !before.created && after.created,
             Effect::Deleted => target(before).is_some() && target(after).is_none(),
@@ -2868,7 +3046,7 @@ async fn check_effect(
             }
         }
     };
-    if let Effect::Reads(text) = case.effect {
+    if let Effect::Reads(text) = effect {
         match trace.outcomes.get(position) {
             Some(Outcome::Allowed(payload)) => assert!(
                 payload.contains(text),
@@ -2883,7 +3061,7 @@ async fn check_effect(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    panic!("{at} did not have its effect {:?}", case.effect)
+    panic!("{at} did not have its effect {effect:?}")
 }
 
 /// Each request of each mode is allowed with its grants, and denied without
@@ -2969,7 +3147,7 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
                             let unknown = if *looks_like == LooksLike::UnknownAgent {
                                 seed.with_unknown_agent()
                             } else {
-                                seed.with_unknown_invocation()
+                                seed.with_unknown_invocation_at(*position)
                             };
                             let unknown = (adapter.run)(&unknown).await?;
                             assert_eq!(
