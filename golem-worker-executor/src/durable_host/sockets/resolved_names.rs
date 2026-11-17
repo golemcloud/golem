@@ -542,10 +542,12 @@ mod tests {
                 HostFunctionName::GolemNetworkDnsResolve,
                 None,
                 false,
-                Some(HostRequest::NetworkDnsResolve(HostRequestNetworkDnsResolve {
-                    name: name.to_string(),
-                    record_type: SerializableDnsRecordType::A,
-                })),
+                Some(HostRequest::NetworkDnsResolve(
+                    HostRequestNetworkDnsResolve {
+                        name: name.to_string(),
+                        record_type: SerializableDnsRecordType::A,
+                    },
+                )),
             )
         };
         let record_end = |start: u64, records: Vec<SerializableDnsRecordData>| {
@@ -588,7 +590,10 @@ mod tests {
             discarded(8),
             // 11..=12: an answer the guest has not received links nothing.
             record_start("undelivered.test"),
-            record_end(11, vec![SerializableDnsRecordData::A(ip("10.0.0.4").into())]),
+            record_end(
+                11,
+                vec![SerializableDnsRecordData::A(ip("10.0.0.4").into())],
+            ),
         ]);
         assert_eq!(names.hostnames(ip("10.0.0.1")), vec!["db.test"]);
         assert_eq!(names.hostnames(ip("fd00::1")), vec!["db.test"]);
