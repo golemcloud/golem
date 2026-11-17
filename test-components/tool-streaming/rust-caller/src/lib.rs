@@ -1449,7 +1449,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         capable: bool,
         gate: Option<golem_rust::PromiseId>,
     ) -> Vec<String> {
-        ToolStreamingCallerClient::get(target)
+        ToolStreamingCallerClient::upsert(target)
             .produce_tool_results(capable, gate)
             .await
             .collect()

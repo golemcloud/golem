@@ -129,10 +129,10 @@ private def matrixResourceEvidence(principal: Principal): (String, String, Strin
     principal match {
       case Principal.Anonymous                             => "anonymous"
       case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
-      case Principal.Agent(_, _)                           => "agent"
+      case Principal.Agent(_)                              => "agent"
       case Principal.GolemUser(_)                          => "golem-user"
     },
-    HostApi.getSelfMetadata().agentId.agentId
+    HostApi.getSelfMetadata().agentId.toString
   )
 
 final case class MatrixResourceConfig(secret: Secret[String])
@@ -255,7 +255,7 @@ final class ScalaResourceToolStreamingCallerImpl(name: String, config: Config[Ma
             s"matrix permission issuer principal was ${issue.principal}, expected oidc:matrix-resource-acceptance"
           )
         )
-      case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.agentId =>
+      case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.toString =>
         Future.failed(
           new IllegalStateException(
             s"matrix permission issuer owner was ${issue.ownerAgentId}, expected the calling agent"
@@ -309,7 +309,7 @@ final class ScalaResourceToolStreamingCallerImpl(name: String, config: Config[Ma
                         s"matrix permission issuer principal was ${issue.principal}, expected oidc:matrix-resource-acceptance"
                       )
                     )
-                  case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.agentId =>
+                  case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.toString =>
                     Future.failed(
                       new IllegalStateException(
                         s"matrix permission issuer owner was ${issue.ownerAgentId}, expected the calling agent"

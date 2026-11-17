@@ -150,11 +150,8 @@ fn principal_key(principal: &Principal) -> String {
             principal.sub
         ),
         Principal::Agent(principal) => {
-            let uuid = &principal.agent_id.component_id.uuid;
-            format!(
-                "agent:{:016x}{:016x}:{}",
-                uuid.high_bits, uuid.low_bits, principal.agent_id.agent_id
-            )
+            let uuid = &principal.agent_id.uuid;
+            format!("agent:{:016x}{:016x}", uuid.high_bits, uuid.low_bits)
         }
         Principal::GolemUser(principal) => {
             let uuid = &principal.account_id.uuid;
@@ -192,7 +189,7 @@ async fn persistent_rate_limit(
         ));
     }
 
-    let mut backend = RateLimitBackendClient::get(
+    let mut backend = RateLimitBackendClient::upsert(
         parameters.policy,
         parameters.limit,
         parameters.window_milliseconds,

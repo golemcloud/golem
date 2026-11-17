@@ -225,8 +225,7 @@ fn outcome_summary(
 fn owner_summary() -> OwnerSummary {
     let owner = get_agent_id();
     OwnerSummary {
-        component_id: owner.component_id.uuid.to_string(),
-        agent_id: owner.agent_id,
+        agent_id: owner.uuid.to_string(),
     }
 }
 
@@ -238,12 +237,11 @@ fn principal_summary(principal: Principal) -> PrincipalSummary {
             subject: oidc.sub,
         },
         Principal::Agent(agent) => PrincipalSummary::Agent {
-            component_id: golem_rust::Uuid::from_u64_pair(
-                agent.agent_id.component_id.uuid.high_bits,
-                agent.agent_id.component_id.uuid.low_bits,
+            agent_id: golem_rust::Uuid::from_u64_pair(
+                agent.agent_id.uuid.high_bits,
+                agent.agent_id.uuid.low_bits,
             )
             .to_string(),
-            agent_id: agent.agent_id.agent_id,
         },
         Principal::GolemUser(user) => PrincipalSummary::GolemUser {
             account_id: golem_rust::Uuid::from_u64_pair(

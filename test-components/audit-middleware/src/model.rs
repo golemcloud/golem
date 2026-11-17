@@ -22,7 +22,6 @@ pub struct AuditRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerSummary {
-    pub component_id: String,
     pub agent_id: String,
 }
 
@@ -39,7 +38,6 @@ pub enum PrincipalSummary {
         subject: String,
     },
     Agent {
-        component_id: String,
         agent_id: String,
     },
     GolemUser {
@@ -299,7 +297,6 @@ mod tests {
             tool_name: "files".to_string(),
             command_path: vec!["read".to_string()],
             owner: OwnerSummary {
-                component_id: "component".to_string(),
                 agent_id: "owner".to_string(),
             },
             principal: PrincipalSummary::Oidc {

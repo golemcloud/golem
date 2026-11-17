@@ -309,7 +309,7 @@ impl ExternalDurableStreams for ExternalDurableStreamsImpl {
         source_id: String,
         url: String,
     ) -> Result<Vec<String>, String> {
-        let source = ExternalDurableStreamsClient::get(source_id);
+        let source = ExternalDurableStreamsClient::upsert(source_id);
         source
             .output_json(url)
             .await
@@ -323,7 +323,7 @@ impl ExternalDurableStreams for ExternalDurableStreamsImpl {
         source_id: String,
         url: String,
     ) -> Result<Vec<u8>, String> {
-        let source = ExternalDurableStreamsClient::get(source_id);
+        let source = ExternalDurableStreamsClient::upsert(source_id);
         source
             .output_bytes(url)
             .await

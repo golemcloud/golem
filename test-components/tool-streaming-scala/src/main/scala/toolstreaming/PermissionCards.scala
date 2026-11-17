@@ -53,7 +53,7 @@ final class ScalaPermissionCardTargetImpl(name: String) extends ScalaPermissionC
   }
 
   override def selfAgentId(): Future[String] =
-    Future.successful(HostApi.getSelfMetadata().agentId.agentId)
+    Future.successful(HostApi.getSelfMetadata().agentId.toString)
 
   override def inspectAllowed(): Future[Boolean] =
     Future.successful(withWallet(_.exists(_.card.inspect().isRight)))
@@ -106,7 +106,7 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
     val scope  = keptScope.getOrElse(throw new IllegalStateException("run the scenario first"))
     val parent = PermissionsApi.deriveScope(List(scope), Bounds.empty)
     ScalaPermissionCardTargetClient
-      .get(target)
+      .upsert(target)
       .inspectAllowed
       .withScopeCard(scope)()
       .map(allowed => s"attach=$allowed")
@@ -141,7 +141,7 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
   override def sendTemplate(target: String): Future[List[String]] =
     rootEntry() match {
       case WalletCard.Template(template) =>
-        val remote = ScalaPermissionCardTargetClient.get(target)
+        val remote = ScalaPermissionCardTargetClient.upsert(target)
         for {
           received <- remote.receiveTemplate(template)
           kinds    <- remote.walletKinds()
@@ -179,7 +179,7 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
       case other                     => throw new IllegalStateException(s"the root card is ${PermissionCardKinds.kind(other)}")
     }
     val self            = HostApi.getSelfMetadata()
-    val selfHolder      = Holder.agent(self.componentId, self.agentId.agentId)
+    val selfHolder      = Holder.Agent(self.agentId)
     val lifespans       = List(2.hours, 1.hour, 3.hours)
     val timed           = lifespans.map(l => unwrap(s"derive $l child", template.derive(inspectOnly, Some(Lifespan(l)))))
     val templateDerived = timed.forall(_.parents == List(template.id))
@@ -193,7 +193,7 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
 
     // 4. Derive a scope card and send it with awaited RPC calls.
     val scope  = unwrap("deriveScope", PermissionsApi.deriveScope(List(root), inspectOnly))
-    val remote = ScalaPermissionCardTargetClient.get(target)
+    val remote = ScalaPermissionCardTargetClient.upsert(target)
 
     // A scope card expires with its earliest root card, also for the callee:
     // the roots are a card without expiry and the cards with 2h, 1h and 3h
@@ -218,7 +218,11 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
       lentNoExpiry  <- remote.lentScopeExpiry.withScopeCard(scope)()
 
       // 5. Install a card on another agent.
-      holder          = Holder.agent(HostApi.getSelfMetadata().componentId, targetAgentId)
+      holder          = Holder.Agent(
+                          golem.AgentId
+                            .parse(targetAgentId)
+                            .fold(error => throw new IllegalStateException(s"parse target agent ID failed: $error"), identity)
+                        )
       installed       = child.install(holder)
       targetExpiring <- remote.expiringCardCount()
       targetInspect  <- remote.inspectAllowed()

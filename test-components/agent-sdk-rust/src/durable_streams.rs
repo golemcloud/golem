@@ -106,8 +106,8 @@ pub trait DurableStreamAgent {
     #[endpoint(put = "/mark/{value}")]
     fn mark(&self, value: u64) -> u64;
 
-    #[endpoint(put = "/component-id")]
-    fn component_id(&self) -> String;
+    #[endpoint(put = "/agent-id")]
+    fn own_agent_id(&self) -> String;
 
     #[endpoint(put = "/shadow/{output}")]
     fn shadow(&self, output: String) -> EchoOutput;
@@ -137,7 +137,7 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
     }
 
     fn instance(&self) -> String {
-        golem_rust::agentic::get_agent_id().agent_id
+        golem_rust::agentic::get_agent_id().uuid.to_string()
     }
 
     fn json(&self, count: u32, delay_ms: u64) -> AgentStream<String> {
@@ -273,8 +273,8 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
         MARKERS.fetch_add(value, Ordering::Relaxed) + value
     }
 
-    fn component_id(&self) -> String {
-        std::env::var("GOLEM_COMPONENT_ID").unwrap()
+    fn own_agent_id(&self) -> String {
+        std::env::var("GOLEM_AGENT_ID").unwrap()
     }
 
     fn shadow(&self, output: String) -> EchoOutput {
@@ -396,11 +396,14 @@ impl EphemeralStreamAgent for EphemeralStreamAgentImpl {
     }
 
     fn instance(&self) -> String {
-        golem_rust::agentic::get_agent_id().agent_id
+        golem_rust::agentic::get_agent_id().uuid.to_string()
     }
 
     fn identity(&self, label: String) -> AgentStream<String> {
-        stream_with_delay([label, golem_rust::agentic::get_agent_id().agent_id], 0)
+        stream_with_delay(
+            [label, golem_rust::agentic::get_agent_id().uuid.to_string()],
+            0,
+        )
     }
 }
 
@@ -424,10 +427,13 @@ impl PhantomStreamAgent for PhantomStreamAgentImpl {
     }
 
     fn instance(&self) -> String {
-        golem_rust::agentic::get_agent_id().agent_id
+        golem_rust::agentic::get_agent_id().uuid.to_string()
     }
 
     fn identity(&self, label: String) -> AgentStream<String> {
-        stream_with_delay([label, golem_rust::agentic::get_agent_id().agent_id], 0)
+        stream_with_delay(
+            [label, golem_rust::agentic::get_agent_id().uuid.to_string()],
+            0,
+        )
     }
 }

@@ -13,11 +13,11 @@ const CHAOS_QUOTA_RESOURCE: &str = "chaos-quota";
 
 #[ctor::ctor]
 fn reserve_instantiation_memory_for_growth_counter() {
-    // This constructor runs for every agent exported by the component. Agent IDs
-    // embed the exported type name, so this predicate keeps the extra allocation
-    // from changing the memory footprint of the other agent types.
-    if std::env::var("GOLEM_AGENT_ID")
-        .is_ok_and(|agent_id| agent_id.contains("InstantiationGrowthCounter"))
+    // This constructor runs for every agent exported by the component. The agent
+    // type check keeps the extra allocation from changing the memory footprint of
+    // the other agent types.
+    if std::env::var("GOLEM_AGENT_TYPE")
+        .is_ok_and(|agent_type| agent_type == "InstantiationGrowthCounter")
     {
         let previous_pages = core::arch::wasm32::memory_grow::<0>(16);
         assert_ne!(previous_pages, usize::MAX, "test memory growth failed");
@@ -67,7 +67,7 @@ trait Counter {
     /// not move the number it is measuring.
     ///
     /// Named `count` rather than `get` because the generated RPC client already
-    /// exposes `CounterClient::get(name)` as its constructor — an agent method
+    /// exposes `CounterClient::upsert(name)` as its constructor — an agent method
     /// called `get` shadows it and breaks every client call site.
     fn count(&self) -> u32;
 
@@ -111,22 +111,22 @@ impl Counter for CounterImpl {
     }
 
     async fn increment_through_rpc(&mut self) -> u32 {
-        let mut client = CounterClient::get(format!("{}-inner", self.id));
+        let mut client = CounterClient::upsert(format!("{}-inner", self.id));
         client.increment().await
     }
 
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32 {
-        let mut client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral", self.id));
+        let mut client = EphemeralCounterClient::upsert(format!("{}-ephemeral", self.id));
         client.increment().await.value
     }
 
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32 {
-        let mut client = EphemeralSingletonCounterClient::new_phantom();
+        let mut client = EphemeralSingletonCounterClient::upsert();
         client.increment().await.value
     }
 
     async fn ephemeral_ids_through_rpc(&mut self) -> (String, String) {
-        let client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral-ids", self.id));
+        let client = EphemeralCounterClient::upsert(format!("{}-ephemeral-ids", self.id));
         let id1 = client.get_id().await.value;
         let id2 = client.get_id().await.value;
         (id1, id2)
@@ -248,17 +248,17 @@ impl EphemeralCounter for EphemeralCounterImpl {
     }
 
     fn get_id(&self) -> String {
-        golem_rust::agentic::get_agent_id().agent_id
+        golem_rust::agentic::get_agent_id().uuid.to_string()
     }
 
     async fn increment_via_self_rpc(&mut self) -> u32 {
         self.count += 1;
-        let mut client = EphemeralCounterClient::new_phantom(self.id.clone());
+        let mut client = EphemeralCounterClient::upsert(self.id.clone());
         self.count + client.increment().await.value
     }
 
     async fn increment_remote_then_fail(&mut self, target: String) -> u32 {
-        let mut client = CounterClient::get(target);
+        let mut client = CounterClient::upsert(target);
         let count = client.increment().await;
         panic!("failing after remote increment to {count}")
     }
@@ -419,7 +419,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
         let _spans: Vec<_> = (0..context_spans)
             .map(|_| start_span("schedule-poll"))
             .collect();
-        let mut target = ScheduleCounterClient::get(target_name);
+        let mut target = ScheduleCounterClient::upsert(target_name);
         target
             .schedule_poll(Datetime {
                 seconds: seconds as i64,
@@ -429,7 +429,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
     }
 
     fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String) {
-        let mut target = ScheduleCounterClient::get(target_name);
+        let mut target = ScheduleCounterClient::upsert(target_name);
         let scheduled_millis = seconds * 1000 + (nanoseconds / 1_000_000) as u64;
         target
             .schedule_fire(

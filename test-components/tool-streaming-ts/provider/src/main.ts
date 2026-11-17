@@ -93,7 +93,7 @@ function resourceEvidence(context: { principal: Principal }) {
   return {
     provider: 'typescript',
     principal: principalName(context.principal),
-    ownerAgentId: getSelfMetadata().agentId.agentId,
+    ownerAgentId: getSelfMetadata().agentId.toString(),
   };
 }
 
@@ -203,7 +203,7 @@ toolDefinition('matrix-core')
             BigInt(request.labels.length),
           labelSummary: [...request.labels].reverse().join('|'),
           principal: principalName(context.principal),
-          ownerAgentId: getSelfMetadata().agentId.agentId,
+          ownerAgentId: getSelfMetadata().agentId.toString(),
         });
       },
     }),

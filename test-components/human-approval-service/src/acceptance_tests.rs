@@ -210,8 +210,8 @@ fn request(request_id: u128, promise_oplog_idx: u64) -> ApprovalRequest {
     ApprovalRequest {
         request_id: Uuid::from_u128(request_id),
         owner: ApprovalOwner {
-            component_id: Uuid::from_u128(0x4b34),
-            agent_name: format!("k4-owner-{request_id}"),
+            environment_id: Uuid::from_u128(0x4b34),
+            agent_id: Uuid::from_u128(0x4b36_0000 + request_id),
         },
         promise_oplog_idx,
         promise_fingerprint: Uuid::from_u128(0x4b35),
@@ -431,8 +431,8 @@ async fn approval_3_decisions_require_auth_and_exact_owner() {
         .bearer_auth(DECISION_TOKEN)
         .json(&json!({
             "owner": {
-                "componentId": Uuid::from_u128(0xBAD),
-                "agentName": request.owner.agent_name,
+                "environmentId": Uuid::from_u128(0xBAD),
+                "agentId": request.owner.agent_id,
             },
             "state": "denied",
             "decidedBy": "operator",

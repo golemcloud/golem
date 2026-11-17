@@ -12,12 +12,11 @@ use golem_rust::retry::{
 };
 use golem_rust::schema::{IntoTypedSchemaValue, try_into_schema_graph};
 use golem_rust::{
-    AgentAnyFilter, AgentId, AgentMetadata, ComponentId, ForkResult, FromSchema, GetAgents,
-    IntoSchema, PromiseId, SchemaValue, Transaction, UpdateMode, Uuid, agent_definition,
-    agent_implementation, encode_schema_value, encode_typed_schema_value, fallible_transaction,
-    fork, generate_idempotency_key, get_agent_metadata, get_self_metadata, golem_operation,
-    infallible_transaction, oplog_commit, resolve_agent_id, resolve_agent_id_strict,
-    resolve_component_id, update_agent,
+    AgentAnyFilter, AgentId, AgentMetadata, ForkResult, FromSchema, GetAgents, IntoSchema,
+    PromiseId, SchemaValue, Transaction, UpdateMode, Uuid, agent_definition, agent_implementation,
+    encode_schema_value, encode_typed_schema_value, fallible_transaction, fork,
+    generate_idempotency_key, get_agent_metadata, get_self_metadata, golem_operation,
+    infallible_transaction, oplog_commit, resolve_component_id, update_agent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -67,16 +66,19 @@ fn encode_parameters(
 }
 
 fn wire_agent_id(agent_id: AgentId) -> golem_rust::schema::wit::wire::AgentId {
-    let (high_bits, low_bits) = agent_id.component_id.uuid.as_u64_pair();
-    golem_rust::schema::wit::wire::AgentId {
-        component_id: golem_rust::schema::wit::wire::ComponentId {
-            uuid: golem_rust::schema::wit::wire::Uuid {
-                high_bits,
-                low_bits,
-            },
-        },
-        agent_id: agent_id.agent_id,
-    }
+    (&agent_id).into()
+}
+
+/// Gets the ID of the keyed agent of `agent_type` whose single constructor parameter is `name`.
+fn lookup_agent_id(
+    agent_type: &str,
+    name: &str,
+) -> Result<Option<golem_rust::schema::wit::wire::AgentId>, String> {
+    agent_host::lookup_agent_id(
+        agent_type,
+        encode_parameters(vec![SchemaValue::String(name.to_string())])?,
+    )
+    .map_err(|error| format!("{error:?}"))
 }
 
 fn encode_tool_input(
@@ -108,22 +110,18 @@ pub trait GolemHostApi {
 
     fn get_workers(
         &self,
-        component_id: ComponentId,
+        agent_type: String,
         filter: Option<AgentAnyFilter>,
         precise: bool,
     ) -> Vec<AgentMetadata>;
-    fn get_agents_next_result(&self, component_id: ComponentId) -> Result<u64, String>;
+    fn get_agents_next_result(&self, agent_type: String) -> Result<u64, String>;
     fn get_agents_across_promise(
         &self,
-        component_id: ComponentId,
+        agent_type: String,
         promise_id: PromiseId,
     ) -> Result<Vec<Vec<String>>, String>;
     fn get_self_metadata_result(&self) -> Result<String, String>;
-    fn resolve_agent_id_strict_result(
-        &self,
-        component_reference: String,
-        agent_name: String,
-    ) -> Result<bool, String>;
+    fn lookup_agent_id_result(&self, agent_type: String, name: String) -> Result<bool, String>;
     fn self_fork_result(&self) -> Result<String, String>;
     fn get_self_uri(&self) -> AgentMetadata;
     fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata>;
@@ -207,12 +205,7 @@ pub trait GolemHostApi {
     fn create_webhook_result(&self, promise_id: PromiseId) -> Result<(), String>;
     fn get_agent_metadata_result(&self, agent_id: AgentId) -> Result<bool, String>;
     fn update_agent_result(&self, agent_id: AgentId, revision: u64) -> Result<(), String>;
-    fn fork_agent_result(
-        &self,
-        source_agent_id: AgentId,
-        target_agent_id: AgentId,
-        oplog_index: u64,
-    ) -> Result<(), String>;
+    fn fork_agent_result(&self, source_agent_id: AgentId, oplog_index: u64) -> Result<(), String>;
     fn revert_agent_result(&self, agent_id: AgentId, oplog_index: u64) -> Result<(), String>;
     fn revert_last_invocations_result(&self, agent_id: AgentId, count: u64) -> Result<(), String>;
     async fn tool_rpc_invoke_result(
@@ -335,8 +328,9 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn resolve_component(&self) -> ResolveComponentResult {
         let component_id = resolve_component_id("component-resolve-target");
-        let worker_id = resolve_agent_id("component-resolve-target", "counter-1");
-        let strict_worker_id = resolve_agent_id_strict("component-resolve-target", "counter-2");
+        let worker_id = lookup_agent_id("RpcCounter", "counter-1").expect("agent lookup failed");
+        let strict_worker_id =
+            lookup_agent_id("RpcCounter", "counter-2").expect("agent lookup failed");
         ResolveComponentResult {
             component_found: component_id.is_some(),
             worker_found: worker_id.is_some(),
@@ -446,7 +440,8 @@ impl GolemHostApi for GolemHostApiImpl {
         let self_name = get_self_metadata()
             .expect("self metadata access should be allowed")
             .agent_id
-            .agent_id;
+            .uuid
+            .to_string();
 
         let path = format!("/fork-test/step1/{self_name}/{input}");
         println!("Sending GET {path}");
@@ -459,15 +454,16 @@ impl GolemHostApi for GolemHostApiImpl {
 
         let path = match fork().expect("self fork should be allowed") {
             ForkResult::Original(details) => {
-                let uuid: golem_rust::Uuid = Into::into(details.forked_phantom_id);
+                let uuid = details.forked_agent_id.uuid;
                 format!("/fork-test/step2/{self_name}/original/{uuid}")
             }
             ForkResult::Forked(details) => {
                 let self_name = get_self_metadata()
                     .expect("self metadata access should be allowed")
                     .agent_id
-                    .agent_id;
-                let uuid: golem_rust::Uuid = Into::into(details.forked_phantom_id);
+                    .uuid
+                    .to_string();
+                let uuid = details.forked_agent_id.uuid;
                 format!("/fork-test/step2/{self_name}/forked/{uuid}")
             }
         };
@@ -484,12 +480,12 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn get_workers(
         &self,
-        component_id: ComponentId,
+        agent_type: String,
         filter: Option<AgentAnyFilter>,
         precise: bool,
     ) -> Vec<AgentMetadata> {
         let mut workers: Vec<AgentMetadata> = Vec::new();
-        let getter = GetAgents::new(component_id, filter.as_ref(), precise);
+        let getter = GetAgents::new(&agent_type, filter.as_ref(), precise);
         while let Some(values) = getter
             .get_next()
             .expect("agent enumeration should be allowed")
@@ -499,18 +495,8 @@ impl GolemHostApi for GolemHostApiImpl {
         workers
     }
 
-    fn get_agents_next_result(&self, component_id: ComponentId) -> Result<u64, String> {
-        let (high_bits, low_bits) = component_id.uuid.as_u64_pair();
-        let getter = host_api::GetAgents::new(
-            golem_rust::schema::wit::wire::ComponentId {
-                uuid: golem_rust::schema::wit::wire::Uuid {
-                    high_bits,
-                    low_bits,
-                },
-            },
-            None,
-            false,
-        );
+    fn get_agents_next_result(&self, agent_type: String) -> Result<u64, String> {
+        let getter = host_api::GetAgents::new(&agent_type, None, false);
         getter
             .get_next()
             .map(|agents| agents.map_or(0, |agents| agents.len() as u64))
@@ -519,10 +505,10 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn get_agents_across_promise(
         &self,
-        component_id: ComponentId,
+        agent_type: String,
         promise_id: PromiseId,
     ) -> Result<Vec<Vec<String>>, String> {
-        let getter = GetAgents::new(component_id, None, false);
+        let getter = GetAgents::new(&agent_type, None, false);
         let first = getter
             .get_next()
             .map_err(|error| format!("{error:?}"))?
@@ -545,27 +531,23 @@ impl GolemHostApi for GolemHostApiImpl {
         Ok(vec![
             first
                 .into_iter()
-                .map(|metadata| metadata.agent_id.agent_id)
+                .map(|metadata| metadata.agent_id.uuid.to_string())
                 .collect(),
             second
                 .into_iter()
-                .map(|metadata| metadata.agent_id.agent_id)
+                .map(|metadata| metadata.agent_id.uuid.to_string())
                 .collect(),
         ])
     }
 
     fn get_self_metadata_result(&self) -> Result<String, String> {
         host_api::get_self_metadata()
-            .map(|metadata| metadata.agent_id.agent_id)
+            .map(|metadata| golem_rust::Uuid::from(metadata.agent_id.uuid).to_string())
             .map_err(|error| format!("{error:?}"))
     }
 
-    fn resolve_agent_id_strict_result(
-        &self,
-        component_reference: String,
-        agent_name: String,
-    ) -> Result<bool, String> {
-        Ok(host_api::resolve_agent_id_strict(&component_reference, &agent_name).is_some())
+    fn lookup_agent_id_result(&self, agent_type: String, name: String) -> Result<bool, String> {
+        lookup_agent_id(&agent_type, &name).map(|agent_id| agent_id.is_some())
     }
 
     fn self_fork_result(&self) -> Result<String, String> {
@@ -664,11 +646,9 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::create(
+        let rpc = WasmRpc::upsert(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
-            None,
-            Vec::new(),
         )
         .map_err(|error| format!("{error:?}"))?;
         rpc.invoke(&method, encode_parameters(Vec::new())?, None)
@@ -682,11 +662,9 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::create(
+        let rpc = WasmRpc::upsert(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
-            None,
-            Vec::new(),
         )
         .map_err(|error| format!("{error:?}"))?;
         rpc.async_invoke_and_await(&method, encode_parameters(Vec::new())?, None)
@@ -703,11 +681,9 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::create(
+        let rpc = WasmRpc::upsert(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
-            None,
-            Vec::new(),
         )
         .map_err(|error| format!("{error:?}"))?;
         rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
@@ -721,11 +697,9 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::create(
+        let rpc = WasmRpc::upsert(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
-            None,
-            Vec::new(),
         )
         .map_err(|error| format!("{error:?}"))?;
         rpc.schedule_invocation(
@@ -747,11 +721,9 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::create(
+        let rpc = WasmRpc::upsert(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
-            None,
-            Vec::new(),
         )
         .map_err(|error| format!("{error:?}"))?;
         rpc.schedule_cancelable_invocation(
@@ -773,12 +745,11 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::upsert(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
-            None,
-            Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .map_err(|error| format!("{error:?}"))?;
         self.kept_rpc = Some(rpc);
@@ -850,7 +821,7 @@ impl GolemHostApi for GolemHostApiImpl {
     fn read_own_oplog_result(&self) -> Result<(), String> {
         let metadata = get_self_metadata().map_err(|error| format!("{error:?}"))?;
         let agent_id = wire_agent_id(metadata.agent_id);
-        GetOplog::new(&agent_id, 0)
+        GetOplog::new(agent_id, 0)
             .get_next()
             .map(|_| ())
             .map_err(|error| match error {
@@ -865,7 +836,7 @@ impl GolemHostApi for GolemHostApiImpl {
                 .map_err(|error| format!("{error:?}"))?
                 .agent_id,
         );
-        SearchOplog::new(&agent_id, &query)
+        SearchOplog::new(agent_id, &query)
             .get_next()
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -877,7 +848,7 @@ impl GolemHostApi for GolemHostApiImpl {
                 .map_err(|error| format!("{error:?}"))?
                 .agent_id,
         );
-        let search = SearchOplog::new(&agent_id, &query);
+        let search = SearchOplog::new(agent_id, &query);
         for batch in 0..max_batches {
             if search
                 .get_next()
@@ -898,7 +869,7 @@ impl GolemHostApi for GolemHostApiImpl {
                 .map_err(|error| format!("{error:?}"))?
                 .agent_id,
         );
-        let search = SearchOplog::new(&agent_id, &query);
+        let search = SearchOplog::new(agent_id, &query);
         search.get_next().map_err(|error| format!("{error:?}"))?;
         self.kept_search = Some(search);
         Ok(())
@@ -922,14 +893,14 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String> {
-        GetOplog::new(&wire_agent_id(agent_id), 0)
+        GetOplog::new(wire_agent_id(agent_id), 0)
             .get_next()
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
     }
 
     fn search_oplog_result(&self, agent_id: AgentId, query: String) -> Result<(), String> {
-        SearchOplog::new(&wire_agent_id(agent_id), &query)
+        SearchOplog::new(wire_agent_id(agent_id), &query)
             .get_next()
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -946,41 +917,33 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     fn create_webhook_result(&self, promise_id: PromiseId) -> Result<(), String> {
-        agent_host::create_webhook(&(&promise_id).into())
+        agent_host::create_webhook((&promise_id).into())
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
     }
 
     fn get_agent_metadata_result(&self, agent_id: AgentId) -> Result<bool, String> {
-        Ok(host_api::get_agent_metadata(&wire_agent_id(agent_id)).is_some())
+        Ok(host_api::get_agent_metadata(wire_agent_id(agent_id)).is_some())
     }
 
     fn update_agent_result(&self, agent_id: AgentId, revision: u64) -> Result<(), String> {
         host_api::update_agent(
-            &wire_agent_id(agent_id),
+            wire_agent_id(agent_id),
             revision,
             host_api::UpdateMode::Automatic,
         )
         .map_err(|error| format!("{error:?}"))
     }
 
-    fn fork_agent_result(
-        &self,
-        source_agent_id: AgentId,
-        target_agent_id: AgentId,
-        oplog_index: u64,
-    ) -> Result<(), String> {
-        host_api::fork_agent(
-            &wire_agent_id(source_agent_id),
-            &wire_agent_id(target_agent_id),
-            oplog_index,
-        )
-        .map_err(|error| format!("{error:?}"))
+    fn fork_agent_result(&self, source_agent_id: AgentId, oplog_index: u64) -> Result<(), String> {
+        host_api::fork_agent(wire_agent_id(source_agent_id), oplog_index)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
     }
 
     fn revert_agent_result(&self, agent_id: AgentId, oplog_index: u64) -> Result<(), String> {
         host_api::revert_agent(
-            &wire_agent_id(agent_id),
+            wire_agent_id(agent_id),
             host_api::RevertAgentTarget::RevertToOplogIndex(oplog_index),
         )
         .map_err(|error| format!("{error:?}"))
@@ -988,7 +951,7 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn revert_last_invocations_result(&self, agent_id: AgentId, count: u64) -> Result<(), String> {
         host_api::revert_agent(
-            &wire_agent_id(agent_id),
+            wire_agent_id(agent_id),
             host_api::RevertAgentTarget::RevertLastInvocations(count),
         )
         .map_err(|error| format!("{error:?}"))

@@ -1,6 +1,6 @@
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { Effect, Schema, Stream } from "effect"
-import { Agents, Quota, Secrets, Tool, WitTypes } from "@golemcloud/effect-golem"
+import { AgentId, Quota, Secrets, SelfAgentId, Tool, WitTypes } from "@golemcloud/effect-golem"
 
 const MatrixRequest = Schema.Struct({
   source: Schema.String,
@@ -63,10 +63,7 @@ const ChunkMStreamEvidence = Schema.Struct({
 
 const ChunkMRejected = Schema.Struct({ reason: Schema.String })
 
-const getSelfMetadata = Agents.getSelfMetadata as Effect.Effect<
-  Agents.AgentMetadata,
-  Agents.AgentsHostError
->
+const selfAgentIdText = Effect.map(SelfAgentId.SelfAgentId, AgentId.format) as Effect.Effect<string>
 
 const principalLabel = (principal: unknown): string => {
   const value = principal as AgentCommon.Principal
@@ -112,7 +109,7 @@ Tool.toolDefinition("matrix-core", { version: "1.0.0" })
               }),
             )
           : Effect.gen(function* () {
-              const metadata = yield* getSelfMetadata.pipe(Effect.orDie)
+              const ownerAgentId = yield* selfAgentIdText
               return {
                 provider: "effect",
                 command: "artifact/inspect",
@@ -124,7 +121,7 @@ Tool.toolDefinition("matrix-core", { version: "1.0.0" })
                   BigInt(request.labels.length),
                 labelSummary: [...request.labels].reverse().join("|"),
                 principal: principalLabel(context.principal),
-                ownerAgentId: metadata.agentId.agentId,
+                ownerAgentId,
               }
             }),
     },
@@ -159,12 +156,12 @@ Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
     secret: {
       exchange: ({ secret }, context) =>
         Effect.gen(function* () {
-          const owner = yield* getSelfMetadata.pipe(Effect.orDie)
+          const ownerAgentId = yield* selfAgentIdText
           const revealed = yield* (
             Secrets.reveal(secret, Schema.String) as Effect.Effect<string, unknown>
           ).pipe(Effect.orDie)
           return {
-            ...evidence(context.principal, owner.agentId.agentId),
+            ...evidence(context.principal, ownerAgentId),
             revealed: revealed === "matrix-secret-value",
             secret,
           }
@@ -173,12 +170,12 @@ Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
     quota: {
       exchange: ({ token }, context) =>
         Effect.gen(function* () {
-          const owner = yield* getSelfMetadata.pipe(Effect.orDie)
+          const ownerAgentId = yield* selfAgentIdText
           return yield* Quota.withReservation(token, 1n, () =>
             Effect.succeed({
               used: 1n,
               value: {
-                ...evidence(context.principal, owner.agentId.agentId),
+                ...evidence(context.principal, ownerAgentId),
                 reserved: true,
                 token,
               },
@@ -189,9 +186,9 @@ Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
     permissions: {
       exchange: ({ card }, context) =>
         Effect.gen(function* () {
-          const owner = yield* getSelfMetadata.pipe(Effect.orDie)
+          const ownerAgentId = yield* selfAgentIdText
           return {
-            ...evidence(context.principal, owner.agentId.agentId),
+            ...evidence(context.principal, ownerAgentId),
             card,
           }
         }),

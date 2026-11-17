@@ -84,10 +84,10 @@ final class MatrixArtifactToolImpl extends MatrixArtifactTool {
           principal = principal match {
             case Principal.Anonymous                             => "anonymous"
             case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
-            case Principal.Agent(_, _)                           => "agent"
+            case Principal.Agent(_)                              => "agent"
             case Principal.GolemUser(_)                          => "golem-user"
           },
-          ownerAgentId = HostApi.getSelfMetadata().agentId.agentId
+          ownerAgentId = HostApi.getSelfMetadata().agentId.toString
         )
       )
 }
