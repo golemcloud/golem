@@ -238,7 +238,7 @@ fn ensure_card_permission<Ctx: WorkerCtx>(
     resource: CardResourcePattern,
 ) -> Result<(), permissions_types::PermissionError> {
     ensure_card_permission_in_surface(
-        &ctx.state.authority().effective_surface,
+        ctx.state.authority().effective_surface(),
         &ctx.state.created_by_email,
         verb,
         resource,

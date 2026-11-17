@@ -730,7 +730,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         self.state
             .loop_invocation_state_mut()
             .authority
-            .final_outcome_reached = true;
+            .reach_final_outcome();
         self.clear_invocation_scope_card().await;
     }
 
@@ -963,7 +963,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             self.state
                 .loop_invocation_state_mut()
                 .authority
-                .final_outcome_reached = true;
+                .reach_final_outcome();
             self.rederive_agent_effective_surface_from_wallet();
             // Terminal worker failures also fail queued invocations. A rejected request completes
             // only its own idempotency key so later queued work remains available.

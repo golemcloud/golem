@@ -72,7 +72,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_effective_surface(&self) -> golem_common::model::card::EffectiveSurface {
-        self.state.authority().effective_surface.clone()
+        self.state.authority().effective_surface().clone()
     }
 
     pub fn agent_auth_ctx(&self) -> AuthCtx {
@@ -235,12 +235,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .published_authority_generation
             .load(Ordering::Acquire);
         let now = Utc::now();
-        if authority_snapshot_is_current_at(
-            self.state.authority().initialized,
+        if self.state.authority().is_current_at(
             self.state.card_interest_index.authority_is_open(),
-            self.state.authority().processed_generation,
             published_generation,
-            self.state.authority().next_expiration,
             now,
         ) {
             let captured = capture(self);
@@ -286,7 +283,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state
                     .published_authority_generation
                     .load(Ordering::Acquire),
-                self.state.authority().next_expiration,
+                self.state.authority().next_expiration(),
                 Utc::now(),
             )
     }
@@ -297,10 +294,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             &self.state.agent_wallet_cards
         };
-        self.state.authority_mut().next_expiration = self
+        let next_expiration = self
             .state
             .authority()
-            .scope_root_cards
+            .scope_root_cards()
             .values()
             .chain(cards.values().map(Arc::as_ref))
             .chain(
@@ -313,12 +310,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .filter_map(StoredCard::expires_at)
             .min();
+        self.state
+            .authority_mut()
+            .set_next_expiration(next_expiration);
     }
 
     pub(in crate::durable_host) fn adopt_authority_generation(&mut self, generation: u64) {
         self.refresh_authority_expiration_deadline();
-        self.state.authority_mut().processed_generation = generation;
-        self.state.authority_mut().initialized = true;
+        self.state.authority_mut().synchronize_at(generation);
     }
 
     pub(crate) async fn authorize_live_permission(
@@ -355,16 +354,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .published_authority_generation
             .load(Ordering::Acquire);
         let now = Utc::now();
-        if authority_snapshot_is_current_at(
-            self.state.authority().initialized,
+        if self.state.authority().is_current_at(
             self.state.card_interest_index.authority_is_open(),
-            self.state.authority().processed_generation,
             published_generation,
-            self.state.authority().next_expiration,
             now,
         ) {
             let result =
-                authorize_effective_surface(&self.state.authority().effective_surface, targets);
+                authorize_effective_surface(self.state.authority().effective_surface(), targets);
             if self.authority_snapshot_is_stable(published_generation) {
                 crate::metrics::wasm::record_agent_permission_authority_fast_path();
                 record_permission_decisions(targets, result.is_ok());
@@ -382,7 +378,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .published_authority_generation
                 .load(Ordering::Acquire);
             let result =
-                authorize_effective_surface(&self.state.authority().effective_surface, targets);
+                authorize_effective_surface(self.state.authority().effective_surface(), targets);
             // The previous cached deadline may be due even though synchronization just removed
             // every expired card. Refresh it before validating the synchronized snapshot.
             self.refresh_authority_expiration_deadline();
@@ -414,7 +410,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .map(|target| {
                     ctx.state
                         .authority()
-                        .effective_surface
+                        .effective_surface()
                         .authorize(target)
                         .unwrap_or(false)
                 })
@@ -531,7 +527,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             roots: self
                 .state
                 .authority()
-                .scope_root_cards
+                .scope_root_cards()
                 .values()
                 .chain(
                     self.state
@@ -570,7 +566,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.authority_wallet = observation.wallet;
         self.apply_owner_authority_synchronization(observation.revoked, observation.root_states)?;
         self.adopt_authority_generation(observation.generation);
-        self.state.authority_mut().initialized = self.state.card_interest_index.authority_is_open();
+        if !self.state.card_interest_index.authority_is_open() {
+            self.state.authority_mut().invalidate();
+        }
         Ok(observation.generation
             == self
                 .state
@@ -651,7 +649,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .invocations
                 .entry_mut(key)
                 .authority
-                .effective_surface = surface;
+                .replace_surface(surface);
         }
     }
 
@@ -706,7 +704,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         if remove_inherited_scope {
             self.state.inherited_invocation_scope = None;
-            if let Some(interest) = &self.state.authority().scope_interest {
+            if let Some(interest) = self.state.authority().scope_interest() {
                 interest.invalidate();
             }
         }
@@ -728,10 +726,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(StoredCard::card_id)
             .collect::<BTreeSet<_>>();
         for (_, entry) in self.state.invocations.entries() {
-            if let Some(scope_card) = &entry.authority.scope_card {
+            if let Some(scope_card) = entry.authority.admitted_scope_card() {
                 card_ids.extend(scope_card.root_card_ids.iter().copied());
             }
-            if let Some(interest) = &entry.authority.scope_interest {
+            if let Some(interest) = entry.authority.scope_interest() {
                 card_ids.extend(interest.roots().iter().copied());
             }
         }
@@ -758,17 +756,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .contribute(None, &scope.root_card_ids)
             })
         });
-        let authority = self.state.authority_mut();
-        authority.initialized = false;
-        authority.final_outcome_reached = false;
-        let (_, handles) =
-            clear_invocation_scope_state(&mut authority.scope_card, &mut authority.scope_handles);
-        authority.scope_card = scope_card;
-        authority.scope_root_cards = root_cards
-            .into_iter()
-            .map(|card| (card.card_id(), card))
-            .collect();
-        authority.scope_interest = scope_interest;
+        let handles =
+            self.state
+                .authority_mut()
+                .install_scope(scope_card, root_cards, scope_interest);
         for rep in handles {
             permissions::retire_invocation_scope_handle(self.table(), rep);
         }
@@ -776,18 +767,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(in crate::durable_host) async fn clear_invocation_scope_card(&mut self) {
-        let authority = self.state.authority_mut();
-        authority.initialized = false;
-        let (scope_changed, handles) =
-            clear_invocation_scope_state(&mut authority.scope_card, &mut authority.scope_handles);
-        if scope_changed {
-            authority.scope_root_cards.clear();
-        }
-        authority.scope_interest = None;
-        for rep in handles {
+        let removal = self.state.authority_mut().clear_scope();
+        for rep in removal.handles {
             permissions::retire_invocation_scope_handle(self.table(), rep);
         }
-        if scope_changed {
+        if removal.card_removed {
             self.rederive_agent_effective_surface_from_wallet();
         }
     }
@@ -801,26 +785,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut retired = Vec::new();
         for entry in self.state.invocations.entries_mut() {
             let authority = &mut entry.authority;
-            if authority
-                .scope_interest
-                .as_ref()
-                .is_some_and(|interest| interest.roots_include(card_ids))
+            if let Some(interest) = authority
+                .scope_interest()
+                .filter(|interest| interest.roots_include(card_ids))
             {
-                if let Some(interest) = &authority.scope_interest {
-                    interest.invalidate();
-                }
+                interest.invalidate();
                 interest_removed = true;
             }
-            let (changed, handles) = remove_invocation_scope_for_revoked_roots(
-                &mut authority.scope_card,
-                &mut authority.scope_handles,
-                card_ids,
-            );
-            if changed {
-                authority.scope_root_cards.clear();
-                scope_changed = true;
-            }
-            retired.extend(handles);
+            let removal = authority.remove_scope_for_revoked_roots(card_ids);
+            scope_changed |= removal.card_removed;
+            retired.extend(removal.handles);
         }
         for rep in retired {
             permissions::retire_invocation_scope_handle(self.table(), rep);
@@ -861,7 +835,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn remove_expired_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
         let expired_root_ids = expired_wallet_card_ids_at(
-            self.state.authority().scope_root_cards.values(),
+            self.state.authority().scope_root_cards().values(),
             Utc::now(),
         );
         if !expired_root_ids.is_empty() {
@@ -1222,44 +1196,6 @@ pub(crate) fn record_permission_decisions(targets: &[PermissionTarget], allowed:
             .unwrap_or("unknown");
         crate::metrics::wasm::record_agent_permission_authorization(permission_class, false);
     }
-}
-
-pub(in crate::durable_host) fn clear_invocation_scope_state(
-    scope_card: &mut Option<ScopeCard>,
-    scope_handles: &mut HashMap<u32, Vec<CardId>>,
-) -> (bool, HashSet<u32>) {
-    let scope_changed = scope_card.take().is_some();
-    let handles = std::mem::take(scope_handles).into_keys().collect();
-    (scope_changed, handles)
-}
-
-pub(in crate::durable_host) fn remove_invocation_scope_for_revoked_roots(
-    scope_card: &mut Option<ScopeCard>,
-    scope_handles: &mut HashMap<u32, Vec<CardId>>,
-    revoked_card_ids: &[CardId],
-) -> (bool, HashSet<u32>) {
-    let affected = scope_card.as_ref().is_some_and(|scope_card| {
-        scope_card
-            .root_card_ids
-            .iter()
-            .any(|root_id| revoked_card_ids.contains(root_id))
-    });
-    if affected {
-        *scope_card = None;
-    }
-    let handles = scope_handles
-        .iter()
-        .filter_map(|(rep, root_card_ids)| {
-            root_card_ids
-                .iter()
-                .any(|root_id| revoked_card_ids.contains(root_id))
-                .then_some(*rep)
-        })
-        .collect::<HashSet<_>>();
-    for rep in &handles {
-        scope_handles.remove(rep);
-    }
-    (affected, handles)
 }
 
 pub(crate) fn owner_revoked_card_ids(

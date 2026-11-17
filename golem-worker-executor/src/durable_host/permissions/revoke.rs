@@ -46,7 +46,7 @@ pub(super) fn capture_revoke_authority<Ctx: WorkerCtx>(
     Ok(ctx
         .state
         .authority()
-        .effective_surface
+        .effective_surface()
         .source_card_ids
         .clone())
 }

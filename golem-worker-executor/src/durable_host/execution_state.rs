@@ -23,10 +23,10 @@
 //! next to the [`InvocationKey::AgentLevel`] entry: beginning an invocation replaces the entry
 //! of the previous one.
 
-use super::InvocationStrictness;
 use super::attribution::InvocationKey;
 use super::durability::RetryPolicyScope;
 use super::tail_work::TailWorkTracker;
+use super::{InvocationStrictness, authority_snapshot_is_current_at};
 use crate::model::InvocationContext;
 use crate::services::card_interest::CardInterestContribution;
 use crate::worker::owner_lane::OwnerInvocationId;
@@ -36,7 +36,7 @@ use golem_common::model::agent::Principal;
 use golem_common::model::card::{CardId, EffectiveSurface, ScopeCard, StoredCard};
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::OplogIndex;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// The authority of one invocation: its scope card and the effective surface derived from
@@ -44,33 +44,262 @@ use std::sync::Arc;
 /// current.
 #[derive(Clone, Default)]
 pub struct InvocationAuthority {
-    /// The scope card the invocation was admitted with.
-    pub scope_card: Option<ScopeCard>,
+    scope: ScopeBinding,
     /// The validated root cards of the scope card.
-    pub scope_root_cards: BTreeMap<CardId, StoredCard>,
-    /// The wallet handles the guest holds for cards of the scope.
-    pub scope_handles: HashMap<u32, Vec<CardId>>,
+    root_cards: BTreeMap<CardId, StoredCard>,
+    /// The wallet handles the guest holds for cards of the scope, with the root cards each
+    /// handle's card depends on. A handle whose roots stay live outlives a removed scope card.
+    handles: HashMap<u32, Vec<CardId>>,
     /// The Store's interest in card events for the scope's roots.
-    pub scope_interest: Option<Arc<CardInterestContribution>>,
+    interest: Option<Arc<CardInterestContribution>>,
     /// The surface that authorizes the invocation's host calls.
-    pub effective_surface: EffectiveSurface,
-    /// Whether `effective_surface` was synchronized with the owner's authority.
-    pub initialized: bool,
-    /// The published authority generation `effective_surface` was synchronized at.
-    pub processed_generation: u64,
-    /// The earliest expiry among the cards `effective_surface` was derived from.
-    pub next_expiration: Option<DateTime<Utc>>,
-    /// Set when the invocation's guest call ends, or when its failure gives up. From then on the
-    /// scope card no longer applies, and the invocation's calls have the agent's authority only.
-    pub final_outcome_reached: bool,
+    surface: EffectiveSurface,
+    synchronization: Synchronization,
+    /// The earliest expiry among the cards `surface` was derived from.
+    next_expiration: Option<DateTime<Utc>>,
+}
+
+/// Whether the scope card the invocation was admitted with bounds its calls.
+#[derive(Clone, Default)]
+enum ScopeBinding {
+    /// The invocation has no scope card.
+    #[default]
+    Unscoped,
+    /// The scope card bounds the invocation's calls.
+    Bound(ScopeCard),
+    /// The invocation's guest call ended, or its failure gave up: its calls have the agent's
+    /// authority only. The card it was admitted with stays until the scope is replaced or
+    /// cleared, or a root of the card is revoked. When the loop begins the next invocation from
+    /// this entry, the card bounds the calls again and the surface is stale.
+    FinalOutcome { admitted: Option<ScopeCard> },
+}
+
+impl ScopeBinding {
+    fn card(&self) -> Option<&ScopeCard> {
+        match self {
+            Self::Unscoped => None,
+            Self::Bound(card) => Some(card),
+            Self::FinalOutcome { admitted } => admitted.as_ref(),
+        }
+    }
+
+    /// The binding once its card is removed: a reached final outcome stays reached.
+    fn without_card(&self) -> Self {
+        match self {
+            Self::Unscoped | Self::Bound(_) => Self::Unscoped,
+            Self::FinalOutcome { .. } => Self::FinalOutcome { admitted: None },
+        }
+    }
+}
+
+/// Whether the surface is synchronized with the owner's authority.
+#[derive(Clone, Copy)]
+enum Synchronization {
+    /// The surface must be synchronized again before it authorizes from the cache: what it is
+    /// derived from changed, or card authority was closed when it was synchronized at
+    /// `last_generation`.
+    Stale { last_generation: u64 },
+    /// The surface was synchronized at this published authority generation.
+    Synchronized { generation: u64 },
+}
+
+impl Default for Synchronization {
+    fn default() -> Self {
+        Self::Stale { last_generation: 0 }
+    }
+}
+
+/// What removing an invocation's scope card and handles removed.
+pub struct ScopeRemoval {
+    /// Whether the scope card was removed.
+    pub card_removed: bool,
+    /// The removed wallet handles, which the caller retires in the resource table.
+    pub handles: HashSet<u32>,
 }
 
 impl InvocationAuthority {
     /// The scope card that bounds the invocation's calls: none once its final outcome is reached.
     pub fn bound_scope_card(&self) -> Option<&ScopeCard> {
-        self.scope_card
-            .as_ref()
-            .filter(|_| !self.final_outcome_reached)
+        match &self.scope {
+            ScopeBinding::Bound(card) => Some(card),
+            ScopeBinding::Unscoped | ScopeBinding::FinalOutcome { .. } => None,
+        }
+    }
+
+    /// The scope card the invocation was admitted with, also once its final outcome is reached.
+    pub fn admitted_scope_card(&self) -> Option<&ScopeCard> {
+        self.scope.card()
+    }
+
+    pub fn scope_root_cards(&self) -> &BTreeMap<CardId, StoredCard> {
+        &self.root_cards
+    }
+
+    pub fn scope_interest(&self) -> Option<&Arc<CardInterestContribution>> {
+        self.interest.as_ref()
+    }
+
+    pub fn effective_surface(&self) -> &EffectiveSurface {
+        &self.surface
+    }
+
+    pub fn next_expiration(&self) -> Option<DateTime<Utc>> {
+        self.next_expiration
+    }
+
+    /// The published authority generation the surface was last synchronized at, also once it is
+    /// stale.
+    pub fn synchronized_generation(&self) -> u64 {
+        match self.synchronization {
+            Synchronization::Stale { last_generation } => last_generation,
+            Synchronization::Synchronized { generation } => generation,
+        }
+    }
+
+    /// Whether the cached surface authorizes at `now` without synchronizing again: it is
+    /// synchronized at `published_generation`, card authority is open, and none of its cards
+    /// expired.
+    pub fn is_current_at(
+        &self,
+        authority_open: bool,
+        published_generation: u64,
+        now: DateTime<Utc>,
+    ) -> bool {
+        authority_snapshot_is_current_at(
+            matches!(self.synchronization, Synchronization::Synchronized { .. }),
+            authority_open,
+            self.synchronized_generation(),
+            published_generation,
+            self.next_expiration,
+            now,
+        )
+    }
+
+    /// Replaces the surface with one the caller derived for the invocation.
+    pub fn replace_surface(&mut self, surface: EffectiveSurface) {
+        self.surface = surface;
+    }
+
+    pub fn set_next_expiration(&mut self, next_expiration: Option<DateTime<Utc>>) {
+        self.next_expiration = next_expiration;
+    }
+
+    /// Marks the surface as synchronized with the owner's authority at `generation`.
+    pub fn synchronize_at(&mut self, generation: u64) {
+        self.synchronization = Synchronization::Synchronized { generation };
+    }
+
+    /// Marks the surface as stale, so the next authorization synchronizes it again.
+    pub fn invalidate(&mut self) {
+        self.synchronization = Synchronization::Stale {
+            last_generation: self.synchronized_generation(),
+        };
+    }
+
+    /// Installs the scope the invocation is admitted with, replacing the previous scope. Returns
+    /// the previous scope's wallet handles, which the caller retires in the resource table.
+    pub fn install_scope(
+        &mut self,
+        card: Option<ScopeCard>,
+        root_cards: Vec<StoredCard>,
+        interest: Option<Arc<CardInterestContribution>>,
+    ) -> HashSet<u32> {
+        let previous = self.clear_scope();
+        self.scope = card.map_or(ScopeBinding::Unscoped, ScopeBinding::Bound);
+        self.root_cards = root_cards
+            .into_iter()
+            .map(|card| (card.card_id(), card))
+            .collect();
+        self.interest = interest;
+        previous.handles
+    }
+
+    /// Removes the scope card with its root cards, the wallet handles and the card interest, and
+    /// marks the surface as stale. A reached final outcome stays reached.
+    pub fn clear_scope(&mut self) -> ScopeRemoval {
+        self.invalidate();
+        let card_removed = self.scope.card().is_some();
+        self.scope = self.scope.without_card();
+        if card_removed {
+            self.root_cards.clear();
+        }
+        self.interest = None;
+        ScopeRemoval {
+            card_removed,
+            handles: std::mem::take(&mut self.handles).into_keys().collect(),
+        }
+    }
+
+    /// Removes the scope card if `revoked_card_ids` include one of its roots, and the wallet
+    /// handles whose cards depend on one of them.
+    pub fn remove_scope_for_revoked_roots(&mut self, revoked_card_ids: &[CardId]) -> ScopeRemoval {
+        let card_removed = self.scope.card().is_some_and(|card| {
+            card.root_card_ids
+                .iter()
+                .any(|root_id| revoked_card_ids.contains(root_id))
+        });
+        if card_removed {
+            self.scope = self.scope.without_card();
+            self.root_cards.clear();
+        }
+        let handles = self
+            .handles
+            .iter()
+            .filter(|(_, root_card_ids)| {
+                root_card_ids
+                    .iter()
+                    .any(|root_id| revoked_card_ids.contains(root_id))
+            })
+            .map(|(rep, _)| *rep)
+            .collect::<HashSet<_>>();
+        self.handles.retain(|rep, _| !handles.contains(rep));
+        ScopeRemoval {
+            card_removed,
+            handles,
+        }
+    }
+
+    /// Replaces the scope's root cards with the live ones that replay or a liveness check found.
+    pub fn replace_scope_root_cards(&mut self, root_cards: BTreeMap<CardId, StoredCard>) {
+        self.root_cards = root_cards;
+    }
+
+    /// Replaces the card interest, for the scope an entity Store inherits.
+    pub fn replace_scope_interest(&mut self, interest: Arc<CardInterestContribution>) {
+        self.interest = Some(interest);
+    }
+
+    /// Records a wallet handle the guest holds for a card that depends on `root_card_ids`.
+    pub fn hold_scope_handle(&mut self, rep: u32, root_card_ids: Vec<CardId>) {
+        self.handles.insert(rep, root_card_ids);
+    }
+
+    /// Forgets a wallet handle the guest dropped or the host took back.
+    pub fn forget_scope_handle(&mut self, rep: u32) {
+        self.handles.remove(&rep);
+    }
+
+    /// Releases the scope card once the invocation's guest call ends or its failure gives up.
+    pub fn reach_final_outcome(&mut self) {
+        self.scope = match std::mem::take(&mut self.scope) {
+            ScopeBinding::Unscoped => ScopeBinding::FinalOutcome { admitted: None },
+            ScopeBinding::Bound(card) => ScopeBinding::FinalOutcome {
+                admitted: Some(card),
+            },
+            reached @ ScopeBinding::FinalOutcome { .. } => reached,
+        };
+    }
+
+    /// Binds the admitted scope card again for the next invocation, after a reached final
+    /// outcome. The surface was derived without the card, so it is stale.
+    fn rebind_scope(&mut self) {
+        self.scope = match std::mem::take(&mut self.scope) {
+            ScopeBinding::FinalOutcome { admitted } => {
+                self.invalidate();
+                admitted.map_or(ScopeBinding::Unscoped, ScopeBinding::Bound)
+            }
+            unchanged => unchanged,
+        };
     }
 }
 
@@ -189,12 +418,7 @@ impl Invocations {
         };
         carried.tail_work = TailWorkTracker::default();
         carried.trap_retry_scopes.clear();
-        if carried.authority.final_outcome_reached {
-            // The surface was derived without the scope card; the next authorization derives it
-            // again with the card.
-            carried.authority.final_outcome_reached = false;
-            carried.authority.initialized = false;
-        }
+        carried.authority.rebind_scope();
         self.entries.insert(key, carried);
         self.entries
             .retain(|existing, _| *existing == InvocationKey::AgentLevel || *existing == key);
@@ -308,6 +532,18 @@ mod tests {
         );
     }
 
+    fn scope_card(root_card_ids: Vec<CardId>) -> ScopeCard {
+        ScopeCard {
+            scope_card_id: CardId(uuid::Uuid::from_u128(100)),
+            root_card_ids,
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            expires_at: None,
+        }
+    }
+
     #[test]
     fn beginning_an_invocation_moves_the_agent_level_authority_into_it() {
         let mut invocations = Invocations::default();
@@ -317,19 +553,18 @@ mod tests {
         invocations
             .loop_entry_mut()
             .authority
-            .scope_handles
-            .insert(7, Vec::new());
+            .hold_scope_handle(7, Vec::new());
         invocations.begin(first);
         assert!(
             invocations.entries[&InvocationKey::AgentLevel]
                 .authority
-                .scope_handles
+                .handles
                 .is_empty()
         );
         assert!(
             invocations.entries[&first]
                 .authority
-                .scope_handles
+                .handles
                 .contains_key(&7)
         );
 
@@ -338,35 +573,114 @@ mod tests {
         assert!(
             invocations.entries[&InvocationKey::AgentLevel]
                 .authority
-                .scope_handles
+                .handles
                 .contains_key(&7)
         );
         invocations.begin(second);
         assert!(
             invocations.entries[&InvocationKey::AgentLevel]
                 .authority
-                .scope_handles
+                .handles
                 .is_empty(),
             "a finished invocation's scope handles stay only in the running invocation's entry"
         );
         assert!(
             invocations.entries[&second]
                 .authority
-                .scope_handles
+                .handles
                 .contains_key(&7)
         );
     }
 
     #[test]
-    fn beginning_after_the_final_outcome_derives_the_surface_again() {
+    fn beginning_after_an_unscoped_final_outcome_makes_the_surface_stale() {
         let mut invocations = Invocations::default();
-        let first = invocation();
-        invocations.begin(first);
-        invocations.loop_entry_mut().authority.initialized = true;
-        invocations.loop_entry_mut().authority.final_outcome_reached = true;
+        invocations.begin(invocation());
+        let authority = &mut invocations.loop_entry_mut().authority;
+        authority.synchronize_at(4);
+        authority.reach_final_outcome();
+        let _ = authority.clear_scope();
+        authority.synchronize_at(4);
+
         invocations.begin(invocation());
         let authority = &invocations.get(None).authority;
-        assert!(!authority.final_outcome_reached);
-        assert!(!authority.initialized);
+        assert!(authority.bound_scope_card().is_none());
+        assert!(!authority.is_current_at(true, 4, Utc::now()));
+    }
+
+    #[test]
+    fn beginning_after_the_final_outcome_binds_the_scope_card_again() {
+        let mut invocations = Invocations::default();
+        invocations.begin(invocation());
+        let card = scope_card(vec![CardId(uuid::Uuid::from_u128(1))]);
+        let authority = &mut invocations.loop_entry_mut().authority;
+        let _ = authority.install_scope(Some(card.clone()), Vec::new(), None);
+        authority.synchronize_at(4);
+        authority.reach_final_outcome();
+        assert!(authority.bound_scope_card().is_none());
+        assert!(authority.admitted_scope_card().is_some());
+
+        invocations.begin(invocation());
+        let authority = &invocations.get(None).authority;
+        assert_eq!(authority.bound_scope_card(), Some(&card));
+        assert!(
+            !authority.is_current_at(true, 4, Utc::now()),
+            "the surface was derived without the card"
+        );
+        assert_eq!(authority.synchronized_generation(), 4);
+    }
+
+    #[test]
+    fn an_unrelated_revocation_keeps_the_scope_and_its_handles() {
+        let scope_root = CardId(uuid::Uuid::from_u128(1));
+        let unrelated = CardId(uuid::Uuid::from_u128(2));
+        let mut authority = InvocationAuthority::default();
+        let _ = authority.install_scope(Some(scope_card(vec![scope_root])), Vec::new(), None);
+        authority.hold_scope_handle(7, vec![scope_root]);
+
+        let removal = authority.remove_scope_for_revoked_roots(&[unrelated]);
+        assert!(!removal.card_removed);
+        assert!(removal.handles.is_empty());
+        assert!(authority.bound_scope_card().is_some());
+        assert_eq!(authority.handles, HashMap::from([(7, vec![scope_root])]));
+    }
+
+    #[test]
+    fn a_revoked_root_removes_the_scope_and_only_its_dependent_handles() {
+        let revoked_root = CardId(uuid::Uuid::from_u128(1));
+        let unrelated_root = CardId(uuid::Uuid::from_u128(2));
+        let mut authority = InvocationAuthority::default();
+        let _ = authority.install_scope(Some(scope_card(vec![revoked_root])), Vec::new(), None);
+        authority.hold_scope_handle(7, vec![revoked_root]);
+        authority.hold_scope_handle(11, vec![unrelated_root]);
+        authority.hold_scope_handle(13, vec![revoked_root, unrelated_root]);
+
+        let removal = authority.remove_scope_for_revoked_roots(&[revoked_root]);
+        assert!(removal.card_removed);
+        assert_eq!(removal.handles, HashSet::from([7, 13]));
+        assert!(authority.admitted_scope_card().is_none());
+        assert_eq!(
+            authority.handles,
+            HashMap::from([(11, vec![unrelated_root])])
+        );
+    }
+
+    #[test]
+    fn clearing_the_scope_removes_the_card_and_every_handle() {
+        let mut authority = InvocationAuthority::default();
+        let _ = authority.install_scope(
+            Some(scope_card(vec![CardId(uuid::Uuid::from_u128(1))])),
+            Vec::new(),
+            None,
+        );
+        authority.hold_scope_handle(7, vec![CardId(uuid::Uuid::from_u128(1))]);
+        authority.hold_scope_handle(11, vec![CardId(uuid::Uuid::from_u128(2))]);
+        authority.reach_final_outcome();
+
+        let removal = authority.clear_scope();
+        assert!(removal.card_removed, "a released card is removed too");
+        assert_eq!(removal.handles, HashSet::from([7, 11]));
+        assert!(authority.admitted_scope_card().is_none());
+        assert!(authority.handles.is_empty());
     }
 }

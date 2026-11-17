@@ -2431,11 +2431,22 @@ keyed by start index and scope ID, and each record names its owner key.
   guest, which opens the same scopes. A guest trap names no task, so its retry decision reads
   `trap_retry_scopes`, written only through the invocation's own entry.
 - **Authority.** `InvocationAuthority` holds the scope card, its root cards and handles, its card
-  interest and the effective surface with its cache state. Wallet-wide changes (re-derivation, root
-  revocation, `interested_card_ids`, invalidation) loop over every entry.
-  `final_outcome_reached` is set when the invocation's guest call ends or its failure gives up;
-  from then on `bound_scope_card()` is none and the invocation has the agent's authority only.
-  `begin` and `install_invocation_scope_card` reset it.
+  interest and the effective surface with its cache state. Its fields are private. The scope
+  transitions (`install_scope`, `clear_scope`, `remove_scope_for_revoked_roots`,
+  `reach_final_outcome`) keep the card, its handles and its interest consistent; `invalidate` and
+  `synchronize_at` change the cache state. The setters for the surface, its expiry, the root cards
+  and an entity Store's interest leave invalidation to the caller. Wallet-wide changes
+  (re-derivation, root revocation, `interested_card_ids`, invalidation) loop over every entry.
+  Two states are explicit. `ScopeBinding` is `Unscoped`, `Bound(card)` or
+  `FinalOutcome { admitted }`: `reach_final_outcome` enters `FinalOutcome` when the invocation's
+  guest call ends or its failure gives up, so `bound_scope_card()` is none and the invocation has
+  the agent's authority only. Removing the card keeps the reached final outcome. `install_scope`
+  binds a new card; `begin` after a reached final outcome binds the admitted card again, if any,
+  and marks the surface stale. `Synchronization` is `Stale { last_generation }` or
+  `Synchronized { generation }`; a stale surface keeps the generation it was last synchronized at,
+  which a durable call's admission reads. `is_current_at` lets the cached surface authorize only
+  when it is synchronized at the published generation, card authority is open and none of its
+  cards expired.
 - **Card decisions** name the attributed invocation in their request
   (see "Card authorization decisions").
 

@@ -431,7 +431,7 @@ pub(super) async fn persist_derived_card<Ctx: WorkerCtx>(
         parent_expires_at,
         move |ctx| {
             ensure_persistent_derivation_repair_authority(
-                &ctx.state.authority().effective_surface,
+                ctx.state.authority().effective_surface(),
                 &ctx.state.created_by_email,
                 parent_id,
                 source,
@@ -742,8 +742,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         ))?;
         self.state
             .authority_mut()
-            .scope_handles
-            .insert(handle.rep(), root_card_ids);
+            .hold_scope_handle(handle.rep(), root_card_ids);
         self.state.invocation_state_mut().scope_card_mint_ordinal = next_ordinal;
         Ok(Ok(handle))
     }

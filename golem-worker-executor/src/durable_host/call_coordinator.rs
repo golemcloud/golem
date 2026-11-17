@@ -15,8 +15,7 @@
 use super::*;
 use crate::durable_host::concurrent::DurableAccess;
 use crate::durable_host::{
-    LiveAuthorizationPermit, authority_snapshot_is_current_at, authorize_effective_surface,
-    record_permission_decisions,
+    LiveAuthorizationPermit, authorize_effective_surface, record_permission_decisions,
 };
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::sync::atomic::Ordering;
@@ -264,16 +263,13 @@ where
             .published_authority_generation
             .load(Ordering::Acquire);
         let now = chrono::Utc::now();
-        if authority_snapshot_is_current_at(
-            ctx.state.authority().initialized,
+        if ctx.state.authority().is_current_at(
             ctx.state.card_interest_index.authority_is_open(),
-            ctx.state.authority().processed_generation,
             published_generation,
-            ctx.state.authority().next_expiration,
             now,
         ) {
             let result =
-                authorize_effective_surface(&ctx.state.authority().effective_surface, targets);
+                authorize_effective_surface(ctx.state.authority().effective_surface(), targets);
             if ctx.authority_snapshot_is_stable(published_generation) {
                 FastResult::Stable(result)
             } else {
@@ -312,7 +308,7 @@ where
                 .published_authority_generation
                 .load(Ordering::Acquire);
             let result =
-                authorize_effective_surface(&ctx.state.authority().effective_surface, targets);
+                authorize_effective_surface(ctx.state.authority().effective_surface(), targets);
             // A due cached deadline sent us through synchronization. Recompute it from the
             // synchronized wallet before deciding whether the snapshot is stable.
             ctx.refresh_authority_expiration_deadline();

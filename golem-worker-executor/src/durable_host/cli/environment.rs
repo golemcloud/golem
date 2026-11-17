@@ -96,7 +96,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     || self
                         .state
                         .authority()
-                        .effective_surface
+                        .effective_surface()
                         .authorize(target)
                         .unwrap_or(false);
                 (target.clone(), allowed)

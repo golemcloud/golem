@@ -556,7 +556,10 @@ impl PrivateDurableWorkerState {
             attribution: Default::default(),
             invocations: {
                 let mut invocations = execution_state::Invocations::default();
-                invocations.loop_entry_mut().authority.effective_surface = agent_effective_surface;
+                invocations
+                    .loop_entry_mut()
+                    .authority
+                    .replace_surface(agent_effective_surface);
                 invocations
             },
             entity_logical_key_position: None,

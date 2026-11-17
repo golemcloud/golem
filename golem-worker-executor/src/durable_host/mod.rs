@@ -42,9 +42,8 @@ pub(crate) use authorization::context::{
 };
 #[cfg(test)]
 use authorization::context::{
-    assert_live_authorization, clear_invocation_scope_state, derive_permission_uuid,
-    derive_permission_uuid_for_sequence, expired_wallet_card_ids_at,
-    remove_invocation_scope_for_revoked_roots,
+    assert_live_authorization, derive_permission_uuid, derive_permission_uuid_for_sequence,
+    expired_wallet_card_ids_at,
 };
 use authorization::context::{
     component_baseline_effective_surface_from_wallet, live_scope_root_cards_from_states,
@@ -1753,7 +1752,7 @@ impl PrivateDurableWorkerState {
     /// agent's wallet.
     pub fn invalidate_authority(&mut self) {
         for entry in self.invocations.entries_mut() {
-            entry.authority.initialized = false;
+            entry.authority.invalidate();
         }
     }
 
