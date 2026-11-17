@@ -67,26 +67,63 @@ cd sdks/python
 python3.14 -B -m unittest discover -s tests
 ```
 
-## Prepared assets
+## Prepared assets and the wheel
 
 `cargo make python-sdk-prepare` installs componentize-py from the
 [golemcloud fork](https://github.com/golemcloud/componentize-py) at the
 revision that the workspace pins. It then prepares the runtime and bindings for
-`wit/main.wit` in `target/prepared`. Building componentize-py compiles CPython
-3.14.10 for WASI and needs `WASI_SDK_PATH`.
+`wit/main.wit` in `target/prepared`, and writes `target/compatibility.json`,
+which names that revision. Building componentize-py compiles CPython 3.14.10
+for WASI and needs `WASI_SDK_PATH`.
 
-`golem-python-assembler` links the prepared assets with the SDK and an
-application and pre-initializes the result on Golem's shared Wasmtime engine.
-It does not process WIT, generate bindings or compile CPython. Its tests read
-`target/prepared`:
+`cargo make python-sdk-wheel` builds
+`target/wheel/golem_py_sdk-<version>-py3-none-any.whl` with `uv`. The wheel,
+`golem-py-sdk`, contains:
+
+- the `golem` package with `py.typed`, which imports on CPython 3.14 or later
+  without the guest runtime;
+- `golem/_prepared`, the prepared runtime and bindings;
+- `golem/_compatibility.json`, the componentize-py revision that prepared them.
+
+The build fixes `SOURCE_DATE_EPOCH`, so the same inputs give the same wheel
+bytes in any directory and at any time.
+
+`golem-python-assembler` reads the wheel without running Python
+(`read_sdk_wheel`). It fails before any application code runs, and names the
+expected and the found values, when:
+
+- a file does not match the wheel's `RECORD`, `RECORD` lists a missing file or
+  misses a file, or a path leaves the wheel;
+- the wheel's version is not the assembler's version;
+- the componentize-py revision is not the one that the assembler links;
+- the prepared assets fail their own checks;
+- the identity of the prepared assets, the SHA-256 of their manifest, is not
+  the assembler's `PREPARED_IDENTITY`. The manifest names the digests of the
+  world bindings, the standard library, the adapter and every runtime library,
+  so assets for another world or runtime fail this check even when they come
+  from the same componentize-py revision.
+
+`read_prepared` applies the same identity check to a `target/prepared`
+directory. When the WIT world, the runtime or the componentize-py revision
+changes, run `cargo make python-sdk-prepare` again and set
+`PREPARED_IDENTITY` to the new identity.
+
+It never regenerates assets or compiles CPython. The assembler then links the
+prepared assets with the SDK and an application and pre-initializes the
+result on Golem's shared Wasmtime engine. It does not process WIT or generate
+bindings.
+
+The assembler's tests read `target/prepared` and the wheel:
 
 ```shell
-cargo make python-sdk-prepare
+cargo make python-sdk-wheel
 cargo test -p golem-python-assembler
 ```
 
 ## Current limits
 
+- The wheel does not yet include the license notices of CPython and the other
+  parts of the prepared runtime, so it is not published.
 - Methods are synchronous. Async methods, compound types, default, variadic
   and keyword-only parameters and an agent `config` fail the build with a
   named error.

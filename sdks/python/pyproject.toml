@@ -1,0 +1,33 @@
+[project]
+name = "golem-py-sdk"
+version = "0.0.0"
+description = "Python SDK for Golem agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.14"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://golem.cloud"
+Repository = "https://github.com/golemcloud/golem"
+
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/golem"]
+
+# The prepared runtime and bindings, written by `cargo make python-sdk-prepare`.
+# The Golem CLI reads them from the wheel; the guest does not import them.
+[tool.hatch.build.targets.wheel.force-include]
+"target/prepared" = "golem/_prepared"
+"target/compatibility.json" = "golem/_compatibility.json"
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "wit", "tests", "README.md", "pyproject.toml"]
