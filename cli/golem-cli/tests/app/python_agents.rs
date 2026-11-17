@@ -47,6 +47,25 @@ fn edit(path: &Path, from: &str, to: &str) {
     std::fs::write(path, text.replacen(from, to, 1)).unwrap();
 }
 
+/// Builds the application and returns its output, failing the test when the
+/// build fails.
+async fn build(ctx: &TestContext) -> String {
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    format!("{}\n{}", outputs.stdout_text(), outputs.stderr_text())
+}
+
+/// Whether the build output reports that it skipped the Python assembly.
+fn skipped_assembly(text: &str) -> bool {
+    text.lines()
+        .any(|line| line.contains("assembling Python modules in") && line.contains("UP-TO-DATE"))
+}
+
+/// Whether the build output reports that it ran the Python assembly.
+fn ran_assembly(text: &str) -> bool {
+    text.contains("Assembling Python modules in")
+}
+
 async fn invoke(ctx: &TestContext, agent: &str, method: &str, args: &[&str]) -> i64 {
     let mut argv = vec![flag::YES, cmd::AGENT, cmd::INVOKE, agent, method];
     argv.extend_from_slice(args);
@@ -97,7 +116,7 @@ async fn test_python_counter_builds_deploys_and_recovers() {
     assert!(unchanged.success_or_dump());
     let text = format!("{}\n{}", unchanged.stdout_text(), unchanged.stderr_text());
     assert!(text.contains("assembling Python modules in"), "{text}");
-    assert!(text.contains("UP-TO-DATE"), "{text}");
+    assert!(skipped_assembly(&text), "{text}");
     assert_eq!(std::fs::read(&wasm).unwrap(), before);
 
     // A changed module is assembled again, and the deployed agent runs it.
@@ -144,7 +163,7 @@ async fn test_python_build_failures_keep_the_last_component() {
     let original_source = std::fs::read_to_string(&source).unwrap();
     let original_pyproject = std::fs::read_to_string(&pyproject).unwrap();
 
-    let cases: [(&str, &Path, &str, &str, &[&str]); 3] = [
+    let cases: [(&str, &Path, &str, &str, &[&str]); 5] = [
         (
             "unsupported type hint",
             &source,
@@ -175,6 +194,28 @@ async fn test_python_build_failures_keep_the_last_component() {
                 "cannot contain third-party packages",
             ],
         ),
+        (
+            "SDK path source",
+            &pyproject,
+            "[project]\n",
+            "[tool.uv.sources]\ngolem-py-sdk = { path = \"../patched-sdk\" }\n\n[project]\n",
+            &[
+                "declares the package source `tool.uv.sources.golem-py-sdk",
+                "../patched-sdk",
+                "set GOLEM_PYTHON_SDK_WHEEL",
+            ],
+        ),
+        (
+            "SDK Git source",
+            &pyproject,
+            "[project]\n",
+            "[tool.uv.sources]\ngolem-py-sdk = { git = \"https://example.com/sdk.git\" }\n\n[project]\n",
+            &[
+                "declares the package source `tool.uv.sources.golem-py-sdk",
+                "https://example.com/sdk.git",
+                "set GOLEM_PYTHON_SDK_WHEEL",
+            ],
+        ),
     ];
     for (case, path, from, to, expected) in cases {
         edit(path, from, to);
@@ -195,4 +236,143 @@ async fn test_python_build_failures_keep_the_last_component() {
         std::fs::write(&source, &original_source).unwrap();
         std::fs::write(&pyproject, &original_pyproject).unwrap();
     }
+}
+
+/// Removing a module is a change: the build assembles again, so a module that
+/// imports the removed one fails the build, which keeps the last component.
+#[test]
+#[timeout("10 minutes")]
+async fn test_python_build_follows_removed_source_files() {
+    let mut ctx = TestContext::new();
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, "py-removed", flag::TEMPLATE, "python"])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd("py-removed");
+    let src = component_dir(&ctx).join("src");
+    let helper = src.join("helper.py");
+    std::fs::write(&helper, "LABEL = 'helper'\n").unwrap();
+    edit(
+        &src.join("main.py"),
+        "import counter_agent  # noqa: F401\n",
+        "import counter_agent  # noqa: F401\nimport helper  # noqa: F401\n",
+    );
+    build(&ctx).await;
+    let wasm = component_wasm(&ctx);
+    let valid = std::fs::read(&wasm).unwrap();
+
+    let unchanged = build(&ctx).await;
+    assert!(skipped_assembly(&unchanged), "{unchanged}");
+    assert_eq!(std::fs::read(&wasm).unwrap(), valid);
+
+    std::fs::remove_file(&helper).unwrap();
+    let failed = ctx.cli([flag::YES, cmd::BUILD]).await;
+    let text = format!("{}\n{}", failed.stdout_text(), failed.stderr_text());
+    assert!(
+        !failed.success(),
+        "the build after removing helper.py succeeded: {text}"
+    );
+    assert!(text.contains("No module named 'helper'"), "{text}");
+    assert_eq!(
+        std::fs::read(&wasm).unwrap(),
+        valid,
+        "the failed build replaced the component"
+    );
+
+    std::fs::write(&helper, "LABEL = 'helper'\n").unwrap();
+    let restored = build(&ctx).await;
+    assert!(ran_assembly(&restored), "{restored}");
+    let unchanged = build(&ctx).await;
+    assert!(skipped_assembly(&unchanged), "{unchanged}");
+}
+
+const ENTRY_MODULE_MANIFEST: &str = r#"
+manifestVersion: MANIFEST_VERSION
+app: py-entries
+environments:
+  local:
+    server: local
+componentTemplates:
+  py:
+    guestLanguage: python
+    presets:
+      default:
+        default: true
+        build:
+        - assemblePython: "{{ componentDir }}/src"
+          modules:
+          - ENTRY_MODULE
+          pyproject: "{{ componentDir }}/pyproject.toml"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+components:
+  py-entries:main:
+    dir: "COMPONENT_DIR"
+    templates: py
+"#;
+
+/// Builds with other entry modules write the same output. Switching back to
+/// the first entry module assembles it again instead of keeping the
+/// component of the second.
+#[test]
+#[timeout("10 minutes")]
+async fn test_python_build_follows_entry_module_switches() {
+    let mut ctx = TestContext::new();
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, "py-entries", flag::TEMPLATE, "python"])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd("py-entries");
+    let component = component_dir(&ctx);
+    let src = component.join("src");
+    std::fs::write(
+        src.join("entry_a.py"),
+        "import counter_agent  # noqa: F401\n",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("entry_b.py"),
+        "from golem import agent, method\n\n\n@agent\nclass GreeterAgent:\n    def __init__(self, name: str) -> None:\n        self.name = name\n\n    @method\n    def greet(self) -> str:\n        return 'hello ' + self.name\n",
+    )
+    .unwrap();
+    let component_dir = component
+        .strip_prefix(ctx.cwd_path())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let configure = |entry: &str| {
+        std::fs::write(
+            ctx.cwd_path_join("golem.yaml"),
+            ENTRY_MODULE_MANIFEST
+                .replace("MANIFEST_VERSION", golem_cli::versions::sdk::MANIFEST)
+                .replace("ENTRY_MODULE", entry)
+                .replace("COMPONENT_DIR", &component_dir),
+        )
+        .unwrap();
+    };
+
+    configure("entry_a");
+    build(&ctx).await;
+    let wasm = component_wasm(&ctx);
+    let a = std::fs::read(&wasm).unwrap();
+
+    configure("entry_b");
+    let switched = build(&ctx).await;
+    assert!(ran_assembly(&switched), "{switched}");
+    let b = std::fs::read(&wasm).unwrap();
+    assert_ne!(a, b, "entry_a and entry_b declare different agents");
+
+    configure("entry_a");
+    let back = build(&ctx).await;
+    assert!(ran_assembly(&back), "{back}");
+    assert_eq!(
+        std::fs::read(&wasm).unwrap(),
+        a,
+        "switching back to entry_a kept the entry_b component"
+    );
+    let unchanged = build(&ctx).await;
+    assert!(skipped_assembly(&unchanged), "{unchanged}");
+    assert_eq!(std::fs::read(&wasm).unwrap(), a);
 }

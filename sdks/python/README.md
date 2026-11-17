@@ -47,7 +47,9 @@ build:
 ```
 
 The step runs no Python, uv or C compiler on the host. It skips the assembly
-when the sources, the `pyproject.toml` and the wheel did not change. A failed
+when the sources, the `pyproject.toml`, the wheel and the step itself did not
+change; adding, editing, removing or renaming a source file, or changing the
+entry modules, assembles again. A failed
 build keeps the last component that it assembled. The build fails, with the
 cause, when:
 
@@ -55,6 +57,9 @@ cause, when:
   the CLI (another version, another prepared runtime or a corrupt file);
 - `project.dependencies` lists anything other than the exact
   `golem-py-sdk==<version>` that the CLI builds with;
+- `pyproject.toml` declares a package source, such as a `[tool.uv.sources]`
+  path or Git entry or a uv index. The SDK always comes from the wheel that
+  `GOLEM_PYTHON_SDK_WHEEL` names;
 - an entry module or a module that it imports raises, with the original
   traceback;
 - a declaration is invalid, with the file and line of each one;

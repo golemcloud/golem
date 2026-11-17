@@ -89,10 +89,13 @@ async fn execute_assemble_python(
         )
     );
 
+    let source_files = python_source_files(source_dir.as_std_path());
+
     new_task_up_to_date_check(ctx)
         .with_task_result_marker(AssemblePythonCommandMarkerHash {
             build_dir: base_build_dir.as_std_path(),
             command,
+            source_files: &source_files,
             sdk_wheel: &wheel_digest,
             prepared_identity: golem_python_assembler::PREPARED_IDENTITY,
         })?
@@ -145,6 +148,27 @@ async fn execute_assemble_python(
         .await
 }
 
+/// The paths of the files in a Python source directory, relative to it and
+/// sorted.
+///
+/// The modification-time check sees edited and added files, but not removed
+/// or renamed ones, so the task marker also covers this list.
+fn python_source_files(source_dir: &Path) -> Vec<String> {
+    walkdir::WalkDir::new(source_dir)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| !entry.file_type().is_dir())
+        .filter_map(|entry| {
+            entry
+                .path()
+                .strip_prefix(source_dir)
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
 /// The `golem-py-sdk` wheel that Python components build with.
 fn python_sdk_wheel() -> anyhow::Result<Utf8PathBuf> {
     match &sdk_overrides()?.python_sdk_wheel {
@@ -158,14 +182,45 @@ fn python_sdk_wheel() -> anyhow::Result<Utf8PathBuf> {
     }
 }
 
-/// Fails when `pyproject.toml` declares a dependency other than the SDK.
+/// Fails when `pyproject.toml` declares a dependency other than the SDK, or
+/// a package source.
 ///
 /// Python components contain only the application's modules and the SDK;
-/// third-party packages are not assembled into them.
+/// third-party packages are not assembled into them. The SDK always comes
+/// from the wheel that the CLI builds with, so a project cannot select another
+/// source for it.
 fn check_python_dependencies(pyproject: &Utf8Path) -> anyhow::Result<()> {
     let text = fs::read_to_string(pyproject)?;
     let manifest: toml::Table =
         toml::from_str(&text).with_context(|| format!("{pyproject} is not valid TOML"))?;
+    if let Some(uv) = manifest
+        .get("tool")
+        .and_then(|tool| tool.get("uv"))
+        .and_then(toml::Value::as_table)
+    {
+        let mut declared = Vec::new();
+        if let Some(sources) = uv.get("sources").and_then(toml::Value::as_table) {
+            declared.extend(
+                sources
+                    .iter()
+                    .map(|(name, source)| format!("`tool.uv.sources.{name} = {source}`")),
+            );
+        }
+        for key in ["index", "index-url", "extra-index-url", "find-links"] {
+            if let Some(value) = uv.get(key) {
+                declared.push(format!("`tool.uv.{key} = {value}`"));
+            }
+        }
+        if !declared.is_empty() {
+            bail!(
+                "{pyproject} declares the package source {}, but Python components build only \
+                 with the {} wheel of the Golem CLI; remove it. To build with a local SDK wheel, \
+                 set GOLEM_PYTHON_SDK_WHEEL instead",
+                declared.join(", "),
+                golem_python_assembler::DISTRIBUTION
+            );
+        }
+    }
     let dependencies = match manifest
         .get("project")
         .and_then(|project| project.get("dependencies"))
@@ -982,5 +1037,42 @@ mod tests {
 
         let message = error("dependencies = \"golem-py-sdk==0.0.0\"");
         assert!(message.contains("is not a list"), "{message}");
+
+        // A direct reference names another source for the SDK.
+        let message = error("dependencies = [\"golem-py-sdk @ file:///sdk.whl\"]");
+        assert!(
+            message.contains("requires `golem-py-sdk @ file:///sdk.whl`"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn python_projects_cannot_declare_package_sources() {
+        let pin = "dependencies = [\"golem-py-sdk==0.0.0\"]\n";
+        for (source, expected) in [
+            (
+                "[tool.uv.sources]\ngolem-py-sdk = { path = \"../patched-sdk\" }\n",
+                "`tool.uv.sources.golem-py-sdk = { path = \"../patched-sdk\" }`",
+            ),
+            (
+                "[tool.uv.sources]\ngolem-py-sdk = { git = \"https://example.com/sdk.git\" }\n",
+                "`tool.uv.sources.golem-py-sdk = { git = \"https://example.com/sdk.git\" }`",
+            ),
+            (
+                "[tool.uv]\nfind-links = [\"../wheels\"]\n",
+                "`tool.uv.find-links = [\"../wheels\"]`",
+            ),
+        ] {
+            // Sources are rejected even when the project lists no dependencies.
+            for dependencies in [pin, ""] {
+                let message = error(&format!("{dependencies}{source}"));
+                assert!(
+                    message.contains(&format!("declares the package source {expected}")),
+                    "{message}"
+                );
+                assert!(message.contains("set GOLEM_PYTHON_SDK_WHEEL"), "{message}");
+            }
+        }
+        check(&format!("{pin}[tool.uv]\ndev-dependencies = []\n")).unwrap();
     }
 }

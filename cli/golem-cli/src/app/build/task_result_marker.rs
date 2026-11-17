@@ -254,6 +254,9 @@ impl TaskResultMarkerHashSource for PreinitializeJsCommandMarkerHash<'_> {
 pub struct AssemblePythonCommandMarkerHash<'a> {
     pub build_dir: &'a Path,
     pub command: &'a AssemblePython,
+    /// The files of the source directory, so that removing or renaming one
+    /// reruns the assembly.
+    pub source_files: &'a [String],
     /// The SHA-256 of the SDK wheel, which contains the SDK sources and the
     /// prepared runtime and bindings.
     pub sdk_wheel: &'a str,
@@ -265,8 +268,13 @@ impl TaskResultMarkerHashSource for AssemblePythonCommandMarkerHash<'_> {
         "AssemblePythonCommandMarkerHash"
     }
 
+    /// Builds with other modules, sources or wheels write the same output, so
+    /// the output alone identifies the task.
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(&(
+            self.build_dir,
+            &self.command.into,
+        ))?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
