@@ -27,7 +27,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let result = async {
         let mut number_of_replayed_functions = 0;
 
-        if refresh_replay_target {
+        // A published cursor has already consumed its historical prefix. Snapshot loading can
+        // append a memory baseline after publication; that live hint must not reopen replay.
+        if refresh_replay_target && !store.as_context().data().durable_ctx().is_live() {
             let worker = store.as_context().data().durable_ctx().public_state.worker();
             // Repaired status covers committed history, not buffered appends. Publish the
             // snapshot-assisted update's full prefix before sampling both target and index.

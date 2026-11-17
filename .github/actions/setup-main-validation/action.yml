@@ -1,0 +1,62 @@
+name: Setup main validation runner
+description: Install the existing CI toolchains on the temporary Blacksmith executor
+runs:
+  using: composite
+  steps:
+    - uses: ./.validation-control/.github/actions/setup-rust
+      with:
+        use-cache: 'false'
+        rust-targets: wasm32-wasip1 wasm32-wasip2 wasm32-unknown-unknown
+        install-cargo-binstall: 'true'
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.14'
+    - uses: ./.validation-control/.github/actions/setup-js-wasm-tools
+      with:
+        node-version: '24'
+        wasm-rquickjs-version: '0.5.3'
+        install-cargo-component: 'true'
+    - uses: oven-sh/setup-bun@v2
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '21'
+    - uses: sbt/setup-sbt@v1
+    - uses: hustcer/setup-moonbit@v1
+      with:
+        version: '0.10.18+6c83a7f62'
+        core-version: '0.10.18+6c83a7f62'
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: sdks/go/golem/go.mod
+        cache: 'false'
+    - uses: shogo82148/actions-setup-redis@v1.49.0
+      with:
+        redis-version: latest
+        auto-start: false
+    - uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: '50.0.1'
+    - name: Install native build and managed-XFS dependencies
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends build-essential libcurl4-openssl-dev libssl-dev libexpat1-dev zlib1g-dev clang lld cmake protobuf-compiler qemu-system-x86 qemu-utils ovmf xfsprogs acl
+        test -c /dev/kvm
+        sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+        docker info
+        directory=$(mktemp -d)
+        trap 'rm -rf "$directory"' EXIT
+        archive="$directory/lima-2.2.0-Linux-x86_64.tar.gz"
+        curl -fSL https://github.com/lima-vm/lima/releases/download/v2.2.0/lima-2.2.0-Linux-x86_64.tar.gz -o "$archive"
+        gh attestation verify --owner lima-vm "$archive"
+        sudo tar -C /usr/local -xzf "$archive"
+        curl -fSL https://github.com/golangci/golangci-lint/releases/download/v2.13.2/golangci-lint-2.13.2-linux-amd64.tar.gz | tar -xz -C "$directory"
+        sudo install "$directory/golangci-lint-2.13.2-linux-amd64/golangci-lint" /usr/local/bin/golangci-lint
+    - name: Install Cargo tools
+      shell: bash
+      run: |
+        cargo binstall --no-confirm --force --locked cargo-nextest cargo-test-r@2.2.11 cargo-deny wasm-tools@1.248.0 wit-bindgen-cli@0.40.0

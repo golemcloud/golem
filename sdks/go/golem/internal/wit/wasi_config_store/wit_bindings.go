@@ -113,7 +113,7 @@ func Get(key string) witTypes.Result[witTypes.Option[string], Error] {
 
 		result0 = witTypes.Ok[witTypes.Option[string], Error](option)
 	case 1:
-		result := wasm_lift_1_t1217(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1218(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Option[string], Error](result)
 	default:
@@ -147,7 +147,7 @@ func GetAll() witTypes.Result[[]witTypes.Tuple2[string, string], Error] {
 
 		result2 = witTypes.Ok[[]witTypes.Tuple2[string, string], Error](result)
 	case 1:
-		result1 := wasm_lift_1_t1217(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t1218(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[[]witTypes.Tuple2[string, string], Error](result1)
 	default:
@@ -159,7 +159,7 @@ func GetAll() witTypes.Result[[]witTypes.Tuple2[string, string], Error] {
 }
 
 //go:noinline
-func wasm_lift_1_t1217(src unsafe.Pointer) Error {
+func wasm_lift_1_t1218(src unsafe.Pointer) Error {
 	var variant Error
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

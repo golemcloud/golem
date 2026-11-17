@@ -440,8 +440,9 @@ fn download_reports<G: GitHubApi>(github: &G, work: Vec<ArtifactWork>) -> Result
     })
 }
 
-fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Result<()> {
+fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> usize {
     let mut jobs_by_attempt = HashMap::<(u64, u32), Vec<Job>>::new();
+    let mut failed_attempts = 0;
     let mut cursors = vec![0; candidates.len()];
     loop {
         let mut pending = HashSet::new();
@@ -462,7 +463,7 @@ fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Resu
         }
         let queue = Mutex::new(VecDeque::from_iter(pending));
         let (sender, receiver) = mpsc::channel();
-        thread::scope(|scope| -> Result<()> {
+        thread::scope(|scope| {
             for _ in 0..4 {
                 let queue = &queue;
                 let sender = sender.clone();
@@ -490,10 +491,17 @@ fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Resu
             }
             drop(sender);
             for (key, result) in receiver {
-                jobs_by_attempt.insert(key, result?);
+                let jobs = result.unwrap_or_else(|error| {
+                    failed_attempts += 1;
+                    eprintln!(
+                        "Job metadata unavailable; using run-attempt links (run={}, attempt={}, error={error})",
+                        key.0, key.1
+                    );
+                    Vec::new()
+                });
+                jobs_by_attempt.insert(key, jobs);
             }
-            Ok(())
-        })?;
+        });
         for (test, cursor) in candidates.iter_mut().zip(&mut cursors) {
             if test.links.len() >= 3 {
                 continue;
@@ -522,7 +530,7 @@ fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Resu
         "Resolved failing job links (run_attempts={})",
         jobs_by_attempt.len()
     );
-    Ok(())
+    failed_attempts
 }
 
 fn find_issue<G: GitHubApi>(github: &G) -> Result<Option<Issue>> {
@@ -684,7 +692,7 @@ fn generate_report<G: GitHubApi>(
     );
     let displayed_count = candidates.len().min(args.limit);
     eprintln!("Resolving failing job links (displayed_tests={displayed_count}, workers=4)");
-    add_job_links(github, &mut candidates[..displayed_count])?;
+    let failed_job_lookups = add_job_links(github, &mut candidates[..displayed_count]);
     let existing = if args.update_issue {
         eprintln!("Looking up the known-flaky-tests issue");
         find_issue(github)?
@@ -692,7 +700,7 @@ fn generate_report<G: GitHubApi>(
         None
     };
     let generated = format_timestamp(now).replace('T', " ").replace('Z', " UTC");
-    let body = render_report(
+    let mut body = render_report(
         &candidates,
         analyzed_run_count,
         runs.len(),
@@ -705,6 +713,13 @@ fn generate_report<G: GitHubApi>(
             .unwrap_or_default(),
         args.limit,
     );
+    if failed_job_lookups > 0 {
+        let warning = format!(
+            "**Job links incomplete:** job metadata was unavailable for {failed_job_lookups} run attempt(s). Those links open the run attempt instead of an individual job. Test observations and scores are unchanged."
+        );
+        eprintln!("::warning::{warning}");
+        body.insert_str(0, &format!("> {warning}\n\n"));
+    }
     Ok((body, existing))
 }
 
@@ -952,7 +967,7 @@ mod tests {
             failed_observation("other", 4, "unit-tests-report-attempt1"),
         ]);
         let mut candidates = aggregate(observations);
-        add_job_links(&github, &mut candidates).unwrap();
+        assert_eq!(add_job_links(&github, &mut candidates), 0);
         assert_eq!(candidates[0].name, "suite");
         assert_eq!(
             candidates[0].links,
@@ -978,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn job_link_lookup_paginates_and_propagates_errors() {
+    fn job_link_lookup_paginates_and_falls_back_on_errors() {
         let mut github = FakeGitHub::new(false, false, false);
         github.job_responses.insert(
             "/repos/test/repo/actions/runs/1/attempts/1/jobs".into(),
@@ -992,7 +1007,7 @@ mod tests {
             1,
             "unit-tests-report-attempt1",
         )]);
-        add_job_links(&github, &mut candidates).unwrap();
+        assert_eq!(add_job_links(&github, &mut candidates), 0);
         assert_eq!(candidates[0].links, ["https://example.test/jobs/page2"]);
         assert_eq!(github.reads.lock().unwrap().len(), 2);
         github.job_responses.insert(
@@ -1000,13 +1015,47 @@ mod tests {
             vec![Value::Null],
         );
         candidates[0].links.clear();
-        assert!(
-            add_job_links(&github, &mut candidates)
-                .unwrap_err()
-                .to_string()
-                .contains("job metadata unavailable")
+        assert_eq!(add_job_links(&github, &mut candidates), 1);
+        assert_eq!(
+            candidates[0].links,
+            ["https://example.test/runs/1/attempts/1"]
         );
-        assert!(candidates[0].links.is_empty());
+    }
+
+    #[test]
+    fn report_can_be_published_when_one_attempts_job_metadata_is_unavailable() {
+        let mut github = FakeGitHub::new(true, true, true);
+        github.second_archive = report_archive(
+            "unit-tests-report-attempt2",
+            json!([
+                {"name": "suite::flip", "status": "passed", "duration": 30},
+                {"name": "suite::retry", "status": "passed", "duration": 40},
+                {"name": "suite::other", "status": "failed", "duration": 50}
+            ]),
+        );
+        github.job_responses.insert(
+            "/repos/test/repo/actions/runs/1/attempts/1/jobs".into(),
+            vec![Value::Null],
+        );
+        let (body, existing) = generate_report(&github, &test_args(true), 1_788_480_000).unwrap();
+
+        assert!(body.contains("**Job links incomplete:**"));
+        assert!(body.contains("1 run attempt"));
+        assert!(body.contains("[log 1](https://example.test/runs/1/attempts/1)"));
+        assert!(body.contains("[log 1](https://example.test/jobs/unit-tests)"));
+        assert!(body.contains("<code>suite::flip</code> | 7"));
+        assert!(body.contains("<code>suite::retry</code> | 3"));
+        assert_eq!(
+            upsert_issue(&github, existing, &body).unwrap(),
+            "https://example.test/issues/42"
+        );
+    }
+
+    #[test]
+    fn invalid_test_data_still_prevents_publication() {
+        let mut github = FakeGitHub::new(true, true, true);
+        github.first_archive = b"not a report archive".to_vec();
+        assert!(generate_report(&github, &test_args(true), 1_788_480_000).is_err());
     }
 
     #[test]

@@ -4376,8 +4376,36 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         ..Default::default()
     };
     let executor = start_with_overrides(deps, &context, overrides()).await?;
-    let (provider_checkpoint_port, provider_checkpoint_server, mut provider_checkpoints) =
-        start_promise_checkpoint_server().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let provider_checkpoint_port = listener.local_addr()?.port();
+    let (arrivals, mut provider_checkpoints) = tokio::sync::mpsc::unbounded_channel();
+    let (promises, mut provider_promises) = tokio::sync::mpsc::unbounded_channel();
+    let app = Router::new().route(
+        "/{name}",
+        post(move |Path(name): Path<String>, body: Bytes| {
+            let arrivals = arrivals.clone();
+            let promises = promises.clone();
+            async move {
+                let (release, wait) = tokio::sync::oneshot::channel();
+                announce_promise_checkpoint(Path(name.clone()), State(promises), body).await;
+                arrivals
+                    .send(CrashCheckpointArrival { name, release })
+                    .expect("record held HTTP checkpoint");
+                // Keep the HTTP request pending, not a promise wait that can unload the owner.
+                if wait.await.is_ok() {
+                    axum::http::StatusCode::NO_CONTENT
+                } else {
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                }
+            }
+        }),
+    );
+    let provider_checkpoint_server =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve held HTTP checkpoints");
+        }));
     let (caller_checkpoint_port, caller_checkpoint_server, mut caller_checkpoints) =
         start_promise_checkpoint_server().await;
     let provider_component = executor
@@ -4462,7 +4490,9 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             .await
     });
     let provider =
-        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let provider_promise =
+        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4493,11 +4523,15 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     executor
         .complete_promise(
             &executor
-                .promise_id(&direct_worker, provider.oplog_idx)
+                .promise_id(&direct_worker, provider_promise.oplog_idx)
                 .await?,
             Vec::new(),
         )
         .await?;
+    provider
+        .release
+        .send(())
+        .expect("release direct typed output producer");
     let caller = next_promise_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
@@ -4585,8 +4619,10 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
-    let provider_promise =
-        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let _provider_gate =
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let _provider_promise =
+        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4660,14 +4696,22 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
+    let replayed_provider_gate =
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let replayed_provider_promise =
+        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
     executor
         .complete_promise(
             &executor
-                .promise_id(&decorated_worker, provider_promise.oplog_idx)
+                .promise_id(&decorated_worker, replayed_provider_promise.oplog_idx)
                 .await?,
             Vec::new(),
         )
         .await?;
+    replayed_provider_gate
+        .release
+        .send(())
+        .expect("release replayed typed output producer");
     let caller_promise = next_promise_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
@@ -4714,6 +4758,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         "universal middleware, typed middleware, and provider terminate once each"
     );
     assert!(provider_checkpoints.try_recv().is_err());
+    assert!(provider_promises.try_recv().is_err());
     assert!(caller_checkpoints.try_recv().is_err());
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();

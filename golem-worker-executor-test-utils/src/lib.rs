@@ -335,9 +335,10 @@ impl WorkerExecutorTestDependencies {
         // the error if another test in the same process already installed a provider.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
+        let config = golem_test_framework::config::EnvBasedTestDependenciesConfig::new();
         let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
+            config.redis_port,
+            config.redis_key_prefix,
             Level::INFO,
             Level::ERROR,
         ));
@@ -601,6 +602,13 @@ mod hosted_descriptor_tests {
 type PrimaryContextProbe = Box<
     dyn for<'a> FnOnce(
             &'a mut DurableWorkerCtx<TestWorkerCtx>,
+        ) -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send,
+>;
+
+type InstancePreparationProbe = Box<
+    dyn for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
         ) -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
         + Send,
 >;
@@ -1245,6 +1253,37 @@ impl TestWorkerExecutor {
             }),
         );
         receive
+    }
+
+    /// Runs once around the next primary instance preparation. The first probe owns the Store
+    /// before recovery; the second observes it only after successful preparation. Both probes
+    /// are consumed by that attempt, including when preparation fails or requests a retry.
+    pub fn probe_next_instance_preparation(
+        &self,
+        agent_id: &AgentId,
+        before: impl for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
+        )
+            -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send
+        + 'static,
+        after: impl for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
+        )
+            -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send
+        + 'static,
+    ) {
+        let mut probes = self
+            .additional_test_deps
+            .instance_preparation_probes
+            .lock()
+            .unwrap();
+        assert!(
+            !probes.contains_key(agent_id),
+            "instance preparation probe already armed"
+        );
+        probes.insert(agent_id.clone(), (Box::new(before), Box::new(after)));
     }
 
     pub fn probe_runtime_disposal(
@@ -3616,8 +3655,26 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         instance: &Instance,
         store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        let probes = store
+            .data()
+            .additional_test_deps
+            .instance_preparation_probes
+            .lock()
+            .unwrap()
+            .remove(agent_id);
+        let after = if let Some((before, after)) = probes {
+            before(store).await?;
+            Some(after)
+        } else {
+            None
+        };
         let result =
             DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await;
+        if matches!(result, Ok(None))
+            && let Some(after) = after
+        {
+            after(store).await?;
+        }
         let gate = store
             .data()
             .additional_test_deps
@@ -4179,16 +4236,16 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             .await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
-        self.durable_memory_grown(current, desired, kind);
+    fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {
+        self.durable_memory_grown(current, desired);
     }
 
     fn memory_grow_failed(
         &mut self,
         _error: wasmtime::Error,
-        kind: MemoryKind,
+        _kind: MemoryKind,
     ) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed(kind)
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(
@@ -4857,6 +4914,20 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _golem_config: &GolemConfig,
     ) -> Arc<dyn DirectInvocationAuthService> {
         Arc::new(NoOpDirectInvocationAuthService)
+    }
+}
+
+/// Returns the same supplied resource entry for every account initialization.
+/// Tests can retain the entry to observe or change its limits and usage.
+pub struct SharedResourceLimits(pub Arc<AtomicResourceEntry>);
+
+#[async_trait]
+impl ResourceLimits for SharedResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+        Ok(self.0.clone())
     }
 }
 
@@ -7107,6 +7178,9 @@ type EntitySettlementAccess =
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
     primary_context_probes: Arc<std::sync::Mutex<HashMap<AgentId, PrimaryContextProbe>>>,
+    instance_preparation_probes: Arc<
+        std::sync::Mutex<HashMap<AgentId, (InstancePreparationProbe, InstancePreparationProbe)>>,
+    >,
     rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
     native_test_effects: Arc<AtomicUsize>,
     native_test_helper_effects: Arc<AtomicUsize>,
@@ -7195,6 +7269,7 @@ impl AdditionalTestDeps {
         let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
             primary_context_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            instance_preparation_probes: Arc::default(),
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,

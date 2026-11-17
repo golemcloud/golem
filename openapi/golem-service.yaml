@@ -17934,9 +17934,15 @@ components:
         currentComponentRevision:
           type: integer
           format: uint64
+        queryHash:
+          description: |-
+            The hash of the search query of the pages that gave the cursor, or empty for the pages of
+            an oplog read without a query. A read refuses a cursor of another query.
+          type: string
       required:
       - nextOplogIndex
       - currentComponentRevision
+      - queryHash
     OplogErrorKind:
       type: string
       enum:
@@ -18733,6 +18739,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          MemorySizeReconciled: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -18792,6 +18799,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -19276,6 +19284,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#LogParams'
+    PublicOplogEntry_r#MemorySizeReconciledParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: MemorySizeReconciled
+            type: string
+            enum:
+            - MemorySizeReconciled
+        required:
+        - type
+      - $ref: '#/components/schemas/r#MemorySizeReconciledParams'
     PublicOplogEntry_r#OplogProcessorCheckpointParams:
       allOf:
       - type: object
@@ -22999,6 +23019,19 @@ components:
       - level
       - context
       - message
+    r#MemorySizeReconciledParams:
+      title: r#MemorySizeReconciledParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        bytes:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - bytes
     r#OplogProcessorCheckpointParams:
       title: r#OplogProcessorCheckpointParams
       type: object

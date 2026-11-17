@@ -60,6 +60,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     );
                     return Self::perform_start_action(store, action).await;
                 }
+                store
+                    .as_context()
+                    .data()
+                    .durable_ctx()
+                    .reconcile_memory_accounting(true)
+                    .await?;
                 let component_metadata = store.as_context().data().component_metadata().clone();
                 let agent_type_provision_config = store
                     .as_context()
@@ -540,6 +546,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "Snapshot recovery at {snapshot_index} failed: {error}"
             )))
         } else {
+            let ctx = store.as_context();
+            let ctx = ctx.data().durable_ctx();
+            // A snapshot-only cursor can already be live before loading the guest state.
+            // The load suppresses growth hints, so replace that earlier accounting baseline.
+            if ctx.is_live()
+                && let Err(error) = ctx.reconcile_memory_accounting(true).await
+            {
+                return SnapshotRecoveryResult::Unavailable(error);
+            }
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
             SnapshotRecoveryResult::Success
@@ -713,8 +728,8 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Rebuilds the links of the Store's address lookups from the history up to `through`, which a
-    /// start from the snapshot at `through` skips. The links that the Store made before, such as
-    /// those of the lookups of a core initializer, stay after them. Without agent sockets no
+    /// start from the snapshot at `through` skips, merged with the links of the core initializer
+    /// as [`sockets::resolved_names::ResolvedNames::after_rebuild`] describes. Without agent sockets no
     /// connect reads the links, so the history is not scanned.
     pub(in crate::durable_host) async fn rebuild_resolved_names(
         &mut self,
@@ -730,14 +745,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
             .deleted_regions
             .clone();
-        let mut resolved_names = sockets::resolved_names::ResolvedNames::rebuild(
+        let rebuilt = sockets::resolved_names::ResolvedNames::rebuild(
             self.state.oplog.as_ref(),
             through,
             &deleted_regions,
         )
         .await?;
-        resolved_names.extend(std::mem::take(&mut self.state.resolved_names));
-        self.state.resolved_names = resolved_names;
+        self.state.resolved_names = sockets::resolved_names::ResolvedNames::after_rebuild(
+            rebuilt,
+            std::mem::take(&mut self.state.resolved_names),
+            self.state.bootstrap_range.as_ref(),
+            through,
+        );
         Ok(())
     }
 }

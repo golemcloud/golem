@@ -182,6 +182,7 @@ min_delay = "200ms"
 multiplier = 2.0
 
 [limits]
+agent_scan_batch_size = 100
 ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
 epoch_ticks = 1
@@ -199,6 +200,10 @@ max_oplog_query_page_bytes = 8388608
 max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
+
+[limits.scan_budget]
+entries = 100000
+time = "5s"
 
 [mcp_transport]
 concurrency = 16
@@ -642,6 +647,7 @@ without_time = false
 # multiplier = 2.0
 #
 # [limits]
+# agent_scan_batch_size = 100
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
 # epoch_ticks = 1
@@ -659,6 +665,10 @@ without_time = false
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [limits.scan_budget]
+# entries = 100000
+# time = "5s"
 #
 # [mcp_transport]
 # concurrency = 16
@@ -1101,6 +1111,7 @@ without_time = false
 # multiplier = 2.0
 #
 # [limits]
+# agent_scan_batch_size = 100
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
 # epoch_ticks = 1
@@ -1118,6 +1129,10 @@ without_time = false
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [limits.scan_budget]
+# entries = 100000
+# time = "5s"
 #
 # [mcp_transport]
 # concurrency = 16
@@ -1530,6 +1545,7 @@ without_time = false
 # multiplier = 2.0
 #
 # [limits]
+# agent_scan_batch_size = 100
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
 # epoch_ticks = 1
@@ -1547,6 +1563,10 @@ without_time = false
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [limits.scan_budget]
+# entries = 100000
+# time = "5s"
 #
 # [mcp_transport]
 # concurrency = 16

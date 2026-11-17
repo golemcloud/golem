@@ -80,7 +80,7 @@ func Caller() golem_agent_common.Caller {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (32 + 48*4), 8))
 	wasm_import_caller(returnArea)
-	result := wasm_lift_1_t491(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
 	return result0
 
@@ -95,9 +95,9 @@ func wasm_lift_1_t10(src unsafe.Pointer) golem_core_types.InvocationId {
 }
 
 //go:noinline
-func wasm_lift_1_t491(src unsafe.Pointer) golem_agent_common.Caller {
-	result := wasm_lift_1_t490(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t490(unsafe.Add(unsafe.Pointer(src), (16 + 24*4)))
+func wasm_lift_1_t492(src unsafe.Pointer) golem_agent_common.Caller {
+	result := wasm_lift_1_t491(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t491(unsafe.Add(unsafe.Pointer(src), (16 + 24*4)))
 
 	return golem_agent_common.Caller{Original: result, Immediate: result0}
 }
@@ -130,21 +130,21 @@ func wasm_lift_1_t4(src unsafe.Pointer) golem_core_types.Uuid {
 }
 
 //go:noinline
-func wasm_lift_1_t490(src unsafe.Pointer) golem_agent_common.Principal {
+func wasm_lift_1_t491(src unsafe.Pointer) golem_agent_common.Principal {
 	var variant golem_agent_common.Principal
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t487(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t488(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_agent_common.MakePrincipalOidc(result)
 
 	case 1:
-		result0 := wasm_lift_1_t488(unsafe.Add(unsafe.Pointer(src), 8))
+		result0 := wasm_lift_1_t489(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_agent_common.MakePrincipalAgent(result0)
 
 	case 2:
-		result1 := wasm_lift_1_t489(unsafe.Add(unsafe.Pointer(src), 8))
+		result1 := wasm_lift_1_t490(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_agent_common.MakePrincipalGolemUser(result1)
 
@@ -168,7 +168,7 @@ func wasm_lift_1_t8(src unsafe.Pointer) golem_core_types.AgentId {
 }
 
 //go:noinline
-func wasm_lift_1_t487(src unsafe.Pointer) golem_agent_common.OidcPrincipal {
+func wasm_lift_1_t488(src unsafe.Pointer) golem_agent_common.OidcPrincipal {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	var option witTypes.Option[string]
@@ -260,14 +260,14 @@ func wasm_lift_1_t487(src unsafe.Pointer) golem_agent_common.OidcPrincipal {
 }
 
 //go:noinline
-func wasm_lift_1_t488(src unsafe.Pointer) golem_agent_common.AgentPrincipal {
+func wasm_lift_1_t489(src unsafe.Pointer) golem_agent_common.AgentPrincipal {
 	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return golem_agent_common.AgentPrincipal{AgentId: result}
 }
 
 //go:noinline
-func wasm_lift_1_t489(src unsafe.Pointer) golem_agent_common.GolemUserPrincipal {
+func wasm_lift_1_t490(src unsafe.Pointer) golem_agent_common.GolemUserPrincipal {
 	result := wasm_lift_1_t11(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return golem_agent_common.GolemUserPrincipal{AccountId: result}
