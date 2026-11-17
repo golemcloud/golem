@@ -5895,6 +5895,7 @@ dependencies = [
  "rand 0.9.5",
  "redis",
  "reqwest 0.13.4",
+ "reqwest-middleware",
  "rlimit",
  "serde",
  "serde_json",

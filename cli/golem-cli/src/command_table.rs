@@ -68,16 +68,17 @@ pub struct Mode {
     /// The mode's name, unique in its row. The integration tests key their
     /// adapters by the row's path and this name.
     pub name: &'static str,
-    /// The arguments that select the mode; any one of them does. Empty for
-    /// the row's default mode. A mode listed later in the row takes
-    /// precedence over an earlier one.
+    /// The arguments that select the mode; the mode applies when all of them
+    /// are given. Empty for the row's default mode. When several modes apply,
+    /// the one listed last is the mode.
     pub selected_by: &'static [Selector],
     pub class: CommandClass,
     /// The server requests that the mode makes, in order.
     pub requests: &'static [Request],
 }
 
-/// An argument that selects a mode: given at all, or given with this value.
+/// An argument that selects a mode: given at all, or given with this value
+/// among its values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Selector {
     /// The clap argument ID.
@@ -94,8 +95,27 @@ pub struct Request {
     /// operation only when it allows every part. The parts whose targets are
     /// 5.3 Rule 21 kinds come first.
     pub parts: &'static [Part],
+    /// Parts that the operation also has when its target needs them, which
+    /// the server decides from the target, never from the request.
+    pub extra: Option<Extra>,
     /// What the never-live mark of the target agent (GOL-1420) changes.
     pub marked: Marked,
+}
+
+/// Parts that an operation also has when its target needs them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Extra {
+    pub when: TargetCondition,
+    pub parts: &'static [Part],
+}
+
+/// A condition on the target that the server reads from its definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetCondition {
+    /// The tool reads static `File` config fields, which needs the tool-wide
+    /// `invoke : *` of 5.3 beside the grant for the command. The tool
+    /// admission (GOL-1086) supplies the check.
+    ToolReadsStaticFileConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,9 +128,13 @@ pub enum Stage {
     Operation,
     /// Each input item that the command sends to the invocation it started.
     Input,
-    /// A later read that the operation leads to: its output, the target's
-    /// state after it, its result, or an entry that a page left out.
+    /// A read of output or state next to the operation: an output connection
+    /// that the command opens before it, the target's state, a result, or an
+    /// entry that a page left out. The mode lists it where the command makes
+    /// it.
     Follow,
+    /// The cancellation of the invocation that the command started.
+    Cancel,
 }
 
 /// When the command makes the request.
@@ -123,6 +147,12 @@ pub enum When {
     Without(&'static [&'static str]),
     /// Only when an argument of the row's `stdin_marker_args` is `-`.
     StdinMarker,
+    /// Only when the tool can stop a command: the stop goes through the
+    /// command's stdin.
+    ToolCanStop,
+    /// Only when the user stops the command, or the CLI stops waiting for
+    /// it.
+    Stopped,
 }
 
 /// What the never-live mark of the target agent changes in a request. The
@@ -284,6 +314,8 @@ pub enum Resource {
     Processor,
     /// The command path and arguments of the tool invocation.
     ToolCommand,
+    /// Every command of the tool.
+    AnyToolCommand,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -357,12 +389,34 @@ const fn request(stage: Stage, parts: &'static [Part]) -> Request {
         stage,
         when: When::Always,
         parts,
+        extra: None,
+        marked: Marked::Same,
+    }
+}
+
+const fn conditional(stage: Stage, when: When, parts: &'static [Part]) -> Request {
+    Request {
+        stage,
+        when,
+        parts,
+        extra: None,
         marked: Marked::Same,
     }
 }
 
 const fn operation(parts: &'static [Part]) -> Request {
     request(Operation, parts)
+}
+
+/// A control of the named agent whose verb the never-live mark changes.
+const fn control_of_marked(parts: &'static [Part], marked: Marked) -> Request {
+    Request {
+        stage: Operation,
+        when: When::Always,
+        parts,
+        extra: None,
+        marked,
+    }
 }
 
 /// The modes of a row with one mode, which no argument selects.
@@ -383,39 +437,96 @@ const fn arg(arg: &'static str) -> Selector {
 
 const VIEW: Part = agent(A::View, R::None);
 /// The CLI's metadata read of the named agent, for its component revision
-/// (`component_by_agent_id_match`, `resolve_tool_owner`).
+/// (`component_by_agent_id_match`). The CLI goes on with the component's
+/// current revision when the agent looks unknown, so a denial of this read
+/// does not stop the command.
 const PREPARE_AGENT: Request = request(Prepare, &[VIEW]);
 const REPLAY: Part = pending(PendingVerb::AgentReplay, Agent, R::None);
+const TOOL_VIEW: Part = pending(PendingVerb::ToolView, Tool, R::None);
+/// Describing a tool bound to an agent. The agent part comes first, so that
+/// an agent the caller may not see looks unknown before the tool is named.
+const DESCRIBE_HOSTED: &[Part] = &[VIEW, TOOL_VIEW];
+const DESCRIBE_STANDALONE: &[Part] = &[TOOL_VIEW];
+/// A tool that reads static `File` config fields also needs the tool-wide
+/// `invoke : *` (5.3).
+const STATIC_FILE_CONFIG: Option<Extra> = Some(Extra {
+    when: TargetCondition::ToolReadsStaticFileConfig,
+    parts: &[part(
+        PartVerb::Tool(ToolVerb::Invoke),
+        Tool,
+        R::AnyToolCommand,
+    )],
+});
+const fn tool_start(parts: &'static [Part]) -> Request {
+    Request {
+        stage: Operation,
+        when: When::Always,
+        parts,
+        extra: STATIC_FILE_CONFIG,
+        marked: Marked::Same,
+    }
+}
 const EXEC: &[Part] = &[
     pending(PendingVerb::AgentExec, Agent, R::None),
     part(PartVerb::Tool(ToolVerb::Invoke), Tool, R::ToolCommand),
 ];
-/// Describing a tool bound to an agent. The agent part comes first, so that
-/// an agent the caller may not see looks unknown before the tool is named.
-const DESCRIBE_HOSTED_TOOL: Request = request(
-    Prepare,
-    &[VIEW, pending(PendingVerb::ToolView, Tool, R::None)],
-);
+const STANDALONE_INVOKE: &[Part] = &[part(PartVerb::Tool(ToolVerb::Invoke), Tool, R::ToolCommand)];
 const SEND_TO_ACCEPTED: Part =
     invocation(PendingVerb::InvocationSend, InvocationSelector::Accepted);
 const READ_ACCEPTED: Part = invocation(PendingVerb::InvocationRead, InvocationSelector::Accepted);
-const FOLLOW_ENTRIES: Request = Request {
-    stage: Follow,
-    when: When::Without(&["omit_payloads"]),
-    parts: &[oplog(R::OplogEntry)],
-    marked: Marked::Same,
-};
-const AWAIT_UPDATE: Request = Request {
-    stage: Follow,
-    when: When::With(&["await"]),
-    parts: &[VIEW],
-    marked: Marked::Same,
-};
+const CANCEL_ACCEPTED: Part =
+    invocation(PendingVerb::InvocationCancel, InvocationSelector::Accepted);
+/// The live output connection that `agent invoke` opens to the agent before
+/// it dispatches, so that it names no invocation yet and can expose the
+/// output of other invocations of the agent.
+const OUTPUT_CONNECTION: Request = conditional(
+    Follow,
+    When::Without(&["no_stream"]),
+    &[invocation(
+        PendingVerb::InvocationRead,
+        InvocationSelector::EachExposed,
+    )],
+);
+const FOLLOW_ENTRIES: Request = conditional(
+    Follow,
+    When::Without(&["omit_payloads"]),
+    &[oplog(R::OplogEntry)],
+);
+const AWAIT_UPDATE: Request = conditional(Follow, When::With(&["await"]), &[VIEW]);
+/// The requests of an `ssh` command: the description of its tool, the start,
+/// the stop through stdin, the read of the agent's state next to each
+/// command, and, when the user or the CLI stops waiting, the cancellation and
+/// the lookup of a result that finished meanwhile.
+const SSH_COMMAND: &[Request] = &[
+    request(Prepare, DESCRIBE_HOSTED),
+    tool_start(EXEC),
+    conditional(Input, When::ToolCanStop, &[SEND_TO_ACCEPTED]),
+    request(Follow, &[VIEW]),
+    conditional(Cancel, When::Stopped, &[CANCEL_ACCEPTED]),
+    conditional(Follow, When::Stopped, &[READ_ACCEPTED]),
+];
+const RESUME_SESSION: &[Request] = &[
+    PREPARE_AGENT,
+    OUTPUT_CONNECTION,
+    operation(&[invocation(
+        PendingVerb::InvocationRead,
+        InvocationSelector::Session,
+    )]),
+    conditional(
+        Input,
+        When::StdinMarker,
+        &[invocation(
+            PendingVerb::InvocationSend,
+            InvocationSelector::Session,
+        )],
+    ),
+];
 
 pub const COMMAND_TABLE: &[CommandRow] = &[
     // ── golem agent ──────────────────────────────────────────────────────
     // A fresh creation is `agent : create`, not `invoke`; GOL-1296 owns its
-    // admission and the creation card.
+    // admission and the creation card. The CLI reads the metadata of the
+    // agent it creates and goes on when it does not exist.
     CommandRow {
         path: &["agent", "new"],
         modes: one_mode!(
@@ -437,51 +548,45 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
     // An `arguments` value of `-` binds stdin to a direct stream parameter.
     // The post-deploy flags can update, redeploy or delete every agent of the
     // deployment without a prompt. The upsert, schedule and request admission
-    // checks of the invocation stay.
+    // checks of the invocation stay. The output connection is not opened for
+    // `--stdout-format raw`.
     CommandRow {
         path: &["agent", "invoke"],
         modes: &[
+            // Through the invocation session.
             Mode {
                 name: "start",
                 selected_by: &[],
                 class: InvocationGrant,
                 requests: &[
                     PREPARE_AGENT,
+                    OUTPUT_CONNECTION,
                     operation(&[agent(A::Invoke, R::Method)]),
-                    Request {
-                        stage: Input,
-                        when: When::StdinMarker,
-                        parts: &[SEND_TO_ACCEPTED],
-                        marked: Marked::Same,
-                    },
-                    Request {
-                        stage: Follow,
-                        when: When::Without(&["no_stream"]),
-                        parts: &[READ_ACCEPTED],
-                        marked: Marked::Same,
-                    },
+                    conditional(Input, When::StdinMarker, &[SEND_TO_ACCEPTED]),
+                ],
+            },
+            // Through REST, which schedules the invocation.
+            Mode {
+                name: "trigger",
+                selected_by: &[arg("trigger")],
+                class: InvocationGrant,
+                requests: &[
+                    PREPARE_AGENT,
+                    OUTPUT_CONNECTION,
+                    operation(&[agent(A::Invoke, R::Method)]),
                 ],
             },
             Mode {
                 name: "resume-session",
-                selected_by: &[arg("resume_session"), arg("takeover_session")],
+                selected_by: &[arg("resume_session")],
                 class: InvocationGrant,
-                requests: &[
-                    PREPARE_AGENT,
-                    operation(&[invocation(
-                        PendingVerb::InvocationRead,
-                        InvocationSelector::Session,
-                    )]),
-                    Request {
-                        stage: Input,
-                        when: When::StdinMarker,
-                        parts: &[invocation(
-                            PendingVerb::InvocationSend,
-                            InvocationSelector::Session,
-                        )],
-                        marked: Marked::Same,
-                    },
-                ],
+                requests: RESUME_SESSION,
+            },
+            Mode {
+                name: "takeover-session",
+                selected_by: &[arg("takeover_session")],
+                class: InvocationGrant,
+                requests: RESUME_SESSION,
             },
         ],
         interactive: false,
@@ -523,12 +628,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
             ManagementControl,
             [
                 PREPARE_AGENT,
-                Request {
-                    stage: Operation,
-                    when: When::Always,
-                    parts: &[agent(A::Delete, R::None)],
-                    marked: Marked::Instead(&[REPLAY]),
-                },
+                control_of_marked(&[agent(A::Delete, R::None)], Marked::Instead(&[REPLAY])),
             ]
         ),
         interactive: false,
@@ -611,12 +711,10 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 class: ManagementControl,
                 requests: &[
                     PREPARE_AGENT,
-                    Request {
-                        stage: Operation,
-                        when: When::Always,
-                        parts: &[agent(A::UpdateRevision, R::None)],
-                        marked: Marked::Instead(&[REPLAY]),
-                    },
+                    control_of_marked(
+                        &[agent(A::UpdateRevision, R::None)],
+                        Marked::Instead(&[REPLAY]),
+                    ),
                     AWAIT_UPDATE,
                 ],
             },
@@ -629,12 +727,10 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 class: ManagementControl,
                 requests: &[
                     PREPARE_AGENT,
-                    Request {
-                        stage: Operation,
-                        when: When::Always,
-                        parts: &[agent(A::UpdateRevision, R::None)],
-                        marked: MANUAL_UPDATE_OF_A_MARKED_AGENT,
-                    },
+                    control_of_marked(
+                        &[agent(A::UpdateRevision, R::None)],
+                        MANUAL_UPDATE_OF_A_MARKED_AGENT,
+                    ),
                     AWAIT_UPDATE,
                 ],
             },
@@ -894,8 +990,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
     },
     // ── exec ─────────────────────────────────────────────────────────────
     // Without `-c`, a session; with `-c`, the script's raw stdout and stderr,
-    // and no JSON output type. The session reads the agent's state between
-    // commands and looks up the result of a command whose connection broke.
+    // and no JSON output type. The CLI resolves the agent's component without
+    // reading the agent's metadata. Each command of a session, and its
+    // helper scripts, make the requests of `SSH_COMMAND`.
     CommandRow {
         path: &["ssh"],
         modes: &[
@@ -903,25 +1000,13 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 name: "session",
                 selected_by: &[],
                 class: Exec,
-                requests: &[
-                    PREPARE_AGENT,
-                    DESCRIBE_HOSTED_TOOL,
-                    operation(EXEC),
-                    request(Input, &[SEND_TO_ACCEPTED]),
-                    request(Follow, &[VIEW]),
-                    request(Follow, &[READ_ACCEPTED]),
-                ],
+                requests: SSH_COMMAND,
             },
             Mode {
                 name: "script",
                 selected_by: &[arg("command")],
                 class: Exec,
-                requests: &[
-                    PREPARE_AGENT,
-                    DESCRIBE_HOSTED_TOOL,
-                    operation(EXEC),
-                    request(Follow, &[READ_ACCEPTED]),
-                ],
+                requests: SSH_COMMAND,
             },
         ],
         interactive: true,
@@ -933,11 +1018,10 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         destructive: false,
     },
     // `--stdin` reads a host file, or the process's stdin when its value is
-    // `-`; the raw output flags write to stdout or to host files. A tool's
-    // help is the describe request alone. With `--lookup`, an `--agent` that
-    // is not `<component-id>:<agent-id>` is resolved first, by a metadata
-    // read of the agent. A tool that reads static `File` config fields also
-    // keeps the tool-wide `invoke : *` check of 5.3.
+    // `-`; the raw output flags write to stdout or to host files. The CLI
+    // resolves an `--agent` and its component without reading the agent's
+    // metadata. `-h` in the tool's arguments selects the help modes as
+    // `--help` does.
     CommandRow {
         path: &["tool", "invoke"],
         modes: &[
@@ -946,15 +1030,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 selected_by: &[arg("agent")],
                 class: Exec,
                 requests: &[
-                    PREPARE_AGENT,
-                    DESCRIBE_HOSTED_TOOL,
-                    operation(EXEC),
-                    Request {
-                        stage: Input,
-                        when: When::With(&["stdin"]),
-                        parts: &[SEND_TO_ACCEPTED],
-                        marked: Marked::Same,
-                    },
+                    request(Prepare, DESCRIBE_HOSTED),
+                    tool_start(EXEC),
+                    conditional(Input, When::With(&["stdin"]), &[SEND_TO_ACCEPTED]),
                 ],
             },
             // The server runs this invocation in a fresh owner agent today;
@@ -964,15 +1042,35 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
                 selected_by: &[arg("component")],
                 class: InvocationGrant,
                 requests: &[
-                    request(Prepare, &[pending(PendingVerb::ToolView, Tool, R::None)]),
-                    operation(&[part(PartVerb::Tool(ToolVerb::Invoke), Tool, R::ToolCommand)]),
-                    Request {
-                        stage: Input,
-                        when: When::With(&["stdin"]),
-                        parts: &[SEND_TO_ACCEPTED],
-                        marked: Marked::Same,
+                    request(Prepare, DESCRIBE_STANDALONE),
+                    tool_start(STANDALONE_INVOKE),
+                    conditional(Input, When::With(&["stdin"]), &[SEND_TO_ACCEPTED]),
+                ],
+            },
+            // The tool's help is its description alone.
+            Mode {
+                name: "hosted-help",
+                selected_by: &[
+                    arg("agent"),
+                    Selector {
+                        arg: "tool_args",
+                        value: Some("--help"),
                     },
                 ],
+                class: ManagementRead,
+                requests: &[operation(DESCRIBE_HOSTED)],
+            },
+            Mode {
+                name: "standalone-help",
+                selected_by: &[
+                    arg("component"),
+                    Selector {
+                        arg: "tool_args",
+                        value: Some("--help"),
+                    },
+                ],
+                class: ManagementRead,
+                requests: &[operation(DESCRIBE_STANDALONE)],
             },
             Mode {
                 name: "lookup",
@@ -1128,11 +1226,10 @@ mod test {
                     problems.push(format!("{at} selects on no argument `{}`", selector.arg));
                     continue;
                 };
+                let values = arg.get_possible_values();
                 if let Some(value) = selector.value
-                    && !arg
-                        .get_possible_values()
-                        .iter()
-                        .any(|v| v.matches(value, false))
+                    && !values.is_empty()
+                    && !values.iter().any(|v| v.matches(value, false))
                 {
                     problems.push(format!(
                         "{at} selects on `{}` with a value it does not take: `{value}`",
@@ -1148,15 +1245,16 @@ mod test {
             if operations != 1 {
                 problems.push(format!("{at} has {operations} operation requests"));
             }
-            // The CLI reads the named agent's metadata for its component
-            // revision before anything else, under its own `agent : view`.
+            // A command that names an agent addresses it under its own
+            // `agent : view` before or with anything else that it does.
             if names_an_agent
-                && mode.requests.first().is_none_or(|first| {
-                    first.stage != Prepare || first.parts != PREPARE_AGENT.parts
-                })
+                && !mode
+                    .requests
+                    .first()
+                    .is_some_and(|first| first.parts.contains(&VIEW))
             {
                 problems.push(format!(
-                    "{at} names an agent but does not first read its metadata"
+                    "{at} names an agent but does not first address it under `agent : view`"
                 ));
             }
             for request in mode.requests {
@@ -1165,7 +1263,7 @@ mod test {
                 }
                 let args = match request.when {
                     When::With(args) | When::Without(args) => args,
-                    When::Always => &[][..],
+                    When::Always | When::ToolCanStop | When::Stopped => &[][..],
                     When::StdinMarker if row.stdin_marker_args.is_empty() => {
                         problems.push(format!("{at} reads stdin but has no stdin argument"));
                         &[][..]
@@ -1193,6 +1291,13 @@ mod test {
                             "{at} checks a tool by name before a Rule 21 target"
                         ));
                     }
+                }
+                if let Some(extra) = request.extra
+                    && extra.parts.iter().any(|part| part.target != Tool)
+                {
+                    problems.push(format!(
+                        "{at} adds a part on a Rule 21 target after the request's parts"
+                    ));
                 }
                 if request.marked != Marked::Same
                     && (request.stage != Operation
