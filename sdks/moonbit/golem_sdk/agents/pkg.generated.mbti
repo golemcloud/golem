@@ -21,10 +21,6 @@ pub async fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, Strin
 
 pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int32, String) -> T raise @common.AgentError
 
-pub fn decode_snapshot_identity(@types.SchemaValueTree) -> SnapshotIdentity raise @common.AgentError
-
-pub fn[T : @schema.FromWire] decode_snapshot_identity_field(SnapshotIdentity, Int32) -> T raise @common.AgentError
-
 pub fn decode_wire_input(@types.SchemaValueTree, Int32, String) -> WireInput raise @common.AgentError
 
 pub fn[T : @schema.FromWire] decode_wire_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
@@ -174,11 +170,6 @@ pub fn SnapshotFormat::equal(Self, Self) -> Bool
 pub fn SnapshotFormat::not_equal(Self, Self) -> Bool
 pub fn SnapshotFormat::to_repr(Self) -> @debug.Repr
 
-pub struct SnapshotIdentity {
-  reader : @schema.WireReader
-  fields : Array[Int32]
-}
-
 pub(all) struct SnapshotPart {
   bytes : Bytes
   content_type : String
@@ -188,13 +179,10 @@ pub fn SnapshotPart::not_equal(Self, Self) -> Bool
 pub fn SnapshotPart::to_repr(Self) -> @debug.Repr
 
 pub(all) struct SnapshotRestoreContext {
-  agent_id : String
+  agent_id : @schema.AgentId
   agent_type : String
-  identity_fields : SnapshotIdentity
-  phantom_id : @schema.Uuid?
   principal : @common.Principal
 }
-pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(Self, Int32) -> T raise @common.AgentError
 
 pub struct WireInput {
   reader : @schema.WireReader

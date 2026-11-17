@@ -296,11 +296,15 @@ pub(open) trait FromSchema {
   `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8; the rich types `Path`, `Url`, `Text[S]`,
   `Duration`, `Quantity[U]`, `Uuid`, and `Datetime`; and `UnstructuredText[L]` /
   `UnstructuredBinary[M]` (see below).
-- `Uuid` is the SDK's UUID type, used by every user-facing API (phantom ids, idempotency keys,
+- `Uuid` is the SDK's UUID type, used by every user-facing API (agent IDs, idempotency keys,
   permission holders). It has `parse` (hyphenated, case-insensitive), `Show` (lowercase
   hyphenated), `Eq`/`Compare`/`Hash`, `random` (version 4 from `wasi:random/random`, which Golem
   records durably), and `from_wit`/`to_wit`. The raw `@types.Uuid` record appears only at WIT
   boundaries and in `@model.SchemaValue::Uuid`.
+- `AgentId` is the SDK's agent ID: an opaque UUID that Golem issues. Its text form (`Show`,
+  `to_string`, `parse`) is the UUID; it has `from_uuid`/`uuid` and `from_wit`/`to_wit`. Clients
+  return it from `agent_id()`, invocation metadata carries it, and `@api` agent operations take it.
+  It carries no agent type and no constructor parameters, so the SDK never derives an ID offline.
 - `Datetime` is the SDK's point in time (seconds since the Unix epoch plus nanoseconds, UTC year
   `0000..9999`). It has `new`, `parse` (RFC 3339 with any offset, converted to UTC), `Show`
   (canonical UTC `Z` form with up to nine fraction digits), `Eq`/`Compare`/`Hash`, and
@@ -420,6 +424,14 @@ Generates, from source annotations:
 4. **`golem_exports.mbt`** — source-derived runtime hooks for the full agent/tool/middleware world.
    Both subcommands are required, including for empty and tool-only components. There is no role
    argument or role-specific world. Generated imports are removed when a category disappears.
+
+Each `<Name>Client` connects through `upsert(params)` (the keyed agent, created when missing; the
+only entry point of an ephemeral agent). A durable client also has `get_by_id(agent_id)` (never
+creates; an unknown or wrong-type ID raises `RpcError::NotFound`), async
+`create(params, keyed?, config?, env?)` (a keyed create of an existing key raises
+`RpcError::Conflict`; `config?` exists only when the agent has overridable config), async
+`agent_id()`, `bind_self()` and the `scoped_upsert` / `scoped_get_by_id` / `scoped_create`
+helpers. `upsert` takes no overrides, and no client copies the caller's environment.
 
 Awaited RPC methods and scoped client helpers are generated as `async`; trigger and scheduling
 methods remain synchronous because they only enqueue work.

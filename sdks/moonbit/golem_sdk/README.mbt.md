@@ -49,8 +49,8 @@ Pure initialization does not implicitly read self metadata. Keep metadata reads 
 of an untrusted evaluator instead of granting self-view for bootstrap. Declare no
 tools or secrets and admit only the host operations the evaluator needs.
 Self metadata is a host operation, not a pure source of identity. Snapshot restoration reads
-`GOLEM_AGENT_ID` through the WASI environment API rather than self metadata, so it
-requires the separate environment-read permission for that variable. Granting
+`GOLEM_AGENT_ID` and `GOLEM_AGENT_TYPE` through the WASI environment API rather than self
+metadata, so it requires the separate environment-read permission for those variables. Granting
 self-view does not grant environment-read permission, and granting environment-read
 permission does not grant self-view.
 

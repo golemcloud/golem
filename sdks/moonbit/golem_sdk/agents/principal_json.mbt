@@ -174,10 +174,7 @@ pub fn principal_from_json(
 
 ///|
 fn agent_id_to_json(id : @types.AgentId) -> Json {
-  Json::object({
-    "componentId": Json::string(uuid_to_json_string(id.component_id.uuid)),
-    "agentId": Json::string(id.agent_id),
-  })
+  Json::object({ "uuid": Json::string(uuid_to_json_string(id.uuid)) })
 }
 
 ///|
@@ -186,17 +183,9 @@ fn agent_id_from_json(json : Json) -> @types.AgentId raise JsonCodecError {
     Object(m) => m
     _ => raise JsonCodecError("Expected JSON object for AgentId")
   }
-  let component_id_str = match obj.get("componentId") {
-    Some(String(s)) => s
-    _ => raise JsonCodecError("Missing 'componentId' in agent val")
-  }
-  let agent_id = match obj.get("agentId") {
-    Some(String(s)) => s
-    _ => raise JsonCodecError("Missing 'agentId' in agent val")
-  }
-  {
-    component_id: { uuid: uuid_from_json_string(component_id_str), },
-    agent_id,
+  match obj.get("uuid") {
+    Some(String(s)) => { uuid: uuid_from_json_string(s), }
+    _ => raise JsonCodecError("Missing 'uuid' in agent val")
   }
 }
 

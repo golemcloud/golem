@@ -21,44 +21,42 @@ pub async fn load(
   }
   let principal = result.0
   let state_bytes = result.1
-  let agent_id = get_golem_agent_id() catch {
+  let agent_id_text = get_golem_env_var("GOLEM_AGENT_ID") catch {
     SnapshotLoadError(msg) => return Err(msg)
   }
-  let identity = @identity.parse(agent_id) catch {
+  let agent_id = @schema.AgentId::parse(agent_id_text) catch {
     e => return Err("Failed to parse agent ID: \{Repr(e)}")
   }
-  let identity_fields = @agents.decode_snapshot_identity(identity.input.value) catch {
-    e => return Err("Failed to decode agent identity: \{Repr(e)}")
+  let agent_type = get_golem_env_var("GOLEM_AGENT_TYPE") catch {
+    SnapshotLoadError(msg) => return Err(msg)
   }
-  let agent_type = identity.type_name
   @agents.restore_and_set_instance(agent_type, state_bytes, {
     agent_id,
     agent_type,
-    identity_fields,
-    phantom_id: identity.phantom_id,
     principal,
   })
 }
 
 ///|
-fn get_golem_agent_id() -> String raise SnapshotLoadError {
-  golem_agent_id_from(@environment.get_environment())
+fn get_golem_env_var(name : String) -> String raise SnapshotLoadError {
+  golem_env_var_from(@environment.get_environment(), name)
 }
 
 ///|
-/// Finds GOLEM_AGENT_ID in the environment that the agent can read. The host
-/// shows the variable only when the agent's permission card allows the agent to
-/// read it.
-fn golem_agent_id_from(
+/// Finds a variable that Golem sets in the environment that the agent can read.
+/// The host shows such a variable only when the agent's permission card allows
+/// the agent to read it.
+fn golem_env_var_from(
   env : Array[(String, String)],
+  name : String,
 ) -> String raise SnapshotLoadError {
   for pair in env {
-    if pair.0 == "GOLEM_AGENT_ID" {
+    if pair.0 == name {
       return pair.1
     }
   }
   raise SnapshotLoadError(
-    "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+    "\{name} is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : \{name}",
   )
 }
 

@@ -98,21 +98,12 @@ pub(all) struct ConstructedAgent {
 
 ///|
 /// Information available while constructing a fresh agent from a snapshot.
+/// The agent ID does not carry the constructor parameters, so an agent that
+/// needs them after a restoration keeps them in its snapshot.
 pub(all) struct SnapshotRestoreContext {
-  agent_id : String
+  agent_id : @schema.AgentId
   agent_type : String
-  identity_fields : SnapshotIdentity
-  phantom_id : @schema.Uuid?
   principal : @common.Principal
-}
-
-///|
-/// Decodes an identity field from the ambient agent ID.
-pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
-  self : SnapshotRestoreContext,
-  index : Int32,
-) -> T raise @common.AgentError {
-  decode_snapshot_identity_field(self.identity_fields, index)
 }
 
 ///|
@@ -212,7 +203,6 @@ pub async fn restore_and_set_instance(
   snapshot : SnapshotData,
   context : SnapshotRestoreContext,
 ) -> Result[Unit, String] {
-  defer context.identity_fields.abort()
   match get_registered_agent(agent_type) {
     None => Err("Agent type not found: \{agent_type}")
     Some(registered_agent) =>
@@ -223,9 +213,6 @@ pub async fn restore_and_set_instance(
           let restored = match load_snapshot(snapshot, context) {
             Ok(restored) => restored
             Err(error) => return Err(error)
-          }
-          context.identity_fields.finish() catch {
-            error => return Err("Invalid agent identity: \{repr(error)}")
           }
           finish_restoration(registered_agent, principal, Ok(restored))
         }

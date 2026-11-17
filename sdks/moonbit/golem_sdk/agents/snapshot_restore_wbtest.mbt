@@ -48,18 +48,10 @@ test "snapshot restoration installs only after success" {
     load_snapshot: None,
   }
   let context : SnapshotRestoreContext = {
-    agent_id: "RestoreTestAgent(identity)",
+    agent_id: @schema.AgentId::parse("0000002a-0000-8011-8000-00000000001d"),
     agent_type: "RestoreTestAgent",
-    identity_fields: decode_snapshot_identity(
-      @schema.into_wire_record(["identity", 42U]),
-    ),
-    phantom_id: None,
     principal: @common.Principal::Anonymous,
   }
-  let identity : String = context.identity(0)
-  debug_inspect(identity, content="\"identity\"")
-  let numeric_identity : UInt32 = context.identity(1)
-  assert_eq(numeric_identity, 42U)
   let failed = finish_restoration(
     registered,
     @common.Principal::Anonymous,
@@ -87,54 +79,6 @@ test "snapshot restoration installs only after success" {
     fail("restored agent has no snapshot saver")
   }
   assert_eq(saver.save_snapshot(), b"restored")
-}
-
-///|
-test "failed snapshot restoration does not commit decoded identity resources" {
-  let mut callback = @async-core.with_waitableset(async fn() {
-    let mut dropped = 0
-    let tree : @types.SchemaValueTree = {
-      value_nodes: [
-        @types.SecretValue(@types.Secret::Secret(42)),
-        @types.RecordValue([0]),
-      ],
-      root: 1,
-    }
-    let reader = @schema.WireReader::new(tree, drop_resource=_ => dropped += 1)
-    ignore(@schema.wire_node(reader, tree.root))
-    let context : SnapshotRestoreContext = {
-      agent_id: "FailedRestore()",
-      agent_type: "FailedRestore",
-      identity_fields: { reader, fields: [0], },
-      phantom_id: None,
-      principal: @common.Principal::Anonymous,
-    }
-    register_agent({
-      name: "FailedRestore",
-      agent_type: restore_test_agent_type(),
-      construct: (_input, _principal) => {
-        Err(@common.AgentError::InvalidInput("constructor must not run"))
-      },
-      load_snapshot: Some((_bytes, context) => {
-        let _secret : @model.GuestSecretHandle = context.identity(0)
-        Err("rejected state")
-      }),
-    })
-    let result = restore_and_set_instance(
-      "FailedRestore",
-      Binary(b"bad"),
-      context,
-    )
-    assert_eq(result, Err("rejected state"))
-    assert_eq(dropped, 1)
-    @async-core.task_returned()
-  })
-  let mut steps = 0
-  while callback != 0 {
-    steps += 1
-    assert_true(steps < 1000 && (callback & 0xf) == 1)
-    callback = @async-core.cb(0, 0, 0)
-  }
 }
 
 ///|
@@ -185,10 +129,8 @@ test "multipart failed restore is retryable skips constructor and installs fresh
     })
     let context = fn() -> SnapshotRestoreContext raise {
       {
-        agent_id: "MultipartRestore()",
+        agent_id: @schema.AgentId::parse("0000002a-0000-8011-8000-00000000001d"),
         agent_type: "MultipartRestore",
-        identity_fields: decode_snapshot_identity(@schema.into_wire_record([])),
-        phantom_id: None,
         principal: @common.Principal::Anonymous,
       }
     }
