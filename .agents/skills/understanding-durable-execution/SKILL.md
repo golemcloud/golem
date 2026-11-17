@@ -1059,6 +1059,19 @@ is not checked against grants again, each datagram still is. Send records only t
 result, never the datagram. An incomplete send completes with `connection-broken` and is not sent
 again; an incomplete receive re-executes after the rebuild.
 
+P2 UDP (`durable_host/sockets/udp.rs`) uses the same entry and the same lazy rebuild.
+`start-bind` (`WriteLocal`) records the selected local address, `stream` (`WriteRemote`) the
+result, `receive` (`ReadRemote`) the datagrams and their sources, `check-send` (`ReadLocal`) the
+permit, and `send` (`WriteRemote`) the destinations, the result and the count, never the bytes.
+The guest's datagram streams are `DurableIncomingDatagramStream` and
+`DurableOutgoingDatagramStream`; a replayed `stream` pushes them without native streams, in the
+native order, so later resource reps do not change. At the first live operation the host binds the
+native socket on the recorded address and calls native `stream` again with the recorded remote
+address when the guest holds streams. A loss is recorded as `lost: true` and reported as
+`connection-reset`, the code P2 TCP also uses for a lost connection (P2 has no
+`connection-broken`). An incomplete send completes with `connection-reset` and is never sent
+again.
+
 WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
 Start before acquiring the executor-wide connection-pool permit. The live pool acquisition
 selects the existing typed interrupt signal without a Store lock. An interrupted acquisition

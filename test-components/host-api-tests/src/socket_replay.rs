@@ -160,7 +160,7 @@ enum Slot {
     P2Udp {
         incoming: p2::IncomingDatagramStream,
         outgoing: p2::OutgoingDatagramStream,
-        _socket: p2::UdpSocket,
+        socket: p2::UdpSocket,
     },
 }
 
@@ -246,6 +246,25 @@ pub trait SocketSession {
     fn p2_udp_bind(&self, slot: String, port: u16) -> Result<(), String>;
     fn p2_udp_send(&self, slot: String, port: u16, data: Vec<u8>) -> Result<(), String>;
     fn p2_udp_receive(&self, slot: String) -> Result<(Vec<u8>, String), String>;
+    /// Creates a P2 UDP socket, binds it on `127.0.0.1:port` and opens streams connected to
+    /// `127.0.0.1:remote`, or unconnected streams when `remote` is `None`.
+    fn p2_udp_bind_streams(
+        &self,
+        slot: String,
+        port: u16,
+        remote: Option<u16>,
+    ) -> Result<(), String>;
+    /// Drops the streams of the socket in `slot` and opens new ones, connected to
+    /// `127.0.0.1:remote` or unconnected.
+    fn p2_udp_restream(&self, slot: String, remote: Option<u16>) -> Result<(), String>;
+    /// `check-send` on the outgoing stream, without waiting for readiness.
+    fn p2_udp_check_send(&self, slot: String) -> Result<u64, String>;
+    /// One `check-send` and one `send` of `data` to `127.0.0.1:port`, or to the connected remote
+    /// address when `port` is `None`. Returns the count that `send` returned.
+    fn p2_udp_send_to(&self, slot: String, port: Option<u16>, data: Vec<u8>)
+    -> Result<u64, String>;
+    fn p2_udp_local_address(&self, slot: String) -> Result<String, String>;
+    fn p2_udp_remote_address(&self, slot: String) -> Result<String, String>;
 
     /// The bytes and datagrams the agent received so far, per slot, in the order they arrived.
     fn received(&self) -> Vec<(String, Vec<u8>)>;
@@ -745,7 +764,7 @@ impl SocketSession for SocketSessionImpl {
             Slot::P2Udp {
                 incoming,
                 outgoing,
-                _socket: socket,
+                socket,
             },
         );
         Ok(())
@@ -786,6 +805,109 @@ impl SocketSession for SocketSessionImpl {
         })?;
         self.record(&slot, &data);
         Ok((data, source))
+    }
+
+    fn p2_udp_bind_streams(
+        &self,
+        slot: String,
+        port: u16,
+        remote: Option<u16>,
+    ) -> Result<(), String> {
+        let socket = wasi::sockets::udp_create_socket::create_udp_socket(p2::IpAddressFamily::Ipv4)
+            .map_err(error)?;
+        socket
+            .start_bind(&p2::instance_network(), p2_loopback(port))
+            .map_err(error)?;
+        socket.subscribe().block();
+        socket.finish_bind().map_err(error)?;
+        let (incoming, outgoing) = socket.stream(remote.map(p2_loopback)).map_err(error)?;
+        self.insert(
+            slot,
+            Slot::P2Udp {
+                incoming,
+                outgoing,
+                socket,
+            },
+        );
+        Ok(())
+    }
+
+    fn p2_udp_restream(&self, slot: String, remote: Option<u16>) -> Result<(), String> {
+        let removed = self.slots.borrow_mut().remove(&slot);
+        let socket = match removed {
+            Some(Slot::P2Udp {
+                incoming,
+                outgoing,
+                socket,
+            }) => {
+                drop(incoming);
+                drop(outgoing);
+                socket
+            }
+            Some(other) => {
+                self.insert(slot.clone(), other);
+                return Err(format!("slot {slot} holds no P2 UDP socket"));
+            }
+            None => return Err(format!("slot {slot} is empty")),
+        };
+        let result = socket.stream(remote.map(p2_loopback)).map_err(error);
+        match result {
+            Ok((incoming, outgoing)) => {
+                self.insert(
+                    slot,
+                    Slot::P2Udp {
+                        incoming,
+                        outgoing,
+                        socket,
+                    },
+                );
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn p2_udp_check_send(&self, slot: String) -> Result<u64, String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2Udp { outgoing, .. } => outgoing.check_send().map_err(error),
+            _ => Err(format!("slot {slot} holds no P2 UDP socket")),
+        })
+    }
+
+    fn p2_udp_send_to(
+        &self,
+        slot: String,
+        port: Option<u16>,
+        data: Vec<u8>,
+    ) -> Result<u64, String> {
+        use wasi::sockets::udp::OutgoingDatagram;
+        self.with_slot(&slot, |value| match value {
+            Slot::P2Udp { outgoing, .. } => {
+                outgoing.subscribe().block();
+                outgoing.check_send().map_err(error)?;
+                outgoing
+                    .send(&[OutgoingDatagram {
+                        data,
+                        remote_address: port.map(p2_loopback),
+                    }])
+                    .map_err(error)
+            }
+            _ => Err(format!("slot {slot} holds no P2 UDP socket")),
+        })
+    }
+
+    fn p2_udp_local_address(&self, slot: String) -> Result<String, String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2Udp { socket, .. } => socket.local_address().map(p2_address).map_err(error),
+            _ => Err(format!("slot {slot} holds no P2 UDP socket")),
+        })
+    }
+
+    fn p2_udp_remote_address(&self, slot: String) -> Result<String, String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2Udp { socket, .. } => socket.remote_address().map(p2_address).map_err(error),
+            _ => Err(format!("slot {slot} holds no P2 UDP socket")),
+        })
     }
 
     fn received(&self) -> Vec<(String, Vec<u8>)> {

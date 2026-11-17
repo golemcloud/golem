@@ -392,6 +392,19 @@ oplog_payload! {
         P3SocketsBind {
             local_address: SerializableP3IpSocketAddress
         },
+        SocketsUdpBind {
+            local_address: SerializableP3IpSocketAddress
+        },
+        SocketsUdpStream {
+            remote_address: Option<SerializableP3IpSocketAddress>
+        },
+        SocketsUdpReceive {
+            max_results: u64
+        },
+        SocketsUdpSend {
+            /// The destination of each datagram; the datagrams themselves are never stored.
+            remote_addresses: Vec<Option<SerializableP3IpSocketAddress>>
+        },
         GolemToolInvoke {
             tool_name: String,
             command_path: Vec<String>,
@@ -778,6 +791,28 @@ oplog_payload! {
         P3SocketsBind {
             result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
         },
+        SocketsUdpBind {
+            result: Result<SerializableP3IpSocketAddress, SerializableSocketError>
+        },
+        /// `lost` is set when the call found that the socket could not get its recorded local
+        /// address back after a reconstruction.
+        SocketsUdpStream {
+            result: Result<(), SerializableSocketError>,
+            lost: bool,
+        },
+        SocketsUdpReceive {
+            result: Result<Vec<SerializableP3UdpDatagram>, SerializableSocketError>,
+            lost: bool,
+        },
+        SocketsUdpCheckSend {
+            result: Result<u64, SerializableSocketError>,
+            lost: bool,
+        },
+        /// The number of datagrams sent.
+        SocketsUdpSend {
+            result: Result<u64, SerializableSocketError>,
+            lost: bool,
+        },
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
         },
@@ -1106,6 +1141,11 @@ pub mod host_functions {
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsUdpPermissionCheck => "sockets::udp::permissions", "check", SocketsUdpPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (SocketsUdpStartBind => "sockets::udp", "start_bind", SocketsUdpBind, SocketsUdpBind),
+        (SocketsUdpStream => "sockets::udp", "stream", SocketsUdpStream, SocketsUdpStream),
+        (SocketsUdpReceive => "sockets::udp", "receive", SocketsUdpReceive, SocketsUdpReceive),
+        (SocketsUdpCheckSend => "sockets::udp", "check_send", NoInput, SocketsUdpCheckSend),
+        (SocketsUdpSend => "sockets::udp", "send", SocketsUdpSend, SocketsUdpSend),
         (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
         (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }

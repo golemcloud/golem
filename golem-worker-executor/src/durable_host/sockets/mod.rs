@@ -50,6 +50,8 @@ pub(crate) struct SocketEntry {
     pub send_taken: bool,
     pub receive_taken: bool,
     pub native_bound: bool,
+    /// P2: `start-bind` succeeded and `finish-bind` has not completed it yet.
+    pub bind_pending: bool,
     pub options: TcpSocketOptions,
 }
 
@@ -63,6 +65,7 @@ impl SocketEntry {
             send_taken: false,
             receive_taken: false,
             native_bound: false,
+            bind_pending: false,
             options: TcpSocketOptions::default(),
         }
     }
