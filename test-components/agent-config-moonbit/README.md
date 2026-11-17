@@ -22,6 +22,7 @@ moon run cmd -- agents ../../../test-components/agent-config-moonbit --component
 From this directory:
 
 ```sh
+../../sdks/moonbit/golem_sdk/scripts/run-sdk-tests.sh component/config_test.mbt
 moon check --target wasm component
 moon build --target wasm --release component
 node check-core.mjs _build/wasm/release/build/golemcloud/agent_config_moonbit/component/component.wasm
@@ -41,6 +42,9 @@ unchanged reads after a host-value change, fresh-instance recapture, canonical
 paths, recursive data and failed host reads/decodes without a code fallback.
 It does **not** resolve selectors, merge layers, validate supplied config defaults
 or replay an oplog. Fresh instantiation is not executor reconstruction.
+
+The generated-override test checks that recursive creation values use canonical
+config field names while ordinary method schemas retain native field names.
 
 ## Hosted acceptance
 

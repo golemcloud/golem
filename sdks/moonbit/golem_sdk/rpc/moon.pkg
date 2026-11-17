@@ -8,6 +8,7 @@ import {
   "golemcloud/golem_sdk/permissions",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
+  "golemcloud/golem_sdk/config",
 }
 
 supported_targets = "+wasm"

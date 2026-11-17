@@ -317,5 +317,8 @@ pub fn[T : @schema.IntoSchema] typed_config_value(
   ) catch {
     e => raise @common.AgentError::InvalidInput(e.to_string())
   }
-  { path, value: wire, }
+  {
+    path,
+    value: { ..wire, graph: @config.canonical_config_graph(wire.graph), },
+  }
 }

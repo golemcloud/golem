@@ -22,7 +22,7 @@ fn canonical_config_name(name : String) -> String {
 ///|
 // Project only config graphs. Positional codecs and ordinary method schemas
 // retain their native fields; discriminator literals and catalog paths are data.
-fn canonical_config_graph(graph : @types.SchemaGraph) -> @types.SchemaGraph {
+pub fn canonical_config_graph(graph : @types.SchemaGraph) -> @types.SchemaGraph {
   let nodes = graph.type_nodes.map(node => {
     let body = match node.body {
       @types.RecordType(fields) => {

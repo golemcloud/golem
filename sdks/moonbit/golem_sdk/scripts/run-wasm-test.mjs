@@ -428,6 +428,9 @@ const importObject = {
     },
   },
   "golem:agent/host@2.0.0": {
+    "get-config-value"() {
+      throw new Error("unexpected config read in SDK unit-test host")
+    },
     "parse-agent-id"() {
       throw new Error("parse-agent-id is not supplied by the SDK unit-test host")
     },
