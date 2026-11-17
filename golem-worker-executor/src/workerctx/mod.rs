@@ -510,6 +510,13 @@ pub trait InvocationHooks {
         trap_type: &TrapType,
     ) -> InvocationFailureDecision;
 
+    /// Validates a replayed method failure or commits its live terminal without failing the agent.
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError>;
+
     /// Called when an agent invocation succeeds, with the typed result directly.
     ///
     /// The implementation may populate fields on `output` that are only known

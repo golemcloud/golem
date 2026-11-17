@@ -3706,6 +3706,16 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx
+            .record_agent_method_failure(full_function_name, error)
+            .await
+    }
+
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
@@ -6711,6 +6721,7 @@ impl Oplog for TestOplog {
             }
             result => result?,
         };
+        self.pause_at_test_append(&ordered.entry, true).await?;
         self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
@@ -6768,6 +6779,7 @@ impl Oplog for TestOplog {
             }
             result => result?,
         };
+        self.pause_at_test_append(&ordered.entry, true).await?;
         self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
