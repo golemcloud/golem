@@ -28,12 +28,51 @@ use super::attribution::InvocationKey;
 use super::durability::RetryPolicyScope;
 use super::tail_work::TailWorkTracker;
 use crate::model::InvocationContext;
+use crate::services::card_interest::CardInterestContribution;
 use crate::worker::owner_lane::OwnerInvocationId;
+use chrono::{DateTime, Utc};
 use golem_common::model::OwnedInvocationId;
 use golem_common::model::agent::Principal;
+use golem_common::model::card::{CardId, EffectiveSurface, ScopeCard, StoredCard};
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::OplogIndex;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
+/// The authority of one invocation: its scope card and the effective surface derived from
+/// the agent's wallet and that card, with the cache state that says whether the surface is
+/// current.
+#[derive(Clone, Default)]
+pub(crate) struct InvocationAuthority {
+    /// The scope card the invocation was admitted with.
+    pub(crate) scope_card: Option<ScopeCard>,
+    /// The validated root cards of the scope card.
+    pub(crate) scope_root_cards: BTreeMap<CardId, StoredCard>,
+    /// The wallet handles the guest holds for cards of the scope.
+    pub(crate) scope_handles: HashMap<u32, Vec<CardId>>,
+    /// The Store's interest in card events for the scope's roots.
+    pub(crate) scope_interest: Option<Arc<CardInterestContribution>>,
+    /// The surface that authorizes the invocation's host calls.
+    pub(crate) effective_surface: EffectiveSurface,
+    /// Whether `effective_surface` was synchronized with the owner's authority.
+    pub(crate) initialized: bool,
+    /// The published authority generation `effective_surface` was synchronized at.
+    pub(crate) processed_generation: u64,
+    /// The earliest expiry among the cards `effective_surface` was derived from.
+    pub(crate) next_expiration: Option<DateTime<Utc>>,
+    /// Set when the invocation's guest call ends, or when its failure gives up. From then on the
+    /// scope card no longer applies, and the invocation's calls have the agent's authority only.
+    pub(crate) final_outcome_reached: bool,
+}
+
+impl InvocationAuthority {
+    /// The scope card that bounds the invocation's calls: none once its final outcome is reached.
+    pub(crate) fn bound_scope_card(&self) -> Option<&ScopeCard> {
+        self.scope_card
+            .as_ref()
+            .filter(|_| !self.final_outcome_reached)
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct InvocationExecutionState {
@@ -75,6 +114,8 @@ pub(crate) struct InvocationExecutionState {
     /// change. The retry decision for a guest trap, which names no task, uses them. They are not
     /// carried to the next invocation.
     pub(crate) trap_retry_scopes: Vec<RetryPolicyScope>,
+    /// The authority of the invocation.
+    pub(crate) authority: InvocationAuthority,
 }
 
 impl Default for InvocationExecutionState {
@@ -96,6 +137,7 @@ impl Default for InvocationExecutionState {
             tool_invocation_attempt_ordinals: HashMap::new(),
             tail_work: TailWorkTracker::default(),
             trap_retry_scopes: Vec::new(),
+            authority: InvocationAuthority::default(),
         }
     }
 }
@@ -128,7 +170,18 @@ impl Invocations {
             return;
         }
         let mut carried = if self.loop_key == InvocationKey::AgentLevel {
-            self.loop_entry().clone()
+            // The authority moves to the new entry: a scope card, its handles and its card
+            // interest belong to one invocation, and nothing reads the agent-level authority
+            // while the loop runs an invocation.
+            let agent_level = self
+                .entries
+                .get_mut(&InvocationKey::AgentLevel)
+                .expect("the agent-level entry always exists");
+            let authority = std::mem::take(&mut agent_level.authority);
+            InvocationExecutionState {
+                authority,
+                ..agent_level.clone()
+            }
         } else {
             self.entries
                 .remove(&self.loop_key)
@@ -136,6 +189,12 @@ impl Invocations {
         };
         carried.tail_work = TailWorkTracker::default();
         carried.trap_retry_scopes.clear();
+        if carried.authority.final_outcome_reached {
+            // The surface was derived without the scope card; the next authorization derives it
+            // again with the card.
+            carried.authority.final_outcome_reached = false;
+            carried.authority.initialized = false;
+        }
         self.entries.insert(key, carried);
         self.entries
             .retain(|existing, _| *existing == InvocationKey::AgentLevel || *existing == key);
@@ -178,11 +237,25 @@ impl Invocations {
         self.entries.get_mut(&attributed?)
     }
 
-    /// The entry of the loop's invocation, for the invocation loop's own code.
-    pub(crate) fn loop_entry(&self) -> &InvocationExecutionState {
-        self.get(None)
+    /// Every entry, for changes to state that every invocation derives from the agent's wallet.
+    pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = &mut InvocationExecutionState> {
+        self.entries.values_mut()
     }
 
+    pub(crate) fn entries(
+        &self,
+    ) -> impl Iterator<Item = (&InvocationKey, &InvocationExecutionState)> {
+        self.entries.iter()
+    }
+
+    /// The entry of exactly `key`, which must live.
+    pub(crate) fn entry_mut(&mut self, key: InvocationKey) -> &mut InvocationExecutionState {
+        self.entries
+            .get_mut(&key)
+            .expect("the entry was read from the map")
+    }
+
+    /// The entry of the loop's invocation, for the invocation loop's own code.
     pub(crate) fn loop_entry_mut(&mut self) -> &mut InvocationExecutionState {
         self.get_mut(None)
     }
@@ -238,5 +311,67 @@ mod tests {
             invocations.get(None).start_index,
             Some(OplogIndex::from_u64(9))
         );
+    }
+
+    #[test]
+    fn beginning_an_invocation_moves_the_agent_level_authority_into_it() {
+        let mut invocations = Invocations::default();
+        let first = invocation();
+        let second = invocation();
+
+        invocations
+            .loop_entry_mut()
+            .authority
+            .scope_handles
+            .insert(7, Vec::new());
+        invocations.begin(first);
+        assert!(
+            invocations.entries[&InvocationKey::AgentLevel]
+                .authority
+                .scope_handles
+                .is_empty()
+        );
+        assert!(
+            invocations.entries[&first]
+                .authority
+                .scope_handles
+                .contains_key(&7)
+        );
+
+        // The entity cycle: back to the agent level, then the next invocation.
+        invocations.begin(InvocationKey::AgentLevel);
+        assert!(
+            invocations.entries[&InvocationKey::AgentLevel]
+                .authority
+                .scope_handles
+                .contains_key(&7)
+        );
+        invocations.begin(second);
+        assert!(
+            invocations.entries[&InvocationKey::AgentLevel]
+                .authority
+                .scope_handles
+                .is_empty(),
+            "a finished invocation's scope handles stay only in the running invocation's entry"
+        );
+        assert!(
+            invocations.entries[&second]
+                .authority
+                .scope_handles
+                .contains_key(&7)
+        );
+    }
+
+    #[test]
+    fn beginning_after_the_final_outcome_derives_the_surface_again() {
+        let mut invocations = Invocations::default();
+        let first = invocation();
+        invocations.begin(first);
+        invocations.loop_entry_mut().authority.initialized = true;
+        invocations.loop_entry_mut().authority.final_outcome_reached = true;
+        invocations.begin(invocation());
+        let authority = &invocations.get(None).authority;
+        assert!(!authority.final_outcome_reached);
+        assert!(!authority.initialized);
     }
 }

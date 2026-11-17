@@ -89,7 +89,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .invocation_scope_card()
                         .map(|card| card.root_card_ids.as_slice())
                         .unwrap_or_default();
-                    self.state.scope_interest = Some(
+                    self.state.authority_mut().scope_interest = Some(
                         self.state
                             .owner_wallet
                             .interest
@@ -100,7 +100,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 // Store keeps its roots registered until settlement or actual invalidation.
                 // A changed scope is not represented by a worker-status generation. Force the next
                 // live authorization through the synchronized path, which checks inherited roots.
-                self.state.authority_initialized = false;
+                self.state.authority_mut().initialized = false;
                 self.rederive_agent_effective_surface_from_wallet();
                 self.entity_invocation_scope = scope;
                 Ok(())

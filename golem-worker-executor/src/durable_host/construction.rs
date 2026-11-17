@@ -554,7 +554,11 @@ impl PrivateDurableWorkerState {
             agent_config,
             owned_agent_id,
             attribution: Default::default(),
-            invocations: Default::default(),
+            invocations: {
+                let mut invocations = execution_state::Invocations::default();
+                invocations.loop_entry_mut().authority.effective_surface = agent_effective_surface;
+                invocations
+            },
             entity_logical_key_position: None,
             rpc,
             worker_proxy,
@@ -585,20 +589,12 @@ impl PrivateDurableWorkerState {
             replay_applications: VecDeque::new(),
             owner_wallet,
             entity_replay_wallet,
-            agent_effective_surface,
             agent_wallet_cards,
-            invocation_scope_card: None,
-            invocation_scope_root_cards: BTreeMap::new(),
-            invocation_scope_handles: HashMap::new(),
             inherited_invocation_scope: None,
-            scope_interest: None,
             owner_revoked_card_ids: HashSet::new(),
             wallet_id_hash,
             wallet_generation,
             published_authority_generation,
-            processed_authority_generation: 0,
-            authority_initialized: false,
-            next_authority_expiration: None,
             replay_state,
             forward_trace_context_headers: true,
             set_outgoing_http_idempotency_key: true,

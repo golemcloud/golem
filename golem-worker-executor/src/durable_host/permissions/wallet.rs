@@ -55,7 +55,7 @@ pub(super) async fn observe_self_wallet<Ctx: WorkerCtx>(
     // invalidated at this boundary is never handed out again.
     let scope_card = ctx
         .with_agent_authority_at_boundary(|ctx| {
-            let scope_card = ctx.state.invocation_scope_card.clone()?;
+            let scope_card = ctx.state.authority().scope_card.clone()?;
             ensure_card_permission(ctx, CardVerb::Inspect, CardResourcePattern::Any)
                 .ok()
                 .map(|()| scope_card)
@@ -115,7 +115,8 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 PermissionCardEntry::from_scope(scope_card, invocation_key),
             ))?;
             self.state
-                .invocation_scope_handles
+                .authority_mut()
+                .scope_handles
                 .insert(handle.rep(), root_card_ids);
             wallet_cards.push(permissions_types::WalletCard::Scope(handle));
         }

@@ -560,7 +560,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         // owner synchronizes again.
                         synchronized_at_admission.then(|| {
                             (
-                                ctx.state.processed_authority_generation,
+                                ctx.state.authority().processed_generation,
                                 ctx.state.authority_wallet.clone(),
                             )
                         }),

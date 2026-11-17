@@ -420,8 +420,8 @@ pub(super) fn apply<Ctx: WorkerCtx>(
     if ctx.current_invocation_scope_card() == prepared.scope
         && let Some(roots) = &prepared.live_scope_roots
     {
-        ctx.state.invocation_scope_root_cards = roots.clone();
-        ctx.state.authority_initialized = false;
+        ctx.state.authority_mut().scope_root_cards = roots.clone();
+        ctx.state.authority_mut().initialized = false;
     }
     ctx.rederive_agent_effective_surface_from_wallet();
     ctx.state.replay_applications.pop_front();
@@ -460,8 +460,8 @@ mod context {
                 .card_service
                 .check_cards(interested_card_ids)
                 .await?;
-            self.state.invocation_scope_root_cards = live_scope_root_cards_from_states(
-                self.state.invocation_scope_card.as_ref(),
+            self.state.authority_mut().scope_root_cards = live_scope_root_cards_from_states(
+                self.state.authority().scope_card.as_ref(),
                 &card_states,
             )?;
             let revoked_card_ids = card_states
@@ -469,7 +469,7 @@ mod context {
                 .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
                 .collect::<Vec<_>>();
             if !revoked_card_ids.is_empty() {
-                self.state.authority_initialized = false;
+                self.state.invalidate_authority();
             }
             self.public_state
                 .worker()

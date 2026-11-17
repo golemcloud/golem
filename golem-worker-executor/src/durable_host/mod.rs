@@ -1210,15 +1210,10 @@ struct PrivateDurableWorkerState {
     authority_wallet: Arc<WalletSnapshot>,
     card_boundary: Weak<CardEventBoundary>,
     replay_applications: VecDeque<Arc<replay_application::ReplayApplication>>,
-    agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: WalletCards,
-    invocation_scope_card: Option<ScopeCard>,
-    invocation_scope_root_cards: BTreeMap<CardId, StoredCard>,
-    invocation_scope_handles: HashMap<u32, Vec<CardId>>,
     /// Invocation scope an entity Store inherits from the Store that started its current entity
     /// invocation. It bounds the entity's effective surface but is not exposed as a wallet handle.
     inherited_invocation_scope: Option<InheritedInvocationScope>,
-    scope_interest: Option<Arc<crate::services::card_interest::CardInterestContribution>>,
     /// Cards the owner worker has revoked. Revocation events are drained by whichever of the
     /// owner's Stores reaches a boundary first, so every Store excludes these cards from its
     /// surfaces instead of relying on draining every event itself.
@@ -1226,9 +1221,6 @@ struct PrivateDurableWorkerState {
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
     published_authority_generation: Arc<AtomicU64>,
-    processed_authority_generation: u64,
-    authority_initialized: bool,
-    next_authority_expiration: Option<DateTime<Utc>>,
 
     forward_trace_context_headers: bool,
     set_outgoing_http_idempotency_key: bool,
@@ -1748,6 +1740,23 @@ impl PrivateDurableWorkerState {
     ) -> Option<&mut execution_state::InvocationExecutionState> {
         let attributed = self.attribution.resolve();
         self.invocations.own_mut(attributed)
+    }
+
+    /// The authority of the invocation the calling code is attributed to.
+    pub(crate) fn authority(&self) -> &execution_state::InvocationAuthority {
+        &self.invocation_state().authority
+    }
+
+    pub(crate) fn authority_mut(&mut self) -> &mut execution_state::InvocationAuthority {
+        &mut self.invocation_state_mut().authority
+    }
+
+    /// Marks the authority of every invocation as not synchronized, after a change to the
+    /// agent's wallet.
+    pub(crate) fn invalidate_authority(&mut self) {
+        for entry in self.invocations.entries_mut() {
+            entry.authority.initialized = false;
+        }
     }
 
     /// The execution state of the invocation the invocation loop runs.
