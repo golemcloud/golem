@@ -97,8 +97,8 @@ jobs:
             done < <(jq -c '.[][] | select(.pull_request == null)' "$RUNNER_TEMP/requests.json")
             if [[ -z "$request" ]]; then
               source=$main
-              status=$(gh api --paginate --slurp "$repository/commits/$source/statuses?per_page=100" \
-                --jq '[.[][] | select(.context == "Main validation" and .creator.login == "github-actions[bot]")][0].state // ""')
+              status=$(gh api --paginate --slurp "$repository/commits/$source/statuses?per_page=100" | \
+                jq -r '[.[][] | select(.context == "Main validation" and .creator.login == "github-actions[bot]")][0].state // ""')
               if [[ "$status" =~ ^(success|failure|error)$ ]]; then
                 echo "Latest main $source already has a completed result."
                 exit 0

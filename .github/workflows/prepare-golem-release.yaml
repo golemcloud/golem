@@ -50,8 +50,8 @@ jobs:
         run: |
           set -euo pipefail
           source=$(git rev-parse HEAD)
-          state=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$source/statuses?per_page=100" \
-            --jq '[.[][] | select(.context == "Main validation" and .creator.login == "github-actions[bot]")][0].state // "missing"')
+          state=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$source/statuses?per_page=100" | \
+            jq -r '[.[][] | select(.context == "Main validation" and .creator.login == "github-actions[bot]")][0].state // "missing"')
           [[ "$state" == success ]] || { echo "Exact release source $source has Main validation status: $state" >&2; exit 1; }
 
   preflight:
