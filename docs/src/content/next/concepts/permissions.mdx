@@ -55,7 +55,7 @@ If an agent type does not declare its permissions, Golem gives it a **broad defa
   input, declare explicit permissions.
 </Callout>
 
-To declare explicit permissions, give the agent type an `initialCard` in `golem.yaml`. It replaces the default card, so list everything the agent needs:
+To declare explicit permissions, give the agent type an `initialCard` in `golem.yaml`. It replaces the default card, so list everything the agent needs. You can also set the card on a component, a component template or a preset: every agent of the component that sets no card of its own then gets it. The most specific layer that sets a card wins, and its card replaces the inherited card completely; cards are never merged.
 
 ```yaml
 # golem.yaml (excerpt)
@@ -76,7 +76,7 @@ agents:
 
 This agent may read its own `GOLEM_AGENT_ID`, run `bash`, read anything under `/workspace`, delete files directly inside `/workspace`, and connect to one host. It can never reveal secrets whose names start with `billing.`.
 
-An explicit card must allow the agent to read `GOLEM_AGENT_ID`. Golem shows an environment variable to an agent only when the agent's cards allow the agent to read it, and this rule also applies to the variables that Golem sets. The Rust, TypeScript, Go, MoonBit and Effect SDKs read the agent's ID from `GOLEM_AGENT_ID`, so give the card the grant `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`. Without this grant, a Rust or TypeScript agent fails at its first call, a Go, MoonBit or Effect agent fails when it loads a snapshot, and `ctx.AgentID()` and `ic.AgentID()` in the Go SDK return an empty string. `golem deploy` prints a warning for an explicit card that does not have the grant. Scala agents read their ID through self metadata when they load a snapshot, and Effect agents do so when they restore a snapshot with an explicit snapshot strategy; an explicit card for them also needs `agent(?agent) @ ?agent : view : *`. Code that reads other variables needs a grant for each of them, for example `env(?agent) @ ?agent : read : GOLEM_COMPONENT_ID` for `get_agent_id()` in the Rust SDK.
+An explicit card must allow the agent to read `GOLEM_AGENT_ID`. Golem shows an environment variable to an agent only when the agent's cards allow the agent to read it, and this rule also applies to the variables that Golem sets. The Rust, TypeScript, Go, MoonBit and Effect SDKs read the agent's ID from `GOLEM_AGENT_ID`, so give the card the grant `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`. Without this grant, a Rust or TypeScript agent fails at its first call, a Go, MoonBit or Effect agent fails when it loads a snapshot, and `ctx.AgentID()` and `ic.AgentID()` in the Go SDK return an empty string. `golem deploy` prints a warning for each agent type whose card, set on the agent type or inherited from its component, does not have the grant. Scala agents read their ID through self metadata when they load a snapshot, and Effect agents do so when they restore a snapshot with an explicit snapshot strategy; an explicit card for them also needs `agent(?agent) @ ?agent : view : *`. Code that reads other variables needs a grant for each of them, for example `env(?agent) @ ?agent : read : GOLEM_COMPONENT_ID` for `get_agent_id()` in the Rust SDK.
 
 A changed card applies to the agents that are created after the deploy. An agent that exists already keeps the card of the component revision it runs on, also after it failed because of a missing grant, until it is updated to a newer revision.
 

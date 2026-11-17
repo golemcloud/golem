@@ -2658,6 +2658,10 @@ impl Layer for ComponentLayer {
                 .config
                 .apply_layer(id, selection, properties.config.value().clone());
 
+            value
+                .initial_card
+                .apply_layer(id, selection, properties.initial_card.value().clone());
+
             value.env.apply_layer(
                 id,
                 selection,
@@ -3465,7 +3469,7 @@ impl AgentLayerId {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct AgentLayer {
+pub struct AgentLayer {
     id: AgentLayerId,
     parents: Vec<AgentLayerId>,
     properties: AgentLayerPropertiesKind,
@@ -3621,18 +3625,19 @@ impl Layer for AgentLayer {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentLayerProperties {
     #[serde(
         serialize_with = "AgentLayerProperties::serialize_applied_layers",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
-    config: JsonProperty<AgentLayer>,
-    initial_card: OptionalProperty<AgentLayer, app_raw::ManifestInitialCard>,
-    env: MapProperty<AgentLayer, String, String>,
-    plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
-    files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
-    tool_bindings: ToolBindingsProperty<AgentLayer>,
+    pub config: JsonProperty<AgentLayer>,
+    pub initial_card: OptionalProperty<AgentLayer, app_raw::ManifestInitialCard>,
+    pub env: MapProperty<AgentLayer, String, String>,
+    pub plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
+    pub files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
+    pub tool_bindings: ToolBindingsProperty<AgentLayer>,
 }
 
 impl AgentLayerProperties {
@@ -6390,12 +6395,13 @@ mod test {
     use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
     use crate::fs;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentDependency, ComponentLayerApplyContext,
-        ComponentPresetSelector, EnvironmentToolBridgeRequests, SubjectSource, ToolName,
-        includes_from_yaml_file,
+        AgentLayerId, Application, ApplicationPreload, ComponentDependency,
+        ComponentLayerApplyContext, ComponentLayerId, ComponentPresetSelector,
+        EnvironmentToolBridgeRequests, SubjectSource, ToolName, includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::optional::OptionalPropertyTraceElem;
     use crate::model::language::GuestLanguage;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
@@ -6404,6 +6410,7 @@ mod test {
     use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
     use golem_common::model::tool::ToolFilesystemAccess;
     use indoc::indoc;
+    use itertools::Itertools;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
@@ -9461,6 +9468,225 @@ bridge:
                 ]
             );
         });
+    }
+
+    /// The layers that can set `initialCard` for the agent `test-agent` of `app:main`, from the
+    /// least to the most specific.
+    const INITIAL_CARD_LEVELS: [&str; 6] = [
+        "component-template",
+        "component",
+        "component-preset",
+        "agent-template",
+        "agent",
+        "agent-preset",
+    ];
+
+    fn initial_card_of_level(level: &str) -> app_raw::ManifestInitialCard {
+        app_raw::ManifestInitialCard {
+            lower_bound: app_raw::ManifestInitialCardBound {
+                positive: vec![format!("env(?agent) @ ?agent : read : FROM_{level}")],
+                negative: vec![],
+            },
+            upper_bound: app_raw::ManifestInitialCardBound::default(),
+        }
+    }
+
+    /// A manifest where each layer in `levels_with_card` sets an `initialCard` that names the
+    /// layer. Every layer also sets `config`, so that no layer is empty.
+    fn initial_card_cascade_manifest(levels_with_card: &[&str]) -> String {
+        let layer = |level: &str| {
+            let card = if levels_with_card.contains(&level) {
+                format!(
+                    r#"initialCard: {{ lowerBound: {{ positive: ["env(?agent) @ ?agent : read : FROM_{level}"] }} }}"#
+                )
+            } else {
+                String::new()
+            };
+            format!("config: {{ from: {level} }}\n{card}")
+        };
+        let indented = |level: &str, indent: usize| {
+            layer(level)
+                .lines()
+                .map(|line| format!("{}{line}", " ".repeat(indent)))
+                .join("\n")
+        };
+        format!(
+            "app: hello-app\n\
+             environments:\n  local:\n    server: local\n    componentPresets: debug\n\
+             componentTemplates:\n  component-template:\n{}\n  agent-template:\n{}\n\
+             components:\n  app:main:\n    templates: component-template\n    componentWasm: dummy-component.wasm\n{}\n    presets:\n      debug:\n{}\n\
+             agents:\n  test-agent:\n    templates: agent-template\n{}\n    presets:\n      debug:\n{}\n",
+            indented("component-template", 4),
+            indented("agent-template", 4),
+            indented("component", 4),
+            indented("component-preset", 8),
+            indented("agent", 4),
+            indented("agent-preset", 8),
+        )
+    }
+
+    /// The card that `app:main` and `test-agent` resolve to.
+    fn resolved_initial_cards(
+        levels_with_card: &[&str],
+    ) -> (
+        Option<app_raw::ManifestInitialCard>,
+        Option<app_raw::ManifestInitialCard>,
+    ) {
+        let (app, _app_tmp_dir) = load_app_for_env(
+            &initial_card_cascade_manifest(levels_with_card),
+            "local",
+            &["debug"],
+        );
+        let component_name = parse_component_name("app:main");
+        let component_card = app.component(&component_name).initial_card().cloned();
+        let agent_card = with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+            agent.initial_card().cloned()
+        });
+        (component_card, agent_card)
+    }
+
+    #[test]
+    fn test_initial_card_of_the_most_specific_layer_replaces_the_inherited_card() {
+        for (index, level) in INITIAL_CARD_LEVELS.iter().enumerate() {
+            let (component_card, agent_card) =
+                resolved_initial_cards(&INITIAL_CARD_LEVELS[..=index]);
+            let component_level = INITIAL_CARD_LEVELS[index.min(2)];
+
+            assert_eq!(
+                agent_card,
+                Some(initial_card_of_level(level)),
+                "the agent card set on {level} must replace the cards of the layers above it"
+            );
+            assert_eq!(
+                component_card,
+                Some(initial_card_of_level(component_level)),
+                "the component must have the card of {component_level}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_initial_card_set_on_one_layer_reaches_the_agent() {
+        for (index, level) in INITIAL_CARD_LEVELS.iter().enumerate() {
+            let (component_card, agent_card) = resolved_initial_cards(&[level]);
+
+            assert_eq!(
+                agent_card,
+                Some(initial_card_of_level(level)),
+                "a card set only on {level} must reach the agent"
+            );
+            assert_eq!(
+                component_card,
+                (index <= 2).then(|| initial_card_of_level(level)),
+                "a card set only on {level} reaches the component only from a component layer"
+            );
+        }
+    }
+
+    #[test]
+    fn test_initial_card_is_absent_when_no_layer_sets_it() {
+        assert_eq!(resolved_initial_cards(&[]), (None, None));
+    }
+
+    #[test]
+    fn test_initial_card_trace_names_the_layer_that_set_the_card() {
+        let expected_agent_layers = [
+            (
+                AgentLayerId::Component(parse_component_name("app:main")),
+                None,
+            ),
+            (
+                AgentLayerId::Component(parse_component_name("app:main")),
+                None,
+            ),
+            (
+                AgentLayerId::Component(parse_component_name("app:main")),
+                None,
+            ),
+            (
+                AgentLayerId::AgentTemplate(
+                    parse_agent_type_name("test-agent"),
+                    "agent-template".to_string(),
+                ),
+                None,
+            ),
+            (
+                AgentLayerId::AgentCommon(parse_agent_type_name("test-agent")),
+                None,
+            ),
+            (
+                AgentLayerId::AgentCustomPresets(parse_agent_type_name("test-agent")),
+                Some("debug".to_string()),
+            ),
+        ];
+        let expected_component_layers = [
+            (
+                ComponentLayerId::TemplateCommon("component-template".to_string()),
+                None,
+            ),
+            (
+                ComponentLayerId::ComponentCommon(parse_component_name("app:main")),
+                None,
+            ),
+            (
+                ComponentLayerId::ComponentCustomPresets(parse_component_name("app:main")),
+                Some("debug".to_string()),
+            ),
+        ];
+
+        for (index, level) in INITIAL_CARD_LEVELS.iter().enumerate() {
+            let (app, _app_tmp_dir) = load_app_for_env(
+                &initial_card_cascade_manifest(&[level]),
+                "local",
+                &["debug"],
+            );
+
+            let agent_overrides = with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+                agent
+                    .layer_properties()
+                    .with_compacted_traces()
+                    .initial_card
+                    .trace()
+                    .iter()
+                    .map(|elem| match elem {
+                        OptionalPropertyTraceElem::Override { id, selection, .. } => {
+                            (id.clone(), selection.clone())
+                        }
+                        OptionalPropertyTraceElem::Skip { .. } => unreachable!(),
+                    })
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(
+                agent_overrides,
+                vec![expected_agent_layers[index].clone()],
+                "agent trace of a card set on {level}"
+            );
+
+            let component_name = parse_component_name("app:main");
+            let component_overrides = app
+                .component(&component_name)
+                .layer_properties()
+                .with_compacted_traces()
+                .initial_card
+                .trace()
+                .iter()
+                .map(|elem| match elem {
+                    OptionalPropertyTraceElem::Override { id, selection, .. } => {
+                        (id.clone(), selection.clone())
+                    }
+                    OptionalPropertyTraceElem::Skip { .. } => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                component_overrides,
+                expected_component_layers
+                    .get(index)
+                    .cloned()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                "component trace of a card set on {level}"
+            );
+        }
     }
 
     #[test]
