@@ -285,10 +285,11 @@ that fit: at most 13, the most IDs that fit in a metadata value, and at most $99
 largest price of Polar.
 
 A paid order of the settlement product records a settlement for each order in its metadata that
-the account still owes, and the account moves to the free plan. It settles nothing when its
-price, the subtotal after the discount, is less than the amount of those orders, and logs an
-error. An order that the account
-does not owe logs a warning; an operator refunds that part in the Polar dashboard. Polar sends a
+the account still owes. When the account owes no more paid overage, it moves to the plan of its
+subscriptions: the free plan, or the paid plan when the person subscribed again. A new
+subscription does not end the suspension before that, and the page names the plan that follows.
+A settlement order settles nothing when its price, the subtotal after the discount, is less than
+the amount of those orders, and logs an error. An order that the account does not owe logs a warning; an operator refunds that part in the Polar dashboard. Polar sends a
 paid order in several events, and the later ones change nothing. If Polar charges an original
 order after its settlement, the app logs `An order was paid after its settlement`, and an operator
 refunds the settlement order. The app has no `refunds:write`.

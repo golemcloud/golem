@@ -199,6 +199,11 @@ export interface SignedInPageOptions {
   /** The settlement that the account can pay; `undefined` when there is none or the call failed. */
   readonly settlement: SettlementOffer | undefined
   /**
+   * The plan of the account when it owes no more paid overage: the plan of its subscriptions alone,
+   * so paid when the person subscribed again. `undefined` when the call failed.
+   */
+  readonly planAfterSettlement: "paid" | "free" | undefined
+  /**
    * Polar has redirected back after the payment of a settlement, and the app has not recorded the
    * settlement of its orders yet.
    */
@@ -260,7 +265,7 @@ const planHero = (options: SignedInPageOptions) => {
       if (options.settlement !== undefined && canSettle(options.plan, options.settlement)) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Suspended</h1>
-        <p class="alert" role="alert">Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account. The subscription has ended, so Polar does not charge the invoice again. Settle the paid overage of ${usd.format(options.settlement.amount / 100)} here, with the tax of the invoice. When the account owes no more paid overage, your plan is Free, and the agents can run again.</p>
+        <p class="alert" role="alert">Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account. The subscription of the invoice has ended, so Polar does not charge the invoice again. Settle the paid overage of ${usd.format(options.settlement.amount / 100)} here, with the tax of the invoice. When the account owes no more paid overage, your plan is ${options.planAfterSettlement === "paid" ? "Paid" : "Free"}, and the agents can run again.</p>
         <div class="actions">
           ${settleForm(options.settlement.amount)}
           ${portalForm("Billing history")}
