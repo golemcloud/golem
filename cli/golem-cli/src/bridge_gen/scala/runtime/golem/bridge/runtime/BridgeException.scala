@@ -28,9 +28,10 @@ class BridgeException(message: String, cause: Throwable)
 /**
  * A streaming call that could not reach the server within its reconnect
  * window. `lastCause` is the last failure: a `WebSocketHandshakeException` for
- * a refused upgrade, a [[BridgeException]] for a retryable rejection, the
- * connection error, or a `TimeoutException` for a start or resume the server
- * never answered.
+ * a refused upgrade, a [[BridgeHttpException]] for an environment lookup the
+ * server answered with HTTP 429 or 5xx, a [[BridgeException]] for a retryable
+ * rejection, the connection error, or a `TimeoutException` for a start or
+ * resume the server never answered.
  */
 final class BridgeUnreachableException(
   val endpoint: String,
@@ -51,6 +52,24 @@ final class BridgeInvocationRejectedException(
   val serverMessage: String,
   val stderr: Option[String]
 ) extends BridgeException(s"$code: $serverMessage", null)
+
+/**
+ * A REST call that the server answered with an error status. `status` is the
+ * HTTP status and `body` the response body.
+ */
+class BridgeHttpException(val endpoint: String, val status: Int, val body: String)
+    extends BridgeException(s"Golem $endpoint request failed with HTTP $status: $body", null)
+
+/**
+ * The agent does not exist: an unknown ID, the ID of an agent of another type,
+ * or an agent that no longer has the fingerprint its client pinned.
+ */
+final class BridgeNotFoundException(endpoint: String, body: String)
+    extends BridgeHttpException(endpoint, 404, body)
+
+/** A keyed create found an existing agent with the key. */
+final class BridgeConflictException(endpoint: String, body: String)
+    extends BridgeHttpException(endpoint, 409, body)
 
 /** A streaming call its [[CancellationToken]] cancelled. */
 final class BridgeCancelledException extends BridgeException("the invocation was cancelled", null)

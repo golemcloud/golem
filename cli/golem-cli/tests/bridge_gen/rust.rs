@@ -336,7 +336,7 @@ fn bridge_rust_compiles_rust_code_first_snippets_foo_agent(
 }
 
 #[test]
-fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
+fn bridge_rust_ephemeral_agent_has_only_upsert() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
     let mut agent_type = agent(
@@ -357,15 +357,23 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
 
     let lib_rs = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
     assert!(lib_rs.contains("pub struct EphemeralConfigAgent"));
-    assert!(!lib_rs.contains("pub async fn new("));
-    assert!(lib_rs.contains("pub async fn new_phantom("));
-    assert!(!lib_rs.contains("pub async fn get_phantom("));
-    assert!(!lib_rs.contains("Uuid::new_v4"));
+    assert!(lib_rs.contains("pub fn upsert("));
+    for absent in [
+        "pub async fn create(",
+        "pub async fn get_by_id(",
+        "pub async fn agent_id(",
+        "target: Option<",
+        "Uuid::new_v4",
+    ] {
+        assert!(!lib_rs.contains(absent), "unexpected {absent}:\n{lib_rs}");
+    }
     let compact_lib_rs: String = lib_rs
         .chars()
         .filter(|char| !char.is_whitespace())
         .collect();
-    assert!(compact_lib_rs.contains("returnOk(Self{constructor_parameters,phantom_id:None,"));
+    assert!(
+        compact_lib_rs.contains("Ok(Self{constructor_parameters:Some(constructor_parameters),})")
+    );
 }
 
 #[test]
@@ -376,7 +384,11 @@ fn bridge_rust_external_rest_and_session_config_use_application_json() {
         "ConfigAgent",
         "rust",
         vec![],
-        vec![],
+        vec![method(
+            "upload",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
         vec![],
         AgentMode::Durable,
     );
@@ -402,9 +414,17 @@ fn bridge_rust_external_rest_and_session_config_use_application_json() {
 
     let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
     assert!(source.contains("let __config_json = golem_common::schema::render::to_json_value("));
-    assert!(source.contains("value: __config_json.clone()"));
     assert!(source.contains("value: __config_json.into()"));
     assert!(!source.contains("serde_json::to_value(&__config_value)"));
+    let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        compact.contains(
+            "pubasyncfncreate(options:crate::__golem_bridge_runtime::CreateOptions<Option<i64>>,)"
+        ),
+        "{source}"
+    );
+    // A session names the keyed agent, which carries its own configuration.
+    assert!(compact.contains("config:Vec::new()"), "{source}");
 }
 
 #[test]
@@ -460,8 +480,8 @@ fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
     for ephemeral_shape in [
         "pub use golem_rust::agentic::EphemeralInvocationResult",
-        "pub fn new_phantom(",
-        "pub fn new_phantom_with_config(",
+        "pub fn upsert(",
+        "golem_rust::agentic::__upsert_agent(\n                \"AlphaAgent\",\n                constructor_value,\n            )",
         "async_invoke_and_await",
         ".invoke(",
         "schedule_invocation",
@@ -474,11 +494,14 @@ fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
     }
     assert!(!lib_rs.contains("pub struct AlphaAgentInvocationResult"));
     assert!(!lib_rs.contains("_with_metadata"));
-    assert!(!lib_rs.contains("pub fn get("));
-    assert!(!lib_rs.contains("pub fn get_phantom("));
-    assert!(!lib_rs.contains("pub fn get_with_config("));
-    assert!(!lib_rs.contains("pub fn get_phantom_with_config("));
-    assert!(!lib_rs.contains("Uuid::new_v4"));
+    for absent in [
+        "pub async fn create(",
+        "pub fn get_by_id(",
+        "pub async fn agent_id(",
+        "Uuid::new_v4",
+    ] {
+        assert!(!lib_rs.contains(absent), "unexpected {absent}:\n{lib_rs}");
+    }
 
     let shared_target_dir = crate::workspace_path().join("target/shared_bridge_tests");
     let output = std::process::Command::new("cargo")
@@ -900,7 +923,7 @@ async fn main() {
         "local",
         ReconnectPolicy::Within(Duration::from_millis(300)),
     );
-    let agent = StreamerAgent::new_phantom().await.unwrap();
+    let agent = StreamerAgent::upsert().unwrap();
     let started = Instant::now();
     match agent.numbers().await {
         Err(ClientError::Unreachable { endpoint, window, .. }) => {
@@ -1175,7 +1198,7 @@ fn external_agent_named_agent_binary_still_compiles() {
     std::fs::create_dir(package_dir.join("examples")).unwrap();
     std::fs::write(
         package_dir.join("examples/client.rs"),
-        "fn main() { let _ = agent_binary_client::AgentBinary::get; }\n",
+        "fn main() { let _ = agent_binary_client::AgentBinary::upsert; }\n",
     )
     .unwrap();
 
@@ -1501,10 +1524,15 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
     for guest_shape in [
         "wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc",
-        "pub fn get(",
-        "pub fn get_phantom(",
-        "pub fn new_phantom(",
-        "golem_rust::golem_agentic::golem::agent::host::WasmRpc::new",
+        "pub fn upsert(",
+        "pub async fn create(",
+        "golem_rust::CreateOptions<()>",
+        "pub fn get_by_id(\n        agent_id: &golem_rust::AgentId,\n    )",
+        "pub async fn agent_id(",
+        "golem_rust::agentic::__agent_id(&self.wasm_rpc)",
+        "golem_rust::agentic::__upsert_agent(\n                \"AlphaAgent\",\n                constructor_value,\n            )",
+        "golem_rust::agentic::__create_agent(",
+        "golem_rust::agentic::__get_agent_by_id(\"AlphaAgent\", agent_id)",
         "pub async fn run(\n        &self,\n        value: i32,",
         "pub fn trigger_run(\n        &self,\n        value: i32,",
         "pub fn schedule_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,",
@@ -1527,7 +1555,7 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
     assert!(!lib_rs.contains("reqwest"));
     assert!(!lib_rs.contains("constructor_parameters"));
     assert!(!lib_rs.contains("agent_id: String"));
-    assert!(!lib_rs.contains("phantom_id: Option<golem_rust::Uuid>,\n                wasm_rpc"));
+    assert!(!lib_rs.contains("phantom"));
     assert!(!lib_rs.contains("golem_rust::golem_agentic::golem::agent::host::make_agent_id"));
 
     let output = std::process::Command::new("cargo")
@@ -1591,7 +1619,7 @@ fn guest_generation_compiles_when_constructor_parameter_matches_internal_name() 
     let mut agent_type = minimal_agent_type("AlphaAgent");
     agent_type.mode = AgentMode::Durable;
     agent_type.constructor.input_schema = InputSchema::parameters(vec![NamedField::user_supplied(
-        "phantom_id",
+        "options",
         SchemaType::s32(),
     )]);
     let mut generator = RustBridgeGenerator::new_with_mode(
@@ -1732,13 +1760,14 @@ fn guest_generation_compiles_when_method_parameter_is_named_when() {
 }
 
 #[test]
-fn guest_generation_compiles_when_method_name_matches_phantom_id_helper() {
+fn guest_generation_compiles_when_method_name_matches_get_by_id_helper() {
     let dir = tempfile::TempDir::new().unwrap();
     let target_path =
         Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
     let mut agent_type = minimal_agent_type("AlphaAgent");
+    agent_type.mode = AgentMode::Durable;
     agent_type.methods.push(AgentMethodSchema {
-        name: "phantom_id".to_string(),
+        name: "get_by_id".to_string(),
         description: String::new(),
         prompt_hint: None,
         input_schema: InputSchema::parameters(vec![]),
@@ -1766,7 +1795,7 @@ fn guest_generation_compiles_when_method_name_matches_phantom_id_helper() {
 
     assert!(
         output.status.success(),
-        "generated guest crate with method named phantom_id failed cargo check\nstdout:\n{}\nstderr:\n{}",
+        "generated guest crate with method named get_by_id failed cargo check\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -2180,7 +2209,7 @@ fn guest_generation_compiles_when_constructor_parameter_is_named_agent_config() 
 }
 
 #[test]
-fn guest_generation_compiles_when_rust_constructor_parameter_matches_reserved_phantom_id_name() {
+fn guest_generation_compiles_when_rust_constructor_parameter_matches_reserved_options_name() {
     let dir = tempfile::TempDir::new().unwrap();
     let target_path =
         Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
@@ -2188,7 +2217,7 @@ fn guest_generation_compiles_when_rust_constructor_parameter_matches_reserved_ph
     agent_type.source_language = "rust".to_string();
     agent_type.mode = AgentMode::Durable;
     agent_type.constructor.input_schema = InputSchema::parameters(vec![NamedField::user_supplied(
-        "__golem_bridge_phantom_id",
+        "__golem_bridge_options",
         SchemaType::s32(),
     )]);
     let mut generator = RustBridgeGenerator::new_with_mode(
@@ -2211,7 +2240,7 @@ fn guest_generation_compiles_when_rust_constructor_parameter_matches_reserved_ph
 
     assert!(
         output.status.success(),
-        "generated guest crate with Rust constructor parameter matching reserved phantom id name failed cargo check\nstdout:\n{}\nstderr:\n{}",
+        "generated guest crate with Rust constructor parameter matching reserved options name failed cargo check\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

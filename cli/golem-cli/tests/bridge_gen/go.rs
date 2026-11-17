@@ -411,8 +411,11 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         "func (c CounterAgentClient) MustTriggerAdd(by uint32) golem.InvocationMetadata {",
         "func (c CounterAgentClient) ScheduleAdd(at time.Time, by uint32) (*golem.ScheduledInvocation, error) {",
         "func (c CounterAgentClient) MustScheduleAdd(at time.Time, by uint32) *golem.ScheduledInvocation {",
-        "func MustGetCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) CounterAgentClient {",
-        "func MustNewPhantomCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) CounterAgentClient {",
+        "func MustUpsertCounterAgent(id CounterAgentID) CounterAgentClient {",
+        "func MustCreateCounterAgent(id CounterAgentID, opts ...golem.CreateOpt) CounterAgentClient {",
+        "func MustGetCounterAgentByID(id golem.AgentID) CounterAgentClient {",
+        "func (c CounterAgentClient) AgentID() (golem.AgentID, error) {",
+        "func (c CounterAgentClient) MustAgentID() golem.AgentID {",
         // A scope card is lent to the awaited calls through a copy of the
         // client.
         "func (c CounterAgentClient) WithScopeCard(card golem.ScopeCard) CounterAgentClient {\n\treturn CounterAgentClient{client: c.client.WithScopeCard(card)}\n}",
@@ -722,20 +725,33 @@ import (
 func TestTheClientInvokesTriggersAndSchedules(t *testing.T) {{
 	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {{
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {{
+		case "/v1/me/token":
+			_, _ = io.WriteString(w, `{{"accountId":"account-id"}}`)
+			return
+		case "/v1/me/visible-environments":
+			_, _ = io.WriteString(w, `{{"values":[{{"environment":{{"id":"env-id","name":"env"}},"application":{{"name":"app"}},"account":{{"id":"account-id"}}}}]}}`)
+			return
+		}}
+		if r.URL.Path != "/v1/runtime/envs/env-id/agent-types/CounterAgent/invoke" {{
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}}
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
 		bodies = append(bodies, body)
-		w.Header().Set("Content-Type", "application/json")
 		result := ""
-		if body["methodName"] == "increment" && body["mode"] == "await" {{
+		if body["method"] == "increment" && body["mode"] == "await" {{
 			result = `,"result":{{"graph":{{"root":{{"kind":"f64","value":{{}}}}}},"value":{{"kind":"f64","value":2.5}}}}`
 		}}
-		_, _ = io.WriteString(w, `{{"agentId":{{"componentId":"c","agentId":"a"}},"idempotencyKey":"k"`+result+`}}`)
+		_, _ = io.WriteString(w, `{{"agentId":"00000000-0000-0000-0000-000000000001","idempotencyKey":"00000000-0000-0000-0000-000000000002"`+result+`}}`)
 	}}))
 	defer server.Close()
 
-	client, err := GetCounterAgent(CounterAgentID{{Name: "c1"}}, bridge.WithConfiguration(bridge.Configuration{{
+	client, err := UpsertCounterAgent(CounterAgentID{{Name: "c1"}}, bridge.WithConfiguration(bridge.Configuration{{
 		Server: bridge.Custom(server.URL, "token"), AppName: "app", EnvName: "env",
 	}}))
 	if err != nil {{
@@ -766,6 +782,9 @@ func TestTheClientInvokesTriggersAndSchedules(t *testing.T) {{
 	}}
 	if want := `{{"kind":"record","value":{{"fields":[{{"kind":"string","value":"c1"}}]}}}}`; params(bodies[0]["parameters"]) != want {{
 		t.Fatalf("constructor arguments sent as %s", params(bodies[0]["parameters"]))
+	}}
+	if _, ok := bodies[0]["agentId"]; ok {{
+		t.Fatalf("a client of upsert named its agent by ID: %v", bodies[0])
 	}}
 	if want := `{{"kind":"record","value":{{"fields":[{{"kind":"u32","value":3}}]}}}}`; params(bodies[1]["methodParameters"]) != want {{
 		t.Fatalf("method arguments sent as %s", params(bodies[1]["methodParameters"]))
@@ -1024,9 +1043,9 @@ func TestAUnitTheCalleeDoesNotAcceptIsRefusedBeforeSending(t *testing.T) {{
 			t.Fatalf("%s: got %v, want a *bridge.EncodeError", what, err)
 		}}
 	}}
-	_, err := GetScaleAgent(ScaleAgentID{{Name: "s", Limit: values.Quantity[UnitKg]{{Mantissa: 1, Unit: "lb"}}}}, configuration)
+	_, err := UpsertScaleAgent(ScaleAgentID{{Name: "s", Limit: values.Quantity[UnitKg]{{Mantissa: 1, Unit: "lb"}}}}, configuration)
 	refused("id", err)
-	client, err := GetScaleAgent(ScaleAgentID{{Name: "s", Limit: values.Quantity[UnitKg]{{Mantissa: 1}}}}, configuration)
+	client, err := UpsertScaleAgent(ScaleAgentID{{Name: "s", Limit: values.Quantity[UnitKg]{{Mantissa: 1}}}}, configuration)
 	if err != nil {{
 		t.Fatal(err)
 	}}
@@ -1380,9 +1399,9 @@ func TestTheToolClientResolves(t *testing.T) {{
 }
 
 /// An ephemeral agent has no durable identity, so its guest client offers
-/// phantoms only and declares the target's mode.
+/// upsert only and declares the target's mode.
 #[test]
-fn go_guest_ephemeral_client_has_no_get(env: &GoEnv) {
+fn go_guest_ephemeral_client_has_only_upsert(env: &GoEnv) {
     let request = agent(
         "RequestAgent",
         "rust",
@@ -1397,15 +1416,27 @@ fn go_guest_ephemeral_client_has_no_get(env: &GoEnv) {
         client.contains("golem.AgentClientSpec{Mode: golem.Ephemeral}"),
         "{client}"
     );
-    assert!(client.contains("func NewPhantomRequestAgent("), "{client}");
-    assert!(!client.contains("func GetRequestAgent("), "{client}");
-    assert!(!client.contains("func MustGetRequestAgent("), "{client}");
+    assert!(
+        client.contains("func UpsertRequestAgent(id RequestAgentID) (RequestAgentClient, error) {"),
+        "{client}"
+    );
+    assert!(client.contains("func MustUpsertRequestAgent("), "{client}");
+    for absent in [
+        "func CreateRequestAgent(",
+        "func GetRequestAgentByID(",
+        "AgentID()",
+    ] {
+        assert!(
+            !client.contains(absent),
+            "unexpected {absent} in:\n{client}"
+        );
+    }
     generated.assert_gofmt_clean(env);
     generated.assert_vets_for_wasip1(env);
 }
 
-/// An ephemeral agent's external client constructs a phantom per call and
-/// reports the instance that ran with each awaited result.
+/// An ephemeral agent's external client offers upsert only, and reports the
+/// one-shot instance that ran with each awaited result.
 #[test]
 fn go_external_ephemeral_client_reports_the_instance(env: &GoEnv) {
     let request = agent(
@@ -1422,7 +1453,7 @@ fn go_external_ephemeral_client_reports_the_instance(env: &GoEnv) {
     let generated = GeneratedGo::external(env, request);
     let client = generated.read("client.go");
     for expected in [
-        "func NewPhantomRequestAgent(",
+        "func UpsertRequestAgent(id RequestAgentID, opts ...bridge.AgentOption) (RequestAgentClient, error) {",
         "Run(ctx context.Context) (bridge.InvocationResult[string], error)",
         "return bridge.CallWithID(ctx, c.agent, \"run\"",
         "Touch(ctx context.Context) (bridge.Receipt, error)",
@@ -1432,7 +1463,16 @@ fn go_external_ephemeral_client_reports_the_instance(env: &GoEnv) {
             "missing {expected} in:\n{client}"
         );
     }
-    assert!(!client.contains("func GetRequestAgent("), "{client}");
+    for absent in [
+        "func CreateRequestAgent(",
+        "func GetRequestAgentByID(",
+        "AgentID(ctx",
+    ] {
+        assert!(
+            !client.contains(absent),
+            "unexpected {absent} in:\n{client}"
+        );
+    }
     generated.assert_gofmt_clean(env);
     generated.assert_vets_natively(env);
 }
@@ -1472,9 +1512,10 @@ fn go_guest_client_overrides_typed_configuration(env: &GoEnv) {
     for expected in [
         "type CounterAgentConfig struct",
         "LimitsMaxItems values.Option[uint16]",
-        "func WithCounterAgentConfig(cfg CounterAgentConfig) golem.ClientOpt {",
+        "func WithCounterAgentConfig(cfg CounterAgentConfig) golem.CreateOpt {",
         "golem.ConfigEntryOf([]string{\"limits\", \"max-items\"}, v)",
-        "func GetCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) (CounterAgentClient, error) {",
+        "func CreateCounterAgent(id CounterAgentID, opts ...golem.CreateOpt) (CounterAgentClient, error) {",
+        "func UpsertCounterAgent(id CounterAgentID) (CounterAgentClient, error) {",
     ] {
         assert!(
             client.contains(expected),
@@ -1519,21 +1560,43 @@ import (
 )
 
 func TestSetConfigurationFieldsTravelAsCanonicalJSON(t *testing.T) {{
-	var config string
+	const agentID = "00000000-0000-0000-0000-000000000001"
+	var created, invoked map[string]json.RawMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {{
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {{
+		case "/v1/me/token":
+			_, _ = io.WriteString(w, `{{"accountId":"account-id"}}`)
+			return
+		case "/v1/me/visible-environments":
+			_, _ = io.WriteString(w, `{{"values":[{{"environment":{{"id":"env-id","name":"env"}},"application":{{"name":"app"}},"account":{{"id":"account-id"}}}}]}}`)
+			return
+		}}
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]json.RawMessage
 		_ = json.Unmarshal(raw, &body)
-		config = string(body["config"])
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{{"agentId":{{"componentId":"c","agentId":"a"}},"idempotencyKey":"k"}}`)
+		switch r.URL.Path {{
+		case "/v1/runtime/envs/env-id/agent-types/CounterAgent/agents":
+			created = body
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{{"agentId":"`+agentID+`","agentFingerprint":"00000000-0000-0000-0000-00000000000f"}}`)
+		case "/v1/runtime/envs/env-id/agent-types/CounterAgent/invoke":
+			invoked = body
+			_, _ = io.WriteString(w, `{{"agentId":"`+agentID+`","idempotencyKey":"00000000-0000-0000-0000-000000000002"}}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}}
 	}}))
 	defer server.Close()
 
-	client, err := GetCounterAgent(CounterAgentID{{Name: "c1"}},
+	ctx := context.Background()
+	client, err := CreateCounterAgent(ctx, CounterAgentID{{Name: "c1"}},
 		bridge.WithConfiguration(bridge.Configuration{{
 			Server: bridge.Custom(server.URL, "token"), AppName: "app", EnvName: "env",
 		}}),
+		bridge.Keyed(),
+		bridge.WithEnv("MODE", "test"),
 		WithCounterAgentConfig(CounterAgentConfig{{
 			LimitsMaxItems: values.Some[uint16](7),
 			Db:             values.Some(CfgDb{{Host: "h", Mode: CfgModeReadWrite}}),
@@ -1542,12 +1605,28 @@ func TestSetConfigurationFieldsTravelAsCanonicalJSON(t *testing.T) {{
 	if err != nil {{
 		t.Fatal(err)
 	}}
-	if err := client.Add(context.Background(), 1); err != nil {{
+	want := `[{{"path":["limits","max-items"],"value":7}},{{"path":["db"],"value":{{"host":"h","mode":"read-write"}}}}]`
+	if config := string(created["config"]); config != want {{
+		t.Fatalf("config sent as %s, want %s", config, want)
+	}}
+	if keyed := string(created["keyed"]); keyed != "true" {{
+		t.Fatalf("keyed sent as %s", keyed)
+	}}
+	if env := string(created["env"]); env != `{{"MODE":"test"}}` {{
+		t.Fatalf("env sent as %s", env)
+	}}
+	id, err := client.AgentID(ctx)
+	if err != nil || id.String() != agentID {{
+		t.Fatalf("AgentID = %v, %v", id, err)
+	}}
+	if err := client.Add(ctx, 1); err != nil {{
 		t.Fatal(err)
 	}}
-	want := `[{{"path":["limits","max-items"],"value":7}},{{"path":["db"],"value":{{"host":"h","mode":"read-write"}}}}]`
-	if config != want {{
-		t.Fatalf("config sent as %s, want %s", config, want)
+	if got := string(invoked["agentId"]); got != `"`+agentID+`"` {{
+		t.Fatalf("invocation named its agent as %s", got)
+	}}
+	if _, ok := invoked["parameters"]; ok {{
+		t.Fatalf("invocation of a created agent sent its parameters: %v", invoked)
 	}}
 }}
 "#

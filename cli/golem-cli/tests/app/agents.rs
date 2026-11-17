@@ -4086,7 +4086,7 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
     let receipt = &document["response"];
     let owner: golem_common::model::AgentId =
         serde_json::from_value(receipt["agentId"].clone()).unwrap();
-    let owner = format!("{}:{}", owner.component_id.0, owner.agent_id);
+    let owner = owner.to_string();
     let invocation_id = receipt["idempotencyKey"].as_str().unwrap();
     Uuid::parse_str(invocation_id).expect("the receipt contains the final invocation UUID");
     assert_ne!(invocation_id, "structured-cli-repeat");

@@ -121,11 +121,13 @@ struct AgentNames {
     agent: String,
     id: String,
     client: String,
-    get: String,
-    new_phantom: String,
-    /// The guest client's panicking forms of `get` and `new_phantom`.
-    must_get: String,
-    must_new_phantom: String,
+    upsert: String,
+    create: String,
+    get_by_id: String,
+    /// The guest client's panicking forms of `upsert`, `create` and `get_by_id`.
+    must_upsert: String,
+    must_create: String,
+    must_get_by_id: String,
     /// The typed configuration struct and its option, when the agent declares
     /// local configuration.
     config: Option<(String, String)>,
@@ -146,16 +148,18 @@ impl AgentNames {
                 .collect(),
             // Methods on the client struct that a schema method must not
             // shadow.
-            &["ID", "WithScopeCard"],
+            &["AgentID", "MustAgentID", "WithScopeCard"],
         );
         let inputs = methods.iter().map(|m| format!("{agent}{m}Input")).collect();
         Self {
             id: format!("{agent}ID"),
             client: format!("{agent}Client"),
-            get: format!("Get{agent}"),
-            new_phantom: format!("NewPhantom{agent}"),
-            must_get: format!("MustGet{agent}"),
-            must_new_phantom: format!("MustNewPhantom{agent}"),
+            upsert: format!("Upsert{agent}"),
+            create: format!("Create{agent}"),
+            get_by_id: format!("Get{agent}ByID"),
+            must_upsert: format!("MustUpsert{agent}"),
+            must_create: format!("MustCreate{agent}"),
+            must_get_by_id: format!("MustGet{agent}ByID"),
             config: agent_type
                 .config
                 .iter()
@@ -171,10 +175,12 @@ impl AgentNames {
         let mut out = vec![
             self.id.clone(),
             self.client.clone(),
-            self.get.clone(),
-            self.new_phantom.clone(),
-            self.must_get.clone(),
-            self.must_new_phantom.clone(),
+            self.upsert.clone(),
+            self.create.clone(),
+            self.get_by_id.clone(),
+            self.must_upsert.clone(),
+            self.must_create.clone(),
+            self.must_get_by_id.clone(),
         ];
         if let Some((config, option)) = &self.config {
             out.push(config.clone());
@@ -793,7 +799,7 @@ impl GoBridgeGenerator {
         writer.doc(&format!(
             "{option} applies the set fields of cfg as configuration overrides."
         ));
-        writer.line(format!("func {option}(cfg {config}) golem.ClientOpt {{"));
+        writer.line(format!("func {option}(cfg {config}) golem.CreateOpt {{"));
         writer.indent();
         writer.line("var entries []golem.ConfigEntry");
         for (decl, ident) in self.local_configs().iter().zip(self.config_field_idents()) {
@@ -896,53 +902,117 @@ impl GoBridgeGenerator {
         ));
         writer.blank();
 
-        // An ephemeral agent has no durable identity, so only phantoms
-        // address one.
-        if !ephemeral {
-            writer.doc(&format!(
-                "{} returns a client for the {agent_name} instance identified by id,\n\
-                 creating it if it does not exist yet. Options address a phantom\n\
-                 (golem.WithPhantomID) and override configuration{}. It returns an\n\
-                 error when the host cannot resolve the target.",
-                n.get,
-                self.config_option_hint()
-            ));
-            writer.line(format!(
-                "func {}(id {}, opts ...golem.ClientOpt) ({}, error) {{",
-                n.get, n.id, n.client
-            ));
-            writer.indent();
-            writer.line(format!("c, err := {remote}.Get(id, opts...)"));
-            writer.line(format!("return {}{{client: c}}, err", n.client));
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-            write_must_constructor(&n.must_get, &n.get, &n.id, &n.client, &mut writer);
-        }
         writer.doc(&format!(
-            "{} allocates a fresh phantom {agent_name} instance. Options override\n\
-             configuration{}. It returns an error when the host cannot resolve the\n\
+            "{} returns a client for the keyed {agent_name} agent of the constructor\n\
+             parameters id{}. It returns an error when the host cannot resolve the\n\
              target.",
-            n.new_phantom,
-            self.config_option_hint()
+            n.upsert,
+            if ephemeral {
+                "; each call runs on a new one-shot instance"
+            } else {
+                ", which the host creates when it is missing"
+            }
         ));
         writer.line(format!(
-            "func {}(id {}, opts ...golem.ClientOpt) ({}, error) {{",
-            n.new_phantom, n.id, n.client
+            "func {}(id {}) ({}, error) {{",
+            n.upsert, n.id, n.client
         ));
         writer.indent();
-        writer.line(format!("c, err := {remote}.NewPhantom(id, opts...)"));
+        writer.line(format!("c, err := {remote}.Upsert(id)"));
         writer.line(format!("return {}{{client: c}}, err", n.client));
         writer.dedent();
         writer.line("}");
         writer.blank();
         write_must_constructor(
-            &n.must_new_phantom,
-            &n.new_phantom,
-            &n.id,
+            &n.must_upsert,
+            &n.upsert,
+            &format!("id {}", n.id),
+            "id",
             &n.client,
             &mut writer,
         );
+
+        // An ephemeral agent has no durable identity: it is neither created
+        // nor addressed by an ID.
+        if !ephemeral {
+            writer.doc(&format!(
+                "{} creates a {agent_name} agent with the constructor parameters id, and\n\
+                 returns a client for it once its constructor has finished. Without\n\
+                 golem.Keyed the new agent has a new ID and no key; a keyed create of\n\
+                 an existing key fails with a golem.RemoteCallError of kind\n\
+                 golem.RemoteConflict. Options also override configuration{} and add\n\
+                 environment variables (golem.WithEnv).",
+                n.create,
+                self.config_option_hint()
+            ));
+            writer.line(format!(
+                "func {}(id {}, opts ...golem.CreateOpt) ({}, error) {{",
+                n.create, n.id, n.client
+            ));
+            writer.indent();
+            writer.line(format!("c, err := {remote}.Create(id, opts...)"));
+            writer.line(format!("return {}{{client: c}}, err", n.client));
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+            write_must_constructor(
+                &n.must_create,
+                &n.create,
+                &format!("id {}, opts ...golem.CreateOpt", n.id),
+                "id, opts...",
+                &n.client,
+                &mut writer,
+            );
+
+            writer.doc(&format!(
+                "{} returns a client for the existing {agent_name} agent with the ID. It\n\
+                 never creates the agent: an unknown ID, or the ID of an agent of\n\
+                 another type, is a golem.RemoteCallError of kind golem.RemoteNotFound.",
+                n.get_by_id
+            ));
+            writer.line(format!(
+                "func {}(id golem.AgentID) ({}, error) {{",
+                n.get_by_id, n.client
+            ));
+            writer.indent();
+            writer.line(format!("c, err := {remote}.GetByID(id)"));
+            writer.line(format!("return {}{{client: c}}, err", n.client));
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+            write_must_constructor(
+                &n.must_get_by_id,
+                &n.get_by_id,
+                "id golem.AgentID",
+                "id",
+                &n.client,
+                &mut writer,
+            );
+
+            writer.doc(
+                "AgentID returns the ID of the client's agent. On a client of the upsert\n\
+                 form the host creates the agent when it is missing.",
+            );
+            writer.line(format!(
+                "func (c {}) AgentID() (golem.AgentID, error) {{",
+                n.client
+            ));
+            writer.indent();
+            writer.line("return c.client.AgentID()");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+            writer.doc("MustAgentID is AgentID that panics on a failure.");
+            writer.line(format!(
+                "func (c {}) MustAgentID() golem.AgentID {{",
+                n.client
+            ));
+            writer.indent();
+            writer.line("return c.client.MustAgentID()");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        }
 
         // A scope card rides on the awaited calls only: the host refuses one
         // on a trigger or a schedule.
@@ -1183,15 +1253,18 @@ impl GoBridgeGenerator {
 }
 
 /// A Must constructor: the error-returning one that panics instead.
-fn write_must_constructor(must: &str, fallible: &str, id: &str, client: &str, w: &mut GoWriter) {
-    w.doc(&format!(
-        "{must} is {fallible} that panics when the host cannot resolve the target."
-    ));
-    w.line(format!(
-        "func {must}(id {id}, opts ...golem.ClientOpt) {client} {{"
-    ));
+fn write_must_constructor(
+    must: &str,
+    fallible: &str,
+    params: &str,
+    args: &str,
+    client: &str,
+    w: &mut GoWriter,
+) {
+    w.doc(&format!("{must} is {fallible} that panics on a failure."));
+    w.line(format!("func {must}({params}) {client} {{"));
     w.indent();
-    w.line(format!("return golem.Must({fallible}(id, opts...))"));
+    w.line(format!("return golem.Must({fallible}({args}))"));
     w.dedent();
     w.line("}");
     w.blank();
