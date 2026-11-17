@@ -1128,8 +1128,8 @@ mod tests {
     }
 
     #[test]
-    fn card_with_env_grant_on_every_agent_of_the_type_warns_for_an_agent_with_a_phantom_id() {
-        assert!(!agent_card_allows_agent_id_read(
+    fn card_with_env_grant_on_every_agent_of_the_type_allows_agent_id_read_with_a_phantom_id() {
+        assert!(agent_card_allows_agent_id_read(
             &["env(?component/Cart(*)) @ ?agent : read : GOLEM_AGENT_ID"],
             &[],
             &[],
