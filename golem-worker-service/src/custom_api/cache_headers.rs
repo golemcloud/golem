@@ -65,9 +65,9 @@ pub fn apply_response_cache_headers(
         );
         // A declared expiry cannot add freshness to a private response.
         headers.remove(header::EXPIRES);
-    } else {
-        add_vary_headers(headers, &["Authorization", "Cookie", "Golem-Token"]);
     }
+    // Private caches must not revalidate one principal's body for another.
+    add_vary_headers(headers, &["Authorization", "Cookie", "Golem-Token"]);
 }
 
 fn has_cache_directive(value: &str, directive: &str) -> bool {

@@ -1174,7 +1174,11 @@ async fn durable_stream_route_is_guarded_at_the_request_handler_boundary() {
     );
     assert_eq!(
         response.headers().get(http::header::VARY),
-        Some(&"Origin, x-golem-session".parse().unwrap())
+        Some(
+            &"Origin, Authorization, Cookie, Golem-Token, x-golem-session"
+                .parse()
+                .unwrap()
+        )
     );
     assert_eq!(
         response.headers()[http::header::CACHE_CONTROL],

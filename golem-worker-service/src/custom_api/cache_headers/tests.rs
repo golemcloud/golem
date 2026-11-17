@@ -27,6 +27,7 @@ fn privacy_floors_override_freshness_on_every_route() {
         assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
         assert_eq!(headers.get_all(header::CACHE_CONTROL).iter().count(), 1);
         assert!(!headers.contains_key(header::EXPIRES));
+        assert_eq!(headers[header::VARY], "Authorization, Cookie, Golem-Token");
     }
     for (authenticated, token, credential) in [
         (false, true, false),
@@ -43,6 +44,7 @@ fn privacy_floors_override_freshness_on_every_route() {
             credential,
         );
         assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
+        assert_eq!(headers[header::VARY], "Authorization, Cookie, Golem-Token");
     }
 }
 
@@ -67,6 +69,24 @@ fn authenticated_no_store_survives_repeated_fields_and_quoted_extensions() {
     );
     apply_response_cache_headers(CacheRouteKind::RawHandler, &mut headers, true, false, false);
     assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
+}
+
+#[test]
+fn authenticated_vary_preserves_custom_variants_and_wildcards() {
+    for (vary, expected) in [
+        (
+            "X-Session, authorization",
+            "X-Session, authorization, Accept-Language, Cookie, Golem-Token",
+        ),
+        ("*", "*"),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.append(header::VARY, vary.parse().unwrap());
+        headers.append(header::VARY, "Accept-Language".parse().unwrap());
+        apply_response_cache_headers(CacheRouteKind::RawHandler, &mut headers, true, false, false);
+        assert_eq!(headers[header::VARY], expected);
+        assert_eq!(headers.get_all(header::VARY).iter().count(), 1);
+    }
 }
 
 #[test]
