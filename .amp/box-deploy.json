@@ -1,0 +1,10 @@
+{
+  "targets": {
+    "dashboard": {
+      "on": "vigoo/golem-ci",
+      "name": "golem-ci-status",
+      "branch": "gol-1971-observer-dashboard",
+      "root": ".github/main-validation/observer/dashboard"
+    }
+  }
+}

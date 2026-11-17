@@ -56,8 +56,13 @@ checkout or schedule automatically.
 
 The current observer is configured under Daniel's personal Amp account in
 [its own thread](https://ampcode.com/threads/T-01a1e9ca-bfca-772d-aa93-7feaf0270dc1).
-It still uses a saved schedule prompt and scratch helpers until the repo-owned
-version is reviewed and deployed. It is not yet accepted on real validation runs.
+Its existing 30-minute schedule reads the repo-owned prompt from a pinned checkout.
+The schedule holds the operator-specific checkout revision, state path and acceptance
+destination. Generated receipt state is separate from the repo-owned helpers.
+The [public dashboard](https://golem-ci-status--vigoo.onamp.dev/) runs on the
+always-on `vigoo/golem-ci` Box, independently of the observer orb. Slack reports
+link to the corresponding run attempt on that dashboard.
+The observer is not yet accepted on real validation runs.
 Accept one failed and one green run, including a repeated wake-up which must not
 double-post. `.github/tools/flaky-tests` also needs real report-artifact acceptance
 before cutover.

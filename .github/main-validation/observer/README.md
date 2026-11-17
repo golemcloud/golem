@@ -30,6 +30,8 @@ To replace an observer, pause the old schedule and wait for its current invocati
 
 The public UI is static HTML with no frontend build or dependencies. A small Python server serves it and a public `/data.json` read model. Only authenticated observer requests can update `/api/run` and `/api/heartbeat`. The server cannot dispatch workflows, access GitHub, run Golem or analyze code. It has no GitHub or Slack credentials.
 
+The current public dashboard is https://golem-ci-status--vigoo.onamp.dev/ on the always-on `vigoo/golem-ci` Box, deployment `golem-ci-status`. It stays available when the observer orb pauses. `amp boxes deploy dashboard` from the repository root uses the saved target; deployments require pushed code and operator authorization.
+
 Deploy `dashboard/` to an always-on Amp Box with its `.amp/box.yaml`. The operator commits and pushes the source, then runs `amp boxes deploy --on <namespace>/<box> --name <deployment> --branch <branch> --public` from that folder. Provision `CI_DASHBOARD_TOKEN` as a deployment secret, then redeploy. The page works without a token, but publishing fails closed until it is configured. Use the returned deployment URL as `CI_DASHBOARD_URL`; deployment targeting is saved in the root `.amp/box-deploy.json`.
 
 `AMP_DEPLOYMENT_DATA_DIRECTORY/data.json` stores the latest 200 run attempts and survives service restarts and code redeploys. Back it up before moving or deleting the Box. To use another host, set `DASHBOARD_DATA_DIR`, `CI_DASHBOARD_TOKEN` and `PORT`, then serve `python3 server.py` behind HTTPS. The observer only publishes data; it does not deploy the dashboard each wake-up.
