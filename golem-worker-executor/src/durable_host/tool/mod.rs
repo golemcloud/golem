@@ -381,7 +381,6 @@ struct ToolExecution {
     filesystem: golem_common::model::entity::FilesystemCapability,
     operation: operation::OwnerToolOperation,
     cancellable: bool,
-    replay_cancel_stdin: bool,
     state: Mutex<ToolExecutionState>,
     changed: Notify,
     get_active: AtomicBool,

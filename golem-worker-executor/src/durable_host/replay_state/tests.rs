@@ -351,7 +351,6 @@ async fn claim_rejected_tool_reconstruction(
         ReplayStartClaimOutcome::Claimed { handle, .. } => handle,
         ReplayStartClaimOutcome::ReplayEnded
         | ReplayStartClaimOutcome::DeletedRegion
-        | ReplayStartClaimOutcome::Abandoned
         | ReplayStartClaimOutcome::StoreAlreadyLive => {
             panic!("expected rejected tool reconstruction Start")
         }
@@ -1465,10 +1464,12 @@ async fn replay_state_and_oplog_over(
 }
 
 fn replay_linear_memory() -> crate::services::linear_memory::LinearMemoryTracker {
-    crate::services::linear_memory::LinearMemoryTracker::new(
+    let now = std::time::Instant::now();
+    let memory = crate::services::linear_memory::LinearMemoryTracker::new(
         2,
         2,
         golem_common::model::agent::AgentMode::Durable,
+        true,
         true,
         Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
             0, 10, 0, 0, 0,
@@ -1476,8 +1477,10 @@ fn replay_linear_memory() -> crate::services::linear_memory::LinearMemoryTracker
         Arc::new(std::sync::Mutex::new(
             crate::services::active_agents::MemoryGrant::inert(2),
         )),
-        std::time::Instant::now(),
-    )
+        now,
+    );
+    memory.grow(2, now);
+    memory
 }
 
 async fn held_completed_reconstruction() -> (
@@ -1514,6 +1517,188 @@ async fn held_completed_reconstruction() -> (
     ));
     reconstruction.body_settled();
     (replay, oplog, reconstruction)
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn initializer_enumeration_preserves_growth_before_native_publication() -> anyhow::Result<()>
+{
+    use crate::services::active_agents::MemoryGrant;
+    use crate::services::linear_memory::LinearMemoryTracker;
+    use crate::services::resource_limits::AtomicResourceEntry;
+    use golem_common::model::agent::AgentMode;
+    use std::sync::Mutex;
+    use std::time::Instant;
+    use wasmtime::{Engine, MemoryKind, Module, ResourceLimiterAsync, Store};
+
+    struct Allocation {
+        tracker: LinearMemoryTracker,
+        oplog: Arc<InMemoryOplog>,
+    }
+
+    #[async_trait]
+    impl ResourceLimiterAsync for Allocation {
+        async fn memory_growing(
+            &mut self,
+            current: usize,
+            desired: usize,
+            _maximum: Option<usize>,
+            _kind: MemoryKind,
+        ) -> wasmtime::Result<bool> {
+            let growth = self
+                .tracker
+                .prepare_unshared_growth(current, desired)
+                .unwrap();
+            self.tracker
+                .retain_growth_grant(MemoryGrant::inert(growth.admission_delta));
+            Ok(true)
+        }
+
+        fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {
+            self.tracker
+                .grow_and_record((desired - current) as u64, Instant::now(), |delta| {
+                    self.oplog
+                        .entries
+                        .lock()
+                        .unwrap()
+                        .push(OplogEntry::grow_memory(delta));
+                });
+        }
+
+        async fn table_growing(
+            &mut self,
+            _current: usize,
+            _desired: usize,
+            _maximum: Option<usize>,
+        ) -> wasmtime::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    const PAGE: u64 = 65536;
+    let engine =
+        Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+    let module = Module::new(
+        &engine,
+        r#"
+        (module
+          (import "test" "begin-native-publication" (func $begin))
+          (memory (export "memory") 40 100)
+          (func $init
+            (call $begin)
+            (if (i32.eq (memory.grow (i32.const 20)) (i32.const -1)) (then unreachable)))
+          (func (export "grow-later")
+            (if (i32.eq (memory.grow (i32.const 1)) (i32.const -1)) (then unreachable)))
+          (start $init))
+    "#,
+    )?;
+    for saved_pages in [20, 40, 80] {
+        let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
+        drop(reconstruction);
+        let entered = Arc::new(tokio::sync::Barrier::new(2));
+        let release = Arc::new(tokio::sync::Barrier::new(2));
+        *replay.cursor.primary_publication_gate.lock().unwrap() =
+            Some((entered.clone(), release.clone()));
+        let tracker = LinearMemoryTracker::new(
+            saved_pages * PAGE,
+            saved_pages * PAGE,
+            AgentMode::Durable,
+            true,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 100 * PAGE as usize, 0, 0, 0)),
+            Arc::new(Mutex::new(MemoryGrant::inert(saved_pages * PAGE))),
+            Instant::now(),
+        );
+        let mut store = Store::new(
+            &engine,
+            Allocation {
+                tracker: tracker.clone(),
+                oplog: oplog.clone(),
+            },
+        );
+        store.limiter_async(|state| state);
+        store.set_fuel(u64::MAX)?;
+        store.set_epoch_deadline(u64::MAX);
+        let task = Arc::new(Mutex::new(None));
+        let mut linker = wasmtime::Linker::new(&engine);
+        linker.func_wrap_async("test", "begin-native-publication", {
+            let replay = replay.clone();
+            let task = task.clone();
+            move |caller: wasmtime::Caller<'_, Allocation>, (): ()| {
+                let tracker = caller.data().tracker.clone();
+                let oplog = caller.data().oplog.clone();
+                let replay = replay.clone();
+                let entered = entered.clone();
+                let task = task.clone();
+                Box::new(async move {
+                    // Orchestrate the native transition; this is not a tool-host substitute.
+                    *task.lock().unwrap() = Some(tokio::spawn(async move {
+                        tracker.start_memory_accounting(false, |bytes| {
+                            oplog
+                                .entries
+                                .lock()
+                                .unwrap()
+                                .push(OplogEntry::memory_size_reconciled(bytes));
+                        });
+                        replay.publish_primary_live(&tracker).await
+                    }));
+                    entered.wait().await;
+                    Ok(())
+                })
+            }
+        })?;
+        let instance = linker.instantiate_async(&mut store, &module).await?;
+        let memory = instance.get_memory(&mut store, "memory").unwrap();
+        let actual = memory.data_size(&store) as u64;
+        assert_eq!(actual, 60 * PAGE);
+        assert!(!replay.is_live_published());
+        let delta = tracker.reconcile(actual, Instant::now());
+        assert_eq!(delta, 20 * PAGE);
+        oplog
+            .entries
+            .lock()
+            .unwrap()
+            .push(OplogEntry::grow_memory(delta));
+        assert_eq!(tracker.current_bytes(), actual);
+        let history = || {
+            oplog
+                .entries
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|entry| match entry {
+                    OplogEntry::MemorySizeReconciled { bytes, .. } => Some((true, *bytes)),
+                    OplogEntry::GrowMemory { delta, .. } => Some((false, *delta)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut expected = Vec::new();
+        if saved_pages != 40 {
+            expected.push((true, 40 * PAGE));
+        }
+        expected.push((false, 20 * PAGE));
+        assert_eq!(history(), expected);
+        release.wait().await;
+        let task = task.lock().unwrap().take().unwrap();
+        task.await??;
+        assert!(replay.is_live_published());
+        instance
+            .get_typed_func::<(), ()>(&mut store, "grow-later")?
+            .call_async(&mut store, ())
+            .await?;
+        expected.push((false, PAGE));
+        assert_eq!(history(), expected);
+        let persisted = history()
+            .iter()
+            .fold(saved_pages * PAGE, |total, &(absolute, bytes)| {
+                if absolute { bytes } else { total + bytes }
+            });
+        assert_eq!(persisted, memory.data_size(&store) as u64);
+        assert_eq!(persisted, tracker.current_bytes());
+        assert_eq!(persisted, tracker.reserved_bytes());
+    }
+    Ok(())
 }
 
 #[test]
@@ -3492,6 +3677,178 @@ fn invocation_finished_for(invocation_id: golem_common::model::InvocationId) -> 
         method_name: None,
         consumed_fuel: 0,
         component_revision: ComponentRevision::INITIAL,
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn invocation_local_terminal_survives_the_final_host_call_and_replay_target_changes() {
+    let anchor = OplogIndex::from_u64(2);
+    let error = AgentError::InternalError("method gave up".into());
+    let terminal = OplogIndex::from_u64(5);
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        OplogEntry::agent_invocation_failed(None, replayed_invocation_id(), error.clone(), anchor),
+        unpinned_invocation_started(),
+        invocation_finished(),
+    ])
+    .await;
+    assert_eq!(
+        rs.invocation_finish_before(OplogIndex::from_u64(6)),
+        Some(terminal)
+    );
+    assert!(rs.invocation_has_recorded_local_failure(anchor));
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    assert!(!rs.invocation_has_recorded_local_failure(anchor));
+    rs.set_replay_target(OplogIndex::from_u64(7)).await.unwrap();
+    assert!(rs.invocation_has_recorded_local_failure(anchor));
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .unwrap();
+    let call = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(call).await.unwrap();
+    assert!(
+        rs.last_replayed_index() < terminal,
+        "the host call must not consume the local terminal as a hint"
+    );
+    assert_eq!(
+        rs.get_oplog_entry_agent_method_failure(&replayed_invocation_id(), anchor, &error, None)
+            .await
+            .unwrap(),
+        Some(terminal)
+    );
+    assert_eq!(rs.last_replayed_index(), terminal);
+    assert!(
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+}
+
+#[test]
+async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_payload_or_parent() {
+    let anchor = OplogIndex::from_u64(2);
+    let error = AgentError::InternalError("method gave up".into());
+    for entry in [
+        invocation_finished(),
+        OplogEntry::agent_invocation_failed(
+            None,
+            golem_common::model::InvocationId(uuid::Uuid::from_u128(99)),
+            error.clone(),
+            anchor,
+        ),
+        OplogEntry::agent_invocation_failed(
+            Some(OplogIndex::INITIAL),
+            replayed_invocation_id(),
+            error.clone(),
+            anchor,
+        ),
+        OplogEntry::agent_invocation_failed(
+            None,
+            replayed_invocation_id(),
+            error.clone(),
+            anchor.next(),
+        ),
+        OplogEntry::agent_invocation_failed(
+            None,
+            replayed_invocation_id(),
+            AgentError::InternalError("other".into()),
+            anchor,
+        ),
+    ] {
+        let rs = replay_state_over(vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            entry,
+        ])
+        .await;
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            rs.get_oplog_entry_agent_method_failure(
+                &replayed_invocation_id(),
+                anchor,
+                &error,
+                None
+            )
+            .await,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+    }
+    for success in [false, true] {
+        let rs = replay_state_over(vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            OplogEntry::agent_invocation_failed(
+                None,
+                replayed_invocation_id(),
+                error.clone(),
+                anchor,
+            ),
+        ])
+        .await;
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .unwrap();
+        let result = if success {
+            rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
+                .await
+                .map(|_| ())
+        } else {
+            rs.get_oplog_entry_agent_invocation_started()
+                .await
+                .map(|_| ())
+        };
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+    }
+}
+
+#[test]
+async fn invocation_local_terminal_is_optional_only_at_the_natural_tail() {
+    let anchor = OplogIndex::from_u64(2);
+    let error = AgentError::InternalError("method gave up".into());
+    for later_history in [false, true] {
+        let mut entries = vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+        ];
+        if later_history {
+            entries.push(unpinned_invocation_started());
+        }
+        let rs = replay_state_over(entries).await;
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .unwrap();
+        let result = rs
+            .get_oplog_entry_agent_method_failure(&replayed_invocation_id(), anchor, &error, None)
+            .await;
+        if later_history {
+            assert!(matches!(
+                result,
+                Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+            ));
+        } else {
+            assert!(result.unwrap().is_none());
+        }
     }
 }
 
@@ -6063,85 +6420,6 @@ async fn identity_claim_does_not_scan_past_delivery_marker() {
 
 #[test]
 #[test_r::timeout("10s")]
-async fn abandoned_claim_releases_only_an_unrecorded_start_behind_delivery() {
-    for recorded in [false, true] {
-        let mut later = start_now();
-        let OplogEntry::Start { invocation_id, .. } = &mut later else {
-            unreachable!()
-        };
-        *invocation_id = Some(test_invocation_id(if recorded { 7 } else { 8 }));
-        let rs = replay_state_over(vec![
-            OplogEntry::RecoverySucceeded {
-                timestamp: Timestamp::now_utc(),
-            },
-            start_now(),
-            end_for(2, 42),
-            delivered_for(2),
-            later,
-            end_for(5, 43),
-        ])
-        .await;
-        let first = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-        rs.await_resolution(first).await.unwrap();
-        let position = rs.last_replayed_index();
-        let abandoned = tokio_util::sync::CancellationToken::new();
-        let claim = StartClaim::unowned(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-        )
-        .with_invocation_id(Some(test_invocation_id(7)));
-        let pending = rs.claim_start_for_store_with_admission(
-            claim,
-            false,
-            |_, _| {},
-            None,
-            Some(abandoned.clone()),
-        );
-        tokio::pin!(pending);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), pending.as_mut())
-                .await
-                .is_err()
-        );
-        abandoned.cancel();
-        if !recorded {
-            assert!(matches!(
-                tokio::time::timeout(Duration::from_secs(1), pending.as_mut())
-                    .await
-                    .expect("an abandoned unrecorded claim must not wait for guest delivery")
-                    .unwrap(),
-                ReplayStartClaimOutcome::Abandoned
-            ));
-            assert_eq!(rs.last_replayed_index(), position);
-            continue;
-        }
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), pending.as_mut())
-                .await
-                .is_err(),
-            "a recorded Start must still be claimed after its caller disappears"
-        );
-        let barrier = rs
-            .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4), None)
-            .await
-            .unwrap();
-        barrier.acknowledge();
-        let ReplayStartClaimOutcome::Claimed { handle, .. } = pending.await.unwrap() else {
-            panic!("a recorded claim must survive caller abandonment");
-        };
-        assert_eq!(handle.start_idx(), OplogIndex::from_u64(5));
-        rs.await_resolution(handle).await.unwrap();
-    }
-}
-
-#[test]
-#[test_r::timeout("10s")]
 async fn claim_adopts_retained_start_behind_its_own_delivery_marker() {
     // [RecoverySucceeded, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5), Delivered(B=3) at 6,
     // Delivered(A=2) at 7]. Draining A's terminal retains B together with its End and parks the
@@ -8395,9 +8673,7 @@ async fn store_live_claim_adopts_retained_start_or_reports_store_already_live() 
                 handle.start_idx()
             )
         }
-        ReplayStartClaimOutcome::ReplayEnded
-        | ReplayStartClaimOutcome::DeletedRegion
-        | ReplayStartClaimOutcome::Abandoned => {
+        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
             panic!("expected StoreAlreadyLive")
         }
     }
@@ -8451,9 +8727,7 @@ async fn store_live_claim_adopts_retained_start_or_reports_store_already_live() 
         ReplayStartClaimOutcome::StoreAlreadyLive => {
             panic!("a matching unclaimed Start ahead of the cursor must be claimed, not skipped")
         }
-        ReplayStartClaimOutcome::ReplayEnded
-        | ReplayStartClaimOutcome::DeletedRegion
-        | ReplayStartClaimOutcome::Abandoned => {
+        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
             panic!("expected Claimed")
         }
     }
@@ -8511,9 +8785,7 @@ async fn store_already_live_claim_reports_replay_ended_once_the_cursor_reaches_t
                 handle.start_idx()
             )
         }
-        ReplayStartClaimOutcome::StoreAlreadyLive
-        | ReplayStartClaimOutcome::DeletedRegion
-        | ReplayStartClaimOutcome::Abandoned => {
+        ReplayStartClaimOutcome::StoreAlreadyLive | ReplayStartClaimOutcome::DeletedRegion => {
             panic!("expected ReplayEnded")
         }
     }
@@ -13622,7 +13894,6 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
                     false,
                     |_, _| {},
                     Some((operation, "clock".to_string())),
-                    None,
                 )
                 .await
         }));
@@ -13760,7 +14031,6 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
                     false,
                     |_, _| {},
                     Some((operation.clone(), "wrong-clock".into())),
-                    None,
                 )
                 .await
                 .err()
@@ -13775,7 +14045,6 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
                 false,
                 |_, _| {},
                 Some((operation.clone(), "clock".into())),
-                None,
             )
             .await
             .unwrap()
@@ -13808,7 +14077,6 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
             false,
             |_, _| {},
             Some((operation.clone(), "clock".into())),
-            None,
         );
         tokio::pin!(next_demand);
         assert!(
@@ -13876,7 +14144,6 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
                     false,
                     |_, _| {},
                     Some((operation.clone(), "clock".into())),
-                    None,
                 )
                 .await
                 .err()
@@ -13974,7 +14241,6 @@ async fn disposal_refusal_without_collection_preserves_nested_calls() {
                 false,
                 |_, _| {},
                 Some((operation.clone(), "nested-call".into())),
-                None,
             ),
         )
         .await
@@ -14011,7 +14277,6 @@ async fn disposal_refusal_without_collection_preserves_nested_calls() {
                 false,
                 |_, _| {},
                 Some((operation.clone(), "nested-call".into())),
-                None,
             ),
         )
         .await

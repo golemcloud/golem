@@ -721,7 +721,6 @@ pub trait ToolStreamingCaller {
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
-    async fn cancel_open_tool_stdin(&self, tool: String, mode: String) -> bool;
     fn native_veto_gate(&self) -> golem_rust::PromiseId;
     async fn native_veto_with_long_clock(&self, gate: golem_rust::PromiseId) -> Vec<String>;
     async fn native_effect_count(&self) -> String;
@@ -3565,32 +3564,6 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         )
         .expect("decode typed input evidence");
         Vec::<TypedInputEvidence>::from_value(value.value()).expect("typed input evidence shape")
-    }
-
-    async fn cancel_open_tool_stdin(&self, tool: String, mode: String) -> bool {
-        let rpc = ToolRpc::create(&tool).expect("tool RPC creation");
-        let (mut source, stdin) =
-            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
-        let (target, mut stdout) = tool_host::create_output();
-        let cancelled = rpc.async_invoke_and_await(
-            &["run".to_string()],
-            raw_input(&mode),
-            Some(pump_tool_stdin(stdin)),
-            Some(target),
-            None,
-        );
-        let marker: &[u8] = if tool == "native-streaming" {
-            b"native:started"
-        } else {
-            b"marker:"
-        };
-        assert_eq!(raw_chunk(&mut stdout).await, marker);
-        cancelled.cancel();
-        assert!(raw_result(&cancelled).await.is_err());
-        !source
-            .write_all(vec![Ok(b"after-cancel".to_vec())])
-            .await
-            .is_empty()
     }
 
     fn native_veto_gate(&self) -> golem_rust::PromiseId {

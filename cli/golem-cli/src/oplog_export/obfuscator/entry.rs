@@ -829,7 +829,7 @@ impl Walker<'_, '_> {
                     "originalPhantomId",
                     original_phantom_id.as_ref().map(|id| self.tok(id)),
                 )
-                .add("instanceId", self.tok(instance_id))
+                .add("instanceId", text(instance_id.to_string()))
                 .build(),
             PublicOplogEntry::Start(StartParams {
                 timestamp: _,
@@ -940,6 +940,16 @@ impl Walker<'_, '_> {
                 .add("consumedFuel", self.int(*consumed_fuel))
                 .add("componentRevision", number(component_revision.get()))
                 .build(),
+            PublicOplogEntry::AgentInvocationFailed(AgentInvocationFailedParams {
+                timestamp: _,
+                invocation_id,
+                error,
+                start_index,
+            }) => Fields::new()
+                .add("invocationId", self.tok(invocation_id))
+                .add("error", self.agent_error_message(error))
+                .add("startIndex", idx(start_index))
+                .build(),
             PublicOplogEntry::Suspend(SuspendParams { timestamp: _ })
             | PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp: _ })
             | PublicOplogEntry::Interrupted(InterruptedParams { timestamp: _ })
@@ -1037,6 +1047,10 @@ impl Walker<'_, '_> {
                 timestamp: _,
                 delta,
             }) => Fields::new().add("delta", number(*delta)).build(),
+            PublicOplogEntry::MemorySizeReconciled(MemorySizeReconciledParams {
+                timestamp: _,
+                bytes,
+            }) => Fields::new().add("bytes", number(*bytes)).build(),
             PublicOplogEntry::CreateResource(CreateResourceParams {
                 timestamp: _,
                 id,

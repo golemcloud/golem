@@ -43,20 +43,21 @@ use crate::model::oplog::payload::host_functions::{
     HostFunctionName, host_request_from_typed_schema_value,
 };
 use crate::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
-    CardDerivedParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
-    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
-    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
-    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
-    StreamSessionParams, StreamTerminalParams, SuccessfulUpdateParams, SuspendParams,
+    ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
+    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
+    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
+    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
+    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
+    ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
+    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StreamTerminalParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::raw_types::{
     CreateProjectionParameters, DurableStreamEventSummary, OplogEnrichmentEntry,
@@ -230,6 +231,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     component_revision: agent_invocation_finished.component_revision.try_into()?,
                 }),
             ),
+            oplog_entry::Entry::AgentInvocationFailed(p) => Ok(
+                PublicOplogEntry::AgentInvocationFailed(AgentInvocationFailedParams {
+                    timestamp: p.timestamp.ok_or("Missing timestamp")?.into(),
+                    invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
+                    error: p.error,
+                    start_index: OplogIndex::from_u64(p.start_index),
+                }),
+            ),
             oplog_entry::Entry::Suspend(suspend) => Ok(PublicOplogEntry::Suspend(SuspendParams {
                 timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
@@ -370,6 +379,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     delta: grow_memory.delta,
                 }))
+            }
+            oplog_entry::Entry::MemorySizeReconciled(p) => {
+                Ok(PublicOplogEntry::MemorySizeReconciled(
+                    crate::model::oplog::public_oplog_entry::MemorySizeReconciledParams {
+                        timestamp: p.timestamp.ok_or("Missing timestamp field")?.into(),
+                        bytes: p.bytes,
+                    },
+                ))
             }
             oplog_entry::Entry::CreateResource(create_resource) => {
                 Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
@@ -896,6 +913,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
+            PublicOplogEntry::AgentInvocationFailed(p) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                entry: Some(oplog_entry::Entry::AgentInvocationFailed(
+                    golem_api_grpc::proto::golem::worker::AgentInvocationFailedParameters {
+                        timestamp: Some(p.timestamp.into()),
+                        invocation_id: Some(p.invocation_id.into()),
+                        error: p.error,
+                        start_index: p.start_index.into(),
+                    },
+                )),
+            },
             PublicOplogEntry::Suspend(suspend) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::Suspend(
@@ -1031,6 +1058,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
                             timestamp: Some(grow_memory.timestamp.into()),
                             delta: grow_memory.delta,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::MemorySizeReconciled(p) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::MemorySizeReconciled(
+                        golem_api_grpc::proto::golem::worker::MemorySizeReconciledParameters {
+                            timestamp: Some(p.timestamp.into()),
+                            bytes: p.bytes,
                         },
                     )),
                 }
@@ -1969,6 +2006,13 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     component_revision: finished.component_revision,
                 })
             }
+            PublicOplogEntry::AgentInvocationFailed(p) => Ok(OplogEntry::AgentInvocationFailed {
+                timestamp: p.timestamp,
+                entity_parent_start_index: None,
+                invocation_id: p.invocation_id,
+                error: AgentError::Unknown(p.error),
+                start_index: p.start_index,
+            }),
             PublicOplogEntry::Suspend(p) => Ok(OplogEntry::Suspend {
                 timestamp: p.timestamp,
             }),
@@ -2042,6 +2086,10 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
             PublicOplogEntry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
                 timestamp: p.timestamp,
                 delta: p.delta,
+            }),
+            PublicOplogEntry::MemorySizeReconciled(p) => Ok(OplogEntry::MemorySizeReconciled {
+                timestamp: p.timestamp,
+                bytes: p.bytes,
             }),
             PublicOplogEntry::CreateResource(p) => Ok(OplogEntry::CreateResource {
                 timestamp: p.timestamp,

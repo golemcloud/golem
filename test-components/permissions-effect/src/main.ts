@@ -289,3 +289,27 @@ defineAgent({
       ),
   }),
 });
+
+defineAgent({
+  name: "EffectMethodFailure",
+  id: { name: Schema.String },
+  methods: {
+    fail: method({ input: {}, success: WitTypes.Int64 }),
+    value: method({ input: {}, success: WitTypes.Int64 }),
+    increment: method({ input: {}, success: WitTypes.Int64 }),
+    declaredError: method({ input: {}, success: WitTypes.Int64, error: Schema.String }),
+  },
+}).implement({
+  init: ({ name }) => name === "fail-constructor"
+    ? Effect.die(new Error("constructor gave up"))
+    : Effect.succeed({ count: 0n }),
+  methods: (state) => ({
+    fail: () => Effect.gen(function* () {
+      state.count += 7n;
+      return yield* Effect.die(new Error("method gave up"));
+    }),
+    value: () => Effect.succeed(state.count),
+    increment: () => Effect.sync(() => ++state.count),
+    declaredError: () => Effect.fail("declared error"),
+  }),
+});

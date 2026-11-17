@@ -335,9 +335,10 @@ impl WorkerExecutorTestDependencies {
         // the error if another test in the same process already installed a provider.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
+        let config = golem_test_framework::config::EnvBasedTestDependenciesConfig::new();
         let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
+            config.redis_port,
+            config.redis_key_prefix,
             Level::INFO,
             Level::ERROR,
         ));
@@ -605,6 +606,13 @@ type PrimaryContextProbe = Box<
         + Send,
 >;
 
+type InstancePreparationProbe = Box<
+    dyn for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
+        ) -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send,
+>;
+
 #[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
@@ -632,6 +640,11 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    /// The port the executor's gRPC API listens on.
+    pub fn grpc_port(&self) -> u16 {
+        self._run_details.grpc_port
+    }
+
     /// Exercises creation and lookup of the virtual owner used by native external-tool ingress.
     /// The returned worker is only valid while this executor's service graph is alive.
     pub async fn get_or_add_ephemeral_external_tool(
@@ -1240,6 +1253,37 @@ impl TestWorkerExecutor {
             }),
         );
         receive
+    }
+
+    /// Runs once around the next primary instance preparation. The first probe owns the Store
+    /// before recovery; the second observes it only after successful preparation. Both probes
+    /// are consumed by that attempt, including when preparation fails or requests a retry.
+    pub fn probe_next_instance_preparation(
+        &self,
+        agent_id: &AgentId,
+        before: impl for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
+        )
+            -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send
+        + 'static,
+        after: impl for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
+        )
+            -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send
+        + 'static,
+    ) {
+        let mut probes = self
+            .additional_test_deps
+            .instance_preparation_probes
+            .lock()
+            .unwrap();
+        assert!(
+            !probes.contains_key(agent_id),
+            "instance preparation probe already armed"
+        );
+        probes.insert(agent_id.clone(), (Box::new(before), Box::new(after)));
     }
 
     pub fn probe_runtime_disposal(
@@ -2614,7 +2658,7 @@ impl TestContext {
 
     /// Waits until the workers of every shut-down executor previously started on this context
     /// stopped executing. Executors that are still running are left alone.
-    async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
+    pub async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
         let previous = self.executor_invocation_loops.lock().unwrap().clone();
         let mut drained = Vec::new();
         for loops in &previous {
@@ -3407,37 +3451,6 @@ impl NativeTestTool for NativeTestToolImpl {
             .map_err(|_| anyhow!("native effect counter did not reach {expected}"))?;
         }
 
-        if matches!(mode.as_str(), "cancel-stdin" | "cancel-stdin-finish") {
-            let stdout = stdout.as_mut().expect("cancel-stdin stdout");
-            stdout
-                .write(ctx, b"native:started".to_vec())
-                .await
-                .map_err(anyhow::Error::msg)?;
-            let input = stdin.as_mut().expect("cancel-stdin input").read(ctx).await;
-            let error = input
-                .expect("cancelled stdin failure")
-                .expect_err("stdin must fail");
-            assert!(
-                error.contains("Cancelled"),
-                "unexpected stdin failure: {error}"
-            );
-            if mode == "cancel-stdin" && is_live {
-                // Complete without a final call after cancellation wins. Reconstruction
-                // still attempts that call, but must stop at the recorded cancellation.
-                cancellation.cancelled().await;
-                return Ok(());
-            }
-            tracing::debug!(mode, is_live, "Attempting cancelled stdin fixture finish");
-            if let Err(error) = stdout.finish(ctx).await {
-                anyhow::ensure!(
-                    error
-                        == "StreamWriteError::Closed(ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled))",
-                    "unexpected final writer failure: {error}"
-                );
-            }
-            return Ok(());
-        }
-
         if mode == "wait-cancel" {
             if let Some(stdout) = &mut stdout {
                 stdout
@@ -3642,8 +3655,26 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         instance: &Instance,
         store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        let probes = store
+            .data()
+            .additional_test_deps
+            .instance_preparation_probes
+            .lock()
+            .unwrap()
+            .remove(agent_id);
+        let after = if let Some((before, after)) = probes {
+            before(store).await?;
+            Some(after)
+        } else {
+            None
+        };
         let result =
             DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await;
+        if matches!(result, Ok(None))
+            && let Some(after) = after
+        {
+            after(store).await?;
+        }
         let gate = store
             .data()
             .additional_test_deps
@@ -3734,6 +3765,16 @@ impl InvocationHooks for TestWorkerCtx {
     ) -> InvocationFailureDecision {
         self.durable_ctx
             .on_invocation_failure(full_function_name, trap_type)
+            .await
+    }
+
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx
+            .record_agent_method_failure(full_function_name, error)
             .await
     }
 
@@ -4195,16 +4236,16 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             .await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
-        self.durable_memory_grown(current, desired, kind);
+    fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {
+        self.durable_memory_grown(current, desired);
     }
 
     fn memory_grow_failed(
         &mut self,
         _error: wasmtime::Error,
-        kind: MemoryKind,
+        _kind: MemoryKind,
     ) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed(kind)
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(
@@ -4873,6 +4914,20 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _golem_config: &GolemConfig,
     ) -> Arc<dyn DirectInvocationAuthService> {
         Arc::new(NoOpDirectInvocationAuthService)
+    }
+}
+
+/// Returns the same supplied resource entry for every account initialization.
+/// Tests can retain the entry to observe or change its limits and usage.
+pub struct SharedResourceLimits(pub Arc<AtomicResourceEntry>);
+
+#[async_trait]
+impl ResourceLimits for SharedResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+        Ok(self.0.clone())
     }
 }
 
@@ -6742,6 +6797,7 @@ impl Oplog for TestOplog {
             }
             result => result?,
         };
+        self.pause_at_test_append(&ordered.entry, true).await?;
         self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
@@ -6799,6 +6855,7 @@ impl Oplog for TestOplog {
             }
             result => result?,
         };
+        self.pause_at_test_append(&ordered.entry, true).await?;
         self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
@@ -7121,6 +7178,9 @@ type EntitySettlementAccess =
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
     primary_context_probes: Arc<std::sync::Mutex<HashMap<AgentId, PrimaryContextProbe>>>,
+    instance_preparation_probes: Arc<
+        std::sync::Mutex<HashMap<AgentId, (InstancePreparationProbe, InstancePreparationProbe)>>,
+    >,
     rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
     native_test_effects: Arc<AtomicUsize>,
     native_test_helper_effects: Arc<AtomicUsize>,
@@ -7209,6 +7269,7 @@ impl AdditionalTestDeps {
         let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
             primary_context_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            instance_preparation_probes: Arc::default(),
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,

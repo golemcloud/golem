@@ -594,10 +594,6 @@ destruction transfers abort and join ownership to the existing worker task scope
 disposal refusal takes precedence over a later owner-finalization terminal: that terminal does not
 prove the requested disposal succeeded. Other retained disposals stay no-ops.
 
-Completed tool replay preserves body reconstruction when the caller cancels. `ToolExecution` checks the entity's recorded terminal before reproducing cancellation of anonymous guest-stream stdin, which has no attachment journal. Only a recorded `Cancelled` permits this close; a recorded `End` means cancellation lost terminal selection and must leave stdin unchanged. The resident winner alone cannot distinguish these histories, because replay has not resolved it yet. Closing anonymous stdin lets the body replay final writer calls recorded before cancellation settled. Journaled attachments retain their recorded terminals, and the body still drains through the ordinary completed-replay coordinator. The execution's cancellation token latches the request without reaching a completed body context. Registration checks every ancestor under the operation mutex, then applies cancellation outside the lock, so children registered after the original traversal also receive it. Each completed child's own recorded terminal still decides whether cancellation applies.
-
-An accessor Start claim runs in an owned metadata task even after its caller disappears. A completed cancelled body can attempt a final writer call that live cancellation preempted before its Start. When that body stops, its unrecorded claim must not keep cleanup waiting behind the caller's result-delivery boundary. The claim finishes its cursor transaction first and abandons only a delivery wait whose invocation identity has no claimable Start in the full replay range. A recorded Start still gets claimed and routed after caller abandonment. Only a completed entity's recorded `Cancelled` terminal permits successful abandonment; `End` reports divergence, and primary and incomplete-entity claims retain their existing lifetime.
-
 `HistoricalAttachmentWriteJob` captures the durable-call preparation, invocation ID and argument
 ownership before spawning. Accessors reserve the guest import's ID through the existing import-order
 check. Native calls reserve an ordinal synchronously under the entity invocation's anchor; their
@@ -675,7 +671,8 @@ causal invocation boundaries" while filesystem-incapable invocations get an imme
 permit. A synchronous call from a body back into its blocked owner must pass
 `OwnerLane::ensure_synchronous_owner_call` and is otherwise rejected with `WouldDeadlock` instead
 of hanging; asynchronous owner calls are allowed. `permanent_tool_guest_trap` in
-`worker/invocation.rs` isolates only its fixed Wasm instruction-trap allowlist. Typed quotas,
+`worker/invocation.rs` isolates only its fixed Wasm instruction-trap allowlist and uncaught Wasm
+exceptions. Typed quotas,
 policy exhaustion, `WorkerOutOfMemory`, infrastructure and lifecycle failures retain owner
 recovery even when the retry decision is exhausted. Supervisors independent of the caller Store
 cancel a failed parent's descendants, preserving selected outcomes and unrelated siblings.

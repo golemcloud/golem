@@ -86,9 +86,18 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
-something from the right column to survive a restart is wrong. Sockets and other OS resources are
-recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect or explicitly handle loss. Replayed websocket handles use their connect-time
+something from the right column to survive a restart is wrong. Native resources are not preserved.
+P3 TCP bind records the selected local address; connect records both endpoints. The per-Store
+`SocketEntries` table in `durable_host/sockets/mod.rs` reconstructs these addresses and the stream-taken
+flags without binding or connecting natively during replay. A replayed successful connect is `Lost`:
+recorded acquisitions still replay, but a new live send or receive acquisition returns `connection-broken`,
+even if that direction was already taken. Address getters use the entry; guest-set option getters use
+cached effective values. A successful setter invalidates its option cache; the next async getter reads
+and caches the native effective value, including OS rounding and buffer limits. Unset option getters
+still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
+socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
+than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
+reconnects as described below. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
 one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
@@ -143,6 +152,8 @@ a host call must not wait for a guard whose holder waits for that guest to stop.
 completion activates only the incarnation that created the promise, through
 `enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
 missing or re-created agent is left alone.
+
+Keyed invocation admission checks fatal agent health inside the status actor's append job, after result-generation validation and before appending the pending entry. Acquiring a worker earlier does not authorize work after its constructor fails. A failed or exited agent refuses new immediate and scheduled methods without writing to its oplog. Generation changes return the caller to same-key result lookup first; recorded outcomes keep precedence. If failed health comes from recovery and a startup attempt is pending, ingress waits for that exact attempt's `WorkerLoaded` result without holding the lifecycle guard, then retries result lookup and admission. It does not wait for queued methods to finish or bypass the serialized health check. Keyless manual updates use their separate admission path so failed agents can still be repaired.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
@@ -460,10 +471,26 @@ filesystem creation. A live limit update uses the same resolver and the existing
 on failure. Unlimited policy remains available on unmanaged storage; Registry's finite policy is a
 deployment requirement, not permission for an unsupported backend to omit enforcement.
 
-A live invocation still holds its allocated linear memory and filesystem stock while waiting for
+A live invocation still holds its allocated linear memory, GC heap capacity and filesystem stock while waiting for
 host I/O. Its live allocations accrue byte-time during these permit-held waits even when no Wasm
-executes. The memory meter measures allocated linear-memory bytes, not the configured maximum.
+executes. The memory meter measures allocated linear-memory bytes plus GC heap capacity, not the configured maximum.
 The parked guest itself burns no fuel.
+
+Primary reconstruction consumes its saved memory reservation across all linear-memory and GC heap allocations, including repeated growth during core initialization. Growth beyond the reservation needs physical admission before allocation. Live publication releases unused reservation but preserves capacity for prepared growth; a failed growth releases that excess capacity.
+
+The tracker's `shrink_retained_reservation` shares mechanics, not policy. Publication shrinks only after reconciliation, to allocation or pending growth, then enforces quota before clearing replay flags. Growth failure first rolls back provisional bytes and the failed grant; eligible shrinkage retains the replay floor. Both paths release private guards before callbacks while holding the transition gate, and enforce quota even if no capacity was released. Preparation remains separate: reconciliation invokes quota callbacks before merging pending grants, then InstanceHost shrinks only if the grant was tracked before reconciliation. Keep that captured decision: merging may adopt a controller, and shrinking an inert grant changes its byte count. Shrinking never acquires capacity; pending grants also contribute to reserved bytes.
+
+`LinearMemoryTracker` defines the accounted total for one Store as allocated linear-memory bytes plus GC heap capacity, not reachable objects or process RSS. Retained linear-memory accounting names use this combined quantity; individual Wasmtime linear memories remain distinct. Initial allocations can contribute provisional bytes before success, so the total is not always a fresh physical measurement. Construction starts allocation and its inactive meter at zero. The saved baseline and prepaid reservation are separate inputs; quota protection starts at the reservation before any allocation. Pass replay and historical admission independently: primary reconstruction replays with current admission, while completed and incomplete entity replay use historical admission. Live entities use neither. Test fixtures that model allocated memory must report that allocation through growth or reconciliation, preserving the intended phase and clock.
+
+`LinearMemoryTracker` keeps transition-owned flags, provisional allocations, pending grants and growth-refusal state in `TrackerState`. Allocation reconciliation and replay are independent facts: live publication can precede enumeration, and accounting can start during replay. Mutations lock the shared transition gate, then private state, then the retained grant. State-only readers never acquire the gate. Release private state and grant guards before enqueue/limit callbacks or owner activation; retain the gate across baseline enqueue and accounting activation. Async reservation acquisition releases synchronous guards before awaiting admission and rechecks the required bytes before installation. Cancellation drops partial grants and permits a later activation retry. Atomic allocation, quota and billing observations remain separate; the gate still synchronizes metering and identifies Worker receipts.
+
+The Wasmtime fork preserves limiter `Err` as an immediate trap. Golem returns `Ok(false)` for quota/capacity refusal of growth of a nonempty GC heap, allowing collection and retry; linear memory and the first nonempty GC allocation still return typed errors. Refusal rolls back provisional admission itself: Wasmtime calls no growth-failure callback after `Ok(false)`. The production Auto collector currently selects Copying. This policy does not classify Null collector `AllocationTooLarge` failures as GC OOM, and explicit host heap-growth errors are distinct from guest allocation failures.
+
+The per-Store tracker retains a refusal until another admission attempt, ordinary growth failure, committed growth, instantiation or invocation entry. Terminal `GcHeapOutOfMemory<()>` uses it to distinguish `ExceededMemoryLimit` from `OutOfMemory`; absent a refusal, it is `OutOfMemory`. A guest GC allocation trap exits the component event loop before root completion or settlement, preserving the reason until classification. Primary exports, tool/middleware bodies and core instantiation retain typed memory failures. Collection reclaims objects without reducing allocated capacity. Heap doubling and collector headroom can still reject an allocation whose live bytes are below the plan limit; the limit applies to capacity.
+
+At the replay tail, the tracker synchronously enqueues `MemorySizeReconciled { bytes }` if allocation differs from the saved baseline, and enables subsequent `GrowMemory` recording under the same transition lock. The lifecycle actor orders the absolute reset before later deltas, including growth during reconstruction settlement. `Worker` owns the commit receipts through `MemoryAccounting` in `worker/residency.rs`, keyed by weak references to each tracker's transition identity. Publication and snapshot resets join that tracker's previous receipt before starting another cutover. Cancellation preserves the receipt and a failed commit remains authoritative for that tracker; a replacement Store does not inherit it. Receipt ownership retains no tracker or memory grants, and the next reconciliation prunes expired identities. A fresh, already-live primary enables growth recording when finalization enqueues its initial delta and awaits its commit before exposing the instance. Successful snapshot-only recovery and manual snapshot loading reset the baseline after the load, even when the cursor was already live. Snapshot recovery with a replay suffix waits for the normal replay-tail boundary. Both entries are replay-skippable accounting hints, not assertions that GC capacity must match on replay. Completed entity replay retains historical admission; an incomplete entity acquires its own live reservation before continuation.
+
+If accounting starts inside a core initializer, the tracker captures its baseline even when the sample equals the saved baseline and needs no hint. Initializer growth remains unrecorded until enumeration. Final reconciliation records allocation above that sample whether primary live publication has happened or is still pending. Without an accounting sample, replay reconciliation emits no delta and live reconciliation uses the saved startup value. Primary finalization joins the generation's preceding accounting receipt, ends reconciliation once, and enqueues its residual through the lifecycle actor under the tracker transition lock. It retains the final commit receipt before awaiting; retries and forced resets join that receipt rather than repeating the delta, and failed receipts remain authoritative. The actor updates the startup requirement after committing even if the initiating caller was cancelled. Finalization never waits for live publication or native disposal, and entities do not enqueue primary memory hints.
 
 Reconstruction keeps physical admission, the concurrent-agent permit, allocation observations,
 per-agent limits and cleanup ownership. Materialization and replay do not start customer byte-time.
@@ -1027,7 +1054,7 @@ that setting. A fixture without this opt-in can return access-denied before reac
 native wait. Check the actual error rather than assuming the intended wait was reached.
 
 P3 UDP `receive` in `durable_host/p3/sockets/udp/mod.rs` selects the same typed signal only
-around the native live receive. `run_read_access` leaves an interrupted
+around the native live receive. Its durable call session leaves an interrupted
 `P3SocketsTypesUdpSocketReceive` Start incomplete; its call-owned trap context preserves the
 `InterruptKind` root cause. Replay resolution, End persistence, accessor delivery and native
 bind/drop remain outside the select. The call remains `ReadRemote` and repairs its original Start.
@@ -1340,6 +1367,13 @@ remains interrupted. Startup, storage and routing errors keep their operational 
 synthetic warm-cache failures cannot establish a recorded constructor failure. A later method
 failure cannot replace constructor success. Forks resolve the retained source initialization key.
 Preparation remains suspended and neither starts nor waits for initialization.
+
+`Worker::resolve_old_invocation_result_index` falls back to scanning the worker's open oplog handle,
+bounded by the status oplog index. An ephemeral completion can precede its archive write, so
+storage-only reads can falsely report a gap. The handle includes entries handed to the asynchronous
+writer but not yet stored; result lookup does not need a storage barrier.
+Test: `oplog_unreadable::an_ephemeral_constructor_completes_while_its_archive_write_is_pending`
+holds that write until Create returns.
 
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
@@ -2323,7 +2357,35 @@ invocation loop appends `AgentInvocationStarted`, runs the guest, and
 result and waits for the commit receipt before waiters are notified. Durable agents use
 `CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
-reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+reads queued on the same state actor wait behind it. Actual traps and constructor errors go through
+`on_invocation_failure`; decoded outer method errors take the separate path below.
+
+### Invocation-local method errors
+
+A valid outer guest `agent-error` from an agent method becomes `InvokeResult::MethodFailed`, not
+a trap. `on_agent_method_failure` (`durable_host/invocation.rs`) finishes required cleanup and
+appends `AgentInvocationFailed { invocation_id, error, start_index, entity_parent_start_index }`.
+It uses the same durable `Always` / ephemeral `Deferred` completion barrier before publishing
+the existing `InvocationFailed` response for that key. A failed cleanup or commit retains its
+infrastructure failure path and does not publish the method outcome.
+
+Mutations before the error remain. Mutating methods invalidate the read-only cache before
+publication. The status fold indexes a completed failure and clears its running key without
+setting fatal `last_error_kind`. The durable serial loop keeps the same Store and runs queued
+work; it neither retries the method nor fails other keys. Ephemeral owners still archive after
+their one accepted method. A persisted local outcome is observable after archival, but a lost
+incomplete ephemeral method is never replayed to manufacture a result.
+
+`AgentInvocationFailed` is a positional terminal, not an error hint. Re-execution reconstructs partial state and validates the invocation ID, error payload, invocation anchor and entity parent before consuming the terminal. A success
+or actual trap instead of that terminal is divergence. Completed replay neither appends nor
+publishes another terminal; cold same-key lookup reads the stored failure without guest execution.
+Only an incomplete durable invocation at the natural history tail may settle live.
+
+Declared schema error values stay ordinary results. Constructors, Rust panics, actual Wasm
+traps and malformed ABI errors keep their fatal paths. Go normalizes only handler-stage panics;
+Scala marks handler throws and failed Futures before encoding; Effect catches escaped handler
+failures/defects before codecs and HTTP cleanup, leaving interruption distinct. SDK machinery
+failures are not permission to reuse a damaged instance.
 
 The live loop hydrates an ordinary invocation from its committed Pending entry into an
 executor-local `HydratedInvocation`. Started reuses that exact payload reference, including its
@@ -2530,6 +2592,8 @@ record. A record with a name on an executor without filesystem snapshots gives `
 - No pending update — `try_load_snapshot` loads the selected periodic record.
 
 ### Bootstrap blocks
+
+Snapshot-assisted recovery refreshes the replay target only while the primary cursor is not live. Once Live is published, new accounting hints belong to live history; extending that cursor would reopen a completed wallet prefix and force a restart. A successful snapshot-only load can therefore record `MemorySizeReconciled` without changing the replay target. Recovery from an older snapshot can reach the same allocation through its replay suffix without emitting that hint; compare guest calls and recovered state separately from these accounting entries.
 
 The core initializer of a component runs during `instantiate`, before `prepare_instance` loads
 any snapshot, and its durable calls (clock reads, random seeds, the environment) shape the state
@@ -3225,6 +3289,22 @@ P2 UDP records explicit remote-address permission decisions in
 request holds the addresses; replay returns the recorded decision without consulting current
 permissions. Connected sends without an explicit address retain their stream's admission.
 
+The socket address policy (`durable_host/sockets/policy.rs`) is shared by P2 and P3. Before any
+grant check, `SocketPolicy::target` refuses cloud metadata and link-local destinations, and the
+executor's gRPC and HTTP ports and `agent_sockets.refused_ports` on loopback, unspecified and this
+host's own addresses. Operator authorization does not bypass it. Otherwise the target is a
+`NetworkResourcePattern::SocketAddress`: a grant with a wildcard host matches it only for an
+`AddressClass::Public` address that is not an address of this host (D28, `this_host`), while
+denials with a wildcard host still cover every address, and a denial of an IPv4 host covers the
+NAT64, 6to4 and IPv4-compatible forms that embed it. HTTP and WebSocket targets keep plain host
+matching and refuse IPv6 hosts. A refusal is recorded as the
+call's denial, like a grant denial (the P2 check call, or the `Start` of the P3 connect or send), so
+replay returns it. The Wasmtime `socket_addr_check`
+backstop refuses TCP listen, binds other than port 0 or loopback, and the refused destinations,
+from its arguments and the configuration only. The executor binds its gRPC and HTTP listeners
+before it creates any agent, so the configuration holds the bound ports. Tests:
+`tests/scope_cards/socket_policy.rs`.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
@@ -3283,6 +3363,8 @@ delivery must be the tail operation of a host function. Tests: `tests/concurrent
 (bare Wasmtime: guest initiation order is stable across re-execution while host completion order
 is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
+
+P3 TCP `send` and `receive` record their one-shot stream acquisition before creating the guest-facing handles. The acquisition's `CompletionDelivery` stays deferred while the host starts the send call or spawns the receive task. `CompletionDelivery::continue_with` suppresses the token if this setup returns a host error, including while constructing handles for an acquisition error; cancelling the setup still drops the armed token and records a discard. Only a successful final host return arms its terminal observer, including when acquisition failed. Replay restores the recorded taken flag before building the handles, then delivers at that same boundary. The built-in `node:net` regression `builtin_node_tcp_replays_after_restart` checks successful traffic with sockets enabled, denial with sockets disabled, and completed tool replay without reconnecting in both cases.
 
 For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
 cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
@@ -3502,7 +3584,11 @@ cursor (`OwnerExecution`, `worker/instance/mod.rs`).
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
 - `worker/invocation.rs::permanent_tool_guest_trap` isolates only its fixed Wasm
-  instruction-trap allowlist. The tool terminal has `body_execution: Trapped` and
+  instruction-trap allowlist and uncaught Wasm exceptions. Agent and tool classification share
+  `model::deterministic_guest_trap`, including GC cast failures, array bounds failures and
+  oversized allocations. Agent stack overflow keeps its separate classification; tool host-call
+  markers take precedence over the predicate. GC heap OOM remains a resource failure.
+  The tool terminal has `body_execution: Trapped` and
   `RemoteInternalError`. Typed quotas, policy exhaustion, `WorkerOutOfMemory`, infrastructure
   and lifecycle failures retain owner recovery even when the retry decision is exhausted.
   Physical Wasmtime Store destruction retains the original `Ctx` for cleanup. Supervisors

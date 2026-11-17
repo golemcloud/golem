@@ -2094,6 +2094,215 @@ fn tool_effective_surface_uses_definite_allows_and_possible_denials() {
     }
 }
 
+fn network_grant(resource: &str) -> NetworkResourcePattern {
+    NetworkResourcePattern::parse_resource(resource).unwrap()
+}
+
+fn socket(address: &str) -> NetworkResourcePattern {
+    let address: std::net::SocketAddr = address.parse().unwrap();
+    NetworkResourcePattern::socket_address(address.ip(), address.port(), false)
+}
+
+fn this_host_socket(address: &str) -> NetworkResourcePattern {
+    let address: std::net::SocketAddr = address.parse().unwrap();
+    NetworkResourcePattern::socket_address(address.ip(), address.port(), true)
+}
+
+#[test]
+fn bracketed_ipv6_grants_are_canonical_and_ipv4_mapped_grants_are_ipv4() {
+    assert_eq!(
+        network_grant("[2001:DB8:0::1]:443"),
+        NetworkResourcePattern::host_port("2001:db8::1", PortPattern::single(443))
+    );
+    assert_eq!(
+        network_grant("[2001:db8::1]"),
+        NetworkResourcePattern::host_port("2001:db8::1", PortPattern::any())
+    );
+    assert_eq!(
+        network_grant("[::ffff:10.0.0.1]:5432"),
+        network_grant("10.0.0.1:5432")
+    );
+    for invalid in [
+        "2001:db8::1:443",
+        "2001:db8::1",
+        "[2001:db8::1]443",
+        "[2001:db8::1]:",
+        "[2001:db8::1",
+        "[10.0.0.1]:80",
+        "[*]:80",
+        "[fe80::1%eth0]:80",
+    ] {
+        assert!(
+            NetworkResourcePattern::parse_resource(invalid).is_err(),
+            "{invalid} must not parse"
+        );
+    }
+    let permission =
+        parse_polymorphic_permission("network() @ * : connect : [2001:DB8::1]:443").unwrap();
+    assert_eq!(
+        permission.render().unwrap(),
+        "network() @ * : connect : [2001:db8::1]:443"
+    );
+}
+
+#[test]
+fn wildcard_network_grants_reach_only_public_socket_destinations() {
+    let public = ["1.0.0.1:443", "[2606:4700::1111]:443"];
+    let internal = [
+        "127.0.0.1:443",
+        "10.0.0.1:443",
+        "169.254.169.254:443",
+        "[::1]:443",
+        "[fd00::1]:443",
+        "[::ffff:10.0.0.1]:443",
+        "[64:ff9b::a00:1]:443",
+        "0.0.0.0:443",
+        "[::]:443",
+    ];
+    for wildcard in ["*", "*:443", "*:1-65535"] {
+        let grant = network_grant(wildcard);
+        for destination in public {
+            assert!(
+                grant.subsumes(&socket(destination)),
+                "{wildcard} must reach {destination}"
+            );
+        }
+        for destination in internal {
+            assert!(
+                !grant.subsumes(&socket(destination)),
+                "{wildcard} must not reach {destination}"
+            );
+        }
+    }
+    for segment_wildcard in ["*.0.0.1:443", "*.*.*.*"] {
+        let grant = network_grant(segment_wildcard);
+        assert!(grant.subsumes(&socket("1.0.0.1:443")));
+        assert!(!grant.subsumes(&socket("10.0.0.1:443")));
+        assert!(!grant.subsumes(&socket("127.0.0.1:443")));
+    }
+    // A public address of the executor host is internal too.
+    assert!(!network_grant("*").subsumes(&this_host_socket("1.2.3.4:6379")));
+    assert!(!network_grant("*:6379").subsumes(&this_host_socket("1.2.3.4:6379")));
+    assert!(network_grant("1.2.3.4:6379").subsumes(&this_host_socket("1.2.3.4:6379")));
+    // Only socket destinations follow D28; HTTP and WebSocket targets keep host matching.
+    let PermissionTarget::Network(http) =
+        network_target::network_target("127.0.0.1", Some(443)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert!(network_grant("*").subsumes(&http.resource));
+}
+
+#[test]
+fn named_network_grants_reach_internal_socket_destinations() {
+    assert!(network_grant("10.0.0.1:443").subsumes(&socket("10.0.0.1:443")));
+    assert!(network_grant("10.0.0.1").subsumes(&socket("10.0.0.1:444")));
+    assert!(!network_grant("10.0.0.1:443").subsumes(&socket("10.0.0.1:444")));
+    assert!(!network_grant("10.0.0.1:443").subsumes(&socket("10.0.0.2:443")));
+    assert!(network_grant("10.0.0.1:5432").subsumes(&socket("[::ffff:10.0.0.1]:5432")));
+    assert!(network_grant("[2001:db8::1]:443").subsumes(&socket("[2001:db8:0::1]:443")));
+    assert!(network_grant("[::1]").subsumes(&socket("[::1]:8080")));
+    assert!(!network_grant("127.0.0.1").subsumes(&socket("[::1]:8080")));
+    assert!(!network_grant("[::1]").subsumes(&socket("127.0.0.1:8080")));
+    assert!(!socket("10.0.0.1:443").subsumes(&socket("10.0.0.1:443")));
+}
+
+#[test]
+fn wildcard_network_denials_cover_internal_socket_destinations() {
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/agent").unwrap();
+    let target = |address: &str| network_target::socket_target(address.parse().unwrap(), false);
+    let surface = |positive: &str, negative: &str| {
+        EffectiveSurface::from_grants(
+            &[network("*", network_grant(positive))],
+            &[network("*", network_grant(negative))],
+            &[],
+            &[],
+            &holder,
+        )
+        .unwrap()
+    };
+    assert!(
+        surface("10.0.0.1:443", "*:22")
+            .authorize(&target("10.0.0.1:443"))
+            .unwrap()
+    );
+    assert!(
+        !surface("10.0.0.1:443", "*:443")
+            .authorize(&target("10.0.0.1:443"))
+            .unwrap()
+    );
+    assert!(
+        !surface("10.0.0.1:443", "*")
+            .authorize(&target("10.0.0.1:443"))
+            .unwrap()
+    );
+    assert!(
+        !surface("*", "*")
+            .authorize(&target("93.184.215.14:443"))
+            .unwrap()
+    );
+    assert!(
+        !surface("*", "*:22")
+            .authorize(&target("10.0.0.1:443"))
+            .unwrap()
+    );
+    assert!(
+        surface("*", "*:22")
+            .authorize(&target("93.184.215.14:443"))
+            .unwrap()
+    );
+
+    let ceiling = |upper: &str| {
+        EffectiveSurface::from_grants(
+            &[network("*", network_grant("10.0.0.1:443"))],
+            &[],
+            &[network("*", network_grant(upper))],
+            &[],
+            &holder,
+        )
+        .unwrap()
+    };
+    assert!(
+        ceiling("10.0.0.1")
+            .authorize(&target("10.0.0.1:443"))
+            .unwrap()
+    );
+    assert!(!ceiling("*").authorize(&target("10.0.0.1:443")).unwrap());
+
+    // A denial of an IPv4 host covers the IPv6 forms that embed it.
+    for address in [
+        "93.184.215.14:22",
+        "[::ffff:93.184.215.14]:22",
+        "[64:ff9b::5db8:d70e]:22",
+        "[2002:5db8:d70e::1]:22",
+        "[::93.184.215.14]:22",
+    ] {
+        assert!(
+            !surface("*", "93.184.215.14")
+                .authorize(&target(address))
+                .unwrap(),
+            "{address} must be denied"
+        );
+        assert!(
+            !surface("*", "93.184.215.14:22")
+                .authorize(&target(address))
+                .unwrap(),
+            "{address} must be denied"
+        );
+        assert!(
+            surface("*", "93.184.215.14:23")
+                .authorize(&target(address))
+                .unwrap(),
+            "{address} must stay allowed on another port"
+        );
+    }
+    assert!(
+        surface("*", "93.184.215.15")
+            .authorize(&target("[64:ff9b::5db8:d70e]:22"))
+            .unwrap()
+    );
+}
+
 fn test_name(value: &str) -> String {
     value
         .chars()

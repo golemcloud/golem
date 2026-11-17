@@ -286,6 +286,13 @@ interface oplog {
         component-revision: u64,
     }
 
+    record agent-invocation-failed-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        error: string,
+        start-index: oplog-index,
+    }
+
     enum oplog-error-kind {
         invocation,
         recovery
@@ -569,6 +576,11 @@ interface oplog {
     record grow-memory-parameters {
         timestamp: datetime,
         delta: u64
+    }
+
+    record memory-size-reconciled-parameters {
+        timestamp: datetime,
+        bytes: u64
     }
 
     type agent-resource-id = u64;
@@ -884,6 +896,13 @@ interface oplog {
         component-revision: u64,
     }
 
+    record raw-agent-invocation-failed-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        error: worker-error,
+        start-index: oplog-index,
+    }
+
     record raw-error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
@@ -1019,6 +1038,7 @@ interface oplog {
         agent-invocation-started(raw-agent-invocation-started-parameters),
         /// The agent has completed an invocation
         agent-invocation-finished(raw-agent-invocation-finished-parameters),
+        agent-invocation-failed(raw-agent-invocation-failed-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed
@@ -1045,6 +1065,7 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
+        memory-size-reconciled(memory-size-reconciled-parameters),
         /// Created a resource instance
         create-resource(raw-create-resource-parameters),
         /// Dropped a resource instance
@@ -1131,6 +1152,7 @@ interface oplog {
         agent-invocation-started(agent-invocation-started-parameters),
         /// The agent has completed an invocation
         agent-invocation-finished(agent-invocation-finished-parameters),
+        agent-invocation-failed(agent-invocation-failed-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed
@@ -1157,6 +1179,7 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
+        memory-size-reconciled(memory-size-reconciled-parameters),
         /// Created a resource instance
         create-resource(create-resource-parameters),
         /// Dropped a resource instance

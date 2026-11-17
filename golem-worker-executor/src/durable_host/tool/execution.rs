@@ -50,7 +50,6 @@ impl ToolExecution {
     pub(super) fn new(
         operation: operation::OwnerToolOperation,
         cancellable: bool,
-        replay_cancel_stdin: bool,
         producer: Option<std::sync::Weak<crate::worker::suspension::ExternalActivity>>,
     ) -> Arc<Self> {
         let invocation = operation
@@ -63,7 +62,6 @@ impl ToolExecution {
             filesystem: operation.context().activation.filesystem(),
             operation,
             cancellable,
-            replay_cancel_stdin,
             state: Mutex::new(ToolExecutionState {
                 result: None,
                 failure: None,
@@ -117,21 +115,13 @@ impl ToolExecution {
     }
 
     pub(super) fn cancel(&self) {
-        if self.cancel_body() || self.replay_cancel_stdin {
+        if self.cancel_body() {
             self.operation.cancel_children();
         }
     }
 
     pub(super) fn cancel_body(&self) -> bool {
-        if !self.cancellable {
-            // Raw guest-stream stdin has no recorded terminal to restore. Reproduce its
-            // committed cancellation without interrupting retained body reconstruction.
-            if self.replay_cancel_stdin {
-                self.cancel.cancel();
-                self.operation.cancel_unjournaled_stdin();
-            }
-            false
-        } else if self.operation.begin_cancel() {
+        if self.cancellable && self.operation.begin_cancel() {
             self.cancel.cancel();
             true
         } else {
@@ -676,38 +666,24 @@ where
 {
     register_tool_admission(accessor, &mut accepted)?;
     let caller = ToolCaller::capture(accessor)?;
-    let cancellable =
-        accepted.durability.scope().mode() != InvocationExecutionMode::ReplayingCompleted;
-    let replay_cancel_stdin = !cancellable
-        && matches!(
-            caller
-                .settlement
-                .replay
-                .visible_terminal_entry(accepted.durability.scope().invocation_id().start_index())
-                .await?,
-            Some(golem_common::model::oplog::OplogEntry::Cancelled { .. })
-        );
     let execution = ToolExecution::new(
         accepted.operation.clone(),
-        cancellable,
-        replay_cancel_stdin,
+        accepted.durability.scope().mode() != InvocationExecutionMode::ReplayingCompleted,
         caller
             .settlement
             .settlement_activity
             .as_ref()
             .map(Arc::downgrade),
     );
-    let ancestor_cancelled = accepted
+    accepted
         .operation
         .register_execution(Arc::downgrade(&execution))?;
-    if ancestor_cancelled
-        || accessor.with(|mut access| {
-            access
-                .get()
-                .entity_cancellation()
-                .is_some_and(|cancellation| cancellation.is_cancelled())
-        })
-    {
+    if accessor.with(|mut access| {
+        access
+            .get()
+            .entity_cancellation()
+            .is_some_and(|cancellation| cancellation.is_cancelled())
+    }) {
         execution.cancel();
     }
     let replaying_incomplete = accepted.durability.scope().mode()

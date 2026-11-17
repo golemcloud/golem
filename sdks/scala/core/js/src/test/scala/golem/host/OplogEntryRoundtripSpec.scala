@@ -120,22 +120,21 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         e.params.retryFrom == BigInt(5)
       )
     },
-    test("Error with invocation ID from dynamic") {
+    test("AgentInvocationFailed with invocation ID and start index from dynamic") {
       val raw = wrapEntry(
-        "error",
+        "agent-invocation-failed",
         js.Dynamic.literal(
           timestamp = ts(),
-          kind = "invocation",
           invocationId = invocationUuidJs,
-          error = "boom",
-          retryFrom = js.BigInt("6")
+          error = "method gave up",
+          startIndex = js.BigInt("17")
         )
       )
-      val e = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Error]
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.AgentInvocationFailed]
       assertTrue(
-        e.params.kind == OplogErrorKind.Invocation,
-        e.params.invocationId.contains(invocationUuid),
-        e.params.error == "boom"
+        parsed.params.invocationId == invocationUuid,
+        parsed.params.error == "method gave up",
+        parsed.params.startIndex == BigInt(17)
       )
     },
     test("EndRemoteWrite from dynamic") {
@@ -164,6 +163,17 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.GrowMemory],
         parsed.asInstanceOf[OplogEntry.GrowMemory].params.delta == BigInt(65536)
+      )
+    },
+    test("MemorySizeReconciled preserves an absolute byte count") {
+      val raw = wrapEntry(
+        "memory-size-reconciled",
+        js.Dynamic.literal(timestamp = ts(), bytes = js.BigInt("9007199254741009"))
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.MemorySizeReconciled]
+      assertTrue(
+        parsed.params.bytes == BigInt("9007199254741009"),
+        parsed.timestamp.seconds == BigInt(1700000000)
       )
     },
     test("CancelPendingInvocation from dynamic") {

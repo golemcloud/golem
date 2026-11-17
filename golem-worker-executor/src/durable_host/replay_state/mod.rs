@@ -163,9 +163,6 @@ enum MissingStart {
 enum BlockedOn {
     /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim.
     CursorProgress,
-    /// The delivery boundary must move, but no unclaimed Start has this invocation identity.
-    /// An abandoned caller can stop this wait without leaving a recorded call unclaimed.
-    UnrecordedStart,
     /// No matching `Start` was found, but the entry at the cursor head belongs to an entity body
     /// that is still active. The body, or the supervisor that drains its recorded terminal, can
     /// still consume that entry, so the missing `Start` is decided only after the cursor moves or
@@ -177,7 +174,7 @@ enum BlockedOn {
 impl BlockedOn {
     async fn wait(self, progress: std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>) {
         match self {
-            Self::CursorProgress | Self::UnrecordedStart => progress.await,
+            Self::CursorProgress => progress.await,
             Self::ActiveBody(mut bodies) => {
                 tokio::select! {
                     _ = progress => {}
@@ -325,7 +322,8 @@ type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIn
 type StreamObservationPositions = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
 type StartsByInvocationId =
     HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
-type InvocationFinishes = std::collections::BTreeSet<OplogIndex>;
+// Terminal index -> local-failure invocation anchor; successful terminals have no anchor.
+type InvocationFinishes = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
 
 /// The recovery metadata that one scan of a visible oplog range collects.
 struct ScannedRecoveryMetadata {
@@ -616,7 +614,7 @@ struct ReplayCursor {
     /// extended by the scan of exactly the newly visible range when the replay target grows. A
     /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
     start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
-    /// The visible `AgentInvocationFinished` positions up to the replay target. Built and kept in
+    /// The visible invocation terminal positions up to the replay target. Built and kept in
     /// sync with the visible prefix by the same scans as the delivery markers; an entry in a
     /// deleted region is not visible. A delivery wait looks up its invocation boundary here
     /// instead of reading the oplog.

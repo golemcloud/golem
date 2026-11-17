@@ -34,7 +34,7 @@ use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, Serializa
 use golem_common::model::oplog::{
     HostRequestGolemRpcCreate, HostResponse, HostResponseFileSystemStat,
     HostResponseGolemRpcCreate, HostResponseKVUnit, HostResponseP3FileSystemStat,
-    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsTcpConnect,
     HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry,
     PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
@@ -3393,8 +3393,9 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
             _ => None,
         })
         .expect("denial must have a durable connect End response");
-    let expected_response: HostResponse = HostResponseP3SocketsConnect {
+    let expected_response: HostResponse = HostResponseP3SocketsTcpConnect {
         result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        closed: false,
     }
     .into();
     assert_eq!(
@@ -3587,7 +3588,7 @@ async fn p3_tcp_denial_survives_recovery_before_start_and_before_end(
             })
             .expect("recovery must complete the denied connect");
         assert_eq!(
-            HostResponseP3SocketsConnect::from_value(response.value())?.result,
+            HostResponseP3SocketsTcpConnect::from_value(response.value())?.result,
             Err(SerializableP3SocketErrorCode::AccessDenied),
             "the unfinished invocation must recover with a guest-visible denial"
         );
@@ -8146,6 +8147,7 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
 }
 
 mod moonbit;
+mod socket_policy;
 
 const CARD_LIVENESS_FUNCTION: &str = "golem::permissions::types::card-liveness";
 

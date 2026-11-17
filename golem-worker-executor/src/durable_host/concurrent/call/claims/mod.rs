@@ -14,65 +14,28 @@
 
 use super::*;
 
-/// Retains a recorded replay claim independently of the Store task that requested it.
+/// Retains an accepted replay claim independently of the Store task that requested it.
 ///
 /// The claim reads only the shared replay state, never the Store, so a Store-holding caller can
-/// await it as well as an accessor call can. A completed cancelled entity releases abandoned
-/// waits proven to have no recorded Start; every cursor transaction and recorded claim still
-/// completes. Other completed terminals report the missing Start as divergence.
-pub(super) async fn owned_access_claim<Ctx: WorkerCtx, F>(
+/// await it as well as an accessor call can.
+pub(super) async fn owned_access_claim<Ctx: WorkerCtx>(
     access: &mut impl DurableContext<Ctx>,
     recorded_start_required: bool,
-    claim: impl FnOnce(Option<tokio_util::sync::CancellationToken>) -> F + Send + 'static,
-) -> Result<ReplayStartClaimOutcome, WorkerExecutorError>
-where
-    F: Future<Output = Result<ReplayStartClaimOutcome, WorkerExecutorError>> + Send + 'static,
-{
-    let (tasks, sink, context, completed_entity) = access.with_ctx(|ctx| {
+    claim: impl Future<Output = Result<ReplayStartClaimOutcome, WorkerExecutorError>> + Send + 'static,
+) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+    let (tasks, sink, context) = access.with_ctx(|ctx| {
         (
             ctx.public_state.worker().tasks.clone(),
             ctx.state.dropped_call_event_sender(),
             ambient_trap_context(ctx),
-            ctx.entity_invocation_scope()
-                .filter(|scope| {
-                    scope.mode()
-                        == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
-                })
-                .map(|scope| {
-                    (
-                        ctx.state.replay_state.clone(),
-                        scope.invocation_id().start_index(),
-                    )
-                }),
         )
     });
     let (send, receive) = oneshot::channel();
     let (settled, settlement) = oneshot::channel();
-    let abandoned = completed_entity
-        .as_ref()
-        .map(|_| tokio_util::sync::CancellationToken::new());
-    let abandon_on_drop = abandoned.clone().map(|token| token.drop_guard());
     drop(
         tasks
             .spawn_metadata(async move {
-                let result = claim(abandoned).await;
-                if matches!(&result, Ok(ReplayStartClaimOutcome::Abandoned)) {
-                    let (replay, start) = completed_entity.expect("only completed entities abandon replay claims");
-                    let completion = match replay.visible_terminal_entry(start).await {
-                        Ok(Some(OplogEntry::Cancelled { .. })) => {
-                            tracing::debug!(entity_start = %start, "Released abandoned unrecorded entity call");
-                            Ok(())
-                        }
-                        Ok(_) => Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "recorded accessor Start",
-                            "completed entity abandoned an unrecorded call without a Cancelled terminal",
-                        )),
-                        Err(error) => Err(error),
-                    };
-                    let _ = settled.send(completion);
-                    return;
-                }
-                let result = result.and_then(|outcome| {
+                let result = claim.await.and_then(|outcome| {
                     if recorded_start_required
                         && !matches!(outcome, ReplayStartClaimOutcome::Claimed { .. })
                     {
@@ -109,9 +72,6 @@ where
         })?;
     if let Some(cleanup) = &mut cleanup {
         cleanup.disarm();
-    }
-    if let Some(abandon_on_drop) = abandon_on_drop {
-        abandon_on_drop.disarm();
     }
     result
 }
@@ -235,34 +195,26 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
             let recorded_start_required = self.claim_options.require_recorded_start
                 || (!self.store_replay_state.is_incomplete_entity()
                     && self.replay_to_live_role() != ReplayToLiveRole::PrimaryAgent);
-            let outcome = owned_access_claim(
-                access,
-                recorded_start_required,
-                move |abandoned| async move {
-                    claiming
-                        .claim_start_for_store_with_admission(
-                            owned_claim,
-                            store_continued_live,
-                            move |index, entry| {
-                                if let Some((observer, _activity)) = &observer {
-                                    observer.clone().started(index, entry, true);
-                                }
-                            },
-                            admission,
-                            abandoned,
-                        )
-                        .await
-                },
-            )
+            let outcome = owned_access_claim(access, recorded_start_required, async move {
+                claiming
+                    .claim_start_for_store_with_admission(
+                        owned_claim,
+                        store_continued_live,
+                        move |index, entry| {
+                            if let Some((observer, _activity)) = &observer {
+                                observer.clone().started(index, entry, true);
+                            }
+                        },
+                        admission,
+                    )
+                    .await
+            })
             .await?;
             let replay_ended = match outcome {
                 ReplayStartClaimOutcome::Claimed { handle, .. } => return Ok(Some(handle)),
                 ReplayStartClaimOutcome::ReplayEnded => true,
                 ReplayStartClaimOutcome::DeletedRegion
                 | ReplayStartClaimOutcome::StoreAlreadyLive => false,
-                ReplayStartClaimOutcome::Abandoned => {
-                    unreachable!("an active caller cannot abandon its own claim")
-                }
             };
             if self.claim_options.require_recorded_start {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(

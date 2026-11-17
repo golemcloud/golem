@@ -1472,23 +1472,15 @@ async fn run_nested_capable(bytes: Vec<u8>) -> Vec<u8> {
 async fn run_nested(
     stdin: InputStream,
     mut stdout: OutputStream,
-    independent_stdin: bool,
 ) -> Result<StreamSummary, StreamingError> {
     use futures_concurrency::prelude::*;
 
     let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
     let (nested_target, mut nested_stdout) = tool_host::create_output();
-    let (_source, nested_stdin) = if independent_stdin {
-        let (source, input) =
-            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
-        (Some(source), pump_tool_stdin(input))
-    } else {
-        (None, pump_tool_stdin(stdin))
-    };
     let nested = rpc.invoke_and_await(
         vec!["run".to_string()],
         raw_run_input("marker-echo"),
-        Some(nested_stdin),
+        Some(golem_rust::agentic::pump_tool_stdin(stdin)),
         Some(nested_target),
         None,
     );
@@ -1882,8 +1874,8 @@ impl Streaming for StreamingImpl {
         if mode == "nested-principal" {
             return run_nested_principal(&principal, stdout).await;
         }
-        if matches!(mode.as_str(), "nested" | "nested-independent-stdin") {
-            return run_nested(stdin, stdout, mode == "nested-independent-stdin").await;
+        if mode == "nested" {
+            return run_nested(stdin, stdout).await;
         }
         if mode == "nested-open-stdin-wait" {
             return run_nested_open_stdin_wait(stdout).await;

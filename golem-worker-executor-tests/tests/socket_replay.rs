@@ -24,7 +24,7 @@
 use crate::Tracing;
 use golem_common::model::agent::{ParsedAgentKey, UpdateRecord};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::{FromSchema, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
@@ -336,6 +336,37 @@ impl<'a> Session<'a> {
         .map_err(|_| anyhow::anyhow!("no snapshot after {count}"))?
     }
 
+    /// Waits until the oplog holds a snapshot after the start of the latest invocation of
+    /// `method`, and gives the number of snapshots. A snapshot of an earlier invocation, such as
+    /// the initialization, does not count.
+    async fn wait_for_snapshot_after_call(&self, method: &str) -> anyhow::Result<usize> {
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let oplog = self.oplog().await?;
+                let start = oplog.iter().rposition(|entry| {
+                    matches!(entry, PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation)
+                            if invocation.method_name == method))
+                });
+                if let Some(start) = start
+                    && oplog[start..]
+                        .iter()
+                        .any(|entry| matches!(entry, PublicOplogEntry::Snapshot(_)))
+                {
+                    return Ok::<_, anyhow::Error>(
+                        oplog
+                            .iter()
+                            .filter(|entry| matches!(entry, PublicOplogEntry::Snapshot(_)))
+                            .count(),
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("no snapshot after the latest call of {method}"))?
+    }
+
     /// Waits for the outcome of the latest update attempt: `Ok` with nothing for a successful
     /// update, `Err` with the details of a failed one.
     async fn update_outcome(&self, attempts_before: usize) -> anyhow::Result<Result<(), String>> {
@@ -440,6 +471,218 @@ async fn p3_tcp_socket_kept_across_invocations_is_lost_after_replay(
             .await?,
         1
     );
+    session.finish().await
+}
+
+#[test]
+#[timeout("3m")]
+async fn g2_send_on_a_replayed_connection_reports_connection_broken(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "g2").await?;
+    let connected: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let duplicate: Result<(), String> = session
+        .call("p3_tcp_receive_again", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(duplicate, Err("ErrorCode::InvalidState".to_string()));
+    session.restart_executor().await?;
+    let sent: Result<(), String> = session
+        .call("p3_tcp_send", data_value!("a".to_string(), b"x".to_vec()))
+        .await?;
+    assert_eq!(
+        sent,
+        Err("1 bytes were not accepted: Err(\"ErrorCode::ConnectionBroken\")".to_string())
+    );
+    let received: Result<(), String> = session
+        .call("p3_tcp_receive_again", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(received, Err("ErrorCode::ConnectionBroken".to_string()));
+    assert_eq!(peer.connections().len(), 1);
+    assert!(peer.connections()[0].received.is_empty());
+    session.finish().await
+}
+
+#[test]
+#[timeout("3m")]
+async fn g3_getters_are_equal_before_and_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "g3").await?;
+    let connected: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let before: Result<(String, String), String> = session
+        .call("p3_tcp_addresses", data_value!("a".to_string()))
+        .await?;
+    assert!(before.is_ok(), "{before:?}");
+    session.restart_executor().await?;
+    let after: Result<(String, String), String> = session
+        .call("p3_tcp_addresses", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after, before);
+    assert_eq!(peer.connections().len(), 1);
+    session.finish().await
+}
+
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_bind_and_configured_options_replay_without_native_bind(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "tcp-bind").await?;
+    let bound: Result<(), String> = session
+        .call("p3_tcp_bind", data_value!("a".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let before: Result<(String, Vec<u64>), String> = session
+        .call("p3_tcp_bound_state", data_value!("a".to_string()))
+        .await?;
+    let (address, options) = before
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!(error.clone()))?;
+    let address: SocketAddr = address.parse()?;
+    assert!(address.ip().is_loopback());
+    assert_ne!(address.port(), 0);
+    assert_eq!(&options[..5], &[1, 3_000_000_000, 4_000_000_000, 7, 42]);
+    for expected in [51u8, 42] {
+        let changed: Result<u8, String> = session
+            .call(
+                "p3_tcp_hop_limit",
+                data_value!("a".to_string(), Some(expected)),
+            )
+            .await?;
+        assert_eq!(changed, Ok(expected));
+        let cached: Result<u8, String> = session
+            .call("p3_tcp_hop_limit", data_value!("a".to_string(), None::<u8>))
+            .await?;
+        assert_eq!(cached, Ok(expected));
+    }
+    session.restart_executor().await?;
+    // Occupy the recorded endpoint before reconstruction. Replaying bind must not touch it.
+    let _occupied = tokio::time::timeout(WAIT, async {
+        loop {
+            match TcpListener::bind(address).await {
+                Ok(listener) => break Ok::<_, std::io::Error>(listener),
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::task::yield_now().await
+                }
+                Err(error) => break Err(error),
+            }
+        }
+    })
+    .await??;
+    let after: Result<(String, Vec<u64>), String> = session
+        .call("p3_tcp_bound_state", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after, before);
+    let listen: Result<(), String> = session
+        .call("p3_tcp_listen", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(listen, Err("ErrorCode::ConnectionBroken".to_string()));
+    let after_listen: Result<(String, Vec<u64>), String> = session
+        .call("p3_tcp_bound_state", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after_listen, before);
+    let changed: Result<u8, String> = session
+        .call("p3_tcp_hop_limit", data_value!("a".to_string(), Some(63u8)))
+        .await?;
+    assert_eq!(changed, Ok(63));
+    assert_eq!(session.starts("sockets::types::tcp-socket::bind").await?, 1);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let connect: Result<(), String> = session
+        .call(
+            "p3_tcp_connect_existing",
+            data_value!("a".to_string(), peer.port),
+        )
+        .await?;
+    assert_eq!(connect, Err("ErrorCode::ConnectionBroken".to_string()));
+    assert!(peer.connections().is_empty());
+    session.finish().await
+}
+
+#[test]
+#[timeout("3m")]
+async fn p3_failed_tcp_connect_preserves_closed_state_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "tcp-refused").await?;
+    let bound: Result<(), String> = session
+        .call("p3_tcp_bind", data_value!("a".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let unused = TcpListener::bind("127.0.0.1:0").await?;
+    let port = unused.local_addr()?.port();
+    drop(unused);
+    let result: Result<(), String> = session
+        .call(
+            "p3_tcp_connect_existing",
+            data_value!("a".to_string(), port),
+        )
+        .await?;
+    assert_eq!(result, Err("ErrorCode::ConnectionRefused".to_string()));
+    let before: Result<(String, String), String> = session
+        .call("p3_tcp_addresses", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(before, Err("ErrorCode::ConnectionRefused".to_string()));
+    for value in [None, Some(51u8)] {
+        let option: Result<u8, String> = session
+            .call("p3_tcp_hop_limit", data_value!("a".to_string(), value))
+            .await?;
+        assert_eq!(option, Err("ErrorCode::ConnectionRefused".to_string()));
+    }
+    session.restart_executor().await?;
+    let after: Result<(String, String), String> = session
+        .call("p3_tcp_addresses", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after, before);
+    for value in [None, Some(63u8)] {
+        let option: Result<u8, String> = session
+            .call("p3_tcp_hop_limit", data_value!("a".to_string(), value))
+            .await?;
+        assert_eq!(option, Err("ErrorCode::ConnectionRefused".to_string()));
+    }
+    let receive: Result<(), String> = session
+        .call("p3_tcp_receive_again", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(receive, Err("ErrorCode::ConnectionRefused".to_string()));
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::connect")
+            .await?,
+        1
+    );
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let reconnect: Result<(), String> = session
+        .call(
+            "p3_tcp_connect_existing",
+            data_value!("a".to_string(), peer.port),
+        )
+        .await?;
+    assert_eq!(reconnect, Err("ErrorCode::InvalidState".to_string()));
+    assert!(peer.connections().is_empty());
     session.finish().await
 }
 
@@ -733,7 +976,7 @@ async fn an_open_p3_tcp_receive_stream_blocks_snapshots_and_manual_updates(
     .await?;
 
     let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
-    let baseline = session.wait_for_snapshot_after(0).await?;
+    let baseline = session.wait_for_snapshot_after_call("received").await?;
 
     let _: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))

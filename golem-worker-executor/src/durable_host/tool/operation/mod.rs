@@ -340,35 +340,16 @@ impl OwnerToolOperation {
     pub(super) fn register_execution(
         &self,
         execution: std::sync::Weak<super::ToolExecution>,
-    ) -> Result<bool, WorkerExecutorError> {
-        let mut ancestors = Vec::new();
-        {
-            let mut state = self.owner.state.lock().unwrap();
-            state
-                .operations
-                .get_mut(&self.id)
-                .ok_or_else(|| {
-                    WorkerExecutorError::runtime("accepted tool operation is no longer registered")
-                })?
-                .execution = execution;
-            let mut parent = &self.context.parent;
-            while let OwnerInvocationId::Entity(invocation) = parent {
-                let Some(ancestor) = state
-                    .operations
-                    .values()
-                    .find(|operation| operation.invocation_id.as_ref() == Some(invocation))
-                else {
-                    break;
-                };
-                if let Some(execution) = ancestor.execution.upgrade() {
-                    ancestors.push(execution);
-                }
-                parent = &ancestor.context.parent;
-            }
-        }
-        Ok(ancestors
-            .iter()
-            .any(|execution| execution.cancel.is_cancelled()))
+    ) -> Result<(), WorkerExecutorError> {
+        let mut state = self.owner.state.lock().unwrap();
+        state
+            .operations
+            .get_mut(&self.id)
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("accepted tool operation is no longer registered")
+            })?
+            .execution = execution;
+        Ok(())
     }
 
     #[cfg(test)]

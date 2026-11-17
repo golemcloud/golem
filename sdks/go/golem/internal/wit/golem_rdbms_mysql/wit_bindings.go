@@ -798,207 +798,27 @@ func (self *DbResultStream) GetColumns() witTypes.Result[[]DbColumn, Error] {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_result_stream_get_columns((self).Handle(), returnArea)
-	var result8 witTypes.Result[[]DbColumn, Error]
+	var result2 witTypes.Result[[]DbColumn, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
+		result0 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(16+4*4))
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			var variant DbColumnType
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-			case 0:
+			result := wasm_lift_1_t798(unsafe.Add(unsafe.Pointer(base), 0))
 
-				variant = MakeDbColumnTypeBoolean()
-
-			case 1:
-
-				variant = MakeDbColumnTypeTinyint()
-
-			case 2:
-
-				variant = MakeDbColumnTypeSmallint()
-
-			case 3:
-
-				variant = MakeDbColumnTypeMediumint()
-
-			case 4:
-
-				variant = MakeDbColumnTypeInt()
-
-			case 5:
-
-				variant = MakeDbColumnTypeBigint()
-
-			case 6:
-
-				variant = MakeDbColumnTypeTinyintUnsigned()
-
-			case 7:
-
-				variant = MakeDbColumnTypeSmallintUnsigned()
-
-			case 8:
-
-				variant = MakeDbColumnTypeMediumintUnsigned()
-
-			case 9:
-
-				variant = MakeDbColumnTypeIntUnsigned()
-
-			case 10:
-
-				variant = MakeDbColumnTypeBigintUnsigned()
-
-			case 11:
-
-				variant = MakeDbColumnTypeFloat()
-
-			case 12:
-
-				variant = MakeDbColumnTypeDouble()
-
-			case 13:
-
-				variant = MakeDbColumnTypeDecimal()
-
-			case 14:
-
-				variant = MakeDbColumnTypeDate()
-
-			case 15:
-
-				variant = MakeDbColumnTypeDatetime()
-
-			case 16:
-
-				variant = MakeDbColumnTypeTimestamp()
-
-			case 17:
-
-				variant = MakeDbColumnTypeTime()
-
-			case 18:
-
-				variant = MakeDbColumnTypeYear()
-
-			case 19:
-
-				variant = MakeDbColumnTypeFixchar()
-
-			case 20:
-
-				variant = MakeDbColumnTypeVarchar()
-
-			case 21:
-
-				variant = MakeDbColumnTypeTinytext()
-
-			case 22:
-
-				variant = MakeDbColumnTypeText()
-
-			case 23:
-
-				variant = MakeDbColumnTypeMediumtext()
-
-			case 24:
-
-				variant = MakeDbColumnTypeLongtext()
-
-			case 25:
-
-				variant = MakeDbColumnTypeBinary()
-
-			case 26:
-
-				variant = MakeDbColumnTypeVarbinary()
-
-			case 27:
-
-				variant = MakeDbColumnTypeTinyblob()
-
-			case 28:
-
-				variant = MakeDbColumnTypeBlob()
-
-			case 29:
-
-				variant = MakeDbColumnTypeMediumblob()
-
-			case 30:
-
-				variant = MakeDbColumnTypeLongblob()
-
-			case 31:
-
-				variant = MakeDbColumnTypeEnumeration()
-
-			case 32:
-
-				variant = MakeDbColumnTypeSet()
-
-			case 33:
-
-				variant = MakeDbColumnTypeBit()
-
-			case 34:
-
-				variant = MakeDbColumnTypeJson()
-
-			default:
-				panic("unreachable")
-			}
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
-
-			result = append(result, DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), Name: value, DbType: variant, DbTypeName: value0})
+			result0 = append(result0, result)
 		}
 
-		result8 = witTypes.Ok[[]DbColumn, Error](result)
+		result2 = witTypes.Ok[[]DbColumn, Error](result0)
 	case 1:
-		var variant7 Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result1 := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant7 = MakeErrorConnectionFailure(value1)
-
-		case 1:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorQueryParameterFailure(value2)
-
-		case 2:
-			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorQueryExecutionFailure(value3)
-
-		case 3:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorQueryResponseFailure(value4)
-
-		case 4:
-			value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorOther(value5)
-
-		case 5:
-			value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorResourceLost(value6)
-
-		default:
-			panic("unreachable")
-		}
-
-		result8 = witTypes.Err[[]DbColumn, Error](variant7)
+		result2 = witTypes.Err[[]DbColumn, Error](result1)
 	default:
 		panic("unreachable")
 	}
-	result9 := result8
-	return result9
+	result3 := result2
+	return result3
 
 }
 
@@ -1011,7 +831,7 @@ func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], 
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_result_stream_get_next((self).Handle(), returnArea)
-	var result24 witTypes.Result[witTypes.Option[[]DbRow], Error]
+	var result2 witTypes.Result[witTypes.Option[[]DbRow], Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		var option witTypes.Option[[]DbRow]
@@ -1020,239 +840,29 @@ func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], 
 
 			option = witTypes.None[[]DbRow]()
 		case 1:
-			result16 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+			result0 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(2*4))
-				result15 := make([]DbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), index*24)
-					var variant DbValue
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-					case 0:
+				result := wasm_lift_1_t802(unsafe.Add(unsafe.Pointer(base), 0))
 
-						variant = MakeDbValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
-
-					case 1:
-
-						variant = MakeDbValueTinyint(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-					case 2:
-
-						variant = MakeDbValueSmallint(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-					case 3:
-
-						variant = MakeDbValueMediumint(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-					case 4:
-
-						variant = MakeDbValueInt(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-					case 5:
-
-						variant = MakeDbValueBigint(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-					case 6:
-
-						variant = MakeDbValueTinyintUnsigned(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-					case 7:
-
-						variant = MakeDbValueSmallintUnsigned(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-					case 8:
-
-						variant = MakeDbValueMediumintUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-					case 9:
-
-						variant = MakeDbValueIntUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-					case 10:
-
-						variant = MakeDbValueBigintUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-					case 11:
-
-						variant = MakeDbValueFloat(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-					case 12:
-
-						variant = MakeDbValueDouble(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-					case 13:
-						value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueDecimal(value)
-
-					case 14:
-
-						variant = MakeDbValueDate(golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))})
-
-					case 15:
-
-						variant = MakeDbValueDatetime(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
-
-					case 16:
-
-						variant = MakeDbValueTimestamp(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
-
-					case 17:
-
-						variant = MakeDbValueTime(golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 10)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
-
-					case 18:
-
-						variant = MakeDbValueYear(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-					case 19:
-						value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueFixchar(value0)
-
-					case 20:
-						value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueVarchar(value1)
-
-					case 21:
-						value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueTinytext(value2)
-
-					case 22:
-						value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueText(value3)
-
-					case 23:
-						value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueMediumtext(value4)
-
-					case 24:
-						value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueLongtext(value5)
-
-					case 25:
-						value6 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueBinary(value6)
-
-					case 26:
-						value7 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueVarbinary(value7)
-
-					case 27:
-						value8 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueTinyblob(value8)
-
-					case 28:
-						value9 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueBlob(value9)
-
-					case 29:
-						value10 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueMediumblob(value10)
-
-					case 30:
-						value11 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueLongblob(value11)
-
-					case 31:
-						value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueEnumeration(value12)
-
-					case 32:
-						value13 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueSet(value13)
-
-					case 33:
-						result := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
-
-							result = append(result, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
-						}
-
-						variant = MakeDbValueBit(result)
-
-					case 34:
-						value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant = MakeDbValueJson(value14)
-
-					case 35:
-
-						variant = MakeDbValueNull()
-
-					default:
-						panic("unreachable")
-					}
-
-					result15 = append(result15, variant)
-				}
-
-				result16 = append(result16, DbRow{Values: result15})
+				result0 = append(result0, result)
 			}
 
-			option = witTypes.Some[[]DbRow](result16)
+			option = witTypes.Some[[]DbRow](result0)
 		default:
 			panic("unreachable")
 		}
 
-		result24 = witTypes.Ok[witTypes.Option[[]DbRow], Error](option)
+		result2 = witTypes.Ok[witTypes.Option[[]DbRow], Error](option)
 	case 1:
-		var variant23 Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result1 := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant23 = MakeErrorConnectionFailure(value17)
-
-		case 1:
-			value18 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant23 = MakeErrorQueryParameterFailure(value18)
-
-		case 2:
-			value19 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant23 = MakeErrorQueryExecutionFailure(value19)
-
-		case 3:
-			value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant23 = MakeErrorQueryResponseFailure(value20)
-
-		case 4:
-			value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant23 = MakeErrorOther(value21)
-
-		case 5:
-			value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant23 = MakeErrorResourceLost(value22)
-
-		default:
-			panic("unreachable")
-		}
-
-		result24 = witTypes.Err[witTypes.Option[[]DbRow], Error](variant23)
+		result2 = witTypes.Err[witTypes.Option[[]DbRow], Error](result1)
 	default:
 		panic("unreachable")
 	}
-	result25 := result24
-	return result25
+	result3 := result2
+	return result3
 
 }
 
@@ -1267,54 +877,20 @@ func DbConnectionOpen(address string) witTypes.Result[*DbConnection, Error] {
 	utf8 := unsafe.Pointer(unsafe.StringData(address))
 	pinner.Pin(utf8)
 	wasm_import_static_db_connection_open(uintptr(utf8), uint32(len(address)), returnArea)
-	var result witTypes.Result[*DbConnection, Error]
+	var result0 witTypes.Result[*DbConnection, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[*DbConnection, Error](DbConnectionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result0 = witTypes.Ok[*DbConnection, Error](DbConnectionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryParameterFailure(value0)
-
-		case 2:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryExecutionFailure(value1)
-
-		case 3:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryResponseFailure(value2)
-
-		case 4:
-			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorOther(value3)
-
-		case 5:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorResourceLost(value4)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[*DbConnection, Error](variant)
+		result0 = witTypes.Err[*DbConnection, Error](result)
 	default:
 		panic("unreachable")
 	}
-	result5 := result
-	return result5
+	result1 := result0
+	return result1
 
 }
 
@@ -1328,671 +904,31 @@ func (self *DbConnection) Query(statement string, params []DbValue) witTypes.Res
 	returnArea := uintptr(witRuntime.Allocate(pinner, (5 * 4), 4))
 	utf8 := unsafe.Pointer(unsafe.StringData(statement))
 	pinner.Pin(utf8)
-	slice17 := params
-	length19 := uint32(len(slice17))
-	result18 := witRuntime.Allocate(pinner, uintptr(length19*24), 8)
-	for index, element := range slice17 {
-		base := unsafe.Add(result18, index*24)
-
-		switch element.Tag() {
-		case DbValueBoolean:
-			payload := element.Boolean()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-			var result int32
-			if payload {
-				result = 1
-			} else {
-				result = 0
-			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result)
-
-		case DbValueTinyint:
-			payload := element.Tinyint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallint:
-			payload := element.Smallint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumint:
-			payload := element.Mediumint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueInt:
-			payload := element.Int()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueBigint:
-			payload := element.Bigint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueTinyintUnsigned:
-			payload := element.TinyintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallintUnsigned:
-			payload := element.SmallintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumintUnsigned:
-			payload := element.MediumintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueIntUnsigned:
-			payload := element.IntUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueBigintUnsigned:
-			payload := element.BigintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64(payload)
-
-		case DbValueFloat:
-			payload := element.Float()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
-			*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDouble:
-			payload := element.Double()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-			*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDecimal:
-			payload := element.Decimal()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-			utf80 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf80)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf80)))
-
-		case DbValueDate:
-			payload := element.Date()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32((payload).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32((payload).Day))
-
-		case DbValueDatetime:
-			payload := element.Datetime()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTimestamp:
-			payload := element.Timestamp()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTime:
-			payload := element.Time()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 9)) = int8(int32((payload).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 10)) = int8(int32((payload).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = int32((payload).Nanosecond)
-
-		case DbValueYear:
-			payload := element.Year()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueFixchar:
-			payload := element.Fixchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-			utf81 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf81)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf81)))
-
-		case DbValueVarchar:
-			payload := element.Varchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-			utf82 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf82)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf82)))
-
-		case DbValueTinytext:
-			payload := element.Tinytext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(21))
-			utf83 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf83)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf83)))
-
-		case DbValueText:
-			payload := element.Text()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(22))
-			utf84 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf84)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf84)))
-
-		case DbValueMediumtext:
-			payload := element.Mediumtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-			utf85 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf85)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf85)))
-
-		case DbValueLongtext:
-			payload := element.Longtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(24))
-			utf86 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf86)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf86)))
-
-		case DbValueBinary:
-			payload := element.Binary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-			data := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data)))
-
-		case DbValueVarbinary:
-			payload := element.Varbinary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
-			data7 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data7)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data7)))
-
-		case DbValueTinyblob:
-			payload := element.Tinyblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
-			data8 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data8)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data8)))
-
-		case DbValueBlob:
-			payload := element.Blob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
-			data9 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data9)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data9)))
-
-		case DbValueMediumblob:
-			payload := element.Mediumblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
-			data10 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data10)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data10)))
-
-		case DbValueLongblob:
-			payload := element.Longblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-			data11 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data11)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data11)))
-
-		case DbValueEnumeration:
-			payload := element.Enumeration()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-			utf812 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf812)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf812)))
-
-		case DbValueSet:
-			payload := element.Set()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
-			utf813 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf813)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf813)))
-
-		case DbValueBit:
-			payload := element.Bit()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
-			slice := payload
-			length := uint32(len(slice))
-			result15 := witRuntime.Allocate(pinner, uintptr(length*1), 1)
-			for index, element := range slice {
-				base := unsafe.Add(result15, index*1)
-				var result14 int32
-				if element {
-					result14 = 1
-				} else {
-					result14 = 0
-				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result14)
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result15)))
-
-		case DbValueJson:
-			payload := element.Json()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
-			utf816 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf816)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf816)))
-
-		case DbValueNull:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
-
-		default:
-			panic("unreachable")
-		}
+	slice := params
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*24)
+		wasm_lower_1_t800(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	wasm_import_method_db_connection_query((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result18), length19, returnArea)
-	var result49 witTypes.Result[DbResult, Error]
+	wasm_import_method_db_connection_query((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result), length, returnArea)
+	var result2 witTypes.Result[DbResult, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result21 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(16+4*4))
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			var variant DbColumnType
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-			case 0:
+		result0 := wasm_lift_1_t805(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-				variant = MakeDbColumnTypeBoolean()
-
-			case 1:
-
-				variant = MakeDbColumnTypeTinyint()
-
-			case 2:
-
-				variant = MakeDbColumnTypeSmallint()
-
-			case 3:
-
-				variant = MakeDbColumnTypeMediumint()
-
-			case 4:
-
-				variant = MakeDbColumnTypeInt()
-
-			case 5:
-
-				variant = MakeDbColumnTypeBigint()
-
-			case 6:
-
-				variant = MakeDbColumnTypeTinyintUnsigned()
-
-			case 7:
-
-				variant = MakeDbColumnTypeSmallintUnsigned()
-
-			case 8:
-
-				variant = MakeDbColumnTypeMediumintUnsigned()
-
-			case 9:
-
-				variant = MakeDbColumnTypeIntUnsigned()
-
-			case 10:
-
-				variant = MakeDbColumnTypeBigintUnsigned()
-
-			case 11:
-
-				variant = MakeDbColumnTypeFloat()
-
-			case 12:
-
-				variant = MakeDbColumnTypeDouble()
-
-			case 13:
-
-				variant = MakeDbColumnTypeDecimal()
-
-			case 14:
-
-				variant = MakeDbColumnTypeDate()
-
-			case 15:
-
-				variant = MakeDbColumnTypeDatetime()
-
-			case 16:
-
-				variant = MakeDbColumnTypeTimestamp()
-
-			case 17:
-
-				variant = MakeDbColumnTypeTime()
-
-			case 18:
-
-				variant = MakeDbColumnTypeYear()
-
-			case 19:
-
-				variant = MakeDbColumnTypeFixchar()
-
-			case 20:
-
-				variant = MakeDbColumnTypeVarchar()
-
-			case 21:
-
-				variant = MakeDbColumnTypeTinytext()
-
-			case 22:
-
-				variant = MakeDbColumnTypeText()
-
-			case 23:
-
-				variant = MakeDbColumnTypeMediumtext()
-
-			case 24:
-
-				variant = MakeDbColumnTypeLongtext()
-
-			case 25:
-
-				variant = MakeDbColumnTypeBinary()
-
-			case 26:
-
-				variant = MakeDbColumnTypeVarbinary()
-
-			case 27:
-
-				variant = MakeDbColumnTypeTinyblob()
-
-			case 28:
-
-				variant = MakeDbColumnTypeBlob()
-
-			case 29:
-
-				variant = MakeDbColumnTypeMediumblob()
-
-			case 30:
-
-				variant = MakeDbColumnTypeLongblob()
-
-			case 31:
-
-				variant = MakeDbColumnTypeEnumeration()
-
-			case 32:
-
-				variant = MakeDbColumnTypeSet()
-
-			case 33:
-
-				variant = MakeDbColumnTypeBit()
-
-			case 34:
-
-				variant = MakeDbColumnTypeJson()
-
-			default:
-				panic("unreachable")
-			}
-			value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
-
-			result21 = append(result21, DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), Name: value, DbType: variant, DbTypeName: value20})
-		}
-
-		result41 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), index*(2*4))
-			result40 := make([]DbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), index*24)
-				var variant39 DbValue
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-
-					variant39 = MakeDbValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
-
-				case 1:
-
-					variant39 = MakeDbValueTinyint(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 2:
-
-					variant39 = MakeDbValueSmallint(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 3:
-
-					variant39 = MakeDbValueMediumint(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 4:
-
-					variant39 = MakeDbValueInt(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 5:
-
-					variant39 = MakeDbValueBigint(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 6:
-
-					variant39 = MakeDbValueTinyintUnsigned(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 7:
-
-					variant39 = MakeDbValueSmallintUnsigned(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 8:
-
-					variant39 = MakeDbValueMediumintUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-				case 9:
-
-					variant39 = MakeDbValueIntUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-				case 10:
-
-					variant39 = MakeDbValueBigintUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-				case 11:
-
-					variant39 = MakeDbValueFloat(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 12:
-
-					variant39 = MakeDbValueDouble(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 13:
-					value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueDecimal(value22)
-
-				case 14:
-
-					variant39 = MakeDbValueDate(golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))})
-
-				case 15:
-
-					variant39 = MakeDbValueDatetime(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
-
-				case 16:
-
-					variant39 = MakeDbValueTimestamp(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
-
-				case 17:
-
-					variant39 = MakeDbValueTime(golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 10)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
-
-				case 18:
-
-					variant39 = MakeDbValueYear(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 19:
-					value23 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueFixchar(value23)
-
-				case 20:
-					value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueVarchar(value24)
-
-				case 21:
-					value25 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueTinytext(value25)
-
-				case 22:
-					value26 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueText(value26)
-
-				case 23:
-					value27 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueMediumtext(value27)
-
-				case 24:
-					value28 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueLongtext(value28)
-
-				case 25:
-					value29 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueBinary(value29)
-
-				case 26:
-					value30 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueVarbinary(value30)
-
-				case 27:
-					value31 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueTinyblob(value31)
-
-				case 28:
-					value32 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueBlob(value32)
-
-				case 29:
-					value33 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueMediumblob(value33)
-
-				case 30:
-					value34 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueLongblob(value34)
-
-				case 31:
-					value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueEnumeration(value35)
-
-				case 32:
-					value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueSet(value36)
-
-				case 33:
-					result37 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
-
-						result37 = append(result37, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
-					}
-
-					variant39 = MakeDbValueBit(result37)
-
-				case 34:
-					value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueJson(value38)
-
-				case 35:
-
-					variant39 = MakeDbValueNull()
-
-				default:
-					panic("unreachable")
-				}
-
-				result40 = append(result40, variant39)
-			}
-
-			result41 = append(result41, DbRow{Values: result40})
-		}
-
-		result49 = witTypes.Ok[DbResult, Error](DbResult{Columns: result21, Rows: result41})
+		result2 = witTypes.Ok[DbResult, Error](result0)
 	case 1:
-		var variant48 Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value42 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result1 := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant48 = MakeErrorConnectionFailure(value42)
-
-		case 1:
-			value43 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorQueryParameterFailure(value43)
-
-		case 2:
-			value44 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorQueryExecutionFailure(value44)
-
-		case 3:
-			value45 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorQueryResponseFailure(value45)
-
-		case 4:
-			value46 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorOther(value46)
-
-		case 5:
-			value47 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorResourceLost(value47)
-
-		default:
-			panic("unreachable")
-		}
-
-		result49 = witTypes.Err[DbResult, Error](variant48)
+		result2 = witTypes.Err[DbResult, Error](result1)
 	default:
 		panic("unreachable")
 	}
-	result50 := result49
-	return result50
+	result3 := result2
+	return result3
 
 }
 
@@ -2006,334 +942,30 @@ func (self *DbConnection) QueryStream(statement string, params []DbValue) witTyp
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	utf8 := unsafe.Pointer(unsafe.StringData(statement))
 	pinner.Pin(utf8)
-	slice17 := params
-	length19 := uint32(len(slice17))
-	result18 := witRuntime.Allocate(pinner, uintptr(length19*24), 8)
-	for index, element := range slice17 {
-		base := unsafe.Add(result18, index*24)
-
-		switch element.Tag() {
-		case DbValueBoolean:
-			payload := element.Boolean()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-			var result int32
-			if payload {
-				result = 1
-			} else {
-				result = 0
-			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result)
-
-		case DbValueTinyint:
-			payload := element.Tinyint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallint:
-			payload := element.Smallint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumint:
-			payload := element.Mediumint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueInt:
-			payload := element.Int()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueBigint:
-			payload := element.Bigint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueTinyintUnsigned:
-			payload := element.TinyintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallintUnsigned:
-			payload := element.SmallintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumintUnsigned:
-			payload := element.MediumintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueIntUnsigned:
-			payload := element.IntUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueBigintUnsigned:
-			payload := element.BigintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64(payload)
-
-		case DbValueFloat:
-			payload := element.Float()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
-			*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDouble:
-			payload := element.Double()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-			*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDecimal:
-			payload := element.Decimal()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-			utf80 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf80)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf80)))
-
-		case DbValueDate:
-			payload := element.Date()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32((payload).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32((payload).Day))
-
-		case DbValueDatetime:
-			payload := element.Datetime()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTimestamp:
-			payload := element.Timestamp()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTime:
-			payload := element.Time()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 9)) = int8(int32((payload).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 10)) = int8(int32((payload).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = int32((payload).Nanosecond)
-
-		case DbValueYear:
-			payload := element.Year()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueFixchar:
-			payload := element.Fixchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-			utf81 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf81)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf81)))
-
-		case DbValueVarchar:
-			payload := element.Varchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-			utf82 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf82)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf82)))
-
-		case DbValueTinytext:
-			payload := element.Tinytext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(21))
-			utf83 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf83)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf83)))
-
-		case DbValueText:
-			payload := element.Text()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(22))
-			utf84 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf84)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf84)))
-
-		case DbValueMediumtext:
-			payload := element.Mediumtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-			utf85 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf85)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf85)))
-
-		case DbValueLongtext:
-			payload := element.Longtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(24))
-			utf86 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf86)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf86)))
-
-		case DbValueBinary:
-			payload := element.Binary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-			data := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data)))
-
-		case DbValueVarbinary:
-			payload := element.Varbinary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
-			data7 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data7)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data7)))
-
-		case DbValueTinyblob:
-			payload := element.Tinyblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
-			data8 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data8)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data8)))
-
-		case DbValueBlob:
-			payload := element.Blob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
-			data9 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data9)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data9)))
-
-		case DbValueMediumblob:
-			payload := element.Mediumblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
-			data10 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data10)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data10)))
-
-		case DbValueLongblob:
-			payload := element.Longblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-			data11 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data11)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data11)))
-
-		case DbValueEnumeration:
-			payload := element.Enumeration()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-			utf812 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf812)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf812)))
-
-		case DbValueSet:
-			payload := element.Set()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
-			utf813 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf813)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf813)))
-
-		case DbValueBit:
-			payload := element.Bit()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
-			slice := payload
-			length := uint32(len(slice))
-			result15 := witRuntime.Allocate(pinner, uintptr(length*1), 1)
-			for index, element := range slice {
-				base := unsafe.Add(result15, index*1)
-				var result14 int32
-				if element {
-					result14 = 1
-				} else {
-					result14 = 0
-				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result14)
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result15)))
-
-		case DbValueJson:
-			payload := element.Json()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
-			utf816 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf816)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf816)))
-
-		case DbValueNull:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
-
-		default:
-			panic("unreachable")
-		}
+	slice := params
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*24)
+		wasm_lower_1_t800(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	wasm_import_method_db_connection_query_stream((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result18), length19, returnArea)
-	var result25 witTypes.Result[*DbResultStream, Error]
+	wasm_import_method_db_connection_query_stream((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result), length, returnArea)
+	var result1 witTypes.Result[*DbResultStream, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result25 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result1 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result0 := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryParameterFailure(value20)
-
-		case 2:
-			value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryExecutionFailure(value21)
-
-		case 3:
-			value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryResponseFailure(value22)
-
-		case 4:
-			value23 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorOther(value23)
-
-		case 5:
-			value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorResourceLost(value24)
-
-		default:
-			panic("unreachable")
-		}
-
-		result25 = witTypes.Err[*DbResultStream, Error](variant)
+		result1 = witTypes.Err[*DbResultStream, Error](result0)
 	default:
 		panic("unreachable")
 	}
-	result26 := result25
-	return result26
+	result2 := result1
+	return result2
 
 }
 
@@ -2347,334 +979,30 @@ func (self *DbConnection) Execute(statement string, params []DbValue) witTypes.R
 	returnArea := uintptr(witRuntime.Allocate(pinner, (16 + 2*4), 8))
 	utf8 := unsafe.Pointer(unsafe.StringData(statement))
 	pinner.Pin(utf8)
-	slice17 := params
-	length19 := uint32(len(slice17))
-	result18 := witRuntime.Allocate(pinner, uintptr(length19*24), 8)
-	for index, element := range slice17 {
-		base := unsafe.Add(result18, index*24)
-
-		switch element.Tag() {
-		case DbValueBoolean:
-			payload := element.Boolean()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-			var result int32
-			if payload {
-				result = 1
-			} else {
-				result = 0
-			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result)
-
-		case DbValueTinyint:
-			payload := element.Tinyint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallint:
-			payload := element.Smallint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumint:
-			payload := element.Mediumint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueInt:
-			payload := element.Int()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueBigint:
-			payload := element.Bigint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueTinyintUnsigned:
-			payload := element.TinyintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallintUnsigned:
-			payload := element.SmallintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumintUnsigned:
-			payload := element.MediumintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueIntUnsigned:
-			payload := element.IntUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueBigintUnsigned:
-			payload := element.BigintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64(payload)
-
-		case DbValueFloat:
-			payload := element.Float()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
-			*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDouble:
-			payload := element.Double()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-			*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDecimal:
-			payload := element.Decimal()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-			utf80 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf80)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf80)))
-
-		case DbValueDate:
-			payload := element.Date()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32((payload).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32((payload).Day))
-
-		case DbValueDatetime:
-			payload := element.Datetime()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTimestamp:
-			payload := element.Timestamp()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTime:
-			payload := element.Time()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 9)) = int8(int32((payload).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 10)) = int8(int32((payload).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = int32((payload).Nanosecond)
-
-		case DbValueYear:
-			payload := element.Year()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueFixchar:
-			payload := element.Fixchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-			utf81 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf81)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf81)))
-
-		case DbValueVarchar:
-			payload := element.Varchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-			utf82 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf82)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf82)))
-
-		case DbValueTinytext:
-			payload := element.Tinytext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(21))
-			utf83 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf83)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf83)))
-
-		case DbValueText:
-			payload := element.Text()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(22))
-			utf84 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf84)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf84)))
-
-		case DbValueMediumtext:
-			payload := element.Mediumtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-			utf85 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf85)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf85)))
-
-		case DbValueLongtext:
-			payload := element.Longtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(24))
-			utf86 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf86)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf86)))
-
-		case DbValueBinary:
-			payload := element.Binary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-			data := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data)))
-
-		case DbValueVarbinary:
-			payload := element.Varbinary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
-			data7 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data7)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data7)))
-
-		case DbValueTinyblob:
-			payload := element.Tinyblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
-			data8 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data8)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data8)))
-
-		case DbValueBlob:
-			payload := element.Blob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
-			data9 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data9)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data9)))
-
-		case DbValueMediumblob:
-			payload := element.Mediumblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
-			data10 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data10)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data10)))
-
-		case DbValueLongblob:
-			payload := element.Longblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-			data11 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data11)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data11)))
-
-		case DbValueEnumeration:
-			payload := element.Enumeration()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-			utf812 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf812)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf812)))
-
-		case DbValueSet:
-			payload := element.Set()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
-			utf813 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf813)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf813)))
-
-		case DbValueBit:
-			payload := element.Bit()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
-			slice := payload
-			length := uint32(len(slice))
-			result15 := witRuntime.Allocate(pinner, uintptr(length*1), 1)
-			for index, element := range slice {
-				base := unsafe.Add(result15, index*1)
-				var result14 int32
-				if element {
-					result14 = 1
-				} else {
-					result14 = 0
-				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result14)
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result15)))
-
-		case DbValueJson:
-			payload := element.Json()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
-			utf816 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf816)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf816)))
-
-		case DbValueNull:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
-
-		default:
-			panic("unreachable")
-		}
+	slice := params
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*24)
+		wasm_lower_1_t800(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	wasm_import_method_db_connection_execute((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result18), length19, returnArea)
-	var result25 witTypes.Result[uint64, Error]
+	wasm_import_method_db_connection_execute((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result), length, returnArea)
+	var result1 witTypes.Result[uint64, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result25 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
+		result1 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
+		result0 := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorQueryParameterFailure(value20)
-
-		case 2:
-			value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorQueryExecutionFailure(value21)
-
-		case 3:
-			value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorQueryResponseFailure(value22)
-
-		case 4:
-			value23 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorOther(value23)
-
-		case 5:
-			value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorResourceLost(value24)
-
-		default:
-			panic("unreachable")
-		}
-
-		result25 = witTypes.Err[uint64, Error](variant)
+		result1 = witTypes.Err[uint64, Error](result0)
 	default:
 		panic("unreachable")
 	}
-	result26 := result25
-	return result26
+	result2 := result1
+	return result2
 
 }
 
@@ -2687,54 +1015,20 @@ func (self *DbConnection) BeginTransaction() witTypes.Result[*DbTransaction, Err
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_connection_begin_transaction((self).Handle(), returnArea)
-	var result witTypes.Result[*DbTransaction, Error]
+	var result0 witTypes.Result[*DbTransaction, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[*DbTransaction, Error](DbTransactionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result0 = witTypes.Ok[*DbTransaction, Error](DbTransactionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryParameterFailure(value0)
-
-		case 2:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryExecutionFailure(value1)
-
-		case 3:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryResponseFailure(value2)
-
-		case 4:
-			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorOther(value3)
-
-		case 5:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorResourceLost(value4)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[*DbTransaction, Error](variant)
+		result0 = witTypes.Err[*DbTransaction, Error](result)
 	default:
 		panic("unreachable")
 	}
-	result5 := result
-	return result5
+	result1 := result0
+	return result1
 
 }
 
@@ -2748,671 +1042,31 @@ func (self *DbTransaction) Query(statement string, params []DbValue) witTypes.Re
 	returnArea := uintptr(witRuntime.Allocate(pinner, (5 * 4), 4))
 	utf8 := unsafe.Pointer(unsafe.StringData(statement))
 	pinner.Pin(utf8)
-	slice17 := params
-	length19 := uint32(len(slice17))
-	result18 := witRuntime.Allocate(pinner, uintptr(length19*24), 8)
-	for index, element := range slice17 {
-		base := unsafe.Add(result18, index*24)
-
-		switch element.Tag() {
-		case DbValueBoolean:
-			payload := element.Boolean()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-			var result int32
-			if payload {
-				result = 1
-			} else {
-				result = 0
-			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result)
-
-		case DbValueTinyint:
-			payload := element.Tinyint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallint:
-			payload := element.Smallint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumint:
-			payload := element.Mediumint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueInt:
-			payload := element.Int()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueBigint:
-			payload := element.Bigint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueTinyintUnsigned:
-			payload := element.TinyintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallintUnsigned:
-			payload := element.SmallintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumintUnsigned:
-			payload := element.MediumintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueIntUnsigned:
-			payload := element.IntUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueBigintUnsigned:
-			payload := element.BigintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64(payload)
-
-		case DbValueFloat:
-			payload := element.Float()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
-			*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDouble:
-			payload := element.Double()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-			*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDecimal:
-			payload := element.Decimal()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-			utf80 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf80)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf80)))
-
-		case DbValueDate:
-			payload := element.Date()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32((payload).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32((payload).Day))
-
-		case DbValueDatetime:
-			payload := element.Datetime()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTimestamp:
-			payload := element.Timestamp()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTime:
-			payload := element.Time()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 9)) = int8(int32((payload).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 10)) = int8(int32((payload).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = int32((payload).Nanosecond)
-
-		case DbValueYear:
-			payload := element.Year()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueFixchar:
-			payload := element.Fixchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-			utf81 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf81)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf81)))
-
-		case DbValueVarchar:
-			payload := element.Varchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-			utf82 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf82)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf82)))
-
-		case DbValueTinytext:
-			payload := element.Tinytext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(21))
-			utf83 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf83)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf83)))
-
-		case DbValueText:
-			payload := element.Text()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(22))
-			utf84 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf84)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf84)))
-
-		case DbValueMediumtext:
-			payload := element.Mediumtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-			utf85 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf85)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf85)))
-
-		case DbValueLongtext:
-			payload := element.Longtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(24))
-			utf86 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf86)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf86)))
-
-		case DbValueBinary:
-			payload := element.Binary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-			data := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data)))
-
-		case DbValueVarbinary:
-			payload := element.Varbinary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
-			data7 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data7)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data7)))
-
-		case DbValueTinyblob:
-			payload := element.Tinyblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
-			data8 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data8)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data8)))
-
-		case DbValueBlob:
-			payload := element.Blob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
-			data9 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data9)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data9)))
-
-		case DbValueMediumblob:
-			payload := element.Mediumblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
-			data10 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data10)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data10)))
-
-		case DbValueLongblob:
-			payload := element.Longblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-			data11 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data11)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data11)))
-
-		case DbValueEnumeration:
-			payload := element.Enumeration()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-			utf812 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf812)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf812)))
-
-		case DbValueSet:
-			payload := element.Set()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
-			utf813 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf813)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf813)))
-
-		case DbValueBit:
-			payload := element.Bit()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
-			slice := payload
-			length := uint32(len(slice))
-			result15 := witRuntime.Allocate(pinner, uintptr(length*1), 1)
-			for index, element := range slice {
-				base := unsafe.Add(result15, index*1)
-				var result14 int32
-				if element {
-					result14 = 1
-				} else {
-					result14 = 0
-				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result14)
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result15)))
-
-		case DbValueJson:
-			payload := element.Json()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
-			utf816 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf816)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf816)))
-
-		case DbValueNull:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
-
-		default:
-			panic("unreachable")
-		}
+	slice := params
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*24)
+		wasm_lower_1_t800(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	wasm_import_method_db_transaction_query((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result18), length19, returnArea)
-	var result49 witTypes.Result[DbResult, Error]
+	wasm_import_method_db_transaction_query((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result), length, returnArea)
+	var result2 witTypes.Result[DbResult, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result21 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(16+4*4))
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			var variant DbColumnType
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-			case 0:
+		result0 := wasm_lift_1_t805(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-				variant = MakeDbColumnTypeBoolean()
-
-			case 1:
-
-				variant = MakeDbColumnTypeTinyint()
-
-			case 2:
-
-				variant = MakeDbColumnTypeSmallint()
-
-			case 3:
-
-				variant = MakeDbColumnTypeMediumint()
-
-			case 4:
-
-				variant = MakeDbColumnTypeInt()
-
-			case 5:
-
-				variant = MakeDbColumnTypeBigint()
-
-			case 6:
-
-				variant = MakeDbColumnTypeTinyintUnsigned()
-
-			case 7:
-
-				variant = MakeDbColumnTypeSmallintUnsigned()
-
-			case 8:
-
-				variant = MakeDbColumnTypeMediumintUnsigned()
-
-			case 9:
-
-				variant = MakeDbColumnTypeIntUnsigned()
-
-			case 10:
-
-				variant = MakeDbColumnTypeBigintUnsigned()
-
-			case 11:
-
-				variant = MakeDbColumnTypeFloat()
-
-			case 12:
-
-				variant = MakeDbColumnTypeDouble()
-
-			case 13:
-
-				variant = MakeDbColumnTypeDecimal()
-
-			case 14:
-
-				variant = MakeDbColumnTypeDate()
-
-			case 15:
-
-				variant = MakeDbColumnTypeDatetime()
-
-			case 16:
-
-				variant = MakeDbColumnTypeTimestamp()
-
-			case 17:
-
-				variant = MakeDbColumnTypeTime()
-
-			case 18:
-
-				variant = MakeDbColumnTypeYear()
-
-			case 19:
-
-				variant = MakeDbColumnTypeFixchar()
-
-			case 20:
-
-				variant = MakeDbColumnTypeVarchar()
-
-			case 21:
-
-				variant = MakeDbColumnTypeTinytext()
-
-			case 22:
-
-				variant = MakeDbColumnTypeText()
-
-			case 23:
-
-				variant = MakeDbColumnTypeMediumtext()
-
-			case 24:
-
-				variant = MakeDbColumnTypeLongtext()
-
-			case 25:
-
-				variant = MakeDbColumnTypeBinary()
-
-			case 26:
-
-				variant = MakeDbColumnTypeVarbinary()
-
-			case 27:
-
-				variant = MakeDbColumnTypeTinyblob()
-
-			case 28:
-
-				variant = MakeDbColumnTypeBlob()
-
-			case 29:
-
-				variant = MakeDbColumnTypeMediumblob()
-
-			case 30:
-
-				variant = MakeDbColumnTypeLongblob()
-
-			case 31:
-
-				variant = MakeDbColumnTypeEnumeration()
-
-			case 32:
-
-				variant = MakeDbColumnTypeSet()
-
-			case 33:
-
-				variant = MakeDbColumnTypeBit()
-
-			case 34:
-
-				variant = MakeDbColumnTypeJson()
-
-			default:
-				panic("unreachable")
-			}
-			value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
-
-			result21 = append(result21, DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), Name: value, DbType: variant, DbTypeName: value20})
-		}
-
-		result41 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), index*(2*4))
-			result40 := make([]DbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), index*24)
-				var variant39 DbValue
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-
-					variant39 = MakeDbValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
-
-				case 1:
-
-					variant39 = MakeDbValueTinyint(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 2:
-
-					variant39 = MakeDbValueSmallint(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 3:
-
-					variant39 = MakeDbValueMediumint(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 4:
-
-					variant39 = MakeDbValueInt(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 5:
-
-					variant39 = MakeDbValueBigint(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 6:
-
-					variant39 = MakeDbValueTinyintUnsigned(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 7:
-
-					variant39 = MakeDbValueSmallintUnsigned(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 8:
-
-					variant39 = MakeDbValueMediumintUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-				case 9:
-
-					variant39 = MakeDbValueIntUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-				case 10:
-
-					variant39 = MakeDbValueBigintUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-				case 11:
-
-					variant39 = MakeDbValueFloat(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 12:
-
-					variant39 = MakeDbValueDouble(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-				case 13:
-					value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueDecimal(value22)
-
-				case 14:
-
-					variant39 = MakeDbValueDate(golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))})
-
-				case 15:
-
-					variant39 = MakeDbValueDatetime(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
-
-				case 16:
-
-					variant39 = MakeDbValueTimestamp(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
-
-				case 17:
-
-					variant39 = MakeDbValueTime(golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 10)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
-
-				case 18:
-
-					variant39 = MakeDbValueYear(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-				case 19:
-					value23 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueFixchar(value23)
-
-				case 20:
-					value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueVarchar(value24)
-
-				case 21:
-					value25 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueTinytext(value25)
-
-				case 22:
-					value26 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueText(value26)
-
-				case 23:
-					value27 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueMediumtext(value27)
-
-				case 24:
-					value28 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueLongtext(value28)
-
-				case 25:
-					value29 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueBinary(value29)
-
-				case 26:
-					value30 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueVarbinary(value30)
-
-				case 27:
-					value31 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueTinyblob(value31)
-
-				case 28:
-					value32 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueBlob(value32)
-
-				case 29:
-					value33 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueMediumblob(value33)
-
-				case 30:
-					value34 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueLongblob(value34)
-
-				case 31:
-					value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueEnumeration(value35)
-
-				case 32:
-					value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueSet(value36)
-
-				case 33:
-					result37 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
-
-						result37 = append(result37, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
-					}
-
-					variant39 = MakeDbValueBit(result37)
-
-				case 34:
-					value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant39 = MakeDbValueJson(value38)
-
-				case 35:
-
-					variant39 = MakeDbValueNull()
-
-				default:
-					panic("unreachable")
-				}
-
-				result40 = append(result40, variant39)
-			}
-
-			result41 = append(result41, DbRow{Values: result40})
-		}
-
-		result49 = witTypes.Ok[DbResult, Error](DbResult{Columns: result21, Rows: result41})
+		result2 = witTypes.Ok[DbResult, Error](result0)
 	case 1:
-		var variant48 Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value42 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result1 := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant48 = MakeErrorConnectionFailure(value42)
-
-		case 1:
-			value43 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorQueryParameterFailure(value43)
-
-		case 2:
-			value44 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorQueryExecutionFailure(value44)
-
-		case 3:
-			value45 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorQueryResponseFailure(value45)
-
-		case 4:
-			value46 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorOther(value46)
-
-		case 5:
-			value47 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant48 = MakeErrorResourceLost(value47)
-
-		default:
-			panic("unreachable")
-		}
-
-		result49 = witTypes.Err[DbResult, Error](variant48)
+		result2 = witTypes.Err[DbResult, Error](result1)
 	default:
 		panic("unreachable")
 	}
-	result50 := result49
-	return result50
+	result3 := result2
+	return result3
 
 }
 
@@ -3426,334 +1080,30 @@ func (self *DbTransaction) QueryStream(statement string, params []DbValue) witTy
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	utf8 := unsafe.Pointer(unsafe.StringData(statement))
 	pinner.Pin(utf8)
-	slice17 := params
-	length19 := uint32(len(slice17))
-	result18 := witRuntime.Allocate(pinner, uintptr(length19*24), 8)
-	for index, element := range slice17 {
-		base := unsafe.Add(result18, index*24)
-
-		switch element.Tag() {
-		case DbValueBoolean:
-			payload := element.Boolean()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-			var result int32
-			if payload {
-				result = 1
-			} else {
-				result = 0
-			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result)
-
-		case DbValueTinyint:
-			payload := element.Tinyint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallint:
-			payload := element.Smallint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumint:
-			payload := element.Mediumint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueInt:
-			payload := element.Int()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueBigint:
-			payload := element.Bigint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueTinyintUnsigned:
-			payload := element.TinyintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallintUnsigned:
-			payload := element.SmallintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumintUnsigned:
-			payload := element.MediumintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueIntUnsigned:
-			payload := element.IntUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueBigintUnsigned:
-			payload := element.BigintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64(payload)
-
-		case DbValueFloat:
-			payload := element.Float()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
-			*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDouble:
-			payload := element.Double()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-			*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDecimal:
-			payload := element.Decimal()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-			utf80 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf80)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf80)))
-
-		case DbValueDate:
-			payload := element.Date()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32((payload).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32((payload).Day))
-
-		case DbValueDatetime:
-			payload := element.Datetime()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTimestamp:
-			payload := element.Timestamp()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTime:
-			payload := element.Time()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 9)) = int8(int32((payload).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 10)) = int8(int32((payload).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = int32((payload).Nanosecond)
-
-		case DbValueYear:
-			payload := element.Year()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueFixchar:
-			payload := element.Fixchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-			utf81 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf81)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf81)))
-
-		case DbValueVarchar:
-			payload := element.Varchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-			utf82 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf82)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf82)))
-
-		case DbValueTinytext:
-			payload := element.Tinytext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(21))
-			utf83 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf83)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf83)))
-
-		case DbValueText:
-			payload := element.Text()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(22))
-			utf84 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf84)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf84)))
-
-		case DbValueMediumtext:
-			payload := element.Mediumtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-			utf85 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf85)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf85)))
-
-		case DbValueLongtext:
-			payload := element.Longtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(24))
-			utf86 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf86)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf86)))
-
-		case DbValueBinary:
-			payload := element.Binary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-			data := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data)))
-
-		case DbValueVarbinary:
-			payload := element.Varbinary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
-			data7 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data7)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data7)))
-
-		case DbValueTinyblob:
-			payload := element.Tinyblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
-			data8 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data8)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data8)))
-
-		case DbValueBlob:
-			payload := element.Blob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
-			data9 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data9)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data9)))
-
-		case DbValueMediumblob:
-			payload := element.Mediumblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
-			data10 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data10)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data10)))
-
-		case DbValueLongblob:
-			payload := element.Longblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-			data11 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data11)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data11)))
-
-		case DbValueEnumeration:
-			payload := element.Enumeration()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-			utf812 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf812)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf812)))
-
-		case DbValueSet:
-			payload := element.Set()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
-			utf813 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf813)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf813)))
-
-		case DbValueBit:
-			payload := element.Bit()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
-			slice := payload
-			length := uint32(len(slice))
-			result15 := witRuntime.Allocate(pinner, uintptr(length*1), 1)
-			for index, element := range slice {
-				base := unsafe.Add(result15, index*1)
-				var result14 int32
-				if element {
-					result14 = 1
-				} else {
-					result14 = 0
-				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result14)
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result15)))
-
-		case DbValueJson:
-			payload := element.Json()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
-			utf816 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf816)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf816)))
-
-		case DbValueNull:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
-
-		default:
-			panic("unreachable")
-		}
+	slice := params
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*24)
+		wasm_lower_1_t800(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	wasm_import_method_db_transaction_query_stream((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result18), length19, returnArea)
-	var result25 witTypes.Result[*DbResultStream, Error]
+	wasm_import_method_db_transaction_query_stream((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result), length, returnArea)
+	var result1 witTypes.Result[*DbResultStream, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result25 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result1 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result0 := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryParameterFailure(value20)
-
-		case 2:
-			value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryExecutionFailure(value21)
-
-		case 3:
-			value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryResponseFailure(value22)
-
-		case 4:
-			value23 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorOther(value23)
-
-		case 5:
-			value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorResourceLost(value24)
-
-		default:
-			panic("unreachable")
-		}
-
-		result25 = witTypes.Err[*DbResultStream, Error](variant)
+		result1 = witTypes.Err[*DbResultStream, Error](result0)
 	default:
 		panic("unreachable")
 	}
-	result26 := result25
-	return result26
+	result2 := result1
+	return result2
 
 }
 
@@ -3767,334 +1117,30 @@ func (self *DbTransaction) Execute(statement string, params []DbValue) witTypes.
 	returnArea := uintptr(witRuntime.Allocate(pinner, (16 + 2*4), 8))
 	utf8 := unsafe.Pointer(unsafe.StringData(statement))
 	pinner.Pin(utf8)
-	slice17 := params
-	length19 := uint32(len(slice17))
-	result18 := witRuntime.Allocate(pinner, uintptr(length19*24), 8)
-	for index, element := range slice17 {
-		base := unsafe.Add(result18, index*24)
-
-		switch element.Tag() {
-		case DbValueBoolean:
-			payload := element.Boolean()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-			var result int32
-			if payload {
-				result = 1
-			} else {
-				result = 0
-			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result)
-
-		case DbValueTinyint:
-			payload := element.Tinyint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallint:
-			payload := element.Smallint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumint:
-			payload := element.Mediumint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueInt:
-			payload := element.Int()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueBigint:
-			payload := element.Bigint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueTinyintUnsigned:
-			payload := element.TinyintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case DbValueSmallintUnsigned:
-			payload := element.SmallintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueMediumintUnsigned:
-			payload := element.MediumintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueIntUnsigned:
-			payload := element.IntUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case DbValueBigintUnsigned:
-			payload := element.BigintUnsigned()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64(payload)
-
-		case DbValueFloat:
-			payload := element.Float()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
-			*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDouble:
-			payload := element.Double()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-			*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case DbValueDecimal:
-			payload := element.Decimal()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-			utf80 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf80)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf80)))
-
-		case DbValueDate:
-			payload := element.Date()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32((payload).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32((payload).Day))
-
-		case DbValueDatetime:
-			payload := element.Datetime()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTimestamp:
-			payload := element.Timestamp()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = ((payload).Date).Year
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(((payload).Date).Month))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 13)) = int8(int32(((payload).Date).Day))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(((payload).Time).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 17)) = int8(int32(((payload).Time).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 18)) = int8(int32(((payload).Time).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)) = int32(((payload).Time).Nanosecond)
-
-		case DbValueTime:
-			payload := element.Time()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Hour))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 9)) = int8(int32((payload).Minute))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 10)) = int8(int32((payload).Second))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = int32((payload).Nanosecond)
-
-		case DbValueYear:
-			payload := element.Year()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case DbValueFixchar:
-			payload := element.Fixchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-			utf81 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf81)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf81)))
-
-		case DbValueVarchar:
-			payload := element.Varchar()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-			utf82 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf82)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf82)))
-
-		case DbValueTinytext:
-			payload := element.Tinytext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(21))
-			utf83 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf83)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf83)))
-
-		case DbValueText:
-			payload := element.Text()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(22))
-			utf84 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf84)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf84)))
-
-		case DbValueMediumtext:
-			payload := element.Mediumtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-			utf85 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf85)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf85)))
-
-		case DbValueLongtext:
-			payload := element.Longtext()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(24))
-			utf86 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf86)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf86)))
-
-		case DbValueBinary:
-			payload := element.Binary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-			data := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data)))
-
-		case DbValueVarbinary:
-			payload := element.Varbinary()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
-			data7 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data7)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data7)))
-
-		case DbValueTinyblob:
-			payload := element.Tinyblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
-			data8 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data8)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data8)))
-
-		case DbValueBlob:
-			payload := element.Blob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
-			data9 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data9)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data9)))
-
-		case DbValueMediumblob:
-			payload := element.Mediumblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
-			data10 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data10)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data10)))
-
-		case DbValueLongblob:
-			payload := element.Longblob()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-			data11 := unsafe.Pointer(unsafe.SliceData(payload))
-			pinner.Pin(data11)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data11)))
-
-		case DbValueEnumeration:
-			payload := element.Enumeration()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-			utf812 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf812)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf812)))
-
-		case DbValueSet:
-			payload := element.Set()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
-			utf813 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf813)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf813)))
-
-		case DbValueBit:
-			payload := element.Bit()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
-			slice := payload
-			length := uint32(len(slice))
-			result15 := witRuntime.Allocate(pinner, uintptr(length*1), 1)
-			for index, element := range slice {
-				base := unsafe.Add(result15, index*1)
-				var result14 int32
-				if element {
-					result14 = 1
-				} else {
-					result14 = 0
-				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result14)
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result15)))
-
-		case DbValueJson:
-			payload := element.Json()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
-			utf816 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf816)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf816)))
-
-		case DbValueNull:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
-
-		default:
-			panic("unreachable")
-		}
+	slice := params
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*24)
+		wasm_lower_1_t800(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
-	wasm_import_method_db_transaction_execute((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result18), length19, returnArea)
-	var result25 witTypes.Result[uint64, Error]
+	wasm_import_method_db_transaction_execute((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result), length, returnArea)
+	var result1 witTypes.Result[uint64, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result25 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
+		result1 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
+		result0 := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorQueryParameterFailure(value20)
-
-		case 2:
-			value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorQueryExecutionFailure(value21)
-
-		case 3:
-			value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorQueryResponseFailure(value22)
-
-		case 4:
-			value23 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorOther(value23)
-
-		case 5:
-			value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeErrorResourceLost(value24)
-
-		default:
-			panic("unreachable")
-		}
-
-		result25 = witTypes.Err[uint64, Error](variant)
+		result1 = witTypes.Err[uint64, Error](result0)
 	default:
 		panic("unreachable")
 	}
-	result26 := result25
-	return result26
+	result2 := result1
+	return result2
 
 }
 
@@ -4107,54 +1153,20 @@ func (self *DbTransaction) Commit() witTypes.Result[witTypes.Unit, Error] {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_transaction_commit((self).Handle(), returnArea)
-	var result witTypes.Result[witTypes.Unit, Error]
+	var result0 witTypes.Result[witTypes.Unit, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
+		result0 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryParameterFailure(value0)
-
-		case 2:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryExecutionFailure(value1)
-
-		case 3:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryResponseFailure(value2)
-
-		case 4:
-			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorOther(value3)
-
-		case 5:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorResourceLost(value4)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, Error](variant)
+		result0 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
 		panic("unreachable")
 	}
-	result5 := result
-	return result5
+	result1 := result0
+	return result1
 
 }
 
@@ -4167,53 +1179,738 @@ func (self *DbTransaction) Rollback() witTypes.Result[witTypes.Unit, Error] {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_transaction_rollback((self).Handle(), returnArea)
-	var result witTypes.Result[witTypes.Unit, Error]
+	var result0 witTypes.Result[witTypes.Unit, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
+		result0 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryParameterFailure(value0)
-
-		case 2:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryExecutionFailure(value1)
-
-		case 3:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorQueryResponseFailure(value2)
-
-		case 4:
-			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorOther(value3)
-
-		case 5:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorResourceLost(value4)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, Error](variant)
+		result0 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
 		panic("unreachable")
 	}
-	result5 := result
-	return result5
+	result1 := result0
+	return result1
 
+}
+
+//go:noinline
+func wasm_lift_1_t798(src unsafe.Pointer) DbColumn {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+	result := wasm_lift_1_t797(unsafe.Add(unsafe.Pointer(src), (8 + 2*4)))
+	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 4*4))))
+
+	return DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), Name: value0, DbType: result, DbTypeName: value1}
+}
+
+//go:noinline
+func wasm_lift_1_t796(src unsafe.Pointer) Error {
+	var variant Error
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorConnectionFailure(value0)
+
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorQueryParameterFailure(value1)
+
+	case 2:
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorQueryExecutionFailure(value2)
+
+	case 3:
+		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorQueryResponseFailure(value3)
+
+	case 4:
+		value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorOther(value4)
+
+	case 5:
+		value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorResourceLost(value5)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t802(src unsafe.Pointer) DbRow {
+	result0 := make([]DbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*24)
+		result := wasm_lift_1_t800(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result0 = append(result0, result)
+	}
+
+	return DbRow{Values: result0}
+}
+
+//go:noinline
+func wasm_lower_1_t800(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case DbValueBoolean:
+		payload := value.Boolean()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+		var result int32
+		if payload {
+			result = 1
+		} else {
+			result = 0
+		}
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(result)
+
+	case DbValueTinyint:
+		payload := value.Tinyint()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(payload))
+
+	case DbValueSmallint:
+		payload := value.Smallint()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+		*(*int16)(unsafe.Add(unsafe.Pointer(dst), 8)) = int16(int32(payload))
+
+	case DbValueMediumint:
+		payload := value.Mediumint()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case DbValueInt:
+		payload := value.Int()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case DbValueBigint:
+		payload := value.Bigint()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case DbValueTinyintUnsigned:
+		payload := value.TinyintUnsigned()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(6))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(payload))
+
+	case DbValueSmallintUnsigned:
+		payload := value.SmallintUnsigned()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
+		*(*int16)(unsafe.Add(unsafe.Pointer(dst), 8)) = int16(int32(payload))
+
+	case DbValueMediumintUnsigned:
+		payload := value.MediumintUnsigned()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = int32(payload)
+
+	case DbValueIntUnsigned:
+		payload := value.IntUnsigned()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = int32(payload)
+
+	case DbValueBigintUnsigned:
+		payload := value.BigintUnsigned()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(10))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64(payload)
+
+	case DbValueFloat:
+		payload := value.Float()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(11))
+		*(*float32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case DbValueDouble:
+		payload := value.Double()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(12))
+		*(*float64)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case DbValueDecimal:
+		payload := value.Decimal()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(13))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf8)))
+
+	case DbValueDate:
+		payload := value.Date()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(14))
+		wasm_lower_1_t788(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case DbValueDatetime:
+		payload := value.Datetime()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(15))
+		wasm_lower_1_t790(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case DbValueTimestamp:
+		payload := value.Timestamp()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(16))
+		wasm_lower_1_t790(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case DbValueTime:
+		payload := value.Time()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(17))
+		wasm_lower_1_t789(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case DbValueYear:
+		payload := value.Year()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(18))
+		*(*int16)(unsafe.Add(unsafe.Pointer(dst), 8)) = int16(int32(payload))
+
+	case DbValueFixchar:
+		payload := value.Fixchar()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(19))
+		utf80 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf80)))
+
+	case DbValueVarchar:
+		payload := value.Varchar()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(20))
+		utf81 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf81)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf81)))
+
+	case DbValueTinytext:
+		payload := value.Tinytext()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(21))
+		utf82 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf82)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf82)))
+
+	case DbValueText:
+		payload := value.Text()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(22))
+		utf83 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf83)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf83)))
+
+	case DbValueMediumtext:
+		payload := value.Mediumtext()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(23))
+		utf84 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf84)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf84)))
+
+	case DbValueLongtext:
+		payload := value.Longtext()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(24))
+		utf85 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf85)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf85)))
+
+	case DbValueBinary:
+		payload := value.Binary()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(25))
+		data := unsafe.Pointer(unsafe.SliceData(payload))
+		pinner.Pin(data)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(data)))
+
+	case DbValueVarbinary:
+		payload := value.Varbinary()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(26))
+		data6 := unsafe.Pointer(unsafe.SliceData(payload))
+		pinner.Pin(data6)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(data6)))
+
+	case DbValueTinyblob:
+		payload := value.Tinyblob()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(27))
+		data7 := unsafe.Pointer(unsafe.SliceData(payload))
+		pinner.Pin(data7)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(data7)))
+
+	case DbValueBlob:
+		payload := value.Blob()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
+		data8 := unsafe.Pointer(unsafe.SliceData(payload))
+		pinner.Pin(data8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(data8)))
+
+	case DbValueMediumblob:
+		payload := value.Mediumblob()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
+		data9 := unsafe.Pointer(unsafe.SliceData(payload))
+		pinner.Pin(data9)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(data9)))
+
+	case DbValueLongblob:
+		payload := value.Longblob()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
+		data10 := unsafe.Pointer(unsafe.SliceData(payload))
+		pinner.Pin(data10)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(data10)))
+
+	case DbValueEnumeration:
+		payload := value.Enumeration()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+		utf811 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf811)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf811)))
+
+	case DbValueSet:
+		payload := value.Set()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
+		utf812 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf812)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf812)))
+
+	case DbValueBit:
+		payload := value.Bit()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
+		slice := payload
+		length := uint32(len(slice))
+		result14 := witRuntime.Allocate(pinner, uintptr(length*1), 1)
+		for index, element := range slice {
+			base := unsafe.Add(result14, index*1)
+			var result13 int32
+			if element {
+				result13 = 1
+			} else {
+				result13 = 0
+			}
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result13)
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result14)))
+
+	case DbValueJson:
+		payload := value.Json()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
+		utf815 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf815)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf815)))
+
+	case DbValueNull:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lift_1_t805(src unsafe.Pointer) DbResult {
+	result0 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(16+4*4))
+		result := wasm_lift_1_t798(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result0 = append(result0, result)
+	}
+
+	result2 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(2*4))
+		result1 := wasm_lift_1_t802(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result2 = append(result2, result1)
+	}
+
+	return DbResult{Columns: result0, Rows: result2}
+}
+
+//go:noinline
+func wasm_lift_1_t797(src unsafe.Pointer) DbColumnType {
+	var variant DbColumnType
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeDbColumnTypeBoolean()
+
+	case 1:
+
+		variant = MakeDbColumnTypeTinyint()
+
+	case 2:
+
+		variant = MakeDbColumnTypeSmallint()
+
+	case 3:
+
+		variant = MakeDbColumnTypeMediumint()
+
+	case 4:
+
+		variant = MakeDbColumnTypeInt()
+
+	case 5:
+
+		variant = MakeDbColumnTypeBigint()
+
+	case 6:
+
+		variant = MakeDbColumnTypeTinyintUnsigned()
+
+	case 7:
+
+		variant = MakeDbColumnTypeSmallintUnsigned()
+
+	case 8:
+
+		variant = MakeDbColumnTypeMediumintUnsigned()
+
+	case 9:
+
+		variant = MakeDbColumnTypeIntUnsigned()
+
+	case 10:
+
+		variant = MakeDbColumnTypeBigintUnsigned()
+
+	case 11:
+
+		variant = MakeDbColumnTypeFloat()
+
+	case 12:
+
+		variant = MakeDbColumnTypeDouble()
+
+	case 13:
+
+		variant = MakeDbColumnTypeDecimal()
+
+	case 14:
+
+		variant = MakeDbColumnTypeDate()
+
+	case 15:
+
+		variant = MakeDbColumnTypeDatetime()
+
+	case 16:
+
+		variant = MakeDbColumnTypeTimestamp()
+
+	case 17:
+
+		variant = MakeDbColumnTypeTime()
+
+	case 18:
+
+		variant = MakeDbColumnTypeYear()
+
+	case 19:
+
+		variant = MakeDbColumnTypeFixchar()
+
+	case 20:
+
+		variant = MakeDbColumnTypeVarchar()
+
+	case 21:
+
+		variant = MakeDbColumnTypeTinytext()
+
+	case 22:
+
+		variant = MakeDbColumnTypeText()
+
+	case 23:
+
+		variant = MakeDbColumnTypeMediumtext()
+
+	case 24:
+
+		variant = MakeDbColumnTypeLongtext()
+
+	case 25:
+
+		variant = MakeDbColumnTypeBinary()
+
+	case 26:
+
+		variant = MakeDbColumnTypeVarbinary()
+
+	case 27:
+
+		variant = MakeDbColumnTypeTinyblob()
+
+	case 28:
+
+		variant = MakeDbColumnTypeBlob()
+
+	case 29:
+
+		variant = MakeDbColumnTypeMediumblob()
+
+	case 30:
+
+		variant = MakeDbColumnTypeLongblob()
+
+	case 31:
+
+		variant = MakeDbColumnTypeEnumeration()
+
+	case 32:
+
+		variant = MakeDbColumnTypeSet()
+
+	case 33:
+
+		variant = MakeDbColumnTypeBit()
+
+	case 34:
+
+		variant = MakeDbColumnTypeJson()
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t800(src unsafe.Pointer) DbValue {
+	var variant DbValue
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeDbValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) != 0))
+
+	case 1:
+
+		variant = MakeDbValueTinyint(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 2:
+
+		variant = MakeDbValueSmallint(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 3:
+
+		variant = MakeDbValueMediumint(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 4:
+
+		variant = MakeDbValueInt(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 5:
+
+		variant = MakeDbValueBigint(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 6:
+
+		variant = MakeDbValueTinyintUnsigned(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 7:
+
+		variant = MakeDbValueSmallintUnsigned(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 8:
+
+		variant = MakeDbValueMediumintUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	case 9:
+
+		variant = MakeDbValueIntUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	case 10:
+
+		variant = MakeDbValueBigintUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	case 11:
+
+		variant = MakeDbValueFloat(*(*float32)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 12:
+
+		variant = MakeDbValueDouble(*(*float64)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 13:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueDecimal(value0)
+
+	case 14:
+		result := wasm_lift_1_t788(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeDbValueDate(result)
+
+	case 15:
+		result1 := wasm_lift_1_t790(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeDbValueDatetime(result1)
+
+	case 16:
+		result2 := wasm_lift_1_t790(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeDbValueTimestamp(result2)
+
+	case 17:
+		result3 := wasm_lift_1_t789(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeDbValueTime(result3)
+
+	case 18:
+
+		variant = MakeDbValueYear(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 19:
+		value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueFixchar(value4)
+
+	case 20:
+		value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueVarchar(value5)
+
+	case 21:
+		value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueTinytext(value6)
+
+	case 22:
+		value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueText(value7)
+
+	case 23:
+		value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueMediumtext(value8)
+
+	case 24:
+		value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueLongtext(value9)
+
+	case 25:
+		value10 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueBinary(value10)
+
+	case 26:
+		value11 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueVarbinary(value11)
+
+	case 27:
+		value12 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueTinyblob(value12)
+
+	case 28:
+		value13 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueBlob(value13)
+
+	case 29:
+		value14 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueMediumblob(value14)
+
+	case 30:
+		value15 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueLongblob(value15)
+
+	case 31:
+		value16 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueEnumeration(value16)
+
+	case 32:
+		value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueSet(value17)
+
+	case 33:
+		result18 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*1)
+
+			result18 = append(result18, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
+		}
+
+		variant = MakeDbValueBit(result18)
+
+	case 34:
+		value19 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeDbValueJson(value19)
+
+	case 35:
+
+		variant = MakeDbValueNull()
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lower_1_t788(pinner *runtime.Pinner, value golem_rdbms_types.Date, dst unsafe.Pointer) {
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Year
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32((value).Month))
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 5)) = int8(int32((value).Day))
+
+}
+
+//go:noinline
+func wasm_lower_1_t790(pinner *runtime.Pinner, value golem_rdbms_types.Timestamp, dst unsafe.Pointer) {
+	wasm_lower_1_t788(nil, (value).Date, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t789(nil, (value).Time, unsafe.Add(unsafe.Pointer(dst), 8))
+
+}
+
+//go:noinline
+func wasm_lower_1_t789(pinner *runtime.Pinner, value golem_rdbms_types.Time, dst unsafe.Pointer) {
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Hour))
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 1)) = int8(int32((value).Minute))
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 2)) = int8(int32((value).Second))
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 4)) = int32((value).Nanosecond)
+
+}
+
+//go:noinline
+func wasm_lift_1_t788(src unsafe.Pointer) golem_rdbms_types.Date {
+
+	return golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(src), 0)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 5))))}
+}
+
+//go:noinline
+func wasm_lift_1_t790(src unsafe.Pointer) golem_rdbms_types.Timestamp {
+	result := wasm_lift_1_t788(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t789(unsafe.Add(unsafe.Pointer(src), 8))
+
+	return golem_rdbms_types.Timestamp{Date: result, Time: result0}
+}
+
+//go:noinline
+func wasm_lift_1_t789(src unsafe.Pointer) golem_rdbms_types.Time {
+
+	return golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 1)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 2)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 4)))}
 }

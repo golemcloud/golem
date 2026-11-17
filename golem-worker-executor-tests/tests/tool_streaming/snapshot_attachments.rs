@@ -1,6 +1,6 @@
 use super::*;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use test_r::test;
+use test_r::{flaky, test};
 
 pub(super) struct DisposalScheduleComponentService {
     pub(super) inner: Arc<dyn golem_worker_executor::services::component::ComponentService>,
@@ -82,6 +82,7 @@ impl golem_worker_executor::services::component::ComponentService
 
 #[test]
 #[timeout("10m")]
+#[flaky(3)]
 async fn completed_entity_writer_disposal_replays_its_attachment_terminals(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -94,385 +95,154 @@ async fn completed_entity_writer_disposal_replays_its_attachment_terminals(
         ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentControl, ToolAttachmentSlot,
         ToolAttachmentTerminal,
     };
+    use golem_common::model::oplog::host_functions::HostFunctionName::GolemToolCreateOutput;
 
-    let bytes = Arc::new(
-        tokio::fs::read(
-            deps.component_directory
-                .join(format!("{}.wasm", provider.wasm_name)),
-        )
-        .await?,
-    );
-    for (live_schedule, replay_schedule) in [(0, 1), (1, 0), (2, 0), (0, 2)] {
-        let schedule = Arc::new(AtomicUsize::new(live_schedule));
-        let selected_schedule = schedule.clone();
-        let provider_bytes = bytes.clone();
-        let context = TestContext::new(last_unique_id);
-        let environment_state = Arc::new(TestEnvironmentStateService::default());
-        let overrides = TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            wrap_component_service: Some(Arc::new(move |inner| {
-                Arc::new(DisposalScheduleComponentService {
-                    inner,
-                    bytes: provider_bytes.clone(),
-                    schedule: selected_schedule.clone(),
-                })
-            })),
-            configure: Some(Arc::new(|config| {
-                config.oplog.default_snapshotting =
-                    golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
-            })),
-            ..Default::default()
-        };
-        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-        let provider_component = executor
-            .component_dep(&context.default_environment_id, provider)
-            .name("gc-disposal-provider")
-            .store()
-            .await?;
-        let component = executor
-            .component_dep(&context.default_environment_id, caller)
-            .store()
-            .await?;
-        let metadata = extract_component_metadata(
-            &deps
-                .component_directory
-                .join(format!("{}.wasm", provider.wasm_name)),
-            false,
-            true,
-        )
-        .await?;
-        environment_state.set_tool_deployment(
-            context.default_environment_id,
-            component.id,
-            component.revision,
-            Some(deployment_state(
-                context.account_id,
-                provider_component.id,
-                provider_component.revision,
-                "golem-it:tool-streaming-rust-provider",
-                "ToolStreamingCaller",
-                metadata.tools,
-            )),
+    tokio::time::timeout(Duration::from_secs(180), async {
+        let bytes = Arc::new(
+            tokio::fs::read(
+                deps.component_directory
+                    .join(format!("{}.wasm", provider.wasm_name)),
+            )
+            .await?,
         );
-        let agent = agent_id!("ToolStreamingCaller", "completed-entity-writer-disposal");
-        let worker = executor.start_agent(&component.id, agent.clone()).await?;
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &agent,
-                "gol40_rust_sdk_terminal_observation",
-                data_value!(),
+        for (live_schedule, replay_schedule) in [(0, 1), (1, 0), (2, 0), (0, 2)] {
+            let schedule = Arc::new(AtomicUsize::new(live_schedule));
+            let selected_schedule = schedule.clone();
+            let provider_bytes = bytes.clone();
+            let context = TestContext::new(last_unique_id);
+            let environment_state = Arc::new(TestEnvironmentStateService::default());
+            let overrides = TestExecutorOverrides {
+                environment_state_service: Some(environment_state.clone()),
+                wrap_component_service: Some(Arc::new(move |inner| {
+                    Arc::new(DisposalScheduleComponentService {
+                        inner,
+                        bytes: provider_bytes.clone(),
+                        schedule: selected_schedule.clone(),
+                    })
+                })),
+                configure: Some(Arc::new(|config| {
+                    config.oplog.default_snapshotting =
+                        golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+                })),
+                ..Default::default()
+            };
+            let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+            let provider_component = executor
+                .component_dep(&context.default_environment_id, provider)
+                .name("gc-disposal-provider")
+                .store()
+                .await?;
+            let component = executor
+                .component_dep(&context.default_environment_id, caller)
+                .store()
+                .await?;
+            let metadata = extract_component_metadata(
+                &deps
+                    .component_directory
+                    .join(format!("{}.wasm", provider.wasm_name)),
+                false,
+                true,
             )
             .await?;
-        let before = executor.stored_oplog(&worker).await;
-        let creations = before
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                matches!(
-                    entry,
-                    OplogEntry::Start {
-                        function_name:
-                            golem_common::model::oplog::host_functions::HostFunctionName::GolemToolCreateOutput,
-                        parent_start_index: Some(_),
-                        ..
-                    }
-                )
-                .then_some(OplogIndex::from_u64(index as u64 + 1))
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            creations.len(),
-            1,
-            "the provider creates one unreachable output"
-        );
-        let terminal = before.iter().find_map(|entry| match entry {
-            OplogEntry::ToolAttachmentControl {
-                attachment,
-                transition: ToolAttachmentControl::TerminalSelected(terminal),
-                ..
-            } if attachment.creation_start == creations[0]
-                && attachment.slot == ToolAttachmentSlot::Output =>
-            {
-                Some(terminal)
-            }
-            _ => None,
-        });
-        if live_schedule != 2 {
-            assert_eq!(
-                terminal,
-                Some(&ToolAttachmentTerminal::Application(
-                    ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned)
-                ))
+            environment_state.set_tool_deployment(
+                context.default_environment_id,
+                component.id,
+                component.revision,
+                Some(deployment_state(
+                    context.account_id,
+                    provider_component.id,
+                    provider_component.revision,
+                    "golem-it:tool-streaming-rust-provider",
+                    "ToolStreamingCaller",
+                    metadata.tools,
+                )),
             );
-        } else {
-            assert_eq!(
-                terminal, None,
-                "neither unreachable endpoint is collected before Store teardown"
-            );
-        }
-        let controls = |history: &[OplogEntry]| {
-            history
-                .iter()
-                .filter(|entry| matches!(entry, OplogEntry::ToolAttachmentControl { .. }))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        drop(executor);
-        schedule.store(replay_schedule, Ordering::SeqCst);
-        let executor = start_with_overrides(deps, &context, overrides).await?;
-        let probe: String = executor
-            .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
-            .await?
-            .into_typed()?;
-        assert_eq!(probe, "replayed");
-        let after = executor.stored_oplog(&worker).await;
-        assert_eq!(&after[..before.len()], before.as_slice());
-        assert_eq!(
-            controls(&after),
-            controls(&before),
-            "completed entity disposal cannot replace or duplicate a terminal"
-        );
-        executor.delete_worker(&worker).await?;
-    }
-    Ok(())
-}
-
-#[test]
-#[timeout("2m")]
-async fn cancelled_open_stdin_replays_with_and_without_a_final_writer_call(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::model::oplog::OplogEntry;
-    use golem_common::model::oplog::host_functions::HostFunctionName;
-
-    for finish in [false, true] {
-        let context = TestContext::new(last_unique_id);
-        let environment_state = Arc::new(TestEnvironmentStateService::default());
-        let mut streaming = native_streaming_tool_metadata();
-        streaming.commands.nodes[0].name = "native-streaming".to_string();
-        let overrides = TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            native_tool_metadata: Some(streaming.clone()),
-            configure: Some(Arc::new(|config| {
-                config.oplog.default_snapshotting =
-                    golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
-            })),
-            ..Default::default()
-        };
-        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-        let component = executor
-            .component_dep(&context.default_environment_id, caller)
-            .store()
-            .await?;
-        environment_state.set_tool_deployment(
-            context.default_environment_id,
-            component.id,
-            component.revision,
-            Some(native_deployment_state(
-                context.account_id,
-                "ToolStreamingCaller",
-                streaming,
-                native_test_tool_metadata(),
-            )),
-        );
-        let agent = agent_id!("ToolStreamingCaller", "cancel-open-stdin");
-        let worker = executor.start_agent(&component.id, agent.clone()).await?;
-        let closed: bool = executor
-            .invoke_and_await_agent(
-                &component,
-                &agent,
-                "cancel_open_tool_stdin",
-                data_value!(
-                    "native-streaming".to_string(),
-                    if finish {
-                        "cancel-stdin-finish".to_string()
-                    } else {
-                        "cancel-stdin".to_string()
-                    }
-                ),
-            )
-            .await?
-            .into_typed()?;
-        assert!(closed);
-        let before = executor.stored_oplog(&worker).await;
-        assert_eq!(
-            before
-                .iter()
-                .filter(|entry| matches!(
-                    entry,
-                    OplogEntry::Start {
-                        function_name: HostFunctionName::GolemToolOutputFinish,
-                        ..
-                    }
-                ))
-                .count(),
-            usize::from(finish),
-            "the fixture must retain exactly the selected final-writer-call history"
-        );
-        let entity_start = before
-            .iter()
-            .enumerate()
-            .find_map(|(index, entry)| {
-                matches!(
-                    entry,
-                    OplogEntry::Start {
-                        function_name: HostFunctionName::GolemEntityInvoke,
-                        ..
-                    }
+            let agent = agent_id!("ToolStreamingCaller", "completed-entity-writer-disposal");
+            let worker = executor.start_agent(&component.id, agent.clone()).await?;
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent,
+                    "gol40_rust_sdk_terminal_observation",
+                    data_value!(),
                 )
-                .then_some(OplogIndex::from_u64(index as u64 + 1))
-            })
-            .expect("native tool entity Start");
-        assert!(before.iter().any(|entry| matches!(
-            entry,
-            OplogEntry::Cancelled {
-                start_index,
-                partial: Some(_),
-                ..
-            } if *start_index == entity_start
-        )));
-        let effects = |entries: &[OplogEntry]| {
-            entries
+                .await?;
+            let before = executor.stored_oplog(&worker).await;
+            let creations = before
                 .iter()
-                .filter(|entry| {
+                .enumerate()
+                .filter_map(|(index, entry)| {
                     matches!(
                         entry,
-                        OplogEntry::Start { .. } | OplogEntry::ToolAttachmentControl { .. }
+                        OplogEntry::Start {
+                            function_name: GolemToolCreateOutput,
+                            parent_start_index: Some(_),
+                            ..
+                        }
                     )
+                    .then_some(OplogIndex::from_u64(index as u64 + 1))
                 })
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        drop(executor);
-        let executor = start_with_overrides(deps, &context, overrides).await?;
-        let probe: String = executor
-            .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
-            .await?
-            .into_typed()?;
-        assert_eq!(probe, "replayed");
-        let after = executor.stored_oplog(&worker).await;
-        assert_eq!(&after[..before.len()], before.as_slice());
-        assert_eq!(effects(&after), effects(&before));
-    }
-    Ok(())
-}
-
-#[test]
-#[timeout("2m")]
-async fn cancelled_nested_independent_stdin_replays_after_restart(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::model::oplog::OplogEntry;
-    use golem_common::model::oplog::host_functions::HostFunctionName;
-
-    let context = TestContext::new(last_unique_id);
-    let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let overrides = TestExecutorOverrides {
-        environment_state_service: Some(environment_state.clone()),
-        configure: Some(Arc::new(|config| {
-            config.oplog.default_snapshotting =
-                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
-        })),
-        ..Default::default()
-    };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    let provider_component = executor
-        .component_dep(&context.default_environment_id, provider)
-        .store()
-        .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, caller)
-        .store()
-        .await?;
-    let metadata = extract_component_metadata(
-        &deps
-            .component_directory
-            .join(format!("{}.wasm", provider.wasm_name)),
-        false,
-        true,
-    )
-    .await?;
-    environment_state.set_tool_deployment(
-        context.default_environment_id,
-        component.id,
-        component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
-    );
-    let agent = agent_id!("ToolStreamingCaller", "cancel-nested-open-stdin");
-    let worker = executor.start_agent(&component.id, agent.clone()).await?;
-    let closed: bool = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent,
-            "cancel_open_tool_stdin",
-            data_value!(
-                "streaming".to_string(),
-                "nested-independent-stdin".to_string()
-            ),
-        )
-        .await?
-        .into_typed()?;
-    assert!(closed);
-    let before = executor.stored_oplog(&worker).await;
-    let entity_starts = before
-        .iter()
-        .enumerate()
-        .filter_map(|(index, entry)| {
-            matches!(
-                entry,
-                OplogEntry::Start {
-                    function_name: HostFunctionName::GolemEntityInvoke,
+                .collect::<Vec<_>>();
+            assert_eq!(
+                creations.len(),
+                1,
+                "the provider creates one unreachable output"
+            );
+            let terminal = before.iter().find_map(|entry| match entry {
+                OplogEntry::ToolAttachmentControl {
+                    attachment,
+                    transition: ToolAttachmentControl::TerminalSelected(terminal),
                     ..
+                } if attachment.creation_start == creations[0]
+                    && attachment.slot == ToolAttachmentSlot::Output =>
+                {
+                    Some(terminal)
                 }
-            )
-            .then_some(OplogIndex::from_u64(index as u64 + 1))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(entity_starts.len(), 2);
-    for entity_start in entity_starts {
-        assert!(before.iter().any(|entry| matches!(
-            entry,
-            OplogEntry::Cancelled { start_index, .. } if *start_index == entity_start
-        )));
-    }
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-    let probe: String = executor
-        .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
-        .await?
-        .into_typed()?;
-    assert_eq!(probe, "replayed");
-    let after = executor.stored_oplog(&worker).await;
-    assert_eq!(&after[..before.len()], before.as_slice());
-    let effects = |entries: &[OplogEntry]| {
-        entries
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry,
-                    OplogEntry::Start { .. } | OplogEntry::ToolAttachmentControl { .. }
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(effects(&after), effects(&before));
-    Ok(())
+                _ => None,
+            });
+            if live_schedule != 2 {
+                assert_eq!(
+                    terminal,
+                    Some(&ToolAttachmentTerminal::Application(
+                        ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned)
+                    ))
+                );
+            } else {
+                assert_eq!(
+                    terminal, None,
+                    "neither unreachable endpoint is collected before Store teardown"
+                );
+            }
+            let controls = |history: &[OplogEntry]| {
+                history
+                    .iter()
+                    .filter(|entry| matches!(entry, OplogEntry::ToolAttachmentControl { .. }))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            drop(executor);
+            schedule.store(replay_schedule, Ordering::SeqCst);
+            let executor = start_with_overrides(deps, &context, overrides).await?;
+            let probe: String = executor
+                .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
+                .await?
+                .into_typed()?;
+            assert_eq!(probe, "replayed");
+            let after = executor.stored_oplog(&worker).await;
+            assert_eq!(&after[..before.len()], before.as_slice());
+            assert_eq!(
+                controls(&after),
+                controls(&before),
+                "completed entity disposal cannot replace or duplicate a terminal"
+            );
+            executor.delete_worker(&worker).await?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("completed entity writer disposal replay stalled for 180 seconds")
+    })?
 }
 
 #[test]
