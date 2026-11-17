@@ -38,7 +38,7 @@
 //! | --- | --- |
 //! | Interrupting or resuming a standalone tool invocation, or reading its oplog, without the grant looks like an unknown invocation | GOL-1079 and GOL-1086 (the entry points); GOL-1417 adds the command rows |
 //! | Closing a tool-owned webhook without `close-webhook` looks like an unknown webhook | GOL-1390 (the webhook commands); the later of GOL-1390 and GOL-1403 adds the rows |
-//! | `agent : replay` admits the restricted manual snapshot-migration rehearsal on a never-live fork, which only validates the load (D12, `MANUAL_UPDATE_OF_A_MARKED_AGENT`) | The executor review and tests of the rehearsal: host-call safety, exact idle, restart behavior and the supported cases. The issue that builds the rehearsal and its gate relative to the replay PR are not agreed yet. GOL-1420 for the mark |
+//! | `agent : replay` admits the restricted manual snapshot-migration rehearsal on a never-live fork, which only validates the load (D12, `MANUAL_UPDATE_OF_A_MARKED_AGENT`) | The executor review and tests of the rehearsal: host-call safety, exact idle, restart behavior and the supported SDK and SQLite cases. GOL-2143 (Simon Schenk) builds the rehearsal; whether it lands before the replay PR is not agreed yet. GOL-1420 for the mark |
 //!
 //! Fixtures that this draft does not have yet are named where they are
 //! used: `Fixture::BashTool` and `Fixture::StaticFileConfigTool`, and the
@@ -89,6 +89,7 @@ use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_test_framework::model::IFSEntry;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -177,9 +178,10 @@ enum Fixture {
     /// A `SnapshotCounter` agent of `it:agent-counters`, which saves and
     /// loads snapshots, so that a manual update reaches the next revision.
     Snapshot,
-    /// An agent that hosts the built-in `bash` tool. Remaining GOL-1403 work:
-    /// the suite has no fixture that grants the built-in `bash` release to an
-    /// environment and binds it to an agent type yet.
+    /// An agent that hosts the built-in `bash` tool, which runs in the
+    /// agent's file system, where the owner reads `STARTED`. Remaining
+    /// GOL-1403 work: the suite has no fixture that grants the built-in
+    /// `bash` release to an environment and binds it to an agent type yet.
     BashTool,
     /// A tool that reads static `File` config fields. GOL-1086 supplies the
     /// tool admission that needs the tool-wide `invoke : *` for it.
@@ -1120,12 +1122,14 @@ impl Trace {
 }
 
 /// Makes the requests in order, as long as the earlier ones let the command
-/// go on.
+/// go on. Each step sees `$seed` as the seed of its trace position.
 macro_rules! in_order {
-    ($($step:expr),+ $(,)?) => {{
+    ($seed:ident; $($step:expr),+ $(,)?) => {{
         let mut trace = Trace::default();
         $(
             if !trace.stopped {
+                let at = $seed.at(trace.outcomes.len());
+                let $seed: &Seed = &at;
                 trace.push($step);
             }
         )+
@@ -1146,13 +1150,13 @@ const CALL_ITEM: &str = "call-item";
 const TOOL: &str = "bash";
 
 /// The owner's agent, component and invocations that the caller addresses.
+#[derive(Clone)]
 struct Seed {
     owner: User,
     caller: User,
     caller_response: LastResponse,
     application: String,
     environment: String,
-    fixture: Fixture,
     component: ComponentDto,
     /// The revision that an update moves the target to.
     next_revision: u64,
@@ -1174,6 +1178,9 @@ struct Seed {
     /// When set, the request at this trace position addresses this missing
     /// invocation of the target instead of the one that the command started.
     missing_invocation: Option<(usize, String)>,
+    /// When set, the request at this trace position addresses an agent of
+    /// the target's type that does not exist.
+    unknown_agent_at: Option<usize>,
 }
 
 impl Seed {
@@ -1274,7 +1281,6 @@ impl Seed {
             caller_response: LastResponse::default(),
             application: env.application_name.0.clone(),
             environment: env.name.0.clone(),
-            fixture,
             component,
             next_revision: 0,
             target,
@@ -1285,6 +1291,7 @@ impl Seed {
             other_scheduled_invocation: String::new(),
             session_token: String::new(),
             missing_invocation: None,
+            unknown_agent_at: None,
         };
         if fixture == Fixture::Snapshot {
             // A manual update carries this state over through a snapshot.
@@ -1337,7 +1344,26 @@ impl Seed {
                 agent_id: target.to_string(),
             },
             target,
-            ..self.same()
+            ..self.clone()
+        }
+    }
+
+    /// The same seed, and the request at trace `position` addresses an
+    /// agent of the target's type that does not exist. The requests before
+    /// it stay on the target.
+    fn with_unknown_agent_at(&self, position: usize) -> Self {
+        Self {
+            unknown_agent_at: Some(position),
+            ..self.clone()
+        }
+    }
+
+    /// The seed of the request at trace `position`.
+    fn at(&self, position: usize) -> Cow<'_, Seed> {
+        if self.unknown_agent_at == Some(position) {
+            Cow::Owned(self.with_unknown_agent())
+        } else {
+            Cow::Borrowed(self)
         }
     }
 
@@ -1347,7 +1373,7 @@ impl Seed {
         Self {
             scheduled_invocation: uuid::Uuid::new_v4().to_string(),
             other_scheduled_invocation: uuid::Uuid::new_v4().to_string(),
-            ..self.same()
+            ..self.clone()
         }
     }
 
@@ -1369,25 +1395,20 @@ impl Seed {
         }
     }
 
-    fn same(&self) -> Self {
-        Self {
-            owner: self.owner.clone(),
-            caller: self.caller.clone(),
-            caller_response: self.caller_response.clone(),
-            application: self.application.clone(),
-            environment: self.environment.clone(),
-            fixture: self.fixture,
-            component: self.component.clone(),
-            next_revision: self.next_revision,
-            target: self.target.clone(),
-            target_id: self.target_id.clone(),
-            new_agent: self.new_agent.clone(),
-            before_seed_item: self.before_seed_item,
-            scheduled_invocation: self.scheduled_invocation.clone(),
-            other_scheduled_invocation: self.other_scheduled_invocation.clone(),
-            session_token: self.session_token.clone(),
-            missing_invocation: self.missing_invocation.clone(),
+    /// Waits until the owner reads `STARTED` in the target's files.
+    async fn wait_until_the_script_runs(&self) -> anyhow::Result<()> {
+        let worker = worker_client(&self.owner).await;
+        for _ in 0..30 {
+            if worker
+                .get_file_content(&self.component.id.0, self.agent_name(), STARTED)
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
+        anyhow::bail!("the script did not start")
     }
 
     async fn wait_until_only_the_scheduled_invocations_are_pending(&self) -> anyhow::Result<()> {
@@ -1837,8 +1858,6 @@ async fn connect(seed: &Seed) -> anyhow::Result<Outcome> {
 
 /// The script that a command runs to its result.
 const SCRIPT: &str = "true";
-/// The script of a command that the user stops before its result.
-const LONG_SCRIPT: &str = "sleep 600";
 
 /// The typed input of the built-in `bash` tool's `run` for `script`, as
 /// `golem ssh` builds it: `run -- <script>`, parsed against the pinned
@@ -2066,8 +2085,8 @@ async fn cancel(seed: &Seed, idempotency_key: &str) -> anyhow::Result<Outcome> {
 enum Stop {
     /// Nothing: the command runs `SCRIPT` to its result.
     None,
-    /// The user stops `LONG_SCRIPT` before its result, and the CLI cancels
-    /// the accepted invocation while the session is open.
+    /// The user stops `LONG_SCRIPT` while it runs, and the CLI cancels the
+    /// accepted invocation while the session is open.
     Cancel,
     /// As `Cancel`, and the session ends without the result, so the CLI
     /// looks it up: `STOPPED_SCRIPT` finishes within the CLI's wait.
@@ -2078,9 +2097,16 @@ enum Stop {
     OutcomeUnknown,
 }
 
-/// The script of a command that the user stops and that finishes within
-/// the CLI's wait for its result.
-const STOPPED_SCRIPT: &str = "sleep 3";
+/// The file that a stopped command's script writes when it runs, which
+/// the owner reads through the agent's files: `bash` runs in the agent's
+/// file system.
+const STARTED: &str = "/management-started";
+/// The script of a command that the user stops after it starts, and that
+/// finishes within the CLI's wait for its result.
+const STOPPED_SCRIPT: &str = "touch /management-started && sleep 2";
+/// The script of a command that the user stops after it starts, and that
+/// has no result within the CLI's wait.
+const LONG_SCRIPT: &str = "touch /management-started && sleep 600";
 /// How long the CLI waits for the result of a stopped command
 /// (`CANCEL_WAIT` of `golem ssh`).
 const RESULT_WAIT: Duration = Duration::from_secs(5);
@@ -2090,20 +2116,25 @@ const NO_RESULT: &str = "no result within the wait";
 
 /// One command of an `ssh` session (`session`) or script: the description,
 /// the read of the agent's state at a session's prompt, the start, and then
-/// what `stop` does on the accepted invocation. The request at the trace
-/// position that `Seed::missing_invocation` names addresses that missing
-/// invocation of the agent instead.
+/// what `stop` does on the accepted invocation. A stop comes only after the
+/// owner sees that the script runs, so that the invocation is not still
+/// queued. The request at the trace position that `Seed::missing_invocation`
+/// names addresses that missing invocation of the agent instead.
 async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<Trace> {
     let mut trace = Trace::default();
-    trace.push(Step::Request(describe(seed, true).await?));
+    trace.push(Step::Request(
+        describe(&seed.at(trace.outcomes.len()), true).await?,
+    ));
     if trace.stopped {
         return Ok(trace);
     }
     if session {
         // The state read is best effort: a denial does not stop the command.
-        trace.outcomes.push(match metadata(seed).await? {
-            Step::Request(outcome) | Step::Prepare(outcome) => outcome,
-        });
+        trace
+            .outcomes
+            .push(match metadata(&seed.at(trace.outcomes.len())).await? {
+                Step::Request(outcome) | Step::Prepare(outcome) => outcome,
+            });
     }
     let script = match stop {
         Stop::None => SCRIPT,
@@ -2111,9 +2142,10 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
         Stop::Cancel | Stop::OutcomeUnknown => LONG_SCRIPT,
     };
     let key = uuid::Uuid::new_v4().to_string();
+    let starting = seed.at(trace.outcomes.len());
     let mut live = open_session(
-        &seed.caller,
-        tool_start(seed, hosted_target(seed), &key, script)?,
+        &starting.caller,
+        tool_start(&starting, hosted_target(&starting), &key, script)?,
     )
     .await?;
     let (started, accepted) = receive(&mut live, stop == Stop::None).await?;
@@ -2124,15 +2156,27 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
     let accepted = accepted
         .expect("an accepted start has its key")
         .idempotency_key;
-    let cancelled = cancel(seed, &seed.addressed(trace.outcomes.len(), &accepted)).await?;
+    seed.wait_until_the_script_runs().await?;
+    let cancelling = seed.at(trace.outcomes.len());
+    let cancelled = cancel(
+        &cancelling,
+        &cancelling.addressed(trace.outcomes.len(), &accepted),
+    )
+    .await?;
     trace.push(Step::Request(cancelled));
     if trace.stopped || stop == Stop::Cancel {
         return Ok(trace);
     }
-    let addressed = seed.addressed(trace.outcomes.len(), &accepted);
+    let looking_up = seed.at(trace.outcomes.len());
+    let addressed = looking_up.addressed(trace.outcomes.len(), &accepted);
     let looked_up = match tokio::time::timeout(
         RESULT_WAIT,
-        invoke_tool(seed, true, NativeToolInvocationMode::Lookup, &addressed),
+        invoke_tool(
+            &looking_up,
+            true,
+            NativeToolInvocationMode::Lookup,
+            &addressed,
+        ),
     )
     .await
     {
@@ -2144,7 +2188,7 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
     // unknown outcome with the agent's state.
     trace.outcomes.push(looked_up);
     if !found {
-        trace.push(metadata(seed).await?);
+        trace.push(metadata(&seed.at(trace.outcomes.len())).await?);
     }
     drop(live);
     Ok(trace)
@@ -2197,6 +2241,7 @@ const ADAPTERS: &[Adapter] = &[
         "create",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare(seed, &seed.new_agent.to_string()).await?,
             request(async {
                 seed.rest(
@@ -2221,6 +2266,7 @@ const ADAPTERS: &[Adapter] = &[
         "no-stream",
         [0, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async { Ok(start_session(seed, &seed.caller, CALL_ITEM, true).await?.0) })
                 .await?,
@@ -2234,6 +2280,7 @@ const ADAPTERS: &[Adapter] = &[
         "raw-output",
         [0, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async { Ok(start_session(seed, &seed.caller, CALL_ITEM, true).await?.0) })
                 .await?,
@@ -2245,6 +2292,7 @@ const ADAPTERS: &[Adapter] = &[
         "stream",
         [0, 1, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(connect(seed)).await?,
             request(async { Ok(start_session(seed, &seed.caller, CALL_ITEM, true).await?.0) })
@@ -2257,6 +2305,7 @@ const ADAPTERS: &[Adapter] = &[
         "no-stream",
         [0, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(invoke(seed, AgentInvocationMode::Schedule)).await?,
         )
@@ -2267,6 +2316,7 @@ const ADAPTERS: &[Adapter] = &[
         "stream",
         [0, 1, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(connect(seed)).await?,
             request(invoke(seed, AgentInvocationMode::Schedule)).await?,
@@ -2278,6 +2328,7 @@ const ADAPTERS: &[Adapter] = &[
         "no-stream",
         [0, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(resume_session(seed, PublicResumeOperation::Resume)).await?,
         )
@@ -2288,6 +2339,7 @@ const ADAPTERS: &[Adapter] = &[
         "raw-output",
         [0, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(resume_session(seed, PublicResumeOperation::Resume)).await?,
         )
@@ -2298,6 +2350,7 @@ const ADAPTERS: &[Adapter] = &[
         "stream",
         [0, 1, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(connect(seed)).await?,
             request(resume_session(seed, PublicResumeOperation::Resume)).await?,
@@ -2309,6 +2362,7 @@ const ADAPTERS: &[Adapter] = &[
         "no-stream",
         [0, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(resume_session(seed, PublicResumeOperation::Takeover)).await?,
         )
@@ -2319,6 +2373,7 @@ const ADAPTERS: &[Adapter] = &[
         "raw-output",
         [0, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(resume_session(seed, PublicResumeOperation::Takeover)).await?,
         )
@@ -2329,12 +2384,14 @@ const ADAPTERS: &[Adapter] = &[
         "stream",
         [0, 1, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(connect(seed)).await?,
             request(resume_session(seed, PublicResumeOperation::Takeover)).await?,
         )
     ),
     adapter!(["agent", "get"], "get", "get", [0, 1], |seed| in_order!(
+        seed;
         prepare_target(seed).await?,
         metadata(seed).await?,
     )),
@@ -2344,6 +2401,7 @@ const ADAPTERS: &[Adapter] = &[
         "delete",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async {
                 seed.rest(
@@ -2356,6 +2414,7 @@ const ADAPTERS: &[Adapter] = &[
         )
     ),
     adapter!(["agent", "list"], "list", "list", [0], |seed| in_order!(
+        seed;
         request(async {
             seed.rest(
                 seed.worker()
@@ -2378,7 +2437,7 @@ const ADAPTERS: &[Adapter] = &[
         "follow",
         "follow",
         [0, 1],
-        |seed| in_order!(prepare_target(seed).await?, request(connect(seed)).await?,)
+        |seed| in_order!(seed; prepare_target(seed).await?, request(connect(seed)).await?,)
     ),
     // The connection names the agent of the REPL's invocation; the
     // invocation that the stdin line selects stays on the client today.
@@ -2387,7 +2446,7 @@ const ADAPTERS: &[Adapter] = &[
         "follow",
         "follow",
         [0],
-        |seed| in_order!(request(connect(seed)).await?)
+        |seed| in_order!(seed; request(connect(seed)).await?)
     ),
     adapter!(
         ["agent", "update"],
@@ -2395,6 +2454,7 @@ const ADAPTERS: &[Adapter] = &[
         "no-await",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(update(seed, AgentUpdateMode::Automatic)).await?,
         )
@@ -2405,6 +2465,7 @@ const ADAPTERS: &[Adapter] = &[
         "await",
         [0, 1, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(update(seed, AgentUpdateMode::Automatic)).await?,
             request(await_update(seed)).await?,
@@ -2416,6 +2477,7 @@ const ADAPTERS: &[Adapter] = &[
         "no-await",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(update(seed, AgentUpdateMode::Manual)).await?,
         )
@@ -2426,6 +2488,7 @@ const ADAPTERS: &[Adapter] = &[
         "await",
         [0, 1, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(update(seed, AgentUpdateMode::Manual)).await?,
             request(await_update(seed)).await?,
@@ -2437,6 +2500,7 @@ const ADAPTERS: &[Adapter] = &[
         "interrupt",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async {
                 seed.rest(
@@ -2454,6 +2518,7 @@ const ADAPTERS: &[Adapter] = &[
         "resume",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async {
                 seed.rest(
@@ -2471,6 +2536,7 @@ const ADAPTERS: &[Adapter] = &[
         "simulate-crash",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async {
                 seed.rest(
@@ -2488,6 +2554,7 @@ const ADAPTERS: &[Adapter] = &[
         "omit-payloads",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(oplog_page(seed, None)).await?,
         )
@@ -2498,6 +2565,7 @@ const ADAPTERS: &[Adapter] = &[
         "payloads",
         [0, 1, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(oplog_page(seed, None)).await?,
             request(oplog_entry(seed)).await?,
@@ -2509,6 +2577,7 @@ const ADAPTERS: &[Adapter] = &[
         "omit-payloads",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(oplog_page(seed, Some("create"))).await?,
         )
@@ -2519,6 +2588,7 @@ const ADAPTERS: &[Adapter] = &[
         "payloads",
         [0, 1, 2],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(oplog_page(seed, Some("create"))).await?,
             request(oplog_entry(seed)).await?,
@@ -2530,6 +2600,7 @@ const ADAPTERS: &[Adapter] = &[
         "to-oplog-index",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(revert(
                 seed,
@@ -2546,6 +2617,7 @@ const ADAPTERS: &[Adapter] = &[
         "by-invocation-count",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(revert(
                 seed,
@@ -2562,6 +2634,7 @@ const ADAPTERS: &[Adapter] = &[
         "cancel",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(cancel(seed, &seed.scheduled_invocation)).await?,
         )
@@ -2572,6 +2645,7 @@ const ADAPTERS: &[Adapter] = &[
         "list",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async {
                 seed.rest(
@@ -2589,6 +2663,7 @@ const ADAPTERS: &[Adapter] = &[
         "read",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async {
                 seed.rest(
@@ -2606,6 +2681,7 @@ const ADAPTERS: &[Adapter] = &[
         "activate",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async {
                 seed.rest(
@@ -2623,6 +2699,7 @@ const ADAPTERS: &[Adapter] = &[
         "deactivate",
         [0, 1],
         |seed| in_order!(
+            seed;
             prepare_target(seed).await?,
             request(async {
                 seed.rest(
@@ -2700,6 +2777,7 @@ const ADAPTERS: &[Adapter] = &[
         "await",
         [0, 1],
         |seed| in_order!(
+            seed;
             request(describe(seed, true)).await?,
             request(invoke_tool(
                 seed,
@@ -2716,6 +2794,7 @@ const ADAPTERS: &[Adapter] = &[
         "await",
         [0, 1],
         |seed| in_order!(
+            seed;
             request(describe(seed, false)).await?,
             request(invoke_tool(
                 seed,
@@ -2731,14 +2810,14 @@ const ADAPTERS: &[Adapter] = &[
         "hosted-help",
         "help",
         [0],
-        |seed| in_order!(request(describe(seed, true)).await?)
+        |seed| in_order!(seed; request(describe(seed, true)).await?)
     ),
     adapter!(
         ["tool", "invoke"],
         "standalone-help",
         "help",
         [0],
-        |seed| in_order!(request(describe(seed, false)).await?)
+        |seed| in_order!(seed; request(describe(seed, false)).await?)
     ),
     // The owner's earlier tool invocation is looked up under its key.
     adapter!(
@@ -2747,6 +2826,7 @@ const ADAPTERS: &[Adapter] = &[
         "lookup",
         [0],
         |seed| in_order!(
+            seed;
             request(invoke_tool(
                 seed,
                 true,
@@ -2988,6 +3068,20 @@ fn management_every_command_mode_has_an_adapter_and_a_case() {
 
 // ── Acceptance ──────────────────────────────────────────────────────────
 
+/// The trace position of the operation of `case` in a trace of `adapter`.
+fn operation_position(case: &Case, adapter: &Adapter) -> usize {
+    let operation = case
+        .requests
+        .iter()
+        .position(|request| request.spec.starts_with("operation"))
+        .expect("every case has an operation");
+    adapter
+        .makes
+        .iter()
+        .position(|index| *index == operation)
+        .expect("every adapter makes the operation")
+}
+
 /// Whether the effect of a mode with all its grants happened.
 async fn check_effect(
     seed: &Seed,
@@ -3002,16 +3096,7 @@ async fn check_effect(
         case.mode,
         adapter.variant
     );
-    let operation = case
-        .requests
-        .iter()
-        .position(|request| request.spec.starts_with("operation"))
-        .expect("every case has an operation");
-    let position = adapter
-        .makes
-        .iter()
-        .position(|index| *index == operation)
-        .expect("every adapter makes the operation");
+    let position = operation_position(case, adapter);
     let effect = adapter.effect.unwrap_or(case.effect);
     let effect_happened = |after: &Observation| {
         let target = |observation: &Observation| observation.target.clone();
@@ -3145,7 +3230,7 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
                     match looks_like {
                         LooksLike::UnknownAgent | LooksLike::UnknownInvocation => {
                             let unknown = if *looks_like == LooksLike::UnknownAgent {
-                                seed.with_unknown_agent()
+                                seed.with_unknown_agent_at(*position)
                             } else {
                                 seed.with_unknown_invocation_at(*position)
                             };
@@ -3195,8 +3280,10 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
     Ok(())
 }
 
-/// `view` and `oplog : read` neither control nor invoke, also through REST
-/// calls that no client preflight guards.
+/// `view`, `oplog : read` and `tool : view` neither control nor invoke, also
+/// through REST calls that no client preflight guards. These grants allow
+/// every read that a mode makes before its operation, so that the operation
+/// itself is what is denied.
 #[test]
 #[timeout("30m")]
 #[ignore = "pending: the 2.0 card model (GOL-1270, GOL-1271, GOL-1272, GOL-1276, GOL-1288, GOL-1289) and 2.0 grant installation (GOL-1275, GOL-1297), all Aditya Salunkhe"]
@@ -3208,17 +3295,16 @@ async fn management_read_grants_cannot_control_or_invoke(
         for adapter in adapters(path, mode) {
             let seed = Seed::new(deps, case.fixture).await?;
             seed.put_in(case.precondition).await?;
-            give(&seed, &[VIEW, OPLOG_READ.0]).await?;
+            give(&seed, &[VIEW, OPLOG_READ.0, TOOL_VIEW.0]).await?;
             let before = seed.observe().await?;
             let trace = (adapter.run)(&seed).await?;
+            let operation = operation_position(case, adapter);
             assert!(
-                trace
-                    .outcomes
-                    .iter()
-                    .any(|outcome| matches!(outcome, Outcome::Denied(_))),
-                "`{}` mode `{mode}` variant `{}` was allowed with read grants",
+                matches!(trace.outcomes.get(operation), Some(Outcome::Denied(_))),
+                "`{}` mode `{mode}` variant `{}` did not have its operation denied with read grants: {:?}",
                 path.join(" "),
-                adapter.variant
+                adapter.variant,
+                trace.outcomes
             );
             assert_eq!(
                 seed.observe().await?,
@@ -3280,7 +3366,7 @@ async fn management_cancel_needs_the_invocation_cancel_grant(
 /// of a marked fork, the restricted snapshot-migration rehearsal, is not a
 /// positive case here: its admission waits for the executor review of its
 /// host-call safety, exact idle, restart behavior and supported cases, and
-/// for an owner (`MANUAL_UPDATE_OF_A_MARKED_AGENT`).
+/// for the rehearsal itself (GOL-2143, `MANUAL_UPDATE_OF_A_MARKED_AGENT`).
 #[test]
 #[timeout("10m")]
 #[ignore = "pending: the never-live mark and the fork that sets it (GOL-1420); the replay verb (GOL-1276), 2.0 grant installation (GOL-1275, GOL-1297) and the 2.0 card model (GOL-1289), all Aditya Salunkhe"]
@@ -3307,7 +3393,7 @@ async fn management_replay_cannot_change_a_real_agent(
         assert_eq!(seed.observe().await?, before, "replay changed a real agent");
     }
     anyhow::bail!(
-        "pending: the marked half of this case needs a sandbox fork with the never-live mark, which GOL-1420 supplies, and a fork of another type as the negative owner control; its manual rehearsal waits for the executor review and an owner of the rehearsal"
+        "pending: the marked half of this case needs a sandbox fork with the never-live mark, which GOL-1420 supplies, and a fork of another type as the negative owner control; its manual rehearsal waits for the executor review and for the rehearsal itself (GOL-2143)"
     )
 }
 

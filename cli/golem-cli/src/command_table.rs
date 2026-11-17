@@ -198,8 +198,9 @@ pub enum Marked {
 ///
 /// This is the grant, not the admission. The server admits the rehearsal
 /// only after the executor review and tests settle its host-call safety,
-/// exact idle and restart behavior, and the supported cases; the issue that
-/// builds it, and its gate relative to the replay PR, are not agreed yet.
+/// exact idle and restart behavior, and the supported SDK and SQLite cases.
+/// GOL-2143 builds the rehearsal; whether it lands before the replay PR is
+/// not agreed yet.
 /// Nothing here builds the rehearsal or refuses a marked manual update.
 pub const MANUAL_UPDATE_OF_A_MARKED_AGENT: Marked = Marked::Instead(&[REPLAY]);
 
