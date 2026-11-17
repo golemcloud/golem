@@ -284,8 +284,22 @@ authorize direct pushes or merges to the selected target branch.
    clean source, and the merged preparation PR. The PR must have the tagged commit
    as its exact head and target `golemcloud/golem`'s `main` or the maintenance
    branch matching the tag (for example, `1.6.x` for `v1.6.2`). Its merge commit
-   must remain reachable from that public target branch. It runs the full reusable
-   CI preflight with published SDK and shared-crate checks. Its protected
+   must remain reachable from that public target branch. With
+   `MAIN_VALIDATION_RELEASE_GATE_ENABLED` unset or not `true`, it runs the full reusable CI
+   preflight with published SDK and shared-crate checks.
+   The replacement remains inactive until runner acceptance and coordinated
+   cutover. After activation, open an issue with the `main-validation-request`
+   label and a JSON body containing the tag's full commit SHA as `source` and
+   its public tag as `release_tag`. Wait for a successful `Main validation`
+   commit status before dispatching preparation. Preparation requires the latest
+   status in that context from `github-actions[bot]` on the exact tagged commit.
+   A missing, failed or pending status stops preparation; it does
+   not start another validation run or fall back to full hosted CI.
+   The replacement then runs release-only checks for the published shared crates,
+   built-in release behavior and all six published SDKs. It rebuilds their local
+   prerequisites instead of restoring ordinary CI's binaries. Those checks use
+   their own Blacksmith runner, outside the validation concurrency group.
+   Its protected
    `golem-release` job creates or resumes the draft, builds and publishes all
    eight built-in inventory entries, and uploads the verified manifest. All
    built-in packages must finish before the first built-in upload. The existing native matrix then builds,

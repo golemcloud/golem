@@ -731,6 +731,11 @@ if not equals ${result.code} 0
 end
 '''
 
+[tasks.prepare-release-prerequisites]
+description = "Prepares release-only checks and local binaries after exact-source validation"
+env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci" }
+run_task = { name = ["verify-shared-crates", "ensure-builtin-artifacts", "build-cli-test-bins", "builtin-artifacts-release-tests"] }
+
 # Worker-executor test tasks use production's 32 MiB native stacks to avoid
 # allocating a temporary invocation stack on every poll.
 [tasks.worker-executor-tests]
