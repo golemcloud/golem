@@ -13471,6 +13471,83 @@ async fn caller_attempt_is_random_v4_persisted_and_reused_after_restart() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn completed_input_reconstruction_reuses_only_matching_registrations() {
+    let owner = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        owner.environment_id,
+        owner.agent_id.clone(),
+        owner.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let key = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key);
+    let session = StreamSession::new(producer.clone(), oplog.clone(), key.clone(), [])
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+    let root = SchemaType::stream(Some(SchemaType::u8()));
+    let graph = SchemaGraph::anonymous(root.clone());
+    let (consumer, stream) =
+        output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
+    drop(consumer);
+    let original = session
+        .materialize_agent_input(
+            &SchemaValue::Stream(stream),
+            &graph,
+            &root,
+            ComponentRevision::INITIAL,
+        )
+        .await
+        .unwrap();
+    wait_for_terminal_commit(&producer, original.mappings[0].handle.stream_id).await;
+    session.complete().await.unwrap();
+    let before = oplog.current_oplog_index().await;
+    drop(session);
+    drop(producer);
+
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        owner.environment_id,
+        owner.agent_id,
+        owner.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let session = StreamSession::new(producer, oplog.clone(), key, [])
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+    for mode in ["same", "new-coordinate", "changed-schema"] {
+        let (consumer, stream) =
+            output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
+        drop(consumer);
+        let (value, graph) = match mode {
+            "new-coordinate" => (
+                stream_union_value(stream),
+                SchemaGraph::anonymous(union_with_stream_in_second_branch()),
+            ),
+            "changed-schema" => (
+                SchemaValue::Stream(stream),
+                SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::u32()))),
+            ),
+            _ => (SchemaValue::Stream(stream), graph.clone()),
+        };
+        let result = session
+            .materialize_agent_input(&value, &graph, &graph.root, ComponentRevision::INITIAL)
+            .await;
+        match mode {
+            "same" => assert_eq!(result.unwrap().mappings, original.mappings),
+            "new-coordinate" => assert!(result.err().unwrap().contains("SessionFinished")),
+            "changed-schema" => assert!(result.err().unwrap().contains("RegistrationDivergence")),
+            _ => unreachable!(),
+        }
+        assert_eq!(oplog.current_oplog_index().await, before);
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn root_forwarding_records_original_reader_before_local_and_rpc_destinations() {
     for remote in [false, true] {
         let owner = identity();
@@ -13622,7 +13699,7 @@ async fn root_forwarding_records_original_reader_before_local_and_rpc_destinatio
             assert_eq!(oplog.current_oplog_index().await, before_retry);
         }
         let mut changed_handle = origin
-            .endpoint(handle, 0, SessionStreamRole::Input)
+            .endpoint(handle.clone(), 0, SessionStreamRole::Input)
             .await
             .unwrap()
             .into_forwarded()
@@ -13640,6 +13717,44 @@ async fn root_forwarding_records_original_reader_before_local_and_rpc_destinatio
             .unwrap();
         assert!(error.contains("original reader binding"));
         assert_eq!(oplog.current_oplog_index().await, before_retry);
+
+        destination.complete().await.unwrap();
+        let before_reconstruction = oplog.current_oplog_index().await;
+        let origin_key = origin.session_reference.clone();
+        let destination_key = destination.session_reference.clone();
+        drop(origin);
+        drop(destination);
+        drop(producer);
+        let producer = DurableStreamStore::load(
+            oplog.clone(),
+            owner.environment_id,
+            owner.agent_id,
+            owner.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let origin = StreamSession::new(producer.clone(), oplog.clone(), origin_key, []);
+        origin.recover_session_mappings().await.unwrap();
+        let destination = StreamSession::new(producer, oplog.clone(), destination_key, [])
+            .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+        let input = origin
+            .endpoint(handle, 0, SessionStreamRole::Input)
+            .await
+            .unwrap()
+            .into_forwarded()
+            .unwrap();
+        let reconstructed = destination
+            .materialize_agent_input(
+                &SchemaValue::Stream(SchemaValueStream::from_host_endpoint(input)),
+                &graph,
+                &root,
+                ComponentRevision::INITIAL,
+            )
+            .await
+            .unwrap();
+        assert_eq!(reconstructed.mappings, vec![mapping]);
+        assert_eq!(oplog.current_oplog_index().await, before_reconstruction);
     }
 }
 

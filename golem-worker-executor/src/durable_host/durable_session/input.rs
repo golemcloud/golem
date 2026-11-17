@@ -789,8 +789,29 @@ impl StreamSession {
                 u64::try_from(pending.len() - 1)
                     .map_err(|_| "durable input handle index overflow".to_string())
             })?;
+        let mut new_stream_count = 0;
+        for input in &pending {
+            let missing = if let Some(forwarded) = &input.forwarded_input {
+                self.mapping_for_reference(
+                    &StreamRecordReference::Foreign(forwarded.handle.clone()),
+                    SessionStreamRole::Input,
+                )
+                .is_none()
+            } else {
+                self.producer
+                    .handle_for_coordinate(&StreamRegistrationCoordinate::Root {
+                        invocation_id: self.session_key.clone(),
+                        root_kind: StreamRootKind::MethodInput,
+                        recursive_value_path: input.path.clone(),
+                    })
+                    .await
+                    .map_err(SessionError::from)?
+                    .is_none()
+            };
+            new_stream_count += usize::from(missing);
+        }
         self.producer
-            .validate_new_session_stream_count(&self.session_key, pending.len())
+            .validate_new_session_stream_count(&self.session_key, new_stream_count)
             .await
             .map_err(SessionError::from)?;
 
