@@ -334,11 +334,34 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
-                                        Some(TrapType::from_worker_executor_error::<Ctx>(
+                                        // A rejected periodic snapshot is reported with its own
+                                        // index, so only a divergence that ends the replay
+                                        // names the snapshot that the replay started from.
+                                        let hint = if snapshot_divergence
+                                            && !Self::rejects_diverged_record(store, &error)
+                                        {
+                                            Self::replay_snapshot_hint(store)
+                                        } else {
+                                            None
+                                        };
+                                        let mut trap_type = TrapType::from_worker_executor_error::<Ctx>(
                                             error,
                                             OplogIndex::INITIAL,
                                             store.as_context().data().agent_mode(),
-                                        ))
+                                        );
+                                        // The hint goes into the text of the error only; the
+                                        // divergence keeps its structure.
+                                        if let (
+                                            Some(hint),
+                                            TrapType::Error {
+                                                error: AgentError::InternalError(text),
+                                                ..
+                                            },
+                                        ) = (hint, &mut trap_type)
+                                        {
+                                            text.push_str(&hint);
+                                        }
+                                        Some(trap_type)
                                     }
                                 }
 ;
@@ -530,6 +553,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             diverged,
             provenance,
         })
+    }
+
+    /// The hint for a divergence of a replay that started from a snapshot: the oplog index of the
+    /// snapshot, and that a restored state that differs from the live one is a common cause. A
+    /// replay without a snapshot gets no hint.
+    fn replay_snapshot_hint(store: &Store<Ctx>) -> Option<String> {
+        store
+            .data()
+            .durable_ctx()
+            .state
+            .last_snapshot_index
+            .map(|snapshot_index| {
+                format!(
+                    "; replay started from the snapshot at oplog index {snapshot_index}; a snapshot load that differs from the live state is a common cause"
+                )
+            })
     }
 
     /// Begins the bootstrap phase of the primary Store, before its core initializer runs.

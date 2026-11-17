@@ -791,6 +791,21 @@ If loading fails, partial state is discarded:
 - If an automatic snapshot is rejected by its loader, or loading or subsequent replay fails deterministically, Golem rejects only that snapshot record and recreates the component. The next start uses the previous usable automatic snapshot, if Golem keeps one and it is not the rejected record. When no usable automatic snapshot is left, Golem starts from the authoritative recovery baseline, or from the beginning if none exists. Transient failures and resource-limit failures can instead propagate or cause recovery to retry.
 - Failure to load the authoritative recovery baseline of an already completed manual update or snapshot-assisted update cannot fall back to pre-update history.
 
+## A restored agent must behave like the live agent
+
+After loading a snapshot, Golem replays the invocations recorded after it and compares every result with the oplog. A restored agent must therefore return exactly what the live agent returned, for every later method result and host call. It is not enough that the snapshot holds the data: `load` must rebuild every value that a later result depends on in the same way that the live code keeps it. When a replayed result differs, the replay diverges with `Unexpected oplog entry during replay: expected …, got …`. When the failing replay started from a snapshot, such as the snapshot of the last manual update, the error names the oplog index of that snapshot.
+
+Common causes:
+
+- **A derived or cached value that `load` computes differently.** For example, live code keeps a running sum of the written sizes, and `load` sets it to the size of the snapshot bytes. Rebuild such values from the restored data exactly as the live code computes them, or save them.
+- **A field that a custom `save` leaves out.** `load` then resets it to an initial value. Typed state snapshotting in TypeScript refuses to save undeclared fields; a custom `save`/`load` pair has no such check.
+- **Approximate counters and statistics** that `load` resets or estimates.
+- **Order-dependent results after a rebuild**, such as the iteration order of a map or set that `load` fills in a different order, or a sort without a total order, where equal keys can come out in another order.
+
+When the replay after an automatic snapshot diverges, Golem rejects that snapshot and starts again from an older restore point. This recovers the agent while its recorded history does not depend on a faulty load. When the agent has already run live from a faulty restore, for example after a restart right after a snapshot, its recorded results come from the restored state. A replay from an older restore point cannot reproduce them, and the agent fails with a `Recovery` error, possibly long after the faulty snapshot was taken. A faulty restore with no later invocations to replay does not fail: the agent continues with the wrong state.
+
+Test restoration by behavior, not only by bytes: apply the same operations to a live state and to a state restored from its snapshot, and compare the results of every method that reads state. Comparing `save(load(save(x)))` with `save(x)` does not find a value that `save` leaves out.
+
 ## Configuring snapshot-based recovery
 
 Choose when Golem takes automatic snapshots in the agent definition. Disabling automatic snapshot creation does not discard the authoritative recovery baseline of the last successful update, if one exists.
