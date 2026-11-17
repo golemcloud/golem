@@ -32,6 +32,10 @@ import { billableStatuses, Subscriptions, type SubscriptionsError } from "./Subs
  * customer with the external ID for it. The cleanup then deletes that customer too, and logs
  * `deleted_account_subscription_canceled`. The user goes with its sessions and GitHub accounts. The
  * subscriptions, orders and usage events of the account stay.
+ *
+ * The cleanup reads, decides and deletes the customer of each account under the lock of the
+ * account, which the subscription webhooks take too. So the app records a subscription either
+ * before the cleanup reads the account, or after the time of the delete.
  */
 
 export class CleanupError extends Data.TaggedError("CleanupError")<{
@@ -145,42 +149,67 @@ export const cleanupDeletedAccounts: Effect.Effect<
     }
   }
 
-  // A finished account whose subscription the app recorded after the delete of its customer.
-  const restarted = yield* query<{ account_id: string; subscription_ids: Array<string> }>(
-    `SELECT c.account_id::text AS account_id,
-            array_agg(s.subscription_id ORDER BY s.subscription_id) AS subscription_ids
-       FROM deleted_account_cleanups c
-       JOIN polar_subscriptions s ON s.account_id = c.account_id
-      WHERE c.account_id = ANY($1::uuid[]) AND s.status = ANY($2) AND NOT s.cancel_at_period_end
-        AND s.updated_at > c.polar_customer_deleted_at
-      GROUP BY c.account_id`,
-    [[...finished], billableStatuses]
-  )
-  for (const row of restarted.rows) {
-    count(yield* deleteCustomer(row.account_id, row.subscription_ids))
+  // The billable subscriptions, not canceled at the period end, that the app recorded after the
+  // delete of the customer of a finished account.
+  const restarted = (accountIds: ReadonlyArray<string>) =>
+    query<{ account_id: string; subscription_ids: Array<string> }>(
+      `SELECT c.account_id::text AS account_id,
+              array_agg(s.subscription_id ORDER BY s.subscription_id) AS subscription_ids
+         FROM deleted_account_cleanups c
+         JOIN polar_subscriptions s ON s.account_id = c.account_id
+        WHERE c.account_id = ANY($1::uuid[]) AND s.status = ANY($2) AND NOT s.cancel_at_period_end
+          AND s.updated_at > c.polar_customer_deleted_at
+        GROUP BY c.account_id`,
+      [accountIds, billableStatuses]
+    )
+  for (const { account_id: accountId } of (yield* restarted([...finished])).rows) {
+    const result = yield* subscriptions.withAccountLock(
+      accountId,
+      Effect.gen(function* () {
+        const row = (yield* restarted([accountId])).rows[0]
+        return row === undefined ? undefined : yield* deleteCustomer(accountId, row.subscription_ids)
+      })
+    )
+    if (result !== undefined) {
+      count(result)
+    }
   }
 
   for (const accountId of deleted.filter((accountId) => !finished.has(accountId))) {
-    const accountSubscriptions = yield* subscriptions.ofAccount(accountId, undefined)
-    const reasons = holdFor(
-      accountSubscriptions,
-      yield* subscriptions.unpaidOrders(accountId, undefined),
-      yield* subscriptions.unbilledUsage(accountId),
-      yield* subscriptions.unfinishedCheckouts(accountId)
+    const result = yield* subscriptions.withAccountLock(
+      accountId,
+      Effect.gen(function* () {
+        const accountSubscriptions = yield* subscriptions.ofAccount(accountId, undefined)
+        const reasons = holdFor(
+          accountSubscriptions,
+          yield* subscriptions.unpaidOrders(accountId, undefined),
+          yield* subscriptions.unbilledUsage(accountId),
+          yield* subscriptions.unfinishedCheckouts(accountId)
+        )
+        const canceling = reasons.includes("subscription")
+          ? accountSubscriptions
+              .filter(
+                (subscription) => billableStatuses.includes(subscription.status) && !subscription.cancelAtPeriodEnd
+              )
+              .map((subscription) => subscription.subscriptionId)
+          : []
+        if (reasons.length > 0 && canceling.length === 0) {
+          yield* Effect.logWarning("A deleted account is not settled; its Polar customer stays").pipe(
+            Effect.annotateLogs({
+              event: "deleted_account_unsettled",
+              golemAccountId: accountId,
+              reasons: reasons.join(",")
+            })
+          )
+          return "unsettled" as const
+        }
+        return yield* deleteCustomer(accountId, canceling)
+      })
     )
-    const canceling = reasons.includes("subscription")
-      ? accountSubscriptions
-          .filter((subscription) => billableStatuses.includes(subscription.status) && !subscription.cancelAtPeriodEnd)
-          .map((subscription) => subscription.subscriptionId)
-      : []
-    if (reasons.length > 0 && canceling.length === 0) {
+    if (result === "unsettled") {
       unsettled++
-      yield* Effect.logWarning("A deleted account is not settled; its Polar customer stays").pipe(
-        Effect.annotateLogs({ event: "deleted_account_unsettled", golemAccountId: accountId, reasons: reasons.join(",") })
-      )
       continue
     }
-    const result = yield* deleteCustomer(accountId, canceling)
     if (result !== "failed") {
       finished.add(accountId)
     }

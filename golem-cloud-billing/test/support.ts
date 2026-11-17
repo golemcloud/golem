@@ -224,6 +224,13 @@ export class FakeUpstreams {
   checkoutCreateStatus = 201
   /** The external IDs of the Polar customers; `DELETE /v1/customers/external/{id}` removes one. */
   readonly polarCustomers = new Set<string>()
+  /**
+   * Runs at `GET /v1/checkouts/{id}` before Polar answers. A status that it gives replaces the
+   * status in `checkouts`, as a replica of Polar that lags.
+   */
+  onCheckoutRead: ((checkoutId: string) => Promise<CheckoutStatus | undefined>) | undefined
+  /** Runs at `DELETE /v1/customers/external/{id}` after Polar deleted the customer, before it answers. */
+  onCustomerDelete: ((externalId: string) => Promise<void>) | undefined
 
   /** The Golem account of the access token of `identity`, created on first use. */
   accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
@@ -348,18 +355,21 @@ export class FakeUpstreams {
           if (bearer !== polarWebToken) {
             return Response.json({ error: "invalid token" }, { status: 401 })
           }
-          return this.checkouts.has(checkout[1]!)
-            ? Response.json(this.checkoutJson(checkout[1]!))
-            : Response.json({ detail: "Not found" }, { status: 404 })
+          if (!this.checkouts.has(checkout[1]!)) {
+            return Response.json({ detail: "Not found" }, { status: 404 })
+          }
+          const status = await this.onCheckoutRead?.(checkout[1]!)
+          return Response.json({ ...this.checkoutJson(checkout[1]!), ...(status === undefined ? {} : { status }) })
         }
         const customer = /^\/v1\/customers\/external\/([^/]+)$/.exec(url.pathname)
         if (url.origin === polarApiUrl && customer !== null && request.method === "DELETE") {
           if (bearer !== polarCleanupToken) {
             return Response.json({ error: "invalid token" }, { status: 401 })
           }
-          return this.polarCustomers.delete(decodeURIComponent(customer[1]!))
-            ? new Response(null, { status: 204 })
-            : Response.json({ detail: "Not found" }, { status: 404 })
+          const externalId = decodeURIComponent(customer[1]!)
+          const deleted = this.polarCustomers.delete(externalId)
+          await this.onCustomerDelete?.(externalId)
+          return deleted ? new Response(null, { status: 204 }) : Response.json({ detail: "Not found" }, { status: 404 })
         }
         const match = /^\/v1\/accounts\/([0-9a-f-]{36})(\/plan|\/limits|\/monthly-usage-mode|\/deletion-holds\/([0-9a-f-]{36}))?$/.exec(url.pathname)
         if (url.origin !== registryUrl || match === null) {

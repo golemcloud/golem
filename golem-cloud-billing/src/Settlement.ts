@@ -6,6 +6,7 @@ import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts
 import {
   billableStatuses,
   type Checkout,
+  type CheckoutStatus,
   type Subscription,
   Subscriptions,
   type SubscriptionsError,
@@ -513,28 +514,33 @@ export const make: Effect.Effect<
 
     // Only a final status from Polar removes the hold of the checkout. Polar answers the read from a
     // replica that can lag, so an `open` checkout after its expiry can be one that the person paid
-    // just before it; the sweep reads it again until the job of Polar expires it. A failed read
-    // keeps the status, and records the time of the read, so the next read waits
-    // `CHECKOUT_READ_INTERVAL_MS`.
+    // just before it; the sweep reads it again until the job of Polar expires it. The sweep reads
+    // and records under the lock of the account, as the checkout route does, so a click never
+    // decides on an older status than the app recorded. A failed read records only the time of
+    // the read, so the next read waits `CHECKOUT_READ_INTERVAL_MS`.
     const readCheckout = (checkout: Checkout, now: Date) =>
-      polar.getCheckout(checkout.checkoutId).pipe(
-        Effect.map((session) => session.status),
-        Effect.tap((status) =>
-          Effect.logInfo("Read a checkout after its expiry").pipe(
-            Effect.annotateLogs({ golemAccountId: checkout.accountId, checkoutId: checkout.checkoutId, status })
-          )
-        ),
-        Effect.catch((error) =>
-          Effect.logError("Cannot read the checkout from Polar").pipe(
-            Effect.annotateLogs({
-              golemAccountId: checkout.accountId,
-              checkoutId: checkout.checkoutId,
-              error: error.message
-            }),
-            Effect.as(checkout.status)
-          )
-        ),
-        Effect.flatMap((status) => subscriptions.recordCheckoutStatus(checkout.checkoutId, status, now)),
+      subscriptions.withAccountLock(
+        checkout.accountId,
+        polar.getCheckout(checkout.checkoutId).pipe(
+          Effect.map((session): CheckoutStatus | undefined => session.status),
+          Effect.tap((status) =>
+            Effect.logInfo("Read a checkout after its expiry").pipe(
+              Effect.annotateLogs({ golemAccountId: checkout.accountId, checkoutId: checkout.checkoutId, status })
+            )
+          ),
+          Effect.catch((error) =>
+            Effect.logError("Cannot read the checkout from Polar").pipe(
+              Effect.annotateLogs({
+                golemAccountId: checkout.accountId,
+                checkoutId: checkout.checkoutId,
+                error: error.message
+              }),
+              Effect.as(undefined)
+            )
+          ),
+          Effect.flatMap((status) => subscriptions.recordCheckoutStatus(checkout.checkoutId, status, now))
+        )
+      ).pipe(
         Effect.catch((error) =>
           Effect.logError("Cannot record the status of the checkout").pipe(
             Effect.annotateLogs({ checkoutId: checkout.checkoutId, error: error.message })

@@ -1346,6 +1346,9 @@ describe("Polar billing", () => {
 
     const postCheckout = (jar: CookieJar) => request(app.handler, jar, "POST", "/billing/checkout", { origin: baseUrl })
     const expiryOf = (checkoutId: string) => upstreams.checkouts.get(checkoutId)!.expiresAt
+    /** Whether `promise` settles within `ms` milliseconds. */
+    const settlesWithin = (promise: Promise<unknown>, ms: number) =>
+      Promise.race([promise.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms))])
     const at = (time: Date, offset: number) => new Date(time.getTime() + offset)
 
     it("holds the account before it sends the checkout URL, until Polar expires the checkout", async () => {
@@ -1448,6 +1451,35 @@ describe("Polar billing", () => {
       expect(new URL(callback.headers.get("location")!, baseUrl).searchParams.get("error")).toBeNull()
     })
 
+    it("cancels a subscription that the app records while the cleanup deletes the Polar customer", async () => {
+      const { accountId } = await signedInToRegistryAccount()
+      upstreams.polarCustomers.add(accountId)
+      await registry.deleteAccount(accountId)
+      upstreams.deletedAccounts.add(accountId)
+      const deleting = Promise.withResolvers<void>()
+      const deleted = Promise.withResolvers<void>()
+      upstreams.onCustomerDelete = async () => {
+        deleting.resolve()
+        await deleted.promise
+      }
+
+      const run = cleanup()
+      await deleting.promise
+      // Polar has a new customer of the account, and sends its subscription.
+      upstreams.polarCustomers.add(accountId)
+      const delivery = deliver("subscription.active", subscription(accountId))
+
+      // The webhook waits for the lock of the account until the cleanup recorded the delete.
+      expect(await settlesWithin(delivery, 200)).toBe(false)
+      deleted.resolve()
+      expect(await run).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 0, deletedUsers: 1 })
+      expect((await delivery).status).toBe(200)
+
+      upstreams.onCustomerDelete = undefined
+      expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, canceledSubscriptions: 1, deletedUsers: 0 })
+      expect(upstreams.polarCustomers.has(accountId)).toBe(false)
+    })
+
     it("sends a second click back to the open checkout", async () => {
       const { jar } = await signedIn()
       await postCheckout(jar)
@@ -1518,6 +1550,54 @@ describe("Polar billing", () => {
       expect(third.headers.get("location")).toBe(upstreams.checkoutUrl("polar_c_1"))
       expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
       expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiryOf("polar_c_1")))
+    })
+
+    it("reads a checkout in the sweep under the lock of the account, so a click meanwhile sees the payment", async () => {
+      const { jar } = await signedIn()
+      await postCheckout(jar)
+      await expireSoon("polar_c_1")
+      const reading = Promise.withResolvers<void>()
+      const read = Promise.withResolvers<void>()
+      let reads = 0
+      upstreams.onCheckoutRead = async () => {
+        reads++
+        if (reads > 1) {
+          // A replica of Polar that lags.
+          return "open"
+        }
+        reading.resolve()
+        await read.promise
+        return "succeeded"
+      }
+
+      const swept = sweep(at(expiryOf("polar_c_1"), Settlement.CHECKOUT_READ_DELAY_MS))
+      await reading.promise
+      const click = postCheckout(jar)
+
+      // The click waits for the lock of the account until the sweep recorded the payment.
+      expect(await settlesWithin(click, 200)).toBe(false)
+      read.resolve()
+      await swept
+      expect((await click).headers.get("location")).toBe(`${baseUrl}/?checkout_id=polar_c_1`)
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+    })
+
+    it("keeps the status of a checkout that the sweep cannot read, and reads it again after 5 minutes", async () => {
+      const { jar, accountId } = await signedIn()
+      await postCheckout(jar)
+      const expiresAt = expiryOf("polar_c_1")
+      upstreams.onCheckoutRead = () => Promise.reject(new Error("Polar is unavailable"))
+
+      const read = at(expiresAt, Settlement.CHECKOUT_READ_DELAY_MS)
+      await sweep(read)
+      await sweep(at(read, Settlement.CHECKOUT_READ_INTERVAL_MS - MINUTE))
+
+      expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toHaveLength(1)
+      expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiresAt))
+      upstreams.onCheckoutRead = undefined
+      upstreams.checkouts.get("polar_c_1")!.status = "expired"
+      await sweep(at(read, Settlement.CHECKOUT_READ_INTERVAL_MS))
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
     })
 
     it("keeps a final status of a checkout when a later read from Polar reports an older one", async () => {

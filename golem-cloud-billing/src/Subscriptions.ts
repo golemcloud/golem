@@ -234,13 +234,14 @@ export interface SubscriptionsShape {
    */
   readonly checkoutsToRead: (now: Date, readAfter: Date) => Effect.Effect<ReadonlyArray<Checkout>, SubscriptionsError>
   /**
-   * Records the status of the checkout that the app read from Polar at `readAt`. A final status
-   * (`CheckoutStatus`) stays: Polar answers a read from a replica that can lag, so a later read
-   * can report an older status.
+   * Records the status of the checkout that the app read from Polar at `readAt`; with no status,
+   * only the time of a read that failed. A final status (`CheckoutStatus`) stays: Polar answers a
+   * read from a replica that can lag, so a later read can report an older status. The caller holds
+   * the lock of the account (`withAccountLock`).
    */
   readonly recordCheckoutStatus: (
     checkoutId: string,
-    status: CheckoutStatus,
+    status: CheckoutStatus | undefined,
     readAt: Date
   ) => Effect.Effect<void, SubscriptionsError>
   /** Whether a webhook with this `webhook-id` was handled before. */
@@ -692,9 +693,9 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
         [now, readAfter]
       ).pipe(Effect.map((result) => result.rows.map(fromCheckoutRow)))
 
-    const recordCheckoutStatus = (checkoutId: string, status: CheckoutStatus, readAt: Date) =>
+    const recordCheckoutStatus = (checkoutId: string, status: CheckoutStatus | undefined, readAt: Date) =>
       query(
-        `UPDATE polar_checkouts SET status = $2, read_at = $3
+        `UPDATE polar_checkouts SET status = COALESCE($2, status), read_at = $3
           WHERE checkout_id = $1 AND status NOT IN ('succeeded', 'expired', 'failed')`,
         [checkoutId, status, readAt]
       ).pipe(Effect.asVoid)

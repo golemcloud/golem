@@ -202,11 +202,12 @@ plan.
   hours. Before that, it reads from Polar each unfinished checkout that is `open` or `confirmed`, 5
   minutes after its expiry (`CHECKOUT_READ_DELAY_MS`) and then every 5 minutes
   (`CHECKOUT_READ_INTERVAL_MS`), and records its status (see [Deletion hold](#deletion-hold)).
-- **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
-  account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
-  delivers the webhook again. A 404 of the registry for an account that is not deleted also
-  answers 500: the permission share of the billing account is missing. A 409 of the registry (the
-  account changed between the read and the write) makes the handler read the account again.
+- **Order and retries.** An advisory lock per account serializes the webhooks, the checkout route,
+  the sweep and the cleanup of one account, also across replicas. When the registry or the database
+  fails, the handler answers 500 and Polar delivers the webhook again. A 404 of the registry for an
+  account that is not deleted also answers 500: the permission share of the billing account is
+  missing. A 409 of the registry (the account changed between the read and the write) makes the
+  handler read the account again.
 
 The plan of a customer is not up to its owner: the registry refuses `set-plan` on the own account.
 The app changes plans and deletion holds with the token of a separate billing account
@@ -492,7 +493,9 @@ A run also checks the accounts that `deleted_account_cleanups` records. When the
 billable subscription that is not canceled at the period end after the delete of the customer,
 Polar created a new customer with the external ID for it, for example for a checkout that the app
 did not create. The cleanup deletes that customer too, logs `deleted_account_subscription_canceled`,
-and records the new time.
+and records the new time. The cleanup does steps 1 and 2 of an account under the lock of the
+account, as the subscription webhooks do. So the app records a subscription either before step 1
+reads it, or after the recorded time of the delete, and a later run finds it.
 
 The subscriptions, orders and usage events of the account stay. A person who signs up again with
 the same GitHub identity gets a new Golem account at once. The billing app refuses its sign-in
