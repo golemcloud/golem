@@ -259,6 +259,26 @@ describe("Polar billing", () => {
       expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
     })
 
+    it("offers the customer portal, not a checkout, on the default plan while the subscription is past due", async () => {
+      // The first reconcile comes after the past-due grace, so `planFor` gives the free plan, and the
+      // account stays on the default plan.
+      const { jar, accountId } = await signedIn()
+      upstreams.planOf(accountId).planId = registryDefaultPlanId
+      const failedAt = new Date(Date.now() - config.pastDueGraceMs - MINUTE)
+      await deliver(
+        "subscription.past_due",
+        subscription(accountId, { status: "past_due", past_due_at: failedAt.toISOString() })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(registryDefaultPlanId)
+
+      expectRefused(await postCheckout(jar))
+      const html = await page(jar)
+      expect(html).toContain("<h1>Default</h1>")
+      expect(html).not.toContain(`action="/billing/checkout"`)
+      expect(html).toContain(`action="/billing/portal"`)
+      expect(html).toContain("The last payment for Paid failed.")
+    })
+
     it("refuses a checkout when the registry does not send the account", async () => {
       const { jar } = await signedIn()
       upstreams.accountReadStatus = 503

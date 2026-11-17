@@ -295,11 +295,21 @@ const planHero = (options: SignedInPageOptions) => {
           ${portalForm("Manage billing")}
         </div>`
     case "default":
-      return html`<span class="eyebrow">Your plan</span>
+      if (canCheckOut(options.plan, options.subscription)) {
+        return html`<span class="eyebrow">Your plan</span>
         <h1>Default</h1>
         <p class="lead">Golem gave this account its default plan. Paid has larger monthly allowances. You pay through Polar. When the subscription ends, your plan changes to Free, not back to Default.</p>
         <div class="actions">
           ${checkoutForm}
+          ${options.subscription === undefined ? null : portalForm("Billing history")}
+        </div>`
+      }
+      // On the default plan, `canCheckOut` refuses only an account with a `past_due` subscription.
+      return html`<span class="eyebrow">Your plan</span>
+        <h1>Default</h1>
+        <p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal. After the payment, your plan is Paid.</p>
+        <div class="actions">
+          ${portalForm("Manage billing")}
         </div>`
     case "other":
       return html`<span class="eyebrow">Your plan</span>
