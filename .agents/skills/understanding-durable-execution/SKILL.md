@@ -1063,8 +1063,12 @@ again; an incomplete receive re-executes after the rebuild.
 
 P2 UDP (`durable_host/sockets/udp.rs`) uses the same entry and the same lazy rebuild.
 `start-bind` (`WriteLocal`) records the selected local address, `stream` (`WriteRemote`) the
-result, `receive` (`ReadRemote`) the datagrams and their sources, `check-send` (`ReadLocal`) the
-permit, and `send` (`WriteRemote`) the destinations, the result and the count, never the bytes.
+result and the native local and remote addresses after the call, `receive` (`ReadRemote`) the
+datagrams and their sources, `check-send` (`ReadLocal`) the permit, and `send` (`WriteRemote`)
+the destinations, the result and the count, never the bytes. The entry takes the addresses that
+`stream` records even when it fails: a connect fixes a wildcard local address, a disconnect can
+release an ephemeral port, and a failed connect can leave the socket disconnected. A `send` that
+binds a new local port records it too, so the rebuild binds the port the peer last saw.
 The guest's datagram streams are `DurableIncomingDatagramStream` and
 `DurableOutgoingDatagramStream`; a replayed `stream` pushes them without native streams, in the
 native order, so later resource reps do not change. At the first live operation the host binds the

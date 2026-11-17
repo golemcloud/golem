@@ -36,7 +36,9 @@ use golem_common::model::oplog::host_functions::{
     SocketsUdpCheckSend, SocketsUdpPermissionCheck, SocketsUdpReceive, SocketsUdpSend,
     SocketsUdpStartBind, SocketsUdpStream,
 };
-use golem_common::model::oplog::types::{SerializableP3UdpDatagram, SerializableSocketError};
+use golem_common::model::oplog::types::{
+    SerializableP3IpSocketAddress, SerializableP3UdpDatagram, SerializableSocketError,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestSocketsUdpBind,
     HostRequestSocketsUdpPermissionCheck, HostRequestSocketsUdpReceive, HostRequestSocketsUdpSend,
@@ -301,6 +303,27 @@ async fn ensure_native_endpoint<Ctx: WorkerCtx>(
     }
 }
 
+/// The native local and remote addresses of the socket. Native connect and disconnect can change
+/// both: a connect fixes a wildcard local address, a disconnect can release an ephemeral port, and
+/// a failed connect can leave the socket disconnected.
+fn native_addresses<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    socket: u32,
+) -> (
+    Option<SerializableP3IpSocketAddress>,
+    Option<SerializableP3IpSocketAddress>,
+) {
+    let mut wasi = ctx.as_wasi_view();
+    let mut view = wasi.sockets();
+    let local = HostUdpSocket::local_address(&mut view, Resource::new_borrow(socket))
+        .ok()
+        .map(Into::into);
+    let remote = HostUdpSocket::remote_address(&mut view, Resource::new_borrow(socket))
+        .ok()
+        .map(Into::into);
+    (local, remote)
+}
+
 fn has_streams<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     socket: u32,
@@ -436,6 +459,8 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
                     return Ok(HostResponseSocketsUdpStream {
                         result: Err(lost_error()),
                         lost: true,
+                        local_address: None,
+                        remote_address: None,
                     });
                 }
                 let result = match native_stream(ctx, rep, remote_address).await? {
@@ -445,23 +470,30 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
                     }
                     Err(error) => Err(recorded_error(error)?),
                 };
+                // Also after a failed call: a failed connect can leave the socket disconnected.
+                let (local_address, remote_address) = native_addresses(ctx, rep);
                 Ok(HostResponseSocketsUdpStream {
                     result,
                     lost: false,
+                    local_address,
+                    remote_address,
                 })
             },
         )
         .await
         .map_err(SocketError::trap)?;
         apply_lost(self, rep, response.lost)?;
+        if !response.lost {
+            let entry = udp_entry(self, rep).map_err(SocketError::trap)?;
+            if response.remote_address.is_some() {
+                entry.phase = SocketPhase::Connected;
+            } else if response.local_address.is_some() {
+                entry.phase = SocketPhase::Bound;
+            }
+            entry.local_address = response.local_address;
+            entry.remote_address = response.remote_address;
+        }
         response.result.map_err(SocketError::from)?;
-        let entry = udp_entry(self, rep).map_err(SocketError::trap)?;
-        entry.phase = if remote_address.is_some() {
-            SocketPhase::Connected
-        } else {
-            SocketPhase::Bound
-        };
-        entry.remote_address = remote_address.map(Into::into);
         push_streams(self, rep, natives).map_err(SocketError::trap)
     }
 
@@ -746,12 +778,14 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
                     return Ok(HostResponseSocketsUdpSend {
                         result: Err(lost_error()),
                         lost: false,
+                        local_address: None,
                     });
                 }
                 if !ensure_native_endpoint(ctx, socket).await? {
                     return Ok(HostResponseSocketsUdpSend {
                         result: Err(lost_error()),
                         lost: true,
+                        local_address: None,
                     });
                 }
                 if persisted {
@@ -765,14 +799,26 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
                     Ok(count) => Ok(count),
                     Err(error) => Err(recorded_error(error)?),
                 };
+                // A send on a socket whose disconnect released its port binds it implicitly.
+                let (native_local, _) = native_addresses(ctx, socket);
+                let local_address = native_local.filter(|address| {
+                    udp_entry(ctx, socket)
+                        .is_ok_and(|entry| entry.local_address.as_ref() != Some(address))
+                });
                 Ok(HostResponseSocketsUdpSend {
                     result,
                     lost: false,
+                    local_address,
                 })
             })
             .await
             .map_err(SocketError::trap)?;
         apply_lost(self, socket, response.lost)?;
+        if let Some(address) = response.local_address.clone() {
+            udp_entry(self, socket)
+                .map_err(SocketError::trap)?
+                .local_address = Some(address);
+        }
         response.result.map_err(SocketError::from)
     }
 

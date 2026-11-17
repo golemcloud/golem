@@ -1989,7 +1989,9 @@ fn p2_udp_socket_host_payload_pairs_roundtrip() {
         },
         super::HostResponseSocketsUdpStream {
             result: Err(reset()),
-            lost: true,
+            lost: false,
+            local_address: Some(local.clone()),
+            remote_address: None,
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpReceive>(
@@ -2016,6 +2018,7 @@ fn p2_udp_socket_host_payload_pairs_roundtrip() {
         super::HostResponseSocketsUdpSend {
             result: Ok(2),
             lost: false,
+            local_address: Some(local),
         },
     );
 }

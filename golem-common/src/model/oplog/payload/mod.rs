@@ -796,9 +796,13 @@ oplog_payload! {
         },
         /// `lost` is set when the call found that the socket could not get its recorded local
         /// address back after a reconstruction.
+        /// The native local and remote addresses after the call, also after a failed call:
+        /// connect and disconnect can change both.
         SocketsUdpStream {
             result: Result<(), SerializableSocketError>,
             lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
+            remote_address: Option<SerializableP3IpSocketAddress>,
         },
         SocketsUdpReceive {
             result: Result<Vec<SerializableP3UdpDatagram>, SerializableSocketError>,
@@ -808,10 +812,12 @@ oplog_payload! {
             result: Result<u64, SerializableSocketError>,
             lost: bool,
         },
-        /// The number of datagrams sent.
+        /// The number of datagrams sent. `local_address` is set when the send bound the socket
+        /// implicitly on a new local address.
         SocketsUdpSend {
             result: Result<u64, SerializableSocketError>,
             lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
         },
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
