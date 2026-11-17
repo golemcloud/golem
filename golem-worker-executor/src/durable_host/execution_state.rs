@@ -25,6 +25,7 @@
 
 use super::InvocationStrictness;
 use super::attribution::InvocationKey;
+use super::tail_work::TailWorkTracker;
 use crate::model::InvocationContext;
 use crate::worker::owner_lane::OwnerInvocationId;
 use golem_common::model::OwnedInvocationId;
@@ -66,6 +67,9 @@ pub(crate) struct InvocationExecutionState {
     pub(crate) scope_card_mint_ordinal: u64,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
     pub(crate) tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
+    /// The tail work counted on the invocation: the activities of trackers obtained while the
+    /// invocation was attributed. It is not carried to the next invocation.
+    pub(crate) tail_work: TailWorkTracker,
 }
 
 impl Default for InvocationExecutionState {
@@ -85,6 +89,7 @@ impl Default for InvocationExecutionState {
             rpc_call_count: 0,
             scope_card_mint_ordinal: 0,
             tool_invocation_attempt_ordinals: HashMap::new(),
+            tail_work: TailWorkTracker::default(),
         }
     }
 }
@@ -116,13 +121,14 @@ impl Invocations {
         if key == self.loop_key {
             return;
         }
-        let carried = if self.loop_key == InvocationKey::AgentLevel {
+        let mut carried = if self.loop_key == InvocationKey::AgentLevel {
             self.loop_entry().clone()
         } else {
             self.entries
                 .remove(&self.loop_key)
                 .expect("the loop's invocation always has an entry")
         };
+        carried.tail_work = TailWorkTracker::default();
         self.entries.insert(key, carried);
         self.entries
             .retain(|existing, _| *existing == InvocationKey::AgentLevel || *existing == key);

@@ -1458,10 +1458,12 @@ impl PrivateDurableWorkerState {
         self.live_host_calls.load(Ordering::Acquire) > 0
     }
 
-    /// Activity tracker for Golem-spawned store background tasks; used to delay invocation
-    /// completion until every spawned task is either finished or parked in a recognized safe wait.
+    /// The per-worker activity tracker of Golem-spawned store tasks, which delays invocation
+    /// completion until every spawned task is finished or parked in a recognized safe wait. It also
+    /// counts on the invocation the running host code belongs to.
     pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
-        self.tail_work.clone()
+        self.tail_work
+            .counting_on(&self.invocation_state().tail_work)
     }
 
     fn wakeup_scheduler(

@@ -38,7 +38,7 @@ use std::future::Future;
 use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use tracing::error;
+use tracing::{debug, error};
 use wasmtime::component::{TaskGroupHook, TaskGroupId};
 
 /// The invocation a host call is attributed to.
@@ -116,8 +116,13 @@ impl InvocationAttribution {
                     "An armed export call did not start a task group"
                 );
             }
-            let _disarm = Disarm(self);
-            future.as_mut().poll(cx)
+            let mut disarm = Disarm {
+                attribution: self,
+                running: false,
+            };
+            let poll = future.as_mut().poll(cx);
+            disarm.running = poll.is_pending();
+            poll
         })
         .await
     }
@@ -207,12 +212,24 @@ impl Drop for Instantiated<'_> {
 }
 
 /// Clears the armed key after the first poll of an export call, also when that poll panics.
-struct Disarm<'a>(&'a InvocationAttribution);
+/// A call still running without having started a task group is a missed path. A call that
+/// ended in its first poll, such as one Wasmtime refused to enter, ran no guest code.
+struct Disarm<'a> {
+    attribution: &'a InvocationAttribution,
+    running: bool,
+}
 
 impl Drop for Disarm<'_> {
     fn drop(&mut self) {
-        if let Some(key) = self.0.state.lock().unwrap().armed.take() {
-            error!(?key, "An armed export call did not start a task group");
+        if let Some(key) = self.attribution.state.lock().unwrap().armed.take() {
+            if self.running {
+                error!(?key, "An armed export call did not start a task group");
+            } else {
+                debug!(
+                    ?key,
+                    "An armed export call ended before it started a task group"
+                );
+            }
         }
     }
 }
