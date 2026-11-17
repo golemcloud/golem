@@ -1353,6 +1353,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     - a **QuickJS d.ts generation** step (with `generateQuickjsDts` field)
     - an **inject to prebuilt QuickJS** step (with `injectToPrebuiltQuickjs` field)
     - a **JS preinitialization** step (with `preinitializeJs` field)
+    - a **Python assembly** step (with `assemblePython` field)
 
     <Example>
       { /* @formatter:off */ }
@@ -1400,6 +1401,21 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "components.<component-name>.build[*].preinitializeJs",
   }}>
     ***WASM input path*** for JavaScript preinitialization. Requires `into` (the output WASM path). Both paths resolve against the effective component directory.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].assemblePython",
+  }}>
+    ***Python source directory***, which contains the application's modules. Requires `modules` (the entry modules that pre-initialization imports), `pyproject` (the `pyproject.toml`, whose `project.dependencies` may list only the exact `golem-py-sdk` version of the CLI) and `into` (the output WASM path). All paths resolve against the effective component directory. The CLI assembles the component from the modules and the `golem-py-sdk` wheel that `GOLEM_PYTHON_SDK_WHEEL` names; it runs no Python on the host. A failed assembly keeps the previous output.
+
+    ```yaml
+    build:
+      - assemblePython: src
+        modules:
+          - main
+        pyproject: pyproject.toml
+        into: golem-temp/agents/app.wasm
+    ```
   </Field>
 
   <Field
@@ -1742,7 +1758,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
       noSpecialization: true,
     }}
   >
-    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala`, `moonbit` or `go`.
+    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala`, `moonbit`, `go` or `python`.
 
     A component's guest language comes from the templates applied to it, directly or through template inheritance. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. The built-in templates (e.g. `ts`, `rust`, `scala`) declare their language, so custom templates inheriting them don't need to declare it; custom templates that don't inherit a built-in template can declare it to enable these features. The templates applied to a component must not declare different languages.
 

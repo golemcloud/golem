@@ -122,6 +122,7 @@ mod tests {
             GuestLanguage::Rust,
             GuestLanguage::MoonBit,
             GuestLanguage::Go,
+            GuestLanguage::Python,
         ] {
             let source = repo
                 .common_template_file_contents(language, Path::new("AGENTS.md"))

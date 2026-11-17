@@ -1120,6 +1120,15 @@ script = '''
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:deploy_runtime" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
+[tasks.cli-integration-tests-python]
+dependencies = ["build-cli-test-bins-non-ci", "ensure-builtin-artifacts", "python-sdk-wheel"]
+description = "Runs the Python CLI integration tests, which need the golem-py-sdk wheel; no it-cli CI shard runs them"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:python" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
 [tasks.cli-integration-tests-core]
 dependencies = ["build-cli-test-bins-non-ci", "build-service-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"

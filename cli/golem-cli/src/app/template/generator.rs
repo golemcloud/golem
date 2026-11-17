@@ -105,6 +105,7 @@ enum Transform {
     ScalaSdk,
     MoonBitSdk,
     GoSdk,
+    PythonSdk,
     ApplicationName,
 }
 
@@ -336,6 +337,9 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                     (false, "go.mod") => vec![Transform::ComponentName, Transform::GoSdk],
                     (false, "go.sum") => vec![Transform::GoSdk],
                     (false, "Cargo.toml") => vec![Transform::ComponentName, Transform::RustSdk],
+                    (false, "pyproject.toml") => {
+                        vec![Transform::ComponentName, Transform::PythonSdk]
+                    }
                     (false, "build.sbt") => vec![
                         Transform::ComponentName,
                         Transform::ScalaSdk,
@@ -496,6 +500,12 @@ fn transform(
                 replacements.insert(
                     "GOLEM_MOONBIT_BUILD_SDK_PATH",
                     sdk_overrides.moonbit_sdk_build_path(),
+                );
+            }
+            Transform::PythonSdk => {
+                replacements.insert(
+                    "GOLEM_PYTHON_SDK_VERSION",
+                    golem_python_assembler::SDK_VERSION.to_string(),
                 );
             }
             Transform::GoSdk => {

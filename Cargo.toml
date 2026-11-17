@@ -60,6 +60,7 @@ golem-model-mock = { version = "=0.0.0", path = "golem-model-mock" }
 golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-package = { version = "=0.0.0", path = "golem-package" }
+golem-python-assembler = { version = "=0.0.0", path = "golem-python-assembler" }
 golem-registry-service = { path = "golem-registry-service" }
 golem-rust-macro = { version = "=0.0.0", path = "golem-rust-macro" }
 golem-schema = { version = "=0.0.0", path = "golem-schema", default-features = false }
