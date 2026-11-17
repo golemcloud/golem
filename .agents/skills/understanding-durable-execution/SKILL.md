@@ -1046,8 +1046,18 @@ A receive Start does not prove that a socket was created, bound or polled Pendin
 Port reuse requires an independently known endpoint; UDP has no EOF. Completion-first
 controls verify End and delivery, then preserve the selected invocation result through
 commit and notification. These tests do not establish exactly-once datagram consumption
-across the receive-before-End crash window. Connected UDP reconstruction and incomplete
-batched sends remain separate, unresolved contracts.
+across the receive-before-End crash window.
+
+P3 UDP keeps its endpoint in the socket's `SocketEntries` entry. Bind records the selected local
+address (`P3SocketsBind`, also for port 0); connect, send and receive record an implicit bind or a
+loss as `SerializableP3UdpEndpoint` in their response. Replay updates the entry and touches no
+native socket; `disconnect` and the address getters are not recorded and use only the entry. At
+the first live operation, `ensure_native_endpoint` binds the native socket on the recorded local
+address and connects it again when the entry is connected, without sending a packet. When that
+fails, the entry becomes `Lost` and every later operation returns `connection-broken`; the rebuild
+is not checked against grants again, each datagram still is. Send records only the target and the
+result, never the datagram. An incomplete send completes with `connection-broken` and is not sent
+again; an incomplete receive re-executes after the rebuild.
 
 WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
 Start before acquiring the executor-wide connection-pool permit. The live pool acquisition

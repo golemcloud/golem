@@ -213,7 +213,10 @@ pub trait SocketSession {
 
     /// Binds a P3 UDP socket on `127.0.0.1:port` and keeps it in `slot`.
     fn p3_udp_bind(&self, slot: String, port: u16) -> Result<(), String>;
+    /// Creates a P3 UDP socket without binding it and keeps it in `slot`.
+    fn p3_udp_create(&self, slot: String) -> Result<(), String>;
     fn p3_udp_connect(&self, slot: String, port: u16) -> Result<(), String>;
+    fn p3_udp_disconnect(&self, slot: String) -> Result<(), String>;
     /// Sends `data` to `127.0.0.1:port`, or to the connected peer when `port` is `None`.
     async fn p3_udp_send(
         &self,
@@ -224,6 +227,7 @@ pub trait SocketSession {
     /// Receives one datagram. Returns its data and source address.
     async fn p3_udp_receive(&self, slot: String) -> Result<(Vec<u8>, String), String>;
     fn p3_udp_local_address(&self, slot: String) -> Result<String, String>;
+    fn p3_udp_remote_address(&self, slot: String) -> Result<String, String>;
 
     /// Connects a P2 TCP socket and keeps it with its streams in `slot`.
     fn p2_tcp_connect(&self, slot: String, port: u16) -> Result<(), String>;
@@ -599,6 +603,19 @@ impl SocketSession for SocketSessionImpl {
         Ok(())
     }
 
+    fn p3_udp_create(&self, slot: String) -> Result<(), String> {
+        let socket = p3::UdpSocket::create(p3::IpAddressFamily::Ipv4).map_err(error)?;
+        self.insert(slot, Slot::P3Udp { socket });
+        Ok(())
+    }
+
+    fn p3_udp_disconnect(&self, slot: String) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P3Udp { socket } => socket.disconnect().map_err(error),
+            _ => Err(format!("slot {slot} holds no P3 UDP socket")),
+        })
+    }
+
     fn p3_udp_connect(&self, slot: String, port: u16) -> Result<(), String> {
         self.with_slot(&slot, |value| match value {
             Slot::P3Udp { socket } => socket.connect(p3_loopback(port)).map_err(error),
@@ -649,6 +666,13 @@ impl SocketSession for SocketSessionImpl {
     fn p3_udp_local_address(&self, slot: String) -> Result<String, String> {
         self.with_slot(&slot, |value| match value {
             Slot::P3Udp { socket } => socket.get_local_address().map(p3_address).map_err(error),
+            _ => Err(format!("slot {slot} holds no P3 UDP socket")),
+        })
+    }
+
+    fn p3_udp_remote_address(&self, slot: String) -> Result<String, String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P3Udp { socket } => socket.get_remote_address().map(p3_address).map_err(error),
             _ => Err(format!("slot {slot} holds no P3 UDP socket")),
         })
     }
