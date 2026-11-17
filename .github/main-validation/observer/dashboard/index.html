@@ -250,12 +250,13 @@
           const item = el('span'); item.append(el('strong','',count(tasks,status)),document.createTextNode(' '),taskStatus(status)); counts.append(item);
         }
         counts.append(el('span','completion-count',`${count(tasks,'passed')} of ${tasks.length} passed`)); summary.append(counts);
-        const completion = el('div','completion-track'); completion.setAttribute('role','img');
-        completion.setAttribute('aria-label',`${tasks.length} planned tasks: ${['passed','failed','running','pending','blocked','interrupted'].map(s=>`${count(tasks,s)} ${s}`).join(', ')}`);
-        for (const task of tasks) { const segment = el('span',task.status); segment.title = `${taskName(task)} · ${task.status}`; completion.append(segment); }
-        summary.append(completion,el('p','small subtle','Each segment is one task, including pending work. Task counts do not estimate time remaining.')); box.append(summary);
         const laneNames = {prepare:'Preparation',worker:'Worker tests','service-build':'Service build',service:'Service tests',cli:'CLI tests',exclusive:'Final checks'};
         const lanes = [...new Set([...Object.keys(laneNames),...tasks.map(t=>t.lane)])].filter(lane=>tasks.some(t=>t.lane === lane));
+        const completion = el('div','completion-track'); completion.setAttribute('role','img');
+        completion.setAttribute('aria-label',`${tasks.length} planned tasks: ${['passed','failed','running','pending','blocked','interrupted'].map(s=>`${count(tasks,s)} ${s}`).join(', ')}`);
+        const ordered = lanes.flatMap(name=>tasks.filter(t=>t.lane === name).sort((a,b)=>(date(a.started_at)?.getTime() ?? Infinity)-(date(b.started_at)?.getTime() ?? Infinity) || a.name.localeCompare(b.name,undefined,{numeric:true})));
+        for (const task of ordered) { const segment = el('span',task.status); segment.title = `${taskName(task)} · ${task.status}`; completion.append(segment); }
+        summary.append(completion,el('p','small subtle','Each segment is one task, grouped in lane-card order, then start order; unstarted tasks follow. Task counts do not estimate time remaining.')); box.append(summary);
         const initial = tasks.find(t=>['failed','interrupted'].includes(t.status)) || tasks.find(t=>t.status === 'running');
         const lane = lanes.includes(state.lanes.get(key(run))) ? state.lanes.get(key(run)) : initial?.lane || lanes[0];
         state.lanes.set(key(run),lane);
