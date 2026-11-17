@@ -335,9 +335,10 @@ impl WorkerExecutorTestDependencies {
         // the error if another test in the same process already installed a provider.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
+        let config = golem_test_framework::config::EnvBasedTestDependenciesConfig::new();
         let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
+            config.redis_port,
+            config.redis_key_prefix,
             Level::INFO,
             Level::ERROR,
         ));

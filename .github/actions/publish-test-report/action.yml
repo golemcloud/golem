@@ -7,6 +7,9 @@ inputs:
   github-token:
     description: 'GitHub token for publishing reports'
     required: true
+  report-path:
+    description: 'Glob for the original CTRF reports'
+    default: '**/target/ctrf-*.json'
 runs:
   using: 'composite'
   steps:
@@ -14,7 +17,7 @@ runs:
       uses: ctrf-io/github-test-reporter@v1
       if: always()
       with:
-        report-path: "**/target/ctrf-*.json"
+        report-path: ${{ inputs.report-path }}
         upload-artifact: 'true'
         artifact-name: ${{ inputs.artifact-name }}-attempt${{ github.run_attempt }}
         summary: true

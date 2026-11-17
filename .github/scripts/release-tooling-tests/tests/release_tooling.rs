@@ -14,6 +14,16 @@ fn workspace_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
+fn copy_makefiles(repo: &Path) {
+    for name in [
+        "Makefile.toml",
+        "Makefile.main-validation.toml",
+        "Makefile.sdk-validation.toml",
+    ] {
+        fs::copy(workspace_path().join(name), repo.join(name)).unwrap();
+    }
+}
+
 #[test]
 fn draft_notes_start_at_the_previous_stable_golem_release() {
     let fixture = TempDir::new().unwrap();
@@ -449,11 +459,7 @@ fn release_source_requires_the_exact_merged_pr_head() {
     let response = fixture.path().join("pulls.json");
     fs::create_dir(&repo).unwrap();
     fs::create_dir(&bin).unwrap();
-    fs::copy(
-        crate::workspace_path().join("Makefile.toml"),
-        repo.join("Makefile.toml"),
-    )
-    .unwrap();
+    copy_makefiles(&repo);
     fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
     git(&repo, &["init", "--initial-branch=main"]);
     git(&repo, &["config", "user.name", "release-test"]);
@@ -610,11 +616,7 @@ exit 1
 fn release_publication_requires_successful_preparation_of_the_exact_tag() {
     let fixture = TempDir::new().unwrap();
     let repo = fixture.path();
-    fs::copy(
-        crate::workspace_path().join("Makefile.toml"),
-        repo.join("Makefile.toml"),
-    )
-    .unwrap();
+    copy_makefiles(repo);
     fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
     git(repo, &["init"]);
     git(repo, &["config", "user.name", "release-test"]);
@@ -687,8 +689,8 @@ fn release_publication_requires_successful_preparation_of_the_exact_tag() {
 fn builtin_packaging_failure_precedes_every_publication() {
     let fixture = TempDir::new().unwrap();
     let repo = fixture.path();
-    let makefile = fs::read_to_string(crate::workspace_path().join("Makefile.toml")).unwrap();
-    fs::write(repo.join("Release.toml"), makefile).unwrap();
+    copy_makefiles(repo);
+    fs::rename(repo.join("Makefile.toml"), repo.join("Release.toml")).unwrap();
     // Replace source validation and expensive compilation, not packaging or publication.
     fs::write(repo.join("Makefile.toml"), "extend = 'Release.toml'\n[tasks.validate-builtin-release]\nclear = true\nscript_runner = '@duckscript'\nscript = 'echo validated'\n[tasks.ensure-builtin-artifacts]\nclear = true\nscript_runner = '@duckscript'\nscript = '''\nmkdir plugins\nmkdir builtin-tools\nwritefile plugins/otlp-exporter.wasm plugin\nwritefile builtin-tools/filesystem-tools.wasm tools\n'''\n").unwrap();
     fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
