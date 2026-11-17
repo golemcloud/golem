@@ -16,6 +16,7 @@ package tool
 
 import (
 	"io"
+	"reflect"
 	"testing"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
@@ -121,6 +122,18 @@ func VcsFixture(t *testing.T) (Metadata, func(types.TypedSchemaValue) error, fun
 		return nil
 	}
 	return metadataOf(t, r, d, "vcs"), invoke, func() CommitArgs { return *v.seen }
+}
+
+// DeclaredMetadata declares the enums, each type with its cases, and a tool
+// with declare in a fresh registry, and returns the tool's published metadata.
+func DeclaredMetadata[T any](t *testing.T, name string, spec Spec, enums map[reflect.Type][]string, declare func(*Definition[T])) Metadata {
+	t.Helper()
+	r, d := newToolRegistry(), newDefinitions()
+	for typ, cases := range enums {
+		d.DefineEnum(typ, cases)
+	}
+	declare(defineToolInto[T](r, d, name, spec, false))
+	return metadataOf(t, r, d, name)
 }
 
 func metadataOf(t *testing.T, r *toolRegistry, d *definitions, name string) Metadata {
