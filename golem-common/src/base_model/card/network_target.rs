@@ -6,9 +6,9 @@
 use super::owner::EmptyOwnerPattern;
 use super::{
     ClassPermissionTarget, NetworkResourcePattern, NetworkVerb, PermissionTarget, PortPattern,
-    ResourcePattern, canonical_ip_host,
+    ResourcePattern,
 };
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -37,13 +37,23 @@ pub fn network_target(
     }))
 }
 
-/// The permission target of a raw socket connect or outgoing datagram to `address`, with the
-/// hostnames that the agent's recorded lookups linked to the address.
-pub fn socket_target(address: SocketAddr, hostnames: Vec<String>) -> PermissionTarget {
+/// The permission target of a raw socket connect or outgoing datagram to `address`;
+/// `this_host` tells whether the address is an address of the executor host, and `hostnames` are
+/// the hostnames that the agent's recorded lookups linked to the address.
+pub fn socket_target(
+    address: SocketAddr,
+    this_host: bool,
+    hostnames: Vec<String>,
+) -> PermissionTarget {
     PermissionTarget::Network(ClassPermissionTarget {
         verb: Some(NetworkVerb::Connect),
         owner: EmptyOwnerPattern,
-        resource: NetworkResourcePattern::socket_address(address.ip(), address.port(), hostnames),
+        resource: NetworkResourcePattern::socket_address(
+            address.ip(),
+            address.port(),
+            this_host,
+            hostnames,
+        ),
     })
 }
 
@@ -56,23 +66,19 @@ pub fn link_hostname(name: &str) -> Option<String> {
 }
 
 fn normalize_host(host: &str) -> Result<String, NetworkTargetError> {
-    let host = host.trim();
-    if let Some(bracketed) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
-        return bracketed
-            .parse::<Ipv6Addr>()
-            .map(|ip| canonical_ip_host(IpAddr::V6(ip)))
-            .map_err(|_| NetworkTargetError::InvalidNetworkAddress(host.to_string()));
-    }
-    let host = host.trim_end_matches('.');
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return Ok(canonical_ip_host(ip));
-    }
+    let host = host.trim().trim_end_matches('.');
     if host.is_empty()
         || host.contains(':')
         || host.contains('*')
         || host.chars().any(char::is_whitespace)
     {
         return Err(NetworkTargetError::InvalidNetworkAddress(host.to_string()));
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(v4) => Ok(v4.to_string()),
+            IpAddr::V6(_) => Err(NetworkTargetError::InvalidNetworkAddress(host.to_string())),
+        };
     }
     if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
         return Err(NetworkTargetError::InvalidNetworkAddress(host.to_string()));
@@ -167,6 +173,14 @@ mod tests {
 
     #[test]
     fn malformed_network_and_urls_fail_closed() {
+        assert!(network_target("::1", Some(80)).is_err());
+        for host in ["[fd00:ec2::254]", "[::ffff:169.254.169.254]", "[::1]:9000"] {
+            assert!(http_target(&format!("http://{host}/")).is_err(), "{host}");
+            assert!(
+                websocket_target(&format!("ws://{host}/")).is_err(),
+                "{host}"
+            );
+        }
         assert!(network_target("*.example.com", None).is_err());
         assert!(http_target("ftp://example.com/a").is_err());
         assert!(http_target("https://u:p@example.com").is_err());

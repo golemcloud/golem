@@ -2100,14 +2100,20 @@ fn network_grant(resource: &str) -> NetworkResourcePattern {
 
 fn socket(address: &str) -> NetworkResourcePattern {
     let address: std::net::SocketAddr = address.parse().unwrap();
-    NetworkResourcePattern::socket_address(address.ip(), address.port(), Vec::new())
+    NetworkResourcePattern::socket_address(address.ip(), address.port(), false, Vec::new())
 }
 
-fn linked_socket(address: &str, hostnames: &[&str]) -> NetworkResourcePattern {
+fn this_host_socket(address: &str) -> NetworkResourcePattern {
+    let address: std::net::SocketAddr = address.parse().unwrap();
+    NetworkResourcePattern::socket_address(address.ip(), address.port(), true, Vec::new())
+}
+
+fn linked_socket(address: &str, this_host: bool, hostnames: &[&str]) -> NetworkResourcePattern {
     let address: std::net::SocketAddr = address.parse().unwrap();
     NetworkResourcePattern::socket_address(
         address.ip(),
         address.port(),
+        this_host,
         hostnames.iter().map(|name| name.to_string()).collect(),
     )
 }
@@ -2184,6 +2190,10 @@ fn wildcard_network_grants_reach_only_public_socket_destinations() {
         assert!(!grant.subsumes(&socket("10.0.0.1:443")));
         assert!(!grant.subsumes(&socket("127.0.0.1:443")));
     }
+    // A public address of the executor host is internal too.
+    assert!(!network_grant("*").subsumes(&this_host_socket("1.2.3.4:6379")));
+    assert!(!network_grant("*:6379").subsumes(&this_host_socket("1.2.3.4:6379")));
+    assert!(network_grant("1.2.3.4:6379").subsumes(&this_host_socket("1.2.3.4:6379")));
     // Only socket destinations follow D28; HTTP and WebSocket targets keep host matching.
     let PermissionTarget::Network(http) =
         network_target::network_target("127.0.0.1", Some(443)).unwrap()
@@ -2211,7 +2221,7 @@ fn named_network_grants_reach_internal_socket_destinations() {
 fn wildcard_network_denials_cover_internal_socket_destinations() {
     let holder = RecipientPattern::parse("acme/shop/prod/cart/agent").unwrap();
     let target =
-        |address: &str| network_target::socket_target(address.parse().unwrap(), Vec::new());
+        |address: &str| network_target::socket_target(address.parse().unwrap(), false, Vec::new());
     let surface = |positive: &str, negative: &str| {
         EffectiveSurface::from_grants(
             &[network("*", network_grant(positive))],
@@ -2269,6 +2279,39 @@ fn wildcard_network_denials_cover_internal_socket_destinations() {
             .unwrap()
     );
     assert!(!ceiling("*").authorize(&target("10.0.0.1:443")).unwrap());
+
+    // A denial of an IPv4 host covers the IPv6 forms that embed it.
+    for address in [
+        "93.184.215.14:22",
+        "[::ffff:93.184.215.14]:22",
+        "[64:ff9b::5db8:d70e]:22",
+        "[2002:5db8:d70e::1]:22",
+        "[::93.184.215.14]:22",
+    ] {
+        assert!(
+            !surface("*", "93.184.215.14")
+                .authorize(&target(address))
+                .unwrap(),
+            "{address} must be denied"
+        );
+        assert!(
+            !surface("*", "93.184.215.14:22")
+                .authorize(&target(address))
+                .unwrap(),
+            "{address} must be denied"
+        );
+        assert!(
+            surface("*", "93.184.215.14:23")
+                .authorize(&target(address))
+                .unwrap(),
+            "{address} must stay allowed on another port"
+        );
+    }
+    assert!(
+        surface("*", "93.184.215.15")
+            .authorize(&target("[64:ff9b::5db8:d70e]:22"))
+            .unwrap()
+    );
 }
 
 fn test_name(value: &str) -> String {
@@ -2280,7 +2323,7 @@ fn test_name(value: &str) -> String {
 
 #[test]
 fn linked_hostnames_reach_socket_destinations_under_d28() {
-    let linked = |address: &str| linked_socket(address, &["db.test"]);
+    let linked = |address: &str| linked_socket(address, false, &["db.test"]);
     // An exact hostname grant reaches every address the name was linked to, internal or not.
     for address in ["10.0.0.5:5432", "127.0.0.1:5432", "93.184.215.14:5432"] {
         assert!(
@@ -2305,10 +2348,19 @@ fn linked_hostnames_reach_socket_destinations_under_d28() {
     assert!(!network_grant("*.test:5432").subsumes(&socket("93.184.215.14:5432")));
     // The address keeps its own rules next to the links.
     assert!(network_grant("10.0.0.5:5432").subsumes(&linked("10.0.0.5:5432")));
-    assert!(
-        network_grant("db.test:5432")
-            .subsumes(&linked_socket("10.0.0.5:5432", &["a.test", "db.test"]))
-    );
+    assert!(network_grant("db.test:5432").subsumes(&linked_socket(
+        "10.0.0.5:5432",
+        false,
+        &["a.test", "db.test"]
+    )));
+    // A public address of this host is like an internal one: an exact hostname linked to it
+    // reaches it, a wildcard grant does not.
+    let own = linked_socket("93.184.215.14:5432", true, &["db.test"]);
+    assert!(network_grant("db.test:5432").subsumes(&own));
+    for wildcard in ["*.test:5432", "*", "*:5432"] {
+        assert!(!network_grant(wildcard).subsumes(&own), "{wildcard}");
+    }
+    assert!(!network_grant("other.test:5432").subsumes(&own));
 }
 
 #[test]
@@ -2325,7 +2377,7 @@ fn denials_of_a_linked_hostname_cover_the_address() {
         .unwrap()
     };
     let target = |hostnames: Vec<String>| {
-        network_target::socket_target("10.0.0.5:5432".parse().unwrap(), hostnames)
+        network_target::socket_target("10.0.0.5:5432".parse().unwrap(), false, hostnames)
     };
     let linked = || target(vec!["db.test".to_string()]);
     assert!(

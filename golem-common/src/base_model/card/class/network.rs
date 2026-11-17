@@ -16,7 +16,7 @@ use super::{
     ClassPermissionPattern, PermissionClass, PermissionPattern, PolymorphicClassPermissionPattern,
     PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
 };
-use crate::base_model::address_class::AddressClass;
+use crate::base_model::address_class::{AddressClass, embedded_ipv4};
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EmptyOwnerPattern;
 use serde::{Deserialize, Serialize};
@@ -81,11 +81,12 @@ pub enum NetworkResourcePattern {
     /// agent's recorded address lookups linked to the address. It is a request, never a grant:
     /// card text never parses to it. A grant matches it when it matches the address or one of the
     /// hostnames, and a grant whose host has a wildcard matches it only when the address is
-    /// [`AddressClass::Public`]. Every other address needs a grant that names it: the address
-    /// itself, or an exact linked hostname.
+    /// [`AddressClass::Public`] and is not an address of this host (`this_host`). Every other
+    /// address needs a grant that names it: the address itself, or an exact linked hostname.
     SocketAddress {
         host: String,
         port: u16,
+        this_host: bool,
         hostnames: Vec<String>,
     },
 }
@@ -109,18 +110,21 @@ impl NetworkResourcePattern {
         }
     }
 
-    /// A socket destination; `hostnames` are the normalized hostnames linked to `ip`.
-    pub fn socket_address(ip: IpAddr, port: u16, hostnames: Vec<String>) -> Self {
+    /// A socket destination; `this_host` tells whether `ip` is an address of the executor host,
+    /// and `hostnames` are the normalized hostnames linked to `ip`.
+    pub fn socket_address(ip: IpAddr, port: u16, this_host: bool, hostnames: Vec<String>) -> Self {
         Self::SocketAddress {
             host: canonical_ip_host(ip),
             port,
+            this_host,
             hostnames,
         }
     }
 
     /// Whether this pattern, used as a denial, covers `other`. A denial with a wildcard host also
-    /// covers socket destinations that are not public, and a denial that covers a linked hostname
-    /// covers the address.
+    /// covers socket destinations that are not public, a denial of an IPv4 host also covers the
+    /// IPv6 forms that embed it (NAT64, 6to4, IPv4-compatible), and a denial that covers a linked
+    /// hostname covers the address.
     pub fn denies(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -130,12 +134,16 @@ impl NetworkResourcePattern {
                     host: target,
                     port,
                     hostnames,
+                    ..
                 },
             ) => {
                 ports.subsumes(&PortPattern::Single(*port))
-                    && std::iter::once(target)
-                        .chain(hostnames)
-                        .any(|name| host_pattern_subsumes(host, name))
+                    && (host_pattern_subsumes(host, target)
+                        || embedded_ipv4_host(target)
+                            .is_some_and(|ipv4| host_pattern_subsumes(host, &ipv4))
+                        || hostnames
+                            .iter()
+                            .any(|name| host_pattern_subsumes(host, name)))
             }
             _ => self.subsumes(other),
         }
@@ -154,10 +162,17 @@ pub fn canonical_ip_host(ip: IpAddr) -> String {
     }
 }
 
-fn wildcard_host_reaches(host: &str) -> bool {
+fn wildcard_host_reaches(host: &str, this_host: bool) -> bool {
     match host.parse::<IpAddr>() {
-        Ok(ip) => AddressClass::of(ip) == AddressClass::Public,
+        Ok(ip) => !this_host && AddressClass::of(ip) == AddressClass::Public,
         Err(_) => true,
+    }
+}
+
+fn embedded_ipv4_host(host: &str) -> Option<String> {
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V6(ip)) => embedded_ipv4(&ip).map(|ipv4| ipv4.to_string()),
+        _ => None,
     }
 }
 
@@ -207,17 +222,23 @@ impl ResourcePattern for NetworkResourcePattern {
                     ports: bp,
                 },
             ) => host_pattern_subsumes(ah, bh) && ap.subsumes(bp),
-            (Self::Any, Self::SocketAddress { host, .. }) => wildcard_host_reaches(host),
+            (
+                Self::Any,
+                Self::SocketAddress {
+                    host, this_host, ..
+                },
+            ) => wildcard_host_reaches(host, *this_host),
             (Self::Any, _) => true,
             (
                 Self::HostPort { host, ports },
                 Self::SocketAddress {
                     host: target,
                     port,
+                    this_host,
                     hostnames,
                 },
             ) => {
-                (!host.contains('*') || wildcard_host_reaches(target))
+                (!host.contains('*') || wildcard_host_reaches(target, *this_host))
                     && ports.subsumes(&PortPattern::Single(*port))
                     && std::iter::once(target)
                         .chain(hostnames)

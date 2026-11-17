@@ -70,7 +70,9 @@ impl SocketPolicy {
     }
 
     /// The permission target of a connect or outgoing datagram, with the hostnames that the
-    /// Store's lookups linked to the address, or the refusal of [`Self::refusal`].
+    /// Store's lookups linked to the address, or the refusal of [`Self::refusal`]. A public
+    /// address of this host's interfaces is marked as this host, so that only a grant that names
+    /// it, or an exact hostname linked to it, admits it, like a loopback address.
     pub fn target(
         &self,
         address: SocketAddr,
@@ -78,10 +80,16 @@ impl SocketPolicy {
     ) -> Result<PermissionTarget, String> {
         match self.refusal(address) {
             Some(refusal) => Err(refusal.to_string()),
-            None => Ok(socket_target(
-                address,
-                resolved_names.hostnames(address.ip()),
-            )),
+            None => {
+                let ip = address.ip().to_canonical();
+                let this_host =
+                    AddressClass::of(ip) == AddressClass::Public && reaches_this_host(ip);
+                Ok(socket_target(
+                    address,
+                    this_host,
+                    resolved_names.hostnames(address.ip()),
+                ))
+            }
         }
     }
 
