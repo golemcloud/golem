@@ -351,7 +351,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 Ok(snapshot)
             }
 
-            Ok(InvokeResult::Failed { error, .. }) => {
+            Ok(InvokeResult::Failed { error, .. } | InvokeResult::MethodFailed { error, .. }) => {
                 let stderr = self
                     .store
                     .data()
@@ -521,7 +521,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         if let Some(outcome) = periodic_snapshot_failure_outcome(&result) {
             match &result {
-                Ok(InvokeResult::Failed { .. }) => {
+                Ok(InvokeResult::Failed { .. } | InvokeResult::MethodFailed { .. }) => {
                     warn!(
                         "Periodic snapshot save function failed; restarting worker to recover the store"
                     );
@@ -553,7 +553,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 warn!("Worker interrupted during periodic snapshot save");
                 Err(CommandOutcome::BreakInnerLoop(RetryDecision::None))
             }
-            Ok(InvokeResult::Failed { .. }) | Err(_) => unreachable!(),
+            Ok(InvokeResult::Failed { .. } | InvokeResult::MethodFailed { .. }) | Err(_) => {
+                unreachable!()
+            }
         }
     }
 }
@@ -562,7 +564,7 @@ pub(super) fn periodic_snapshot_failure_outcome(
     result: &Result<InvokeResult, WorkerExecutorError>,
 ) -> Option<CommandOutcome> {
     match result {
-        Ok(InvokeResult::Failed { .. }) | Err(_) => {
+        Ok(InvokeResult::Failed { .. } | InvokeResult::MethodFailed { .. }) | Err(_) => {
             Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
         }
         _ => None,

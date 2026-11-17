@@ -88,6 +88,10 @@ impl OplogEntry {
                 entity_parent_start_index,
                 ..
             }
+            | OplogEntry::AgentInvocationFailed {
+                entity_parent_start_index,
+                ..
+            }
             | OplogEntry::Jump {
                 entity_parent_start_index,
                 ..
@@ -260,6 +264,7 @@ impl OplogEntry {
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
             | OplogEntry::RecoverySucceeded { .. }
@@ -356,6 +361,7 @@ impl OplogScopeProjection {
                 ..
             } => self.starts.contains(parent_start_index),
             OplogEntry::Error { .. }
+            | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }

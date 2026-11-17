@@ -347,7 +347,9 @@ class StreamRuntimeTest extends munit.FunSuite {
       val times = connected.toArray(Array.empty[java.lang.Long]).map(_.longValue)
       assert(times.length >= 3 && times.length <= 6, s"connected ${times.length} times")
       val lastWait = (times(times.length - 1) - times(times.length - 2)).nanos
-      assert(lastWait >= 150.millis, s"the last reconnect waited only $lastWait")
+      // The window includes handshakes, so it need not leave time for the third retry.
+      val lastBackoff = (50L << (times.length - 2)).millis
+      assert(lastWait >= lastBackoff, s"the last reconnect waited only $lastWait, expected at least $lastBackoff")
     } finally server.close()
   }
 
