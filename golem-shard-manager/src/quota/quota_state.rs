@@ -128,9 +128,22 @@ impl QuotaState {
     pub fn update_definition(&mut self, definition: ResourceDefinition) {
         debug_assert_eq!(self.definition.id, definition.id);
         debug_assert_eq!(self.definition.environment_id, definition.environment_id);
-        let new_pool = Self::initial_pool(&definition.limit);
         let total_allocated: u64 = self.leases.values().map(|l| l.allocated).sum();
-        self.remaining = new_pool.saturating_sub(total_allocated);
+        // Spent budget stays spent: a refresh, of a changed or an unchanged definition, never
+        // refills what the leases already used.
+        self.remaining = match (&self.definition.limit, &definition.limit) {
+            (ResourceLimit::Rate(_), ResourceLimit::Rate(new)) => {
+                self.remaining.min(new.max.saturating_sub(total_allocated))
+            }
+            (ResourceLimit::Capacity(old), ResourceLimit::Capacity(new)) => {
+                if new.value >= old.value {
+                    self.remaining.saturating_add(new.value - old.value)
+                } else {
+                    self.remaining.saturating_sub(old.value - new.value)
+                }
+            }
+            (_, new) => Self::initial_pool(new).saturating_sub(total_allocated),
+        };
         self.definition = definition;
         self.last_refreshed = Utc::now();
     }
@@ -181,11 +194,14 @@ impl QuotaState {
         let elapsed = elapsed_since(self.last_refilled);
         let full_periods = elapsed.as_nanos() / period.as_nanos();
 
+        // The cap also applies without a refill: unused budget that a lease granted under a
+        // larger `max` returns must not lift the pool above the current `max`.
+        let total_allocated: u64 = self.leases.values().map(|l| l.allocated).sum();
+        let cap = rate.max.saturating_sub(total_allocated);
+        let refill = (rate.value as u128 * full_periods).min(rate.max as u128) as u64;
+        self.remaining = (self.remaining + refill).min(cap);
+
         if full_periods > 0 {
-            let refill = (rate.value as u128 * full_periods).min(rate.max as u128) as u64;
-            let total_allocated: u64 = self.leases.values().map(|l| l.allocated).sum();
-            let cap = rate.max.saturating_sub(total_allocated);
-            self.remaining = (self.remaining + refill).min(cap);
             let advance_nanos = period.as_nanos() * full_periods;
             self.last_refilled += chrono::Duration::nanoseconds(advance_nanos as i64);
         }
