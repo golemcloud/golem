@@ -1874,10 +1874,16 @@ async fn test_generated_streaming_bridges_end_to_end() {
         assert.equal((await firstConsumer.next()).value, 8)
         await firstConsumer.return?.()
 
-        const cancelled = await agent.produceByteThenWait()
-        const cancelConsumer = cancelled[Symbol.asyncIterator]()
-        assert.equal((await cancelConsumer.next()).value, 1)
-        await cancelConsumer.return?.()
+        const attachment = new AbortController()
+        try {{
+          const cancelled = await agent.produceByteThenWait.abortable(attachment.signal)
+          const cancelConsumer = cancelled[Symbol.asyncIterator]()
+          assert.equal((await cancelConsumer.next()).value, 1)
+          await cancelConsumer.return?.()
+        }} finally {{
+          // Reader cancellation does not end the parked producer body.
+          attachment.abort()
+        }}
         console.log('TYPESCRIPT_STREAMING_BRIDGE_E2E_OK')
         "#};
     std::fs::write(typescript_client.join("e2e.ts"), typescript_driver).unwrap();
@@ -2203,6 +2209,12 @@ async fn test_generated_streaming_bridges_end_to_end() {
             collect_byte(agent.transform_bytes(byte_input([0, 1, 127, 128, 255]))),
             [0, 1, 127, 128, 255],
           )
+
+          let (dropped, retained) = agent.produce_siblings()
+          assert_eq(dropped.next(), Some("a"))
+          assert_eq(dropped.next(), Some("b"))
+          dropped.drop()
+          assert_eq(collect_uint(retained), [for value in 0U..<64U => value])
 
           let affine = agent.produce([8, 9])
           assert_eq(affine.next(), Some(8))
@@ -6398,7 +6410,7 @@ async fn deploy_counter_agent_with_invocations(ctx: &mut TestContext, app_name: 
 }
 
 /// The JSON document embedded in a generated oplog viewer page.
-fn embedded_oplog_viewer_document(html: &str) -> serde_json::Value {
+pub(super) fn embedded_oplog_viewer_document(html: &str) -> serde_json::Value {
     let open_tag = "<script id=\"oplog-data\" type=\"application/json\">";
     let start = html
         .find(open_tag)
@@ -6505,12 +6517,18 @@ async fn test_agent_oplog_served_viewer() {
     assert!(document["entries"].as_array().unwrap().is_empty());
     assert!(document["pageSize"].as_u64().unwrap() > 0);
 
-    let first_page: serde_json::Value = get("api/oplog?count=2")
+    let first_page_text = get("api/oplog?count=2")
         .await
         .unwrap()
-        .json()
+        .text()
         .await
         .unwrap();
+    assert!(
+        first_page_text.starts_with(r#"{"entries":[{"index":1,"attribution":"#)
+            && first_page_text.contains(r#""entry":{"type":"Create""#),
+        "the page must keep the declared field order: {first_page_text}"
+    );
+    let first_page: serde_json::Value = serde_json::from_str(&first_page_text).unwrap();
     let first_entries = first_page["entries"].as_array().unwrap();
     assert_eq!(first_entries.len(), 2);
     assert_eq!(first_entries[0]["index"], 1);

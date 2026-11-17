@@ -47,30 +47,38 @@ describe("websocket reconstruction", () => {
       ).pipe(Effect.provide(fake.layer))
     }),
   )
-  for (const constructor of ["layer", "channel"] as const) {
-    it.effect(`forwards the policy through ${constructor}`, () =>
+  for (const constructor of ["connect", "layer", "channel"] as const) {
+    it.effect(`forwards the policy, or its absence, through ${constructor}`, () =>
       Effect.gen(function* () {
-        const fake = yield* WsFake.make
-        const conn = new WsMock.WebsocketConnection("wss://test", undefined)
-        conn.receive = () => Promise.reject({ tag: "session-lost" })
-        yield* fake.setResponder(() => conn)
-        const options = { reconstructionPolicy: "report-connection-loss" } as const
-        const run =
-          constructor === "layer"
-            ? Effect.gen(function* () {
-                const socket = yield* Socket.Socket
-                const pull = yield* Socket.readerString(socket)
-                yield* pull
-              }).pipe(Effect.provide(Websocket.layer("wss://test", options)))
-            : Stream.runDrain(
-                Stream.empty.pipe(
-                  Stream.pipeThroughChannel(Websocket.makeChannel("wss://test", options)),
-                ),
-              )
-        yield* Effect.exit(run.pipe(Effect.provide(fake.layer)))
-        expect((yield* fake.recordedConnects)[0]?.reconstructionPolicy).toBe(
+        for (const reconstructionPolicy of [
+          undefined,
+          "reconnect-automatically",
           "report-connection-loss",
-        )
+        ] as const) {
+          const fake = yield* WsFake.make
+          const conn = new WsMock.WebsocketConnection("wss://test", undefined)
+          conn.receive = () => Promise.reject({ tag: "session-lost" })
+          yield* fake.setResponder(() => conn)
+          const options = reconstructionPolicy === undefined ? undefined : { reconstructionPolicy }
+          const run =
+            constructor === "connect"
+              ? Effect.scoped(Websocket.connect("wss://test", options))
+              : constructor === "layer"
+                ? Effect.gen(function* () {
+                    const socket = yield* Socket.Socket
+                    const pull = yield* Socket.readerString(socket)
+                    yield* pull
+                  }).pipe(Effect.provide(Websocket.layer("wss://test", options)))
+                : Stream.runDrain(
+                    Stream.empty.pipe(
+                      Stream.pipeThroughChannel(Websocket.makeChannel("wss://test", options)),
+                    ),
+                  )
+          yield* Effect.exit(run.pipe(Effect.provide(fake.layer)))
+          const connects = yield* fake.recordedConnects
+          expect(connects).toHaveLength(1)
+          expect(connects[0]?.reconstructionPolicy).toBe(reconstructionPolicy)
+        }
       }),
     )
   }

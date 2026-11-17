@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::{JoinedChildren, TaskScope, WorkerTasks};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use futures::FutureExt;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::future::{Future, poll_fn};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
@@ -178,6 +179,23 @@ impl NativeReconstructionSpawner {
 }
 
 impl NativeReconstructionMonitor {
+    /// Interrupt the observer, not its owned children. A completed native failure takes
+    /// precedence over cancellation; the caller retains responsibility for runtime teardown.
+    pub(crate) async fn drain_interruptibly(
+        &self,
+        interrupt: impl Future<Output = InterruptKind>,
+    ) -> Result<(), WorkerExecutorError> {
+        let result = tokio::select! {
+            biased;
+            result = self.drain() => result,
+            kind = interrupt => Err(WorkerExecutorError::Interrupted { kind }),
+        };
+        match self.wait_for_failure().now_or_never() {
+            Some(error) => Err(error),
+            None => result,
+        }
+    }
+
     /// Join the currently registered work without closing admission for the next invocation.
     /// The context owner still revokes this weak handle and aborts children on destruction.
     pub(crate) async fn drain(&self) -> Result<(), WorkerExecutorError> {

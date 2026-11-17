@@ -30,6 +30,7 @@ pub(all) struct AgentClient {
   rpc : @host.WasmRpc
   // private fields
 }
+pub fn AgentClient::bind_self(String) -> Self raise
 pub fn AgentClient::check_scope_card(Self, scope_card? : @permissions.ScopeCard) -> Unit
 pub fn AgentClient::drop(Self) -> Unit
 pub fn AgentClient::ephemeral(String, @types.SchemaValueTree) -> Self

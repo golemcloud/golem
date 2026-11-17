@@ -1,5 +1,6 @@
 ### Rust template
 debug/
+!/docs/src/content/*/debug/
 target/
 target-tarpaulin/
 **/*.rs.bk

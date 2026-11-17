@@ -122,6 +122,62 @@ func TestConnectSequenceAndFailures(t *testing.T) {
 	}
 }
 
+func TestSelfBindingPreservesRecordedIdentityAndRefusesWrongTypes(t *testing.T) {
+	for _, failAt := range []string{"", "host", "parse", "type"} {
+		t.Run(failAt, func(t *testing.T) {
+			rpc := &host.WasmRpc{}
+			phantom := witTypes.Some(types.Uuid{HighBits: 17, LowBits: 29})
+			drops := 0
+			o := operations{
+				bindSelf: func() witTypes.Result[witTypes.Tuple2[string, *host.WasmRpc], host.RpcError] {
+					if failAt == "host" {
+						return witTypes.Err[witTypes.Tuple2[string, *host.WasmRpc]](host.MakeRpcErrorDenied("ephemeral owner"))
+					}
+					return witTypes.Ok[witTypes.Tuple2[string, *host.WasmRpc], host.RpcError](witTypes.Tuple2[string, *host.WasmRpc]{F0: "recorded-phantom-id", F1: rpc})
+				},
+				parse: func(id string) witTypes.Result[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError] {
+					if id != "recorded-phantom-id" {
+						t.Fatal("parsed a different identity")
+					}
+					if failAt == "parse" {
+						return witTypes.Err[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]]](common.MakeAgentErrorInvalidAgentId("bad id"))
+					}
+					name := "Counter"
+					if failAt == "type" {
+						name = "Other"
+					}
+					return witTypes.Ok[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError](witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]]{F0: name, F2: phantom})
+				},
+				drop: func(got *host.WasmRpc) {
+					if got != rpc {
+						t.Fatal("dropped another resource")
+					}
+					drops++
+				},
+			}
+			got, failure := o.self("Counter")
+			switch failAt {
+			case "":
+				if failure != nil || got.AgentID != "recorded-phantom-id" || got.PhantomID != phantom || got.RPC != rpc || drops != 0 {
+					t.Fatal("lost bound identity or resource")
+				}
+			case "host":
+				if failure == nil || failure.RPCError.Denied() != "ephemeral owner" || drops != 0 {
+					t.Fatal("lost host refusal")
+				}
+			case "parse":
+				if failure == nil || failure.AgentError.InvalidAgentId() != "bad id" || drops != 1 {
+					t.Fatal("lost parse error or leaked resource")
+				}
+			case "type":
+				if failure == nil || failure.AgentError.InvalidType() != "self binding expects Counter, identity is Other" || drops != 1 {
+					t.Fatal("lost typed refusal or leaked resource")
+				}
+			}
+		})
+	}
+}
+
 func TestBindUsesParsedTargetAndConfig(t *testing.T) {
 	config := []common.TypedAgentConfigValue{{}}
 	parsed := Parsed{TypeName: "Counter", Constructor: types.TypedSchemaValue{Value: types.SchemaValueTree{Root: 2}}}

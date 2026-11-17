@@ -300,6 +300,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: ComponentRevision,
         runtime_source: Option<suspension::RuntimeSource>,
         preparation: Option<suspension::ExternalActivity>,
+        tasks: &crate::worker::tasks::NativeReconstructionSpawner,
     ) -> Result<golem_common::schema::SchemaValue, WorkerExecutorError> {
         let Some(prepared) = self.prepared_stream_session(idempotency_key).await? else {
             if contains_stream(&value) {
@@ -330,9 +331,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             streams = streams.require_root_attachment_before_production();
         }
         streams
-            .materialize_result_accounted(value, graph, root, component_revision, preparation)
+            .spawn_materialize_result(value, graph, root, component_revision, preparation, tasks)?
             .await
-            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
+            .map_err(|_| WorkerExecutorError::runtime("schema output task owner was discarded"))?
     }
     /// Records a failed terminal for the invocation's durable stream session.
     pub async fn fail_durable_streaming_session(
@@ -831,7 +832,8 @@ pub(crate) fn stream_session_record_key(
                 .session_key
                 .qualify(owner_environment_id, owner, owner_fingerprint),
         ),
-        StreamSessionRecord::ConsumerTerminal(record) => Some(record.session_key.qualify(
+        StreamSessionRecord::ConsumerTerminal(record)
+        | StreamSessionRecord::ConsumerOutcome(record) => Some(record.session_key.qualify(
             owner_environment_id,
             owner,
             owner_fingerprint,

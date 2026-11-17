@@ -32,6 +32,7 @@ fn fake_agent_stream(id : Int32) -> AgentStream[Int32] {
     handle: @model.GuestSchemaValueStreamHandle::from_wrapped(
       @types.SchemaValueStream::SchemaValueStream(id),
     ),
+    ended: Ref(false),
     decode: decode_wire_stream_item,
   }
 }
@@ -70,9 +71,9 @@ test "typed producer closes normally and preserves order" {
       assert_true(writer.write_one(1) is Accepted)
       assert_true(writer.write_all([2, 3]) is Accepted)
     })
-    assert_eq(stream.read(), Some(1))
-    assert_eq(stream.read(), Some(2))
-    assert_eq(stream.read(), Some(3))
+    assert_eq(stream.read(), Some(Ok(1)))
+    assert_eq(stream.read(), Some(Ok(2)))
+    assert_eq(stream.read(), Some(Ok(3)))
     assert_true(stream.read() is None)
   })
 }
@@ -83,6 +84,55 @@ test "explicit close is idempotent and produces clean EOF" {
     let (writer, stream) : (AgentStreamWriter[Int32], AgentStream[Int32]) = AgentStream::new()
     writer.close()
     writer.close()
+    assert_true(stream.read() is None)
+  })
+}
+
+///|
+test "stream outcomes preserve the prefix and distinguish all terminal failures" {
+  run_agent_stream_async(async fn() {
+    let tag : TypeTag[Int32] = type_tag()
+    let failure : @types.TypedSchemaValue = {
+      graph: @model.schema_graph_to_wit(schema_graph_of_tag(tag)),
+      value: into_wire(73),
+    }
+    let cases : Array[@types.StreamError] = [
+      @types.StreamError::Failed(failure),
+      @types.StreamError::Trapped("trap"),
+      @types.StreamError::Cancelled,
+      @types.StreamError::Abandoned,
+      @types.StreamError::Interrupted("hop lost"),
+      @types.StreamError::ResourceExhausted("quota"),
+    ]
+    for error in cases {
+      let (reader, sink) = @async-core.Stream::new_with_cleanup(
+        drop_wire_stream_item,
+        capacity=1,
+      )
+      assert_true(sink.write_all([into_wire(17)][:]))
+      sink.close()
+      let stream : AgentStream[Int32] = AgentStream::from_reader(
+        reader,
+        from_value_as,
+        outcome=@async-core.Future::ready(Err(error)),
+      )
+      assert_eq(stream.read(), Some(Ok(17)))
+      assert_eq(stream.read(), Some(Err(decode_stream_error(error))))
+      assert_true(stream.read() is None)
+    }
+    let stream : AgentStream[Int32] = AgentStream::produce(async fn(writer) {
+      ignore(writer.write_one(23))
+      raise StreamError::Failed(@model.TypedSchemaValue::{
+        graph: schema_graph_of_tag(tag),
+        value: @model.S32(91),
+      })
+    })
+    assert_eq(stream.read(), Some(Ok(23)))
+    match stream.read() {
+      Some(Err(StreamError::Failed(value))) =>
+        assert_eq(value.value, @model.S32(91))
+      _ => fail("declared producer failure was not preserved")
+    }
     assert_true(stream.read() is None)
   })
 }
@@ -102,7 +152,7 @@ test "accepted write waits for reader demand" {
       })
       started.get()
       assert_false(completed[0])
-      assert_eq(stream.read(), Some(9))
+      assert_eq(stream.read(), Some(Ok(9)))
       assert_true(write.wait() is Accepted)
     })
     writer.close()
@@ -122,7 +172,8 @@ test "partial write_all owns and cleans every nested stream" {
     @async-core.with_task_group(async fn(group) {
       let write = group.spawn(async fn() { writer.write_all(values) })
       match stream.read() {
-        Some(first) => first.drop()
+        Some(Ok(first)) => first.drop()
+        Some(Err(error)) => raise error
         None => fail("partial write produced no first item")
       }
       stream.drop()
@@ -346,12 +397,7 @@ test "read distinguishes ownership wire and item failures" {
     ) = AgentStream::new()
     ownership_writer.close()
     assert_true(ownership_stream.read() is None)
-    try ownership_stream.read() catch {
-      AgentStreamReadError::Ownership(_) => ()
-      error => fail("unexpected ownership error: \{Repr(error)}")
-    } noraise {
-      _ => fail("read after EOF unexpectedly succeeded")
-    }
+    assert_true(ownership_stream.read() is None)
 
     let (wire_reader, wire_sink) = @async-core.Stream::new_with_cleanup(
       @model.drop_wit_capabilities,
@@ -454,7 +500,8 @@ test "unread stream transfer is affine" {
     @async-core.with_task_group(async fn(group) {
       let write = group.spawn(async fn() { writer.write_one(original) })
       let forwarded = match stream.read() {
-        Some(forwarded) => forwarded
+        Some(Ok(forwarded)) => forwarded
+        Some(Err(error)) => raise error
         None => fail("forwarded stream was lost")
       }
       assert_true(write.wait() is Accepted)

@@ -1383,6 +1383,7 @@ fn render_snapshot_data_lines(pad: &str, snapshot: &PublicSnapshotData) -> Vec<S
 mod tests {
     use super::*;
     use comfy_table::{Cell, Table as ComfyTable};
+    use golem_common::model::InvocationId;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
@@ -1392,12 +1393,12 @@ mod tests {
         ProcessOplogEntriesParameters, PublicAgentEntity, PublicAgentEntityKind,
         PublicEntityInvocationContext, PublicToolInvocationOperation, RawSnapshotData,
     };
-    use golem_common::model::{Empty, InvocationId};
     use golem_common::schema::{
         IntoTypedSchemaValue, NamedFieldType, PermissionCardSpec, PermissionCardValuePayload,
         QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
         SecretValuePayload,
     };
+    use golem_schema::Empty;
     use test_r::test;
 
     fn timestamp() -> Timestamp {

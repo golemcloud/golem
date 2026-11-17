@@ -38,7 +38,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::component::Component;
 use nonempty_collections::NEVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::future::{Future, pending};
 use std::pin::Pin;
@@ -915,7 +915,7 @@ impl InvocationContext {
         &self,
         span_id: &SpanId,
         inherit: bool,
-    ) -> Result<HashMap<String, Vec<AttributeValue>>, String> {
+    ) -> Result<BTreeMap<String, Vec<AttributeValue>>, String> {
         let span = self.span(span_id)?;
         Ok(span.get_attributes(inherit))
     }
@@ -1755,11 +1755,15 @@ mod tests {
 
         let attributes = ctx.get_attributes(&current_id, true).unwrap();
 
-        assert_eq!(attributes.len(), 4);
-        assert_eq!(attributes.get("x").unwrap(), &[s("11"), s("1")]);
-        assert_eq!(attributes.get("y").unwrap(), &[s("22"), s("2")]);
-        assert_eq!(attributes.get("z").unwrap(), &[s("33"), s("3")]);
-        assert_eq!(attributes.get("a").unwrap(), &[s("0")]);
+        assert_eq!(
+            attributes.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("a".to_string(), vec![s("0")]),
+                ("x".to_string(), vec![s("11"), s("1")]),
+                ("y".to_string(), vec![s("22"), s("2")]),
+                ("z".to_string(), vec![s("33"), s("3")]),
+            ]
+        );
     }
 
     #[test]

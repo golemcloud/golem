@@ -15,19 +15,49 @@
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct Empty {}
+
 /// The producer's failure, independent of a reader dropping its stream.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema, thiserror::Error,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[serde(rename_all = "kebab-case")]
 #[schema(named = "golem.core.StreamError")]
 pub enum StreamError {
+    #[error("agent stream declared failure")]
     Failed(Box<crate::schema::TypedSchemaValue>),
+    #[error("agent stream trapped: {0}")]
     Trapped(String),
     /// An invocation cancellation request was recorded and honoured.
+    #[error("agent stream cancelled")]
     Cancelled,
     /// The producing invocation completed with its writer still open.
+    #[error("agent stream abandoned")]
     Abandoned,
+    #[error("agent stream interrupted: {0}")]
     Interrupted(String),
+    #[error("agent stream resource exhausted: {0}")]
     ResourceExhausted(String),
 }
 

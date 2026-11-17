@@ -26,6 +26,7 @@ pub use benchmark::{BenchmarkCliParameters, BenchmarkTestDependencies, CliTestSe
 use chrono::{DateTime, Utc};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
+pub use env::service_executable;
 pub use env::{RedisControl, RedisControlStub};
 pub use env::{
     WorkerExecutorClusterControl, WorkerExecutorClusterControlDispatch,

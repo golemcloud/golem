@@ -154,6 +154,75 @@ impl SchedulerStorage for DuplicateWakes {
     }
 }
 
+/// Holds every scheduler claim until released, and observes acknowledgement of the invocation wake.
+#[derive(Debug)]
+struct PausedScheduler {
+    inner: Arc<dyn SchedulerStorage + Send + Sync>,
+    release: tokio_util::sync::CancellationToken,
+    invocation_wake: Mutex<Option<ScheduleId>>,
+    acknowledged: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl SchedulerStorage for PausedScheduler {
+    async fn insert(
+        &self,
+        id: ScheduleId,
+        due: DateTime<Utc>,
+        shard: ShardId,
+        action: &[u8],
+    ) -> Result<(), SchedulerStorageError> {
+        self.inner.insert(id, due, shard, action).await?;
+        if matches!(
+            deserialize::<ScheduledAction>(action).unwrap(),
+            ScheduledAction::WakeInvocation { .. }
+        ) {
+            *self.invocation_wake.lock().unwrap() = Some(id);
+        }
+        Ok(())
+    }
+
+    async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+        self.inner.cancel(id).await
+    }
+
+    async fn claim_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+        limit: u32,
+        ttl: Duration,
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+        self.release.cancelled().await;
+        self.inner.claim_due(now, assignment, limit, ttl).await
+    }
+
+    async fn count_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+    ) -> Result<u64, SchedulerStorageError> {
+        self.inner.count_due(now, assignment).await
+    }
+
+    async fn extend_lease(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        until: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.extend_lease(id, owner, until).await
+    }
+
+    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
+        let acknowledged = self.inner.ack(id, owner).await?;
+        if acknowledged && self.invocation_wake.lock().unwrap().as_ref() == Some(id) {
+            self.acknowledged.notify_one();
+        }
+        Ok(acknowledged)
+    }
+}
+
 /// The target and invocation key of one schedule call.
 pub(crate) type Schedule = (AgentId, Option<golem_common::model::InvocationId>);
 
@@ -171,6 +240,34 @@ pub(crate) struct HoldFirstSchedule {
 
 #[async_trait]
 impl Rpc for HoldFirstSchedule {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
@@ -263,6 +360,7 @@ impl Rpc for HoldFirstSchedule {
         environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method: String,
         input: SchemaValue,
         created_by: AccountId,
@@ -279,6 +377,7 @@ impl Rpc for HoldFirstSchedule {
                 environment_id,
                 key,
                 freshness,
+                expected_callee_fingerprint,
                 method,
                 input,
                 created_by,
@@ -298,6 +397,7 @@ impl Rpc for HoldFirstSchedule {
         environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method: String,
         input: SchemaValue,
         created_by: AccountId,
@@ -313,6 +413,7 @@ impl Rpc for HoldFirstSchedule {
                 environment_id,
                 key,
                 freshness,
+                expected_callee_fingerprint,
                 method,
                 input,
                 created_by,
@@ -884,7 +985,7 @@ async fn scheduled_ephemeral_target_lost_after_it_began_never_runs(
     Ok(())
 }
 
-/// Deleting the target before its deadline leaves a stale wake, which must not recreate it.
+/// Deleting the target before wake delivery leaves a stale wake, which must not recreate it.
 #[test]
 #[timeout("3m")]
 async fn deleted_scheduled_ephemeral_target_is_not_recreated_by_its_wake(
@@ -894,19 +995,43 @@ async fn deleted_scheduled_ephemeral_target_is_not_recreated_by_its_wake(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let release = tokio_util::sync::CancellationToken::new();
+    let _release_on_drop = release.clone().drop_guard();
+    let acknowledged = Arc::new(tokio::sync::Notify::new());
+    let overrides = TestExecutorOverrides {
+        wrap_scheduler_storage: Some(Arc::new({
+            let release = release.clone();
+            let acknowledged = acknowledged.clone();
+            move |inner| {
+                Arc::new(PausedScheduler {
+                    inner,
+                    release: release.clone(),
+                    invocation_wake: Mutex::new(None),
+                    acknowledged: acknowledged.clone(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
     let name = "deleted";
-    let due = Utc::now() + chrono::Duration::seconds(5);
+    let due = Utc::now();
     schedule(&executor, &component, name, 0, due).await?;
     let target = ephemeral_target(&executor, &component).await?;
+    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    assert!(scheduled_key(&oplog).is_some());
+    let oplog = shape(&oplog);
+    assert_eq!((oplog.restarts, oplog.starts), (0, 0));
     executor.delete_worker(&target).await?;
-    assert!(Utc::now() < due, "the deletion must precede the deadline");
 
-    sleep_until(due + chrono::Duration::seconds(5)).await;
+    release.cancel();
+    tokio::time::timeout(Duration::from_secs(60), acknowledged.notified())
+        .await
+        .map_err(|_| anyhow::anyhow!("the invocation wake was never acknowledged"))?;
     assert_eq!(effects(&executor, &component, name).await?, (0, 0));
     assert_eq!(executor.get_worker_metadata_opt(&target).await?, None);
     Ok(())

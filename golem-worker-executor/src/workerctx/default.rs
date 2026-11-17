@@ -937,6 +937,10 @@ impl HostWasmRpc for Context {
             .await
     }
 
+    async fn bind_self(&mut self) -> anyhow::Result<Result<(String, Resource<WasmRpc>), RpcError>> {
+        self.durable_ctx.bind_self().await
+    }
+
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,

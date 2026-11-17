@@ -1510,12 +1510,21 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
                 source
             );
         }
+        // Persist the update before restart so background recovery cannot enter source replay
+        // and consume the admission gates before the target revision's startup preflight.
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            executor.auto_update_worker(&worker_id, target.revision, false),
+        )
+        .await??;
         end.abort();
         executor.shutdown_and_wait_for_invocation_loops().await?;
         drop(end);
         drop(executor);
 
+        let (startup_entered, startup_release) = outage.gate_component(target.revision);
         let executor = start_with_overrides(deps, &context, overrides).await?;
+        tokio::time::timeout(Duration::from_secs(30), startup_entered).await??;
         let mut a = executor.gate_next_replay_access_admission(
             &worker_id,
             PROMISE,
@@ -1527,9 +1536,7 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
             ReplayAdmissionStage::AfterStart,
         );
         let mut events = executor.capture_output(&worker_id).await?;
-        executor
-            .auto_update_worker(&worker_id, target.revision, false)
-            .await?;
+        startup_release.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
             tokio::join!(a.entered(), c.entered());
         })

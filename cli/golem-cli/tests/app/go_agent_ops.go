@@ -312,8 +312,13 @@ func init() {
 
 	// A failed production must not reach the reader as a clean end.
 	ops.Handle(ReadFailing, func(*golem.Context[opsState], golem.Unit) string {
-		items := Failing.MustCall(Source.Get(SourceID{Name: "s"}), golem.Unit{}).Collect()
-		return fmt.Sprintf("clean-eof:%v", items)
+		items, err := Failing.MustCall(Source.Get(SourceID{Name: "s"}), golem.Unit{}).Collect()
+		var failure *golem.StreamError
+		if !errors.As(err, &failure) || failure.Kind != golem.StreamFailed {
+			panic(fmt.Sprintf("unexpected stream outcome: %v", err))
+		}
+		message := golem.Must(golem.DecodeTypedValue[string](failure.Value))
+		return fmt.Sprintf("caught:%v:%s", items, message)
 	})
 
 	ops.Handle(Self, func(*golem.Context[opsState], golem.Unit) string {

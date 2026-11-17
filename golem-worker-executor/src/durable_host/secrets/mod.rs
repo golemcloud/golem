@@ -319,6 +319,7 @@ fn classify_secret_revision_error(error: &WorkerExecutorError) -> HostFailureKin
     match error {
         WorkerExecutorError::InvalidRequest { .. }
         | WorkerExecutorError::AgentAlreadyExists { .. }
+        | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
         | WorkerExecutorError::AgentNotFound { .. }
         | WorkerExecutorError::PromiseNotFound { .. }
         | WorkerExecutorError::PromiseDropped { .. }
