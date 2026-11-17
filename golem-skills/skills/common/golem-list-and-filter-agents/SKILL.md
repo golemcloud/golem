@@ -108,7 +108,7 @@ golem agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
 The cursor is an opaque value returned in the output when there are more results. Pass it back unchanged in the next call to get the next page.
 
-> **Note**: `--scan-cursor` requires a single component to be selected (either via `--component-name` or by being in a single-component application directory).
+> **Note**: `--max-count` applies to each listed agent type. One cursor covers every listed agent type, so pass it back with the same agent type or component selection; the next page continues each type that still has more results.
 
 ### Precise Mode
 

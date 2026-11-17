@@ -33,17 +33,18 @@ use crate::oplog_export::obfuscator::{KeepFlags, TokenKey};
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_client::api::WorkerClient;
+use golem_common::model::AgentId;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use std::path::PathBuf;
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// The oplog reads of one agent through the worker service.
 pub struct RestOplogReads {
     pub ctx: Arc<Context>,
-    pub component_id: Uuid,
-    pub agent_name: String,
+    pub environment_id: EnvironmentId,
+    pub agent_id: AgentId,
 }
 
 #[async_trait]
@@ -59,12 +60,13 @@ impl OplogReads for RestOplogReads {
         let response = clients
             .worker
             .get_oplog(
-                &self.component_id,
-                &self.agent_name,
+                &self.environment_id.0,
+                &self.agent_id.0,
                 from,
                 count,
                 cursor,
                 query,
+                None,
             )
             .await
             .map_service_error()
@@ -84,10 +86,11 @@ impl OplogReads for RestOplogReads {
         Ok(clients
             .worker
             .get_oplog_entry(
-                &self.component_id,
-                &self.agent_name,
+                &self.environment_id.0,
+                &self.agent_id.0,
                 oplog_index,
                 Some(component_revision.into()),
+                None,
             )
             .await
             .map_service_error()
@@ -195,16 +198,16 @@ impl OplogExportSink for CliExportSink {
 /// Exports the obfuscated oplog of one agent to stdout and, with `--html`, to a viewer page.
 pub async fn cmd_oplog_export(
     ctx: Arc<Context>,
-    component_id: Uuid,
-    agent_name: String,
+    environment_id: EnvironmentId,
+    agent_id: AgentId,
     options: OplogExportOptions,
     viewer: OplogViewerArgs,
 ) -> anyhow::Result<()> {
     let print = viewer.html.is_none() || ctx.format().is_structured();
     let reads = RestOplogReads {
         ctx: ctx.clone(),
-        component_id,
-        agent_name,
+        environment_id,
+        agent_id,
     };
     let mut sink = CliExportSink {
         ctx: ctx.clone(),

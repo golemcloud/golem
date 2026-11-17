@@ -29,7 +29,7 @@ use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
     OplogViewerServer, open_in_browser, oplog_page_entry_view, serve_oplog_viewer,
 };
-use crate::command_handler::agent::stream::AgentConnection;
+use crate::command_handler::agent::stream::{AgentConnection, LiveOutput};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
@@ -49,8 +49,11 @@ use crate::model::agent::oplog::AgentOplogEntryView;
 use crate::model::agent::oplog_html::{
     OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
 };
-use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
-use crate::model::component::ComponentNameMatchKind;
+use crate::model::agent::{
+    AgentAddress, AgentCreateView, AgentGetView, AgentListCursor, AgentUpsertView,
+    agent_id_display, format_agent_id_match, format_timestamp,
+};
+use crate::model::component::{ComponentNameMatchKind, ComponentRevisionSelection};
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
 use crate::model::help::{
     AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
@@ -58,7 +61,7 @@ use crate::model::help::{
 };
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text_format::{log_fuzzy_match, log_text_view};
-use anyhow::{Context as AnyhowContext, anyhow, bail};
+use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use golem_common::model::invocation_session_public::PublicErrorCode;
@@ -76,26 +79,24 @@ use crate::model::environment::{
 use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;
 use golem_client::model::{
-    AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
+    AgentInvocationMode, AgentInvocationRequest, AgentKeyRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest, WorkersMetadataRequest,
 };
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::typed_constructor_parameters;
 use golem_common::model::agent::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
-use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentKey};
+use golem_common::model::agent::{
+    AgentConfigSource, AgentMode, AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey,
+};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
-use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::{
-    ComponentMetadata, ParsedFunctionName, ParsedFunctionSite,
-};
-use golem_common::model::environment::EnvironmentName;
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use golem_common::model::{
-    AgentFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
-    OplogIndex, StringFilterComparator,
+    AgentFilter, AgentFingerprint, AgentId, FilterComparator, IdempotencyKey, OplogIndex,
 };
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
@@ -114,7 +115,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use terminal_size::terminal_size;
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -164,11 +165,17 @@ impl AgentCommandHandler {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
         Box::pin(async move {
             match subcommand {
-                AgentSubcommand::New {
+                AgentSubcommand::Create {
                     agent_id,
+                    keyed,
+                    idempotency_key,
                     env,
                     config,
-                } => self.cmd_new(agent_id, env, config).await,
+                } => {
+                    self.cmd_create(agent_id, keyed, idempotency_key, env, config)
+                        .await
+                }
+                AgentSubcommand::Upsert { agent_id } => self.cmd_upsert(agent_id).await,
                 AgentSubcommand::Invoke {
                     agent_id,
                     function_name,
@@ -184,6 +191,7 @@ impl AgentCommandHandler {
                     takeover_session,
                     post_deploy_args,
                     schedule_at,
+                    expected_fingerprint,
                 } => {
                     self.cmd_invoke(
                         agent_id,
@@ -200,6 +208,7 @@ impl AgentCommandHandler {
                         takeover_session,
                         post_deploy_args,
                         schedule_at,
+                        expected_fingerprint.map(AgentFingerprint),
                     )
                     .await
                 }
@@ -233,22 +242,8 @@ impl AgentCommandHandler {
                 } => self.cmd_stream(agent_id, stream_args).await,
                 AgentSubcommand::ReplStream {
                     agent_type_name,
-                    parameters,
-                    idempotency_key,
-                    method_name,
-                    phantom_id,
                     stream_args,
-                } => {
-                    self.cmd_repl_stream(
-                        agent_type_name,
-                        parameters,
-                        idempotency_key,
-                        method_name,
-                        phantom_id,
-                        stream_args,
-                    )
-                    .await
-                }
+                } => self.cmd_repl_stream(agent_type_name, stream_args).await,
                 AgentSubcommand::Interrupt { agent_id } => self.cmd_interrupt(agent_id).await,
                 AgentSubcommand::Update {
                     agent_id,
@@ -319,68 +314,113 @@ impl AgentCommandHandler {
         })
     }
 
-    async fn cmd_new(
+    /// The address of a create or upsert, which must be a key.
+    async fn key_address(
         &self,
         agent_id: AgentIdArgs,
-        env: Vec<(String, String)>,
-        config: Vec<AgentConfigEntryDto>,
-    ) -> anyhow::Result<()> {
+        post_deploy_args: Option<&PostDeployArgs>,
+    ) -> anyhow::Result<(AgentIdMatch, ParsedAgentKey)> {
         self.ctx.silence_app_context_init().await;
-
-        let agent_id = agent_id.agent_id;
-        let mut agent_id_match = self.match_agent_id(agent_id).await?;
-        let component = self
-            .ctx
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        self.ctx
             .component_handler()
             .component_by_name_with_auto_deploy(
                 &agent_id_match.environment,
                 agent_id_match.component_name_match_kind,
                 &agent_id_match.component_name,
-                Some((&agent_id_match.agent_id).into()),
                 None,
+                post_deploy_args,
                 None,
                 false,
             )
             .await?;
-
-        let agent_id = agent_id_match.agent_id.clone();
-        let agent_id = match self.validate_agent_and_function_names(&component, &agent_id, None)? {
-            Some((agent_id, agent_type)) => {
-                // `normalize_public_agent_id` may auto-generate a phantom
-                // UUID for ephemeral agents, changing the canonical form.
-                let normalized = normalize_public_agent_id(&agent_id, &agent_type)?;
-                let canonical: RawAgentId = normalized.to_string().into();
-                agent_id_match.agent_id = canonical.clone();
-                agent_id_match.parsed_agent_id = Some(normalized);
-                canonical
-            }
-            None => agent_id,
+        validate_ordinary_agent_type(&agent_id_match.agent_type.agent_type)?;
+        let AgentAddress::Key(key) = &agent_id_match.address else {
+            log_error(format!(
+                "Agent {} is an agent ID; this command takes {}",
+                agent_id_match.display_name().log_color_error_highlight(),
+                "<AGENT_TYPE>(<AGENT_PARAMETERS>)".log_color_highlight()
+            ));
+            bail!(NonSuccessfulExit);
         };
+        let key = (**key).clone();
+        Ok((agent_id_match, key))
+    }
+
+    async fn cmd_create(
+        &self,
+        agent_id: AgentIdArgs,
+        keyed: bool,
+        idempotency_key: Option<IdempotencyKey>,
+        env: Vec<(String, String)>,
+        config: Vec<AgentConfigEntryDto>,
+    ) -> anyhow::Result<()> {
+        let (agent_id_match, key) = self.key_address(agent_id, None).await?;
 
         log_action(
             "Creating",
-            format!("new agent {}", format_agent_id_match(&agent_id_match)),
+            format!(
+                "{}agent {}",
+                if keyed { "keyed " } else { "" },
+                format_agent_id_match(&agent_id_match)
+            ),
         );
 
-        self.new_agent(
-            component.id.0,
-            agent_id.0.clone(),
-            env.into_iter().collect(),
-            config,
-        )
-        .await?;
-
-        let display_agent_id: RawAgentId = crate::agent_id_display::render_agent_id_or_raw(
-            agent_id_match.parsed_agent_id.as_ref(),
-            &agent_id_match.source_language,
-            &agent_id.0,
-        )
-        .into();
+        let clients = self.ctx.golem_clients().await?;
+        let reference = clients
+            .agent
+            .create_agent(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id_match.agent_type_name.0,
+                idempotency_key.as_ref().map(|key| key.value.as_str()),
+                &golem_client::model::CreateAgentRequest {
+                    parameters: key_parameters(&key)?,
+                    config: Some(config),
+                    env: Some(env.into_iter().collect()),
+                    keyed: Some(keyed),
+                },
+            )
+            .await
+            .map_service_error()?;
 
         logln("");
         self.ctx.log_handler().log_output(AgentCreateView {
             component_name: agent_id_match.component_name,
-            agent_id: display_agent_id,
+            agent_type: agent_id_match.agent_type_name,
+            agent_id: AgentId(reference.agent_id),
+            agent_fingerprint: AgentFingerprint(reference.agent_fingerprint),
+        })?;
+
+        Ok(())
+    }
+
+    async fn cmd_upsert(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
+        let (agent_id_match, key) = self.key_address(agent_id, None).await?;
+
+        log_action(
+            "Upserting",
+            format!("agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        let reference = clients
+            .agent
+            .upsert_agent(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id_match.agent_type_name.0,
+                &AgentKeyRequest {
+                    parameters: key_parameters(&key)?,
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        logln("");
+        self.ctx.log_handler().log_output(AgentUpsertView {
+            component_name: agent_id_match.component_name,
+            agent_type: agent_id_match.agent_type_name,
+            agent_id: AgentId(reference.agent_id),
+            agent_fingerprint: AgentFingerprint(reference.agent_fingerprint),
         })?;
 
         Ok(())
@@ -402,6 +442,7 @@ impl AgentCommandHandler {
         takeover_session: Option<std::path::PathBuf>,
         post_deploy_args: Option<PostDeployArgs>,
         schedule_at: Option<DateTime<Utc>>,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> anyhow::Result<()> {
         let _raw_output_guard = (stdout_format == InvocationStdoutFormat::Raw)
             .then(|| LogOutput::new(LogOutputTarget::None));
@@ -461,21 +502,27 @@ impl AgentCommandHandler {
                 &agent_id_match.environment,
                 agent_id_match.component_name_match_kind,
                 &agent_id_match.component_name,
-                Some((&agent_id_match.agent_id).into()),
+                None,
                 post_deploy_args.as_ref(),
                 None,
                 false,
             )
             .await?;
 
-        // First, validate without the function name. The agent name was
-        // already canonicalized when the `AgentIdMatch` was constructed.
-        let agent_id_and_type =
-            self.validate_agent_and_function_names(&component, &agent_id_match.agent_id, None)?;
-
-        let (agent_id, agent_type) =
-            agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
-        validate_public_invocation_agent_id(&agent_id, &agent_type)?;
+        let component_metadata: ComponentMetadata = component.metadata.clone().into();
+        let Some(agent_type) = component_metadata
+            .agent_types()
+            .iter()
+            .find(|agent_type| agent_type.type_name == agent_id_match.agent_type_name)
+            .cloned()
+        else {
+            bail!(
+                "Agent type {} is not implemented by component {}",
+                agent_id_match.agent_type_name,
+                component.component_name
+            );
+        };
+        validate_ordinary_agent_type(&agent_type)?;
 
         let matched_method_name = resolve_agent_method_name(function_name, &agent_type);
         let method_name = match matched_method_name {
@@ -502,7 +549,6 @@ impl AgentCommandHandler {
                     logln("");
                     log_text_view(&AvailableFunctionNamesHelp::new_agent(
                         &component,
-                        &agent_id,
                         &agent_type,
                     ));
 
@@ -517,7 +563,6 @@ impl AgentCommandHandler {
                     logln("");
                     log_text_view(&AvailableFunctionNamesHelp::new_agent(
                         &component,
-                        &agent_id,
                         &agent_type,
                     ));
 
@@ -525,19 +570,6 @@ impl AgentCommandHandler {
                 }
             },
         };
-
-        let stream_agent_id = invocation_agent_id(
-            &agent_id,
-            &agent_type,
-            self.ctx.account_id().await?,
-            &idempotency_key,
-            &method_name,
-        )?;
-
-        // Update agent_id with normalized agent id (and keep the parsed form
-        // for language-specific display).
-        let agent_id_match = agent_id_match
-            .with_canonical_and_parsed(agent_id.to_string().into(), Some(agent_id.clone()));
 
         if trigger {
             log_action(
@@ -579,36 +611,57 @@ impl AgentCommandHandler {
             bail!("durable session save/resume options require a streaming agent method");
         }
 
-        if method_uses_streams {
-            let selected_agent_name = stream_agent_id.to_string();
-            let mut invocation_goal = None;
-            let mut connect_handle = if !no_stream && stdout_format == InvocationStdoutFormat::Value
+        let selected_agent_name = agent_id_match.display_name();
+        let environment = &agent_id_match.environment;
+        let wait_for_invocation = !trigger && stdout_format == InvocationStdoutFormat::Value;
+        let live_output = (!no_stream).then(|| {
+            Arc::new(LiveOutput::new(
+                self.ctx.clone(),
+                environment.environment_id,
+                stream_args.into(),
+                wait_for_invocation,
+            ))
+        });
+        // An ID address names the agent before the call, so its output can be shown from the
+        // start. An awaited call by key with an expected fingerprint needs an existing agent, so
+        // its ID is looked up before the call for the same reason. Any other key address names
+        // the agent only when the server accepts the invocation.
+        let known_agent_id = match &agent_id_match.address {
+            AgentAddress::Id(agent_id) => Some(*agent_id),
+            AgentAddress::Key(_)
+                if live_output.is_some()
+                    && expected_fingerprint.is_some()
+                    && !trigger
+                    && !method_uses_streams =>
             {
-                let connection = AgentConnection::new(
-                    self.ctx.worker_service_url().clone(),
-                    self.ctx.auth_token().await?,
-                    &component.id,
-                    stream_agent_id.to_string(),
-                    stream_args.into(),
-                    self.ctx.allow_insecure(),
-                    self.ctx.format(),
-                    self.ctx.agent_stream_ping_interval(),
-                    true,
-                )
-                .await?;
-                invocation_goal = connection.invocation_goal();
-                Some(tokio::spawn(async move { connection.run_forever().await }))
-            } else {
-                None
-            };
+                Some(self.agent_id_of(&agent_id_match).await?)
+            }
+            AgentAddress::Key(_) => None,
+        };
+        if let (Some(live_output), Some(agent_id)) = (&live_output, &known_agent_id) {
+            live_output.open(agent_id, &selected_agent_name).await?;
+        }
 
+        // The invocation session addresses an agent by its key, without a fingerprint check.
+        let session_key = match &agent_id_match.address {
+            AgentAddress::Key(key) if expected_fingerprint.is_none() => Some((**key).clone()),
+            _ => None,
+        };
+
+        if method_uses_streams {
+            let Some(key) = session_key else {
+                bail!(
+                    "Streaming agent methods are invoked by an agent key, without an expected fingerprint"
+                );
+            };
             let result = invocation_session::invoke(
                 self.ctx.clone(),
                 invocation_session::InvocationSessionArgs {
-                    application_name: agent_id_match.environment.application_name.to_string(),
-                    environment_name: agent_id_match.environment.environment_name.to_string(),
+                    environment_id: environment.environment_id,
+                    application_name: environment.application_name.to_string(),
+                    environment_name: environment.environment_name.to_string(),
                     agent_type,
-                    parsed_agent_id: agent_id,
+                    parsed_agent_id: key,
                     method_name,
                     arguments,
                     config: Vec::new(),
@@ -617,15 +670,13 @@ impl AgentCommandHandler {
                     stdout_format,
                     selected_agent_name,
                     session_mode,
-                    invocation_goal,
+                    live_output: live_output.clone(),
                 },
             )
             .await;
 
-            if let Some(mut handle) = connect_handle.take()
-                && timeout(Duration::from_secs(3), &mut handle).await.is_err()
-            {
-                handle.abort();
+            if let Some(live_output) = live_output {
+                live_output.finish().await;
             }
             return result;
         }
@@ -638,50 +689,25 @@ impl AgentCommandHandler {
             &source_language,
         )?;
 
-        let mut connect_handle = if !no_stream {
-            let connection = AgentConnection::new(
-                self.ctx.worker_service_url().clone(),
-                self.ctx.auth_token().await?,
-                &component.id,
-                stream_agent_id.to_string(),
-                stream_args.into(),
-                self.ctx.allow_insecure(),
-                self.ctx.format(),
-                self.ctx.agent_stream_ping_interval(),
-                !trigger,
-            )
-            .await?;
-            let goal = connection.invocation_goal();
-            Some((
-                goal,
-                tokio::task::spawn(async move { connection.run_forever().await }),
-            ))
-        } else {
-            None
-        };
-
-        let environment = &agent_id_match.environment;
-
-        if !trigger {
+        if !trigger && let Some(key) = session_key {
             let invocation = invocation_session::invoke_scalar(
                 self.ctx.clone(),
                 invocation_session::ScalarInvocationArgs {
+                    environment_id: environment.environment_id,
                     application_name: environment.application_name.to_string(),
                     environment_name: environment.environment_name.to_string(),
                     agent_type: agent_type.clone(),
-                    parsed_agent_id: agent_id,
+                    parsed_agent_id: key,
                     method_name: method_name.clone(),
                     method_parameters,
                     idempotency_key,
-                    invocation_goal: connect_handle.as_ref().and_then(|(goal, _)| goal.clone()),
+                    selected_agent_name,
+                    live_output: live_output.clone(),
                 },
             )
             .await;
-            if let Some((goal, handle)) = connect_handle.take() {
-                if let Some(goal) = goal {
-                    goal.set_output_written();
-                }
-                let _ = timeout(Duration::from_secs(3), handle).await;
+            if let Some(live_output) = live_output {
+                live_output.finish().await;
             }
             let invocation = invocation.map_err(|error| {
                 self.with_previous_invocation_failed_hint(error, &agent_id_match)
@@ -698,48 +724,82 @@ impl AgentCommandHandler {
             return Ok(());
         }
 
+        let (agent_id, parameters) = match (known_agent_id, &agent_id_match.address) {
+            (Some(agent_id), _) => (Some(agent_id.0), None),
+            (None, AgentAddress::Key(key)) => (None, Some(key_parameters(key)?)),
+            (None, AgentAddress::Id(agent_id)) => (Some(agent_id.0), None),
+        };
         let request = AgentInvocationRequest {
-            app_name: environment.application_name.to_string(),
-            env_name: environment.environment_name.to_string(),
-            agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
-                .map_err(anyhow::Error::msg)?,
-            phantom_id: agent_id.phantom_id,
-            config: None,
-            method_name: method_name.clone(),
+            agent_id,
+            parameters,
+            method: method_name.clone(),
             method_parameters: ExternalSchemaValue::try_from(method_parameters)
                 .map_err(anyhow::Error::msg)?,
-            mode: AgentInvocationMode::Schedule,
+            mode: if trigger {
+                AgentInvocationMode::Schedule
+            } else {
+                AgentInvocationMode::Await
+            },
             schedule_at,
-            idempotency_key: Some(idempotency_key.value.clone()),
-            deployment_revision: None,
-            owner_account_email: None,
+            expected_fingerprint: expected_fingerprint.map(|fingerprint| fingerprint.0),
         };
 
         let clients = self.ctx.golem_clients().await?;
         let result = clients
             .agent
-            .invoke_agent(Some(&idempotency_key.value), &request)
+            .invoke_agent(
+                &environment.environment_id.0,
+                &agent_id_match.agent_type_name.0,
+                Some(&idempotency_key.value),
+                &request,
+            )
             .await
             .map_service_error()
             .map_err(|error| {
                 self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
-            })?;
+            });
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(live_output) = live_output {
+                    live_output.finish().await;
+                }
+                return Err(error);
+            }
+        };
 
         // The key the server accepted the invocation under, which cancels and looks it up.
         let accepted_key = golem_common::model::InvocationId(result.idempotency_key);
-        if let Some((goal, handle)) = connect_handle.take() {
-            if let Some(goal) = goal {
-                goal.set_target(accepted_key);
-                goal.set_output_written();
-            }
-            let _ = timeout(Duration::from_secs(3), handle).await;
+        if let Some(live_output) = live_output {
+            live_output
+                .accepted(
+                    &AgentId(result.agent_id),
+                    &selected_agent_name,
+                    accepted_key,
+                )
+                .await?;
+            live_output.finish().await;
         }
 
-        log_action("Triggered", "invocation");
-        self.ctx
-            .log_handler()
-            .log_output(InvokeResultView::new_trigger(accepted_key))?;
+        if trigger {
+            log_action("Triggered", "invocation");
+            self.ctx
+                .log_handler()
+                .log_output(InvokeResultView::new_trigger(accepted_key))?;
+        } else {
+            let result = result
+                .result
+                .map(golem_common::schema::TypedSchemaValue::from);
+            logln("");
+            self.ctx
+                .log_handler()
+                .log_output(InvokeResultView::new_agent_invoke(
+                    accepted_key,
+                    result,
+                    &agent_type,
+                    &method_name,
+                ))?;
+        }
 
         Ok(())
     }
@@ -752,7 +812,7 @@ impl AgentCommandHandler {
         self.ctx.silence_app_context_init().await;
 
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
 
         log_action(
             "Connecting",
@@ -762,8 +822,9 @@ impl AgentCommandHandler {
         let connection = AgentConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
-            &component.id,
-            agent_id.0.clone(),
+            &agent_id_match.environment.environment_id,
+            &agent_id,
+            agent_id_match.display_name(),
             stream_args.into(),
             self.ctx.allow_insecure(),
             self.ctx.format(),
@@ -783,10 +844,6 @@ impl AgentCommandHandler {
     async fn cmd_repl_stream(
         &self,
         agent_type_name: AgentTypeName,
-        parameters: String,
-        idempotency_key: IdempotencyKey,
-        method_name: String,
-        phantom_id: Option<Uuid>,
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -797,79 +854,31 @@ impl AgentCommandHandler {
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        let parameters: serde_json::Value = serde_json::from_str(&parameters)
-            .with_context(|| "Failed to deserialize agent parameters".to_string())?;
-
-        let Some(agent_type) = self
-            .ctx
-            .app_handler()
-            .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
-            .await?
-        else {
-            bail!("Agent type not found: {}", agent_type_name.0);
-        };
-
-        let value: ExternalSchemaValue = serde_json::from_value(parameters).map_err(|err| {
-            anyhow!("Failed to match agent type parameters to the current metadata: {err}")
-        })?;
-        let typed_parameters =
-            typed_constructor_parameters(&agent_type.agent_type, value.into_inner());
-        let agent_id = ParsedAgentKey::try_new(
-            agent_type.agent_type.type_name.clone(),
-            typed_parameters,
-            phantom_id,
-        )
-        .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
-        let agent_id = invocation_agent_id(
-            &agent_id,
-            &agent_type.agent_type,
-            self.ctx.account_id().await?,
-            &idempotency_key,
-            &method_name,
-        )?;
-        let agent_id = RawAgentId(agent_id.to_string());
-
-        let connection = AgentConnection::new(
-            self.ctx.worker_service_url().clone(),
-            self.ctx.auth_token().await?,
-            &agent_type.implemented_by.component_id,
-            agent_id.0.clone(),
-            stream_args.into(),
-            self.ctx.allow_insecure(),
-            self.ctx.format(),
-            self.ctx.agent_stream_ping_interval(),
-            true,
-        )
-        .await?;
-
         // The REPL writes the accepted invocation ID to stdin once the call returns.
-        let invocation_target = connection.invocation_goal().map(|goal| async move {
-            use tokio::io::AsyncBufReadExt;
-            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-            if let Ok(Some(line)) = lines.next_line().await {
-                goal.set_target(
-                    line.trim()
-                        .parse::<golem_common::model::InvocationId>()
-                        .context("stdin contains an invalid invocation ID")?,
-                );
-                goal.set_output_written();
-            }
-            Ok::<_, anyhow::Error>(())
-        });
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+        let Some(line) = lines.next_line().await? else {
+            return Ok(());
+        };
+        let invocation = line
+            .trim()
+            .parse::<golem_common::model::OwnedInvocationId>()
+            .map_err(|error| anyhow!("stdin contains an invalid invocation ID: {error}"))?;
 
-        if let Some(target) = invocation_target {
-            let connection = connection.run_forever();
-            tokio::pin!(connection);
-            tokio::select! {
-                result = &mut connection => result?,
-                result = target => {
-                    result?;
-                    connection.await?;
-                }
-            }
-        } else {
-            connection.run_forever().await?;
-        }
+        let live_output = LiveOutput::new(
+            self.ctx.clone(),
+            environment.environment_id,
+            stream_args.into(),
+            true,
+        );
+        live_output
+            .accepted(
+                invocation.agent_id(),
+                &agent_id_display(Some(&agent_type_name), invocation.agent_id()),
+                invocation.id(),
+            )
+            .await?;
+        live_output.finish().await;
 
         Ok(())
     }
@@ -877,14 +886,15 @@ impl AgentCommandHandler {
     async fn cmd_simulate_crash(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
 
         log_action(
             "Simulating crash",
             format!("for agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.interrupt_agent(&component, &agent_id, true).await?;
+        self.interrupt_agent(&agent_id_match, &agent_id, true)
+            .await?;
 
         log_action(
             "Simulated crash",
@@ -895,7 +905,7 @@ impl AgentCommandHandler {
             .log_handler()
             .log_output(AgentSimulateCrashResult {
                 simulated: true,
-                agent_id: agent_id.0.clone(),
+                agent_id,
             })?;
 
         Ok(())
@@ -920,8 +930,8 @@ impl AgentCommandHandler {
             if viewer.serve {
                 return oplog_serve::serve_oplog_export_viewer(
                     self.ctx.clone(),
-                    component.id.0,
-                    agent_id.0.clone(),
+                    agent_id_match.environment.environment_id,
+                    agent_id,
                     options,
                     viewer.port,
                     !viewer.no_open,
@@ -930,8 +940,8 @@ impl AgentCommandHandler {
             }
             return oplog_export::cmd_oplog_export(
                 self.ctx.clone(),
-                component.id.0,
-                agent_id.0.clone(),
+                agent_id_match.environment.environment_id,
+                agent_id,
                 options,
                 viewer,
             )
@@ -956,8 +966,8 @@ impl AgentCommandHandler {
             return serve_oplog_viewer(
                 OplogViewerServer {
                     ctx: self.ctx.clone(),
-                    component_id: component.id.0,
-                    agent_id: agent_id.0.clone(),
+                    environment_id: agent_id_match.environment.environment_id,
+                    agent_id,
                     page,
                     page_size: batch_size,
                     omit_payloads,
@@ -982,12 +992,13 @@ impl AgentCommandHandler {
                 let result = clients
                     .worker
                     .get_oplog(
-                        &component.id.0,
+                        &agent_id_match.environment.environment_id.0,
                         &agent_id.0,
                         from,
                         batch_size,
                         cursor.as_ref(),
                         query.as_deref(),
+                        None,
                     )
                     .await
                     .map_service_error()?;
@@ -1001,8 +1012,8 @@ impl AgentCommandHandler {
                 for entry in entries {
                     let view = oplog_page_entry_view(
                         &self.ctx,
-                        &component.id.0,
-                        &agent_id.0,
+                        &agent_id_match.environment.environment_id,
+                        &agent_id,
                         entry,
                         omit_payloads,
                     )
@@ -1081,10 +1092,10 @@ impl AgentCommandHandler {
 
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
 
         if !self.ctx.interactive_handler().confirm_revert_agent(
-            &agent_id,
+            &agent_id_match.display_name(),
             last_oplog_index,
             number_of_invocations,
         )? {
@@ -1115,7 +1126,12 @@ impl AgentCommandHandler {
 
             clients
                 .worker
-                .revert_worker(&component.id.0, &agent_id.0, &target)
+                .revert_worker(
+                    &agent_id_match.environment.environment_id.0,
+                    &agent_id.0,
+                    None,
+                    &target,
+                )
                 .await
                 .map(|_| ())
                 .map_service_error()?
@@ -1128,7 +1144,7 @@ impl AgentCommandHandler {
 
         self.ctx.log_handler().log_output(AgentRevertResult {
             reverted: true,
-            agent_id: agent_id.0.clone(),
+            agent_id,
             last_oplog_index,
             number_of_invocations,
         })?;
@@ -1143,7 +1159,7 @@ impl AgentCommandHandler {
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
 
         log_warn_action(
             "Canceling invocation",
@@ -1158,7 +1174,12 @@ impl AgentCommandHandler {
 
         let canceled = clients
             .worker
-            .cancel_invocation(&component.id.0, &agent_id.0, &idempotency_key.value)
+            .cancel_invocation(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id.0,
+                &idempotency_key.value,
+                None,
+            )
             .await
             .map(|result| result.canceled)
             .map_service_error()?;
@@ -1173,7 +1194,7 @@ impl AgentCommandHandler {
             .log_handler()
             .log_output(AgentCancelInvocationResult {
                 canceled,
-                agent_id: agent_id.0,
+                agent_id,
                 idempotency_key: idempotency_key.value,
             })?;
 
@@ -1186,7 +1207,7 @@ impl AgentCommandHandler {
         component_name: Option<ComponentName>,
         filters: Vec<String>,
         mode: AgentListMode,
-        scan_cursor: Option<ScanCursor>,
+        scan_cursor: Option<AgentListCursor>,
         max_count: Option<u64>,
         precise: bool,
         refresh: Option<u64>,
@@ -1201,13 +1222,13 @@ impl AgentCommandHandler {
             None
         };
         let filters = apply_list_mode_filter(filters, mode);
-        let (components, filters) = self
-            .resolve_list_components(agent_type_name, component_name, filters)
+        let targets = self
+            .resolve_list_components(agent_type_name, component_name)
             .await?;
 
         if let Some(interval_ms) = refresh {
             self.list_with_refresh(
-                &components,
+                &targets,
                 &filters,
                 mode_overlay.as_ref(),
                 scan_cursor.as_ref(),
@@ -1219,7 +1240,7 @@ impl AgentCommandHandler {
         } else {
             let view = self
                 .list_agents(
-                    &components,
+                    &targets,
                     &filters,
                     mode_overlay.as_ref(),
                     scan_cursor.as_ref(),
@@ -1235,10 +1256,10 @@ impl AgentCommandHandler {
 
     async fn list_with_refresh(
         &self,
-        components: &[ComponentDto],
+        targets: &[AgentListTarget],
         filters: &[String],
         mode_overlay: Option<&AgentFilter>,
-        scan_cursor: Option<&ScanCursor>,
+        scan_cursor: Option<&AgentListCursor>,
         max_count: Option<u64>,
         precise: bool,
         interval_ms: u64,
@@ -1265,7 +1286,7 @@ impl AgentCommandHandler {
                 // Fetch first — while the previous frame is still visible
                 let output = self
                     .list_agents(
-                        components,
+                        targets,
                         filters,
                         mode_overlay,
                         scan_cursor,
@@ -1320,8 +1341,7 @@ impl AgentCommandHandler {
         &self,
         agent_type_name: Option<AgentTypeName>,
         component_name: Option<ComponentName>,
-        filters: Vec<String>,
-    ) -> anyhow::Result<(Vec<ComponentDto>, Vec<String>)> {
+    ) -> anyhow::Result<Vec<AgentListTarget>> {
         let clients = self.ctx.golem_clients().await?;
         let component_handler = self.ctx.component_handler();
 
@@ -1346,27 +1366,15 @@ impl AgentCommandHandler {
                     bail!(NonSuccessfulExit)
                 };
 
-                let mut filters = filters;
-                filters.insert(
-                    0,
-                    AgentFilter::new_name(
-                        StringFilterComparator::StartsWith,
-                        format!("{}(", agent_type.agent_type.type_name.0),
-                    )
-                    .to_string(),
-                );
-
-                Ok((
-                    vec![
-                        component_handler
-                            .get_component_revision_by_id(
-                                &agent_type.implemented_by.component_id,
-                                agent_type.implemented_by.component_revision,
-                            )
-                            .await?,
-                    ],
-                    filters,
-                ))
+                Ok(vec![AgentListTarget {
+                    component: component_handler
+                        .get_component_revision_by_id(
+                            &agent_type.implemented_by.component_id,
+                            agent_type.implemented_by.component_revision,
+                        )
+                        .await?,
+                    agent_types: vec![agent_type.agent_type.type_name],
+                }])
             }
             None => {
                 let selected_components = self
@@ -1380,7 +1388,7 @@ impl AgentCommandHandler {
                 environment
                     .with_current_deployment_revision_or_default_warn(
                         |current_deployment_revision| async move {
-                            let mut components =
+                            let mut targets =
                                 Vec::with_capacity(selected_components.component_names.len());
                             for component_name in selected_components.component_names {
                                 match clients
@@ -1394,7 +1402,10 @@ impl AgentCommandHandler {
                                     .map_service_error_not_found_as_opt()?
                                 {
                                     Some(component) => {
-                                        components.push(component);
+                                        targets.push(AgentListTarget {
+                                            agent_types: component_agent_types(&component),
+                                            component,
+                                        });
                                     }
                                     None => {
                                         log_error(format!(
@@ -1406,7 +1417,7 @@ impl AgentCommandHandler {
                                 }
                             }
 
-                            Ok((components, filters))
+                            Ok(targets)
                         },
                     )
                     .await
@@ -1416,38 +1427,49 @@ impl AgentCommandHandler {
 
     async fn list_agents(
         &self,
-        components: &[ComponentDto],
+        targets: &[AgentListTarget],
         filters: &[String],
         mode_overlay: Option<&AgentFilter>,
-        scan_cursor: Option<&ScanCursor>,
+        scan_cursor: Option<&AgentListCursor>,
         max_count: Option<u64>,
         precise: bool,
         stable_sort: bool,
     ) -> anyhow::Result<AgentsMetadataResponseView> {
-        if scan_cursor.is_some() && components.len() != 1 {
-            log_error(format!(
-                "Cursor cannot be used with multiple components selected! ({})",
-                components
-                    .iter()
-                    .map(|component| &component.component_name)
-                    .map(|cn| cn.0.log_color_highlight())
-                    .join(", ")
-            ));
-            logln("");
-            logln(
-                "Switch to an application directory with only one component or explicitly specify the requested component name.",
-            );
-            logln("");
-            bail!(NonSuccessfulExit);
+        if let Some(scan_cursor) = scan_cursor {
+            let listed = targets
+                .iter()
+                .flat_map(|target| target.agent_types.iter())
+                .map(|agent_type| agent_type.0.as_str())
+                .collect::<BTreeSet<_>>();
+            let unlisted = scan_cursor
+                .agent_types()
+                .filter(|agent_type| !listed.contains(agent_type))
+                .collect::<Vec<_>>();
+            if !unlisted.is_empty() {
+                log_error(format!(
+                    "The cursor continues agent types that are not listed: {}",
+                    unlisted
+                        .iter()
+                        .map(|agent_type| agent_type.log_color_highlight())
+                        .join(", ")
+                ));
+                logln("");
+                logln(
+                    "Pass the cursor with the agent type or component selection that returned it.",
+                );
+                logln("");
+                bail!(NonSuccessfulExit);
+            }
         }
 
         let mut view = AgentsMetadataResponseView::default();
+        let mut next_cursor = AgentListCursor::default();
 
-        for component in components {
-            let (agents, component_scan_cursor) = self
+        for target in targets {
+            let (agents, type_scan_cursors) = self
                 .list_component_agents(
-                    &component.component_name,
-                    &component.id,
+                    &target.component,
+                    &target.agent_types,
                     Some(filters),
                     mode_overlay,
                     scan_cursor,
@@ -1457,25 +1479,30 @@ impl AgentCommandHandler {
                 .await?;
 
             for agent in agents {
-                let raw_agent_id = agent.raw_agent_id().to_owned();
-
-                let agent_component = self
+                // An agent created before its type moved to another component runs a revision
+                // of the old component, which the current one may not have. It is listed
+                // without the details that its component's metadata adds.
+                let Ok(agent_component) = self
                     .ctx
                     .component_handler()
-                    .get_component_revision_by_id(&agent.component_id(), agent.component_revision)
-                    .await?;
+                    .get_component_revision_by_id(&target.component.id, agent.component_revision)
+                    .await
+                else {
+                    view.agents.push(AgentMetadataView::from(agent));
+                    continue;
+                };
 
-                let parsed_agent_type_name = agent.agent_type_name();
+                let agent_type_name = agent.agent_type_name.clone();
                 let component_metadata: ComponentMetadata = agent_component.metadata.into();
 
-                let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
+                let defaults = agent_type_name.as_ref().and_then(|agent_type_name| {
                     component_metadata
                         .agent_type_provision_configs()
                         .get(agent_type_name)
                         .cloned()
                 });
 
-                let source_language = parsed_agent_type_name
+                let source_language = agent_type_name
                     .as_ref()
                     .and_then(|type_name| {
                         component_metadata
@@ -1486,7 +1513,7 @@ impl AgentCommandHandler {
                     })
                     .unwrap_or_default();
 
-                let secret_config_paths = parsed_agent_type_name
+                let secret_config_paths = agent_type_name
                     .as_ref()
                     .map(|agent_type_name| {
                         secret_config_paths_for_agent_type(
@@ -1496,35 +1523,26 @@ impl AgentCommandHandler {
                     })
                     .unwrap_or_default();
 
-                let parsed = agent.parsed_agent_id(&component_metadata);
-                let mut agent_view = AgentMetadataView::from(agent)
-                    .with_defaults(defaults)
-                    .with_secret_config_paths(secret_config_paths);
-
-                agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
-                    parsed.as_ref(),
-                    &source_language,
-                    &raw_agent_id,
-                )
-                .into();
-
-                view.agents
-                    .push(agent_view.with_source_language(source_language));
+                let parsed_key = agent.parsed_key(&component_metadata);
+                view.agents.push(
+                    AgentMetadataView::from(agent)
+                        .with_defaults(defaults)
+                        .with_secret_config_paths(secret_config_paths)
+                        .with_source_language(source_language)
+                        .with_rendered_key(parsed_key.as_ref()),
+                );
             }
-            component_scan_cursor
-                .into_iter()
-                .for_each(|component_scan_cursor| {
-                    view.cursors.insert(
-                        component.component_name.to_string(),
-                        scan_cursor_to_string(&component_scan_cursor),
-                    );
-                });
+            for (agent_type, type_scan_cursor) in type_scan_cursors {
+                next_cursor.insert(&agent_type, type_scan_cursor);
+            }
         }
+        view.cursor = (!next_cursor.is_empty()).then(|| next_cursor.encode());
 
         if stable_sort {
             view.agents.sort_by(|a, b| {
                 a.component_name
                     .cmp(&b.component_name)
+                    .then_with(|| a.agent_type.cmp(&b.agent_type))
                     .then_with(|| a.agent_id.0.cmp(&b.agent_id.0))
             });
         }
@@ -1557,7 +1575,8 @@ impl AgentCommandHandler {
             format!("agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.interrupt_agent(&component, &agent_id, false).await?;
+        self.interrupt_agent(&agent_id_match, &agent_id, false)
+            .await?;
 
         log_action(
             "Interrupted",
@@ -1566,7 +1585,7 @@ impl AgentCommandHandler {
 
         self.ctx.log_handler().log_output(AgentInterruptResult {
             interrupted: true,
-            agent_id: agent_id.0.clone(),
+            agent_id,
         })?;
 
         Ok(())
@@ -1575,7 +1594,7 @@ impl AgentCommandHandler {
     async fn cmd_resume(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
 
         log_action(
             "Resuming",
@@ -1585,7 +1604,11 @@ impl AgentCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         clients
             .worker
-            .resume_worker(&component.id.0, &agent_id.0)
+            .resume_worker(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id.0,
+                None,
+            )
             .await
             .map(|_| ())
             .map_service_error()
@@ -1600,7 +1623,7 @@ impl AgentCommandHandler {
 
         self.ctx.log_handler().log_output(AgentResumeResult {
             resumed: true,
-            agent_id: agent_id.0.clone(),
+            agent_id,
         })?;
 
         Ok(())
@@ -1640,9 +1663,7 @@ impl AgentCommandHandler {
 
                 if !self.ctx.interactive_handler().confirm_update_to_current(
                     &component.component_name,
-                    &agent_id,
-                    agent_id_match.parsed_agent_id.as_ref(),
-                    &agent_id_match.source_language,
+                    &agent_id_match.display_name(),
                     current_deployed_revision.revision,
                 )? {
                     bail!(NonSuccessfulExit)
@@ -1653,13 +1674,17 @@ impl AgentCommandHandler {
         };
 
         let from_revision = self
-            .agent_metadata(component.id.0, &component.component_name, &agent_id)
+            .agent_metadata(
+                agent_id_match.environment.environment_id,
+                &component.component_name,
+                &agent_id,
+            )
             .await?
             .map(|metadata| metadata.component_revision)
             .unwrap_or(target_revision);
         let meta = AgentUpdateMeta {
             component_name: component.component_name.clone(),
-            agent_id: agent_id.clone(),
+            agent_id,
             from_revision,
             revision: target_revision,
         };
@@ -1669,8 +1694,9 @@ impl AgentCommandHandler {
         match self
             .update_agent(
                 &component.component_name,
-                &component.id,
-                &agent_id.0,
+                &agent_id_match.environment.environment_id,
+                &agent_id,
+                &agent_id_match.display_name(),
                 mode,
                 target_revision,
                 await_update,
@@ -1682,7 +1708,7 @@ impl AgentCommandHandler {
             Err(error) => {
                 update_results.errors.push(AgentActionError {
                     component_name: component.component_name.clone(),
-                    agent_id: agent_id.clone(),
+                    agent_id,
                     error: error_message_for_output(&error),
                 });
                 self.ctx.log_handler().log_output(update_results)?;
@@ -1705,7 +1731,11 @@ impl AgentCommandHandler {
         let metadata = {
             let result = clients
                 .worker
-                .get_worker_metadata(&component.id.0, &agent_id.0)
+                .get_worker_metadata(
+                    &agent_id_match.environment.environment_id.0,
+                    &agent_id.0,
+                    None,
+                )
                 .await
                 .map_service_error()?;
 
@@ -1723,16 +1753,12 @@ impl AgentCommandHandler {
             &agent_id_match.agent_type_name,
         );
 
-        let mut metadata_view = AgentMetadataView::from(metadata)
+        let parsed_key = metadata.parsed_key(&component_metadata);
+        let metadata_view = AgentMetadataView::from(metadata)
             .with_defaults(defaults)
             .with_secret_config_paths(secret_config_paths)
-            .with_source_language(agent_id_match.source_language.clone());
-        metadata_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
-            agent_id_match.parsed_agent_id.as_ref(),
-            &agent_id_match.source_language,
-            &metadata_view.agent_id.0,
-        )
-        .into();
+            .with_source_language(agent_id_match.source_language.clone())
+            .with_rendered_key(parsed_key.as_ref());
 
         self.ctx
             .log_handler()
@@ -1744,18 +1770,19 @@ impl AgentCommandHandler {
     async fn cmd_delete(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
 
         log_warn_action(
             "Deleting",
             format!("agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.delete(component.id.0, &agent_id.0).await?;
+        self.delete(&agent_id_match.environment.environment_id, &agent_id)
+            .await?;
 
         self.ctx.log_handler().log_output(AgentDeleteView {
             deleted: true,
-            agent_id: agent_id.0.clone(),
+            agent_id,
         })?;
 
         Ok(())
@@ -1764,7 +1791,7 @@ impl AgentCommandHandler {
     async fn cmd_files(&self, agent_id: AgentIdArgs, path: String) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
 
         log_action(
             "Listing files",
@@ -1778,7 +1805,12 @@ impl AgentCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let nodes = match clients
             .worker
-            .get_files(&component.id.0, &agent_id.0, &path)
+            .get_files(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id.0,
+                &path,
+                None,
+            )
             .await
             .map_service_error()
         {
@@ -1852,7 +1884,7 @@ impl AgentCommandHandler {
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
 
         log_action(
             "Downloading file",
@@ -1866,7 +1898,12 @@ impl AgentCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let file_contents = match clients
             .worker
-            .get_file_content(&component.id.0, &agent_id.0, &path)
+            .get_file_content(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id.0,
+                &path,
+                None,
+            )
             .await
             .map_service_error()
         {
@@ -1908,7 +1945,7 @@ impl AgentCommandHandler {
                 );
                 self.ctx.log_handler().log_output(AgentFileContentsResult {
                     saved: false,
-                    agent_id: agent_id.0.clone(),
+                    agent_id,
                     path,
                     output_path: output_path.into(),
                     bytes: 0,
@@ -1925,7 +1962,7 @@ impl AgentCommandHandler {
                 );
                 self.ctx.log_handler().log_output(AgentFileContentsResult {
                     saved: true,
-                    agent_id: agent_id.0.clone(),
+                    agent_id,
                     path,
                     output_path: output_path.into(),
                     bytes: file_contents.len(),
@@ -1971,7 +2008,12 @@ impl AgentCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         clients
             .worker
-            .activate_plugin(&component.id.0, &agent_id.0, plugin_priority)
+            .activate_plugin(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id.0,
+                plugin_priority,
+                None,
+            )
             .await
             .map(|_| ())
             .map_service_error()?;
@@ -1987,7 +2029,7 @@ impl AgentCommandHandler {
 
         self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: true,
-            agent_id: agent_id.0.clone(),
+            agent_id,
             plugin: plugin_name.clone(),
             priority: plugin_priority,
         })?;
@@ -2024,7 +2066,12 @@ impl AgentCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         clients
             .worker
-            .deactivate_plugin(&component.id.0, &agent_id.0, plugin_priority)
+            .deactivate_plugin(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id.0,
+                plugin_priority,
+                None,
+            )
             .await
             .map(|_| ())
             .map_service_error()?;
@@ -2040,7 +2087,7 @@ impl AgentCommandHandler {
 
         self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: false,
-            agent_id: agent_id.0.clone(),
+            agent_id,
             plugin: plugin_name.clone(),
             priority: plugin_priority,
         })?;
@@ -2120,54 +2167,32 @@ impl AgentCommandHandler {
         }
     }
 
-    async fn new_agent(
-        &self,
-        component_id: Uuid,
-        agent_id: String,
-        env: HashMap<String, String>,
-        config: Vec<AgentConfigEntryDto>,
-    ) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients().await?;
-
-        clients
-            .worker
-            .launch_new_worker(
-                &component_id,
-                &golem_client::model::AgentCreationRequest {
-                    name: agent_id,
-                    env,
-                    config,
-                },
-            )
-            .await
-            .map(|_| ())
-            .map_service_error()?;
-
-        Ok(())
-    }
-
     pub async fn agent_metadata(
         &self,
-        component_id: Uuid,
+        environment_id: EnvironmentId,
         component_name: &ComponentName,
-        agent_id: &RawAgentId,
+        agent_id: &AgentId,
     ) -> anyhow::Result<Option<AgentMetadata>> {
         let clients = self.ctx.golem_clients().await?;
 
         Ok(clients
             .worker
-            .get_worker_metadata(&component_id, &agent_id.0)
+            .get_worker_metadata(&environment_id.0, &agent_id.0, None)
             .await
             .map_service_error_not_found_as_opt()?
             .map(|result| AgentMetadata::from(component_name.clone(), result)))
     }
 
-    async fn delete(&self, component_id: Uuid, agent_id: &str) -> anyhow::Result<()> {
+    async fn delete(
+        &self,
+        environment_id: &EnvironmentId,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
         clients
             .worker
-            .delete_worker(&component_id, agent_id)
+            .delete_worker(&environment_id.0, &agent_id.0, None)
             .await
             .map(|_| ())
             .map_service_error()?;
@@ -2177,13 +2202,13 @@ impl AgentCommandHandler {
 
     pub async fn update_component_agents(
         &self,
-        component_name: &ComponentName,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         await_update: bool,
         disable_wakeup: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersView> {
+        let component_name = &component.component_name;
         let agent_filters = [
             // only consider durable agents
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable).to_string(),
@@ -2192,8 +2217,8 @@ impl AgentCommandHandler {
         ];
         let (agents_to_update, _) = self
             .list_component_agents(
-                component_name,
-                component_id,
+                component,
+                &component_agent_types(component),
                 Some(&agent_filters),
                 None,
                 None,
@@ -2224,8 +2249,9 @@ impl AgentCommandHandler {
             let result = self
                 .update_agent(
                     component_name,
-                    &agent.component_id(),
-                    agent.raw_agent_id(),
+                    &agent.environment_id,
+                    &agent.agent_id,
+                    &agent.display_name(),
                     update_mode,
                     target_revision,
                     false,
@@ -2240,14 +2266,14 @@ impl AgentCommandHandler {
                 Err(error) => {
                     update_results.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent.raw_agent_id().into(),
+                        agent_id: agent.agent_id,
                         error: error_message_for_output(&error),
                     });
                 }
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
-                agent_id: agent.raw_agent_id().into(),
+                agent_id: agent.agent_id,
                 from_revision: agent.component_revision,
                 revision: target_revision,
             });
@@ -2257,8 +2283,8 @@ impl AgentCommandHandler {
             for (agent, update_attempt_index) in agents_awaiting_update {
                 if let Err(error) = self
                     .await_update_result(
-                        &agent.component_id(),
-                        agent.raw_agent_id(),
+                        &agent.environment_id,
+                        &agent.agent_id,
                         target_revision,
                         client_update_mode,
                         update_attempt_index,
@@ -2267,7 +2293,7 @@ impl AgentCommandHandler {
                 {
                     update_results.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent.raw_agent_id().into(),
+                        agent_id: agent.agent_id,
                         error: error_message_for_output(&error),
                     });
                 }
@@ -2280,8 +2306,9 @@ impl AgentCommandHandler {
     async fn update_agent(
         &self,
         component_name: &ComponentName,
-        component_id: &ComponentId,
-        agent_id: &str,
+        environment_id: &EnvironmentId,
+        agent_id: &AgentId,
+        agent_name: &str,
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         await_update: bool,
@@ -2292,7 +2319,7 @@ impl AgentCommandHandler {
             format!(
                 "for agent {}/{} to revision {} using {} update mode",
                 component_name.0.bold().blue(),
-                agent_id.bold().green(),
+                agent_name.bold().green(),
                 target_revision.to_string().log_color_highlight(),
                 update_mode.to_string().log_color_highlight()
             ),
@@ -2303,8 +2330,9 @@ impl AgentCommandHandler {
         let result = clients
             .worker
             .update_worker(
-                &component_id.0,
-                agent_id,
+                &environment_id.0,
+                &agent_id.0,
+                None,
                 &UpdateWorkerRequest {
                     mode: client_update_mode,
                     target_revision: target_revision.into(),
@@ -2321,7 +2349,7 @@ impl AgentCommandHandler {
 
                 if await_update {
                     self.await_update_result(
-                        component_id,
+                        environment_id,
                         agent_id,
                         target_revision,
                         client_update_mode,
@@ -2343,8 +2371,8 @@ impl AgentCommandHandler {
 
     async fn await_update_result(
         &self,
-        component_id: &ComponentId,
-        agent_id: &str,
+        environment_id: &EnvironmentId,
+        agent_id: &AgentId,
         target_revision: ComponentRevision,
         update_mode: golem_common::model::agent::AgentUpdateMode,
         selected_update_attempt_index: OplogIndex,
@@ -2353,7 +2381,7 @@ impl AgentCommandHandler {
         loop {
             let metadata = clients
                 .worker
-                .get_worker_metadata(&component_id.0, agent_id)
+                .get_worker_metadata(&environment_id.0, &agent_id.0, None)
                 .await?;
             let mut pending = false;
             let mut successes = Vec::new();
@@ -2459,11 +2487,19 @@ impl AgentCommandHandler {
     /// are returned with the revision they were running at before (their "from" revision).
     pub async fn redeploy_component_agents(
         &self,
-        component_name: &ComponentName,
-        component_id: &ComponentId,
-    ) -> anyhow::Result<BulkAgentActionResult<(RawAgentId, ComponentRevision)>> {
+        component: &ComponentDto,
+    ) -> anyhow::Result<BulkAgentActionResult<(AgentId, AgentId, ComponentRevision)>> {
+        let component_name = &component.component_name;
         let (agents, _) = self
-            .list_component_agents(component_name, component_id, None, None, None, None, false)
+            .list_component_agents(
+                component,
+                &component_agent_types(component),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
             .await?;
 
         if agents.is_empty() {
@@ -2492,26 +2528,29 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
+        let component_metadata: ComponentMetadata = component.metadata.clone().into();
         let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in agents {
-            let agent_id = agent.raw_agent_id().to_owned();
+            let agent_id = agent.agent_id;
+            let agent_name = agent.display_name();
             let from_revision = agent.component_revision;
-            match self.redeploy_agent(component_name, agent).await {
-                Ok(()) => result
-                    .succeeded
-                    .push((agent_id.as_str().into(), from_revision)),
+            match self
+                .redeploy_agent(component_name, &component_metadata, agent)
+                .await
+            {
+                Ok(recreated) => result.succeeded.push((agent_id, recreated, from_revision)),
                 Err(error) => {
                     log_error_action(
                         "Failed",
                         format!(
                             "redeploying agent {}/{}: {error}",
                             component_name.0.bold().blue(),
-                            agent_id.bold().green(),
+                            agent_name.bold().green(),
                         ),
                     );
                     result.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent_id.into(),
+                        agent_id,
                         error: message_for_output(&error),
                     });
                 }
@@ -2525,12 +2564,20 @@ impl AgentCommandHandler {
     /// others, it is reported in the result instead.
     pub async fn delete_component_agents(
         &self,
-        component_name: &ComponentName,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         show_skip: bool,
-    ) -> anyhow::Result<BulkAgentActionResult<RawAgentId>> {
+    ) -> anyhow::Result<BulkAgentActionResult<AgentId>> {
+        let component_name = &component.component_name;
         let (agents, _) = self
-            .list_component_agents(component_name, component_id, None, None, None, None, false)
+            .list_component_agents(
+                component,
+                &component_agent_types(component),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
             .await?;
 
         if agents.is_empty() {
@@ -2563,21 +2610,20 @@ impl AgentCommandHandler {
 
         let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in &agents {
-            let agent_id = agent.raw_agent_id();
             match self.delete_agent(component_name, agent).await {
-                Ok(()) => result.succeeded.push(agent_id.into()),
+                Ok(()) => result.succeeded.push(agent.agent_id),
                 Err(error) => {
                     log_error_action(
                         "Failed",
                         format!(
                             "deleting agent {}/{}: {error:#}",
                             component_name.0.bold().blue(),
-                            agent_id.bold().green(),
+                            agent.display_name().bold().green(),
                         ),
                     );
                     result.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent_id.into(),
+                        agent_id: agent.agent_id,
                         error: error_message_for_output(&error),
                     });
                 }
@@ -2587,19 +2633,53 @@ impl AgentCommandHandler {
         Ok(result)
     }
 
-    /// Redeploys an agent by deleting and recreating it. The error says which of the two steps
-    /// failed, as a failed recreation leaves the agent deleted.
+    /// Redeploys an agent by deleting it and creating it again from its constructor parameters,
+    /// env and config. A keyed agent is recreated with its key, which gives it the same agent ID.
+    /// An agent without a key is recreated without a key, so it gets a new agent ID, which this
+    /// returns. The error says which step failed, as a failed recreation leaves the agent
+    /// deleted.
     async fn redeploy_agent(
         &self,
         component_name: &ComponentName,
+        component_metadata: &ComponentMetadata,
         agent_metadata: AgentMetadata,
-    ) -> Result<(), RedeployAgentError> {
+    ) -> Result<AgentId, RedeployAgentError> {
+        let agent_name = agent_metadata.display_name();
+        let (Some(agent_type), Some(constructor_parameters)) = (
+            agent_metadata.agent_type_name.clone(),
+            agent_metadata.constructor_parameters.as_deref(),
+        ) else {
+            return Err(RedeployAgentError::NoConstructorParameters);
+        };
+        // A durable agent of a type that the current revision made ephemeral could not be
+        // created again, so it is not deleted.
+        if component_metadata
+            .agent_types()
+            .iter()
+            .find(|declared| declared.type_name == agent_type)
+            .is_some_and(|declared| declared.mode == AgentMode::Ephemeral)
+        {
+            return Err(RedeployAgentError::InvalidParameters(anyhow!(
+                "agent type {agent_type} is ephemeral in the current component revision"
+            )));
+        }
+        let keyed = agent_metadata.canonical_key.is_some();
+        let parameters =
+            ParsedAgentKey::parse_parameters(&agent_type, constructor_parameters, component_metadata)
+                .map_err(|error| {
+                    anyhow!(
+                        "the constructor parameters do not match the constructor of agent type {agent_type}: {error}"
+                    )
+                })
+                .and_then(|key| key_parameters(&key))
+                .map_err(RedeployAgentError::InvalidParameters)?;
+
         log_warn_action(
             "Redeploying",
             format!(
                 "agent {}/{} to current version",
                 component_name.0.bold().blue(),
-                agent_metadata.raw_agent_id().bold().green(),
+                agent_name.bold().green(),
             ),
         );
         let _indent = LogIndent::new();
@@ -2613,20 +2693,75 @@ impl AgentCommandHandler {
             format!(
                 "agent {}/{}",
                 component_name.0.bold().blue(),
-                agent_metadata.raw_agent_id().bold().green(),
+                agent_name.bold().green(),
             ),
         );
-        self.new_agent(
-            agent_metadata.component_id().0,
-            agent_metadata.raw_agent_id().to_owned(),
-            agent_metadata.env,
-            agent_metadata.config,
-        )
-        .await
-        .map_err(RedeployAgentError::Recreate)?;
-        log_action("Recreated", "agent");
+        let recreated = self
+            .recreate_agent(
+                &agent_metadata.environment_id,
+                &agent_metadata.agent_id,
+                keyed,
+                &agent_type,
+                parameters,
+                agent_metadata.env,
+                agent_metadata.config,
+            )
+            .await
+            .map_err(RedeployAgentError::Recreate)?;
+        if keyed {
+            log_action("Recreated", "agent");
+        } else {
+            log_action(
+                "Recreated",
+                format!(
+                    "agent as {}, a new agent ID because the agent has no key",
+                    agent_id_display(Some(&agent_type), &recreated)
+                        .bold()
+                        .green()
+                ),
+            );
+        }
 
-        Ok(())
+        Ok(recreated)
+    }
+
+    /// Creates the agent of `parameters` again. A keyed agent must get the ID of the deleted
+    /// agent; an agent without a key gets a new ID.
+    #[allow(clippy::too_many_arguments)]
+    async fn recreate_agent(
+        &self,
+        environment_id: &EnvironmentId,
+        deleted_agent_id: &AgentId,
+        keyed: bool,
+        agent_type: &AgentTypeName,
+        parameters: ExternalSchemaValue,
+        env: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+    ) -> anyhow::Result<AgentId> {
+        let clients = self.ctx.golem_clients().await?;
+        let reference = clients
+            .agent
+            .create_agent(
+                &environment_id.0,
+                &agent_type.0,
+                None,
+                &golem_client::model::CreateAgentRequest {
+                    parameters,
+                    config: Some(config),
+                    env: Some(env),
+                    keyed: Some(keyed),
+                },
+            )
+            .await
+            .map_service_error()?;
+        if keyed && reference.agent_id != deleted_agent_id.0 {
+            bail!(
+                "the agent was recreated at ID {}, not at the deleted agent's ID {}",
+                reference.agent_id,
+                deleted_agent_id.0
+            );
+        }
+        Ok(AgentId(reference.agent_id))
     }
 
     pub async fn delete_agent(
@@ -2639,33 +2774,35 @@ impl AgentCommandHandler {
             format!(
                 "agent {}/{}",
                 component_name.0.bold().blue(),
-                agent_metadata.raw_agent_id().bold().green(),
+                agent_metadata.display_name().bold().green(),
             ),
         );
-        self.delete(
-            agent_metadata.component_id().0,
-            agent_metadata.raw_agent_id(),
-        )
-        .await?;
+        self.delete(&agent_metadata.environment_id, &agent_metadata.agent_id)
+            .await?;
         log_action("Deleted", "agent");
         Ok(())
     }
 
+    /// Lists the agents of the given agent types of `component`. Listing is per agent type, so
+    /// the result is the union over the types; a type that the deployment does not have gives no
+    /// agents. With a start cursor, each type resumes at its cursor, and a type that the cursor
+    /// does not name was fully listed, so it is skipped. The returned cursors are the ones of the
+    /// types that still have more results.
     pub async fn list_component_agents(
         &self,
-        component_name: &ComponentName,
-        component_id: &ComponentId,
+        component: &ComponentDto,
+        agent_types: &[AgentTypeName],
         filters: Option<&[String]>,
         mode_overlay: Option<&AgentFilter>,
-        start_scan_cursor: Option<&ScanCursor>,
+        start_cursor: Option<&AgentListCursor>,
         max_count: Option<u64>,
         precise: bool,
-    ) -> anyhow::Result<(Vec<AgentMetadata>, Option<ScanCursor>)> {
+    ) -> anyhow::Result<(Vec<AgentMetadata>, Vec<(AgentTypeName, ScanCursor)>)> {
         let clients = self.ctx.golem_clients().await?;
         let mut agents = Vec::<AgentMetadata>::new();
-        let mut final_result_cursor = Option::<ScanCursor>::None;
+        let mut final_result_cursors = Vec::<(AgentTypeName, ScanCursor)>::new();
 
-        // The structured `find_workers_metadata` POST endpoint is used for all
+        // The structured `find_agents_metadata` POST endpoint is used for all
         // listing: string filters are converted to a structured `AgentFilter`
         // and combined with the optional mode overlay (`--mode all`), which the
         // string-filter GET endpoint cannot express as it only supports `And`
@@ -2684,13 +2821,20 @@ impl AgentCommandHandler {
             (None, None) => None,
         };
 
-        let mut current_scan_cursor = start_scan_cursor.cloned();
-        loop {
-            let result_cursor = {
-                let results = clients
-                    .worker
-                    .find_workers_metadata(
-                        &component_id.0,
+        for agent_type in agent_types {
+            let mut current_scan_cursor = match start_cursor {
+                None => None,
+                Some(start_cursor) => match start_cursor.resume_at(agent_type) {
+                    Some(resume_at) => Some(resume_at),
+                    None => continue,
+                },
+            };
+            loop {
+                let Some(results) = clients
+                    .agent
+                    .find_agents_metadata(
+                        &component.environment_id.0,
+                        &agent_type.0,
                         &WorkersMetadataRequest {
                             filter: filter.clone(),
                             cursor: current_scan_cursor.clone(),
@@ -2699,45 +2843,51 @@ impl AgentCommandHandler {
                         },
                     )
                     .await
-                    .map_service_error()?;
+                    .map_service_error_not_found_as_opt()?
+                else {
+                    break;
+                };
 
                 agents.extend(
                     results
                         .workers
                         .into_iter()
-                        .map(|meta| AgentMetadata::from(component_name.clone(), meta)),
+                        .map(|meta| AgentMetadata::from(component.component_name.clone(), meta)),
                 );
 
-                results.cursor
-            };
-
-            match result_cursor {
-                Some(next_cursor) => {
-                    if max_count.is_none() {
-                        current_scan_cursor = Some(next_cursor);
-                    } else {
-                        final_result_cursor = Some(next_cursor);
-                        break;
+                match results.cursor {
+                    Some(next_cursor) => {
+                        if max_count.is_none() {
+                            current_scan_cursor = Some(next_cursor);
+                        } else {
+                            final_result_cursors.push((agent_type.clone(), next_cursor));
+                            break;
+                        }
                     }
+                    None => break,
                 }
-                None => break,
             }
         }
 
-        Ok((agents, final_result_cursor))
+        Ok((agents, final_result_cursors))
     }
 
+    /// The addressed agent's ID and its component, at the agent's own component revision.
     pub(crate) async fn component_by_agent_id_match(
         &self,
         agent_id_match: &AgentIdMatch,
-    ) -> anyhow::Result<(ComponentDto, RawAgentId)> {
+    ) -> anyhow::Result<(ComponentDto, AgentId)> {
+        let agent_id = self.agent_id_of(agent_id_match).await?;
         let component = self
             .ctx
             .component_handler()
             .resolve_component(
                 &agent_id_match.environment,
                 &agent_id_match.component_name,
-                Some((&agent_id_match.agent_id).into()),
+                Some(ComponentRevisionSelection::ByAgentId(
+                    agent_id_match.environment.environment_id,
+                    agent_id,
+                )),
             )
             .await?;
 
@@ -2750,111 +2900,74 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         };
 
-        // `agent_id_match.agent_id` is already canonicalized in
-        // `match_agent_id_in_environment`. Just return a clone for callers
-        // that need it for downstream HTTP/gRPC calls.
-        Ok((component, agent_id_match.agent_id.clone()))
-    }
-
-    pub(crate) fn try_recanonicalize_agent_id(
-        &self,
-        agent_id: &RawAgentId,
-        component: &ComponentDto,
-    ) -> RawAgentId {
-        try_recanonicalize_agent_id_with_parsed(agent_id, component).0
+        Ok((component, agent_id))
     }
 }
 
-/// Re-canonicalize an agent id string against the component's agent type
-/// metadata. Returns the canonical structural form together with the parsed
-/// representation (when language-aware parsing succeeded). The parsed form
-/// can be used by display code to render the agent id in its source
-/// language (see [`crate::agent_id_display::render_agent_id`]).
-pub(crate) fn try_recanonicalize_agent_id_with_parsed(
-    agent_id: &RawAgentId,
-    component: &ComponentDto,
-) -> (RawAgentId, Option<ParsedAgentKey>) {
-    let raw = &agent_id.0;
+/// A component and the agent types of it that a listing covers.
+struct AgentListTarget {
+    component: ComponentDto,
+    agent_types: Vec<AgentTypeName>,
+}
 
-    // Extract type name and params using ParsedAgentKey::parse_agent_type_name
-    // and manual splitting for the params portion
-    let Some(paren_pos) = raw.find('(') else {
-        return (agent_id.clone(), None);
-    };
-    let type_name = &raw[..paren_pos];
+/// The agent types that `component` implements.
+fn component_agent_types(component: &ComponentDto) -> Vec<AgentTypeName> {
+    component
+        .metadata
+        .agent_types
+        .iter()
+        .map(|agent_type| agent_type.declaration.type_name.clone())
+        .collect()
+}
 
-    // Find matching closing paren (account for nesting and phantom id)
-    let mut nesting = 0i32;
-    let mut close_pos = None;
-    for (i, ch) in raw[paren_pos..].char_indices() {
-        match ch {
-            '(' => nesting += 1,
-            ')' => {
-                nesting -= 1;
-                if nesting == 0 {
-                    close_pos = Some(paren_pos + i);
-                    break;
-                }
-            }
-            _ => {}
-        }
+/// Reads an ID address: a bare agent UUID, or `Type[<uuid>]`. Any other text is a key.
+fn parse_agent_id_address(text: &str) -> Option<(Option<String>, AgentId)> {
+    if let Ok(uuid) = Uuid::parse_str(text) {
+        return Some((None, AgentId(uuid)));
     }
+    let (agent_type, rest) = text.split_once('[')?;
+    if agent_type.is_empty() || agent_type.contains('(') {
+        return None;
+    }
+    let uuid = Uuid::parse_str(rest.strip_suffix(']')?).ok()?;
+    Some((Some(agent_type.to_string()), AgentId(uuid)))
+}
 
-    let Some(close_pos) = close_pos else {
-        return (agent_id.clone(), None);
-    };
+/// Reads a key address, `Type(parameters)`, against the agent types of `component`. The
+/// parameters may use the source-language syntax of the agent type.
+pub(crate) fn parse_agent_key(text: &str, component: &ComponentDto) -> Option<ParsedAgentKey> {
+    let paren_pos = text.find('(')?;
+    let close_pos = text.rfind(')')?;
+    if close_pos + 1 != text.len() || close_pos < paren_pos {
+        return None;
+    }
+    let type_name = &text[..paren_pos];
+    let params_str = &text[paren_pos + 1..close_pos];
 
-    let params_str = &raw[paren_pos + 1..close_pos];
-    let phantom_str = if close_pos + 1 < raw.len() {
-        Some(&raw[close_pos + 1..])
-    } else {
-        None
-    };
-
-    // Look up the agent type from component metadata
     let agent_type = component
         .metadata
         .agent_types
         .iter()
         .map(|agent_type| &agent_type.declaration)
-        .find(|at| at.type_name.0 == type_name);
-
-    let Some(agent_type) = agent_type else {
-        return (agent_id.clone(), None);
-    };
-
-    // Derive source language from agent type metadata
+        .find(|at| at.type_name.0 == type_name)?;
     let source_language = SourceLanguage::from(agent_type.source_language.as_str());
 
-    let Ok(value) = crate::agent_id_display::parse_agent_id_params(
+    let value = crate::agent_id_display::parse_agent_id_params(
         params_str,
         &agent_type.schema,
         &agent_type.constructor.input_schema,
         &source_language,
-    ) else {
-        return (agent_id.clone(), None);
-    };
-    let typed = typed_constructor_parameters(agent_type, value);
+    )
+    .ok()?;
+    Some(ParsedAgentKey::new(
+        agent_type.type_name.clone(),
+        typed_constructor_parameters(agent_type, value),
+    ))
+}
 
-    let Ok(canonical) =
-        golem_common::model::agent::structural_format::format_structural_typed(&typed)
-    else {
-        return (agent_id.clone(), None);
-    };
-
-    let mut new_id = format!("{}({canonical})", agent_type.type_name.0);
-    // Parse the optional phantom uuid for the parsed form (`[uuid]`)
-    let phantom_uuid = phantom_str.and_then(|s| {
-        let trimmed = s.strip_prefix('[')?.strip_suffix(']')?;
-        uuid::Uuid::parse_str(trimmed).ok()
-    });
-    if let Some(phantom) = phantom_str {
-        new_id.push_str(phantom);
-    }
-
-    let parsed = ParsedAgentKey::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
-
-    (RawAgentId(new_id), parsed)
+/// The constructor parameters of a key in the REST wire form.
+fn key_parameters(key: &ParsedAgentKey) -> anyhow::Result<ExternalSchemaValue> {
+    ExternalSchemaValue::try_from(key.parameters.value().clone()).map_err(anyhow::Error::msg)
 }
 
 impl AgentCommandHandler {
@@ -2884,7 +2997,7 @@ impl AgentCommandHandler {
                 .map(|profile_name| profile_name.0.as_str()),
             self.ctx.global_environment_selector(),
             agent_id_match.environment_reference(),
-            &agent_id_match.agent_id,
+            &revert_address(agent_id_match),
         );
 
         anyhow!(
@@ -2896,15 +3009,20 @@ impl AgentCommandHandler {
 
     async fn interrupt_agent(
         &self,
-        component: &ComponentDto,
-        agent_id: &RawAgentId,
+        agent_id_match: &AgentIdMatch,
+        agent_id: &AgentId,
         recover_immediately: bool,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
         clients
             .worker
-            .interrupt_worker(&component.id.0, &agent_id.0, Some(recover_immediately))
+            .interrupt_worker(
+                &agent_id_match.environment.environment_id.0,
+                &agent_id.0,
+                Some(recover_immediately),
+                None,
+            )
             .await
             .map(|_| ())
             .map_service_error()?;
@@ -2917,42 +3035,65 @@ impl AgentCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         agent_id: String,
     ) -> anyhow::Result<AgentIdMatch> {
-        let parsed_agent_type_name = match ParsedAgentKey::parse_agent_type_name(&agent_id) {
-            Ok(agent_type_name) => agent_type_name,
-            Err(err) => {
-                logln("");
-                log_error(format!(
-                    "Failed to parse agent name ({}) as agent id: {err}",
-                    agent_id.log_color_error_highlight()
-                ));
-                logln("");
-                log_text_view(&AgentNameHelp);
-                self.log_available_deployed_agent_constructors(&environment)
-                    .await;
-                bail!(NonSuccessfulExit);
+        let (agent_type, address_id) = match parse_agent_id_address(&agent_id) {
+            Some((None, id)) => {
+                let agent_types = self
+                    .ctx
+                    .app_handler()
+                    .list_agent_types(&environment)
+                    .await?;
+                let Some(agent_type) = agent_types
+                    .into_iter()
+                    .find(|agent_type| agent_type.type_id.get() == id.type_tag())
+                else {
+                    logln("");
+                    log_error(format!(
+                        "No agent type of the selected deployment has the type of agent ID {}.",
+                        id.to_string().log_color_error_highlight()
+                    ));
+                    logln("");
+                    bail!(NonSuccessfulExit);
+                };
+                (agent_type, Some(id))
             }
-        };
-
-        let Some(agent_type) = self
-            .ctx
-            .app_handler()
-            .get_agent_type_by_name(&environment, &parsed_agent_type_name.0)
-            .await?
-        else {
-            logln("");
-            log_error(format!(
-                "Agent type {} is not found in the selected deployment.",
-                parsed_agent_type_name.0.log_color_error_highlight()
-            ));
-            logln("");
-            logln(
-                "Deploy the component that defines this agent type or specify environment/application/account prefixes.",
-            );
-            logln("");
-            log_text_view(&AgentNameHelp);
-            self.log_available_deployed_agent_constructors(&environment)
-                .await;
-            bail!(NonSuccessfulExit);
+            Some((Some(agent_type_name), id)) => {
+                let agent_type = self
+                    .deployed_agent_type(&environment, &agent_type_name)
+                    .await?;
+                if agent_type.type_id.get() != id.type_tag() {
+                    logln("");
+                    log_error(format!(
+                        "Agent ID {} does not belong to agent type {}.",
+                        id.to_string().log_color_error_highlight(),
+                        agent_type_name.log_color_highlight()
+                    ));
+                    logln("");
+                    bail!(NonSuccessfulExit);
+                }
+                (agent_type, Some(id))
+            }
+            None => {
+                let agent_type_name = match ParsedAgentKey::parse_agent_type_name(&agent_id) {
+                    Ok(agent_type_name) => agent_type_name,
+                    Err(err) => {
+                        logln("");
+                        log_error(format!(
+                            "Failed to parse agent name ({}) as agent id: {err}",
+                            agent_id.log_color_error_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&AgentNameHelp);
+                        self.log_available_deployed_agent_constructors(&environment)
+                            .await;
+                        bail!(NonSuccessfulExit);
+                    }
+                };
+                (
+                    self.deployed_agent_type(&environment, &agent_type_name.0)
+                        .await?,
+                    None,
+                )
+            }
         };
 
         let component = self
@@ -2964,23 +3105,89 @@ impl AgentCommandHandler {
             )
             .await?;
 
-        // Recanonicalize the user input against the component's agent type
-        // metadata so the canonical form (used for HTTP/gRPC calls) and the
-        // parsed form (used for language-specific display) are both available
-        // immediately on the resulting `AgentIdMatch`.
-        let raw_agent_id: RawAgentId = agent_id.into();
-        let (canonical_agent_id, parsed_agent_id) =
-            try_recanonicalize_agent_id_with_parsed(&raw_agent_id, &component);
+        let address = match address_id {
+            Some(id) => AgentAddress::Id(id),
+            None => match parse_agent_key(&agent_id, &component) {
+                Some(key) => AgentAddress::Key(Box::new(key)),
+                None => {
+                    logln("");
+                    log_error(format!(
+                        "Failed to parse the constructor parameters of agent {}",
+                        agent_id.log_color_error_highlight()
+                    ));
+                    logln("");
+                    log_text_view(&AvailableAgentConstructorsHelp::for_component(
+                        &component,
+                        Some(&agent_type.agent_type.type_name),
+                    ));
+                    bail!(NonSuccessfulExit);
+                }
+            },
+        };
 
         Ok(AgentIdMatch {
             environment,
             component_name_match_kind: ComponentNameMatchKind::Unknown,
             component_name: component.component_name,
-            agent_type_name: parsed_agent_type_name,
-            agent_id: canonical_agent_id,
+            agent_type_name: agent_type.agent_type.type_name.clone(),
             source_language: SourceLanguage::from(agent_type.agent_type.source_language.as_str()),
-            parsed_agent_id,
+            agent_type,
+            address,
         })
+    }
+
+    async fn deployed_agent_type(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        agent_type_name: &str,
+    ) -> anyhow::Result<DeployedRegisteredAgentType> {
+        match self
+            .ctx
+            .app_handler()
+            .get_agent_type_by_name(environment, agent_type_name)
+            .await?
+        {
+            Some(agent_type) => Ok(agent_type),
+            None => {
+                logln("");
+                log_error(format!(
+                    "Agent type {} is not found in the selected deployment.",
+                    agent_type_name.log_color_error_highlight()
+                ));
+                logln("");
+                logln(
+                    "Deploy the component that defines this agent type or specify environment/application/account prefixes.",
+                );
+                logln("");
+                log_text_view(&AgentNameHelp);
+                self.log_available_deployed_agent_constructors(environment)
+                    .await;
+                bail!(NonSuccessfulExit);
+            }
+        }
+    }
+
+    /// The ID of the addressed agent. A key is looked up, so a key that no current agent has
+    /// fails as not found; the CLI never derives an agent ID itself.
+    pub async fn agent_id_of(&self, agent_id_match: &AgentIdMatch) -> anyhow::Result<AgentId> {
+        match &agent_id_match.address {
+            AgentAddress::Id(agent_id) => Ok(*agent_id),
+            AgentAddress::Key(key) => {
+                let clients = self.ctx.golem_clients().await?;
+                let reference = clients
+                    .agent
+                    .lookup_agent(
+                        &agent_id_match.environment.environment_id.0,
+                        &agent_id_match.agent_type_name.0,
+                        &AgentKeyRequest {
+                            parameters: key_parameters(key)?,
+                        },
+                    )
+                    .await
+                    .map_service_error()?;
+                Ok(AgentId(reference.agent_id))
+            }
+        }
     }
 
     pub async fn match_agent_id(&self, agent_id: RawAgentId) -> anyhow::Result<AgentIdMatch> {
@@ -3099,94 +3306,6 @@ impl AgentCommandHandler {
                 ));
                 logln("");
                 log_text_view(&AgentNameHelp);
-                bail!(NonSuccessfulExit);
-            }
-        }
-    }
-
-    pub fn validate_agent_and_function_names(
-        &self,
-        component: &ComponentDto,
-        agent_id: &RawAgentId,
-        function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(ParsedAgentKey, AgentTypeSchema)>> {
-        let component_metadata: ComponentMetadata = component.metadata.clone().into();
-        if !component_metadata.is_agent() {
-            return Ok(None);
-        }
-
-        match ParsedAgentKey::parse_and_resolve_type(&agent_id.0, &component_metadata) {
-            Ok((agent_id, agent_type)) => {
-                validate_ordinary_agent_type(&agent_type)?;
-                match function_name {
-                    Some(function_name) => {
-                        let parsed = match ParsedFunctionName::parse(function_name) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                logln("");
-                                log_error(format!(
-                                    "Incompatible agent type ({}) and method ({})",
-                                    agent_id.agent_type.as_str().log_color_error_highlight(),
-                                    function_name.log_color_error_highlight()
-                                ));
-                                logln("");
-                                log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                                    component,
-                                    &agent_id,
-                                    &agent_type,
-                                ));
-                                bail!(NonSuccessfulExit);
-                            }
-                        };
-
-                        if let ParsedFunctionSite::PackagedInterface {
-                            namespace,
-                            package,
-                            interface,
-                            ..
-                        } = parsed.site()
-                        {
-                            let component_name = format!("{namespace}:{package}");
-                            if *interface == agent_id.agent_type.0
-                                && component.component_name.0 == component_name
-                            {
-                                return Ok(Some((agent_id, agent_type.clone())));
-                            }
-                        }
-
-                        logln("");
-                        log_error(format!(
-                            "Incompatible agent type ({}) and method ({})",
-                            agent_id.agent_type.as_str().log_color_error_highlight(),
-                            function_name.log_color_error_highlight()
-                        ));
-                        logln("");
-                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                            component,
-                            &agent_id,
-                            &agent_type,
-                        ));
-                        bail!(NonSuccessfulExit);
-                    }
-
-                    None => Ok(Some((agent_id, agent_type.clone()))),
-                }
-            }
-            Err(err) => {
-                let parsed_agent_type_name =
-                    ParsedAgentKey::parse_agent_type_name(&agent_id.0).ok();
-
-                logln("");
-                log_error(format!(
-                    "Failed to parse agent name ({}) as agent id: {err}",
-                    agent_id.0.log_color_error_highlight()
-                ));
-                logln("");
-                log_text_view(&AvailableAgentConstructorsHelp::for_component(
-                    component,
-                    parsed_agent_type_name.as_ref(),
-                ));
-
                 bail!(NonSuccessfulExit);
             }
         }
@@ -3429,10 +3548,6 @@ pub(super) fn parse_method_argument_schema_value(
     parsed
 }
 
-fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
-    cursor.to_string()
-}
-
 fn secret_config_paths_for_agent_type(
     agent_types: &[AgentTypeSchema],
     agent_type_name: &AgentTypeName,
@@ -3500,12 +3615,23 @@ fn all_modes_filter() -> AgentFilter {
     ])
 }
 
+/// The agent address that the suggested revert command uses: the canonical key text for a key,
+/// or `Type[<uuid>]` for an ID.
+fn revert_address(agent_id_match: &AgentIdMatch) -> String {
+    match &agent_id_match.address {
+        AgentAddress::Key(key) => key.to_string(),
+        AgentAddress::Id(agent_id) => {
+            agent_id_display(Some(&agent_id_match.agent_type_name), agent_id)
+        }
+    }
+}
+
 fn render_revert_command(
     executable: &str,
     explicit_profile_name: Option<&str>,
     global_environment_selector: Option<&GlobalEnvironmentSelector>,
     matched_environment_reference: Option<&EnvironmentReference>,
-    agent_id: &RawAgentId,
+    agent_id: &str,
 ) -> String {
     fn quote(value: &str) -> String {
         shlex::try_quote(value)
@@ -3622,82 +3748,31 @@ fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<
     Ok(())
 }
 
-/// The agent that runs a user's invocation of `method_name` with `idempotency_key`. The server
-/// derives an ephemeral agent's phantom ID from the owner key of the caller-scoped request key,
-/// so the CLI derives it the same way to stream that agent's output.
-fn invocation_agent_id(
-    agent_id: &ParsedAgentKey,
-    agent_type: &AgentTypeSchema,
-    account_id: AccountId,
-    idempotency_key: &IdempotencyKey,
-    method_name: &str,
-) -> anyhow::Result<ParsedAgentKey> {
-    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
-        let owner_key = InvocationRequestKey::external(
-            Some(IdempotencyScope::User(account_id)),
-            Some(idempotency_key),
-        )
-        .owner_key(method_name);
-        agent_id
-            .with_ephemeral_invocation_phantom(&owner_key)
-            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
-    } else {
-        Ok(agent_id.clone())
-    }
-}
-
-fn normalize_public_agent_id(
-    agent_id: &ParsedAgentKey,
-    agent_type: &AgentTypeSchema,
-) -> anyhow::Result<ParsedAgentKey> {
-    ParsedAgentKey::new_auto_phantom(
-        agent_type.type_name.clone(),
-        agent_id.parameters.clone(),
-        agent_id.phantom_id,
-        agent_type.mode,
-    )
-    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
-}
-
-fn validate_public_invocation_agent_id(
-    agent_id: &ParsedAgentKey,
-    agent_type: &AgentTypeSchema,
-) -> anyhow::Result<()> {
-    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some() {
-        bail!("Explicit phantom IDs cannot be used to invoke ephemeral agents");
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, AgentUpdateMode, apply_list_mode_filter, invocation_agent_id,
-        is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
+        AgentListMode, AgentUpdateMode, apply_list_mode_filter, is_selected_update_attempt,
+        parse_agent_id_address, parse_method_argument_schema_value,
         parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
-        split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
+        split_agent_id, validate_ordinary_agent_type,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
-    use crate::model::agent::RawAgentId;
     use crate::model::environment::EnvironmentReference;
-    use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
+    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::{IdempotencyKey, OplogIndex};
+    use golem_common::model::OplogIndex;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
         NamedField, OutputSchema,
     };
-    use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
     use golem_schema::Empty;
     use pretty_assertions::assert_eq;
     use test_r::test;
-    use uuid::Uuid;
 
     #[test]
     fn await_update_attempt_filter_ignores_earlier_same_target_outcomes() {
@@ -3755,7 +3830,7 @@ mod tests {
             Some("team profile"),
             None,
             Some(&environment),
-            &RawAgentId("MyAgent(\"a b's\")".to_string()),
+            "MyAgent(\"a b's\")",
         );
 
         assert_eq!(
@@ -3783,7 +3858,7 @@ mod tests {
             application_name: ApplicationName("another app".to_string()),
             environment_name: EnvironmentName("production".to_string()),
         };
-        let agent_id = RawAgentId("MyAgent(\"id\")".to_string());
+        let agent_id = "MyAgent(\"id\")";
 
         for selector in [
             GlobalEnvironmentSelector::Environment(short_environment),
@@ -3791,7 +3866,7 @@ mod tests {
             GlobalEnvironmentSelector::Local,
             GlobalEnvironmentSelector::Cloud,
         ] {
-            let command = render_revert_command("golem", None, Some(&selector), None, &agent_id);
+            let command = render_revert_command("golem", None, Some(&selector), None, agent_id);
             let args = shlex::split(&command).unwrap();
 
             assert!(!args.contains(&"--profile".to_string()));
@@ -3805,7 +3880,7 @@ mod tests {
                 GlobalEnvironmentSelector::Local => assert!(args.contains(&"--local".to_string())),
                 GlobalEnvironmentSelector::Cloud => assert!(args.contains(&"--cloud".to_string())),
             }
-            assert!(args.contains(&agent_id.0));
+            assert!(args.contains(&agent_id.to_string()));
         }
     }
 
@@ -3962,13 +4037,6 @@ mod tests {
         assert!(error.contains("cannot be created or invoked"), "{error}");
     }
 
-    fn empty_typed_parameters() -> TypedSchemaValue {
-        TypedSchemaValue::new(
-            SchemaGraph::anonymous(SchemaType::record(vec![])),
-            SchemaValue::Record { fields: vec![] },
-        )
-    }
-
     #[test]
     fn test_split_agent_id() {
         assert_eq!(split_agent_id("a"), vec!["a"]);
@@ -3984,100 +4052,21 @@ mod tests {
         assert_eq!(split_agent_id("a(/"), vec!["a(/"]);
     }
 
-    fn logical_agent_id(
-        mode: AgentMode,
-        phantom_id: Option<Uuid>,
-    ) -> (ParsedAgentKey, AgentTypeSchema) {
-        let agent_type = test_agent_type_schema(mode);
-        let agent_id = ParsedAgentKey::try_new(
-            agent_type.type_name.clone(),
-            empty_typed_parameters(),
-            phantom_id,
-        )
-        .unwrap();
-        (agent_id, agent_type)
-    }
-
     #[test]
-    fn invocation_agent_id_scopes_the_ephemeral_phantom_like_the_server() {
-        let (agent_id, agent_type) = logical_agent_id(AgentMode::Ephemeral, None);
-        let key = IdempotencyKey::new("repl-invocation".to_string());
-        let account = AccountId(Uuid::new_v4());
-        let phantom = |account, method| {
-            invocation_agent_id(&agent_id, &agent_type, account, &key, method)
-                .unwrap()
-                .phantom_id
-                .unwrap()
-        };
-
-        assert_eq!(phantom(account, "run"), phantom(account, "run"));
-        assert_ne!(phantom(account, "run"), phantom(account, "other"));
-        assert_ne!(
-            phantom(account, "run"),
-            phantom(AccountId(Uuid::new_v4()), "run")
-        );
-        // The raw key alone names a different agent than the one the server runs.
-        assert_ne!(
-            Some(phantom(account, "run")),
-            agent_id
-                .with_ephemeral_invocation_phantom(&key)
-                .unwrap()
-                .phantom_id
-        );
-    }
-
-    #[test]
-    fn invocation_agent_id_keeps_durable_and_explicit_phantom_ids() {
-        let key = IdempotencyKey::new("repl-invocation".to_string());
-        let account = AccountId(Uuid::new_v4());
-        let (agent_id, agent_type) = logical_agent_id(AgentMode::Durable, None);
-        assert!(
-            invocation_agent_id(&agent_id, &agent_type, account, &key, "run")
-                .unwrap()
-                .phantom_id
-                .is_none()
-        );
-
-        let explicit = Uuid::new_v4();
-        let (agent_id, agent_type) = logical_agent_id(AgentMode::Ephemeral, Some(explicit));
+    fn id_addresses_are_a_bare_uuid_or_a_type_with_a_bracketed_uuid() {
+        let id = golem_common::model::AgentId::from_parts(7, 42);
+        assert_eq!(parse_agent_id_address(&id.to_string()), Some((None, id)));
         assert_eq!(
-            invocation_agent_id(&agent_id, &agent_type, account, &key, "run")
-                .unwrap()
-                .phantom_id,
-            Some(explicit)
+            parse_agent_id_address(&format!("Counter[{id}]")),
+            Some((Some("Counter".to_string()), id))
         );
-    }
-
-    #[test]
-    fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
-        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
-        let agent_id = ParsedAgentKey::try_new(
-            AgentTypeName("repl-agent".to_string()),
-            empty_typed_parameters(),
-            None,
-        )
-        .unwrap();
-        let normalized = normalize_public_agent_id(&agent_id, &agent_type).unwrap();
-
-        assert!(normalized.phantom_id.is_some());
-    }
-
-    #[test]
-    fn explicit_ephemeral_phantom_is_rejected_for_public_invocation() {
-        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
-        let agent_id = ParsedAgentKey::try_new(
-            AgentTypeName("repl-agent".to_string()),
-            empty_typed_parameters(),
-            Some(Uuid::new_v4()),
-        )
-        .unwrap();
-
-        let error = validate_public_invocation_agent_id(&agent_id, &agent_type).unwrap_err();
-
         assert_eq!(
-            error.to_string(),
-            "Explicit phantom IDs cannot be used to invoke ephemeral agents"
+            parse_agent_id_address(&format!("Counter(\"a\")[{id}]")),
+            None
         );
+        assert_eq!(parse_agent_id_address("Counter(\"[x]\")"), None);
+        assert_eq!(parse_agent_id_address("Counter[not-a-uuid]"), None);
+        assert_eq!(parse_agent_id_address(&format!("[{id}]")), None);
     }
 
     #[test]

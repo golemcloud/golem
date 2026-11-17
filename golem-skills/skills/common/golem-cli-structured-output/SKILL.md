@@ -39,7 +39,7 @@ Example:
 {
   "$type": "agent.list",
   "agents": [],
-  "cursors": {}
+  "cursor": null
 }
 ```
 

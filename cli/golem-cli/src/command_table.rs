@@ -64,8 +64,9 @@ pub enum PartVerb {
 /// What a part addresses, given by the command's arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    /// The agent that the command names: by its agent ID, by its agent type,
-    /// parameters and phantom ID (`agent repl-stream`), or, for
+    /// The agent that the command names: by its key (`Type(parameters)`), by its
+    /// agent ID (`Type[<uuid>]` or a bare UUID), by the agent ID in the invocation
+    /// ID that `agent repl-stream` reads from stdin, or, for
     /// `tool invoke --component`, the new owner that the invocation creates.
     Agent,
     /// Every agent of a component: of each component that `agent list` scans,
@@ -127,9 +128,20 @@ const fn filesystem(verb: FilesystemVerb) -> Part {
 
 pub const COMMAND_TABLE: &[CommandRow] = &[
     // ── golem agent ──────────────────────────────────────────────────────
-    // The server checks `agent : invoke` when it creates an agent.
+    // The server checks `agent : invoke` when it creates an agent; `upsert` creates the keyed
+    // agent when it is missing.
     CommandRow {
-        path: &["agent", "new"],
+        path: &["agent", "create"],
+        class: ManagementControl,
+        parts: &[agent(A::View, Agent), agent(A::Invoke, Agent)],
+        interactive: false,
+        cli_only_args: &[],
+        fixed_args: &[],
+        stdin_marker_args: &[],
+        destructive: false,
+    },
+    CommandRow {
+        path: &["agent", "upsert"],
         class: ManagementControl,
         parts: &[agent(A::View, Agent), agent(A::Invoke, Agent)],
         interactive: false,

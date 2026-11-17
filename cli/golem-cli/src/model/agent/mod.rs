@@ -40,11 +40,14 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey};
-use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogErrorKind;
-use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentResourceDescription, AgentStatus, OplogIndex, ScanCursor,
+    Timestamp,
+};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -72,19 +75,33 @@ impl Display for RawAgentId {
     }
 }
 
-/// A failed agent of a best-effort bulk action (update, redeploy, delete-all). Agents are
-/// identified by component and agent id: agent ids are unique within a component only, an
-/// agent type moved to another component leaves its old agents behind in the previous one.
+/// The agent that a command addresses: the keyed agent of constructor parameters, or the agent
+/// with an ID.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentAddress {
+    Key(Box<ParsedAgentKey>),
+    Id(AgentId),
+}
+
+/// The display form of an agent ID: `Type[<uuid>]`, or the bare UUID for an owner without a type.
+pub fn agent_id_display(agent_type: Option<&AgentTypeName>, agent_id: &AgentId) -> String {
+    match agent_type {
+        Some(agent_type) => format!("{agent_type}[{agent_id}]"),
+        None => agent_id.to_string(),
+    }
+}
+
+/// A failed agent of a best-effort bulk action (update, redeploy, delete-all).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentActionError {
     pub component_name: ComponentName,
-    pub agent_id: RawAgentId,
+    pub agent_id: AgentId,
     pub error: String,
 }
 
 impl AgentActionError {
-    pub fn is_for(&self, component_name: &ComponentName, agent_id: &RawAgentId) -> bool {
+    pub fn is_for(&self, component_name: &ComponentName, agent_id: &AgentId) -> bool {
         self.component_name == *component_name && self.agent_id == *agent_id
     }
 }
@@ -114,6 +131,11 @@ impl<T> Default for BulkAgentActionResult<T> {
 /// Why redeploying a single agent failed. Redeploying deletes and then recreates the agent, so
 /// the two phases are told apart: after a failed recreation the agent no longer exists.
 pub enum RedeployAgentError {
+    /// The agent has no constructor parameters to recreate it from. The agent is not deleted.
+    NoConstructorParameters,
+    /// The constructor parameters do not fit the current component revision. The agent is not
+    /// deleted.
+    InvalidParameters(anyhow::Error),
     Delete(anyhow::Error),
     Recreate(anyhow::Error),
 }
@@ -121,6 +143,16 @@ pub enum RedeployAgentError {
 impl Display for RedeployAgentError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NoConstructorParameters => write!(
+                f,
+                "the agent has no constructor parameters to recreate it from; it was not deleted"
+            ),
+            Self::InvalidParameters(error) => {
+                write!(
+                    f,
+                    "the agent cannot be recreated, it was not deleted: {error:#}"
+                )
+            }
             Self::Delete(error) => write!(f, "failed to delete the agent: {error:#}"),
             Self::Recreate(error) => {
                 write!(
@@ -195,7 +227,11 @@ impl Display for AgentListMode {
 #[serde(rename_all = "camelCase")]
 pub struct AgentMetadataView {
     pub component_name: ComponentName,
-    pub agent_id: RawAgentId,
+    pub agent_id: AgentId,
+    pub agent_type: Option<AgentTypeName>,
+    /// The key of a keyed agent, rendered as `Type(parameters)`. An agent without a key has none.
+    pub agent_key: Option<String>,
+    pub fingerprint: AgentFingerprint,
     pub created_by: AccountId,
     pub environment_id: EnvironmentId,
     pub env: HashMap<String, String>,
@@ -222,9 +258,13 @@ pub struct AgentMetadataView {
 
 impl From<AgentMetadata> for AgentMetadataView {
     fn from(value: AgentMetadata) -> Self {
+        let agent_key = value.canonical_key.clone();
         AgentMetadataView {
             component_name: value.component_name,
-            agent_id: value.agent_id.agent_id.into(),
+            agent_id: value.agent_id,
+            agent_type: value.agent_type_name,
+            agent_key,
+            fingerprint: value.fingerprint,
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
@@ -249,6 +289,25 @@ impl From<AgentMetadata> for AgentMetadataView {
 }
 
 impl AgentMetadataView {
+    /// The agent's key when it has one, else its ID as `Type[<uuid>]`.
+    pub fn display_name(&self) -> String {
+        self.agent_key
+            .clone()
+            .unwrap_or_else(|| agent_id_display(self.agent_type.as_ref(), &self.agent_id))
+    }
+
+    /// Renders the key in the agent's source language.
+    pub fn with_rendered_key(mut self, parsed_key: Option<&ParsedAgentKey>) -> Self {
+        if let Some(parsed_key) = parsed_key {
+            self.agent_key = Some(crate::agent_id_display::render_agent_id_or_raw(
+                Some(parsed_key),
+                &self.source_language,
+                self.agent_key.as_deref().unwrap_or_default(),
+            ));
+        }
+        self
+    }
+
     pub fn with_defaults(mut self, defaults: Option<AgentTypeProvisionConfig>) -> Self {
         if let Some(defaults) = defaults {
             self.default_env = defaults.env.into_iter().collect();
@@ -282,6 +341,11 @@ impl Masked for AgentMetadataView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
+    pub agent_type_name: Option<AgentTypeName>,
+    pub canonical_key: Option<String>,
+    /// The canonical constructor parameter text, without the agent type name.
+    pub constructor_parameters: Option<String>,
+    pub fingerprint: AgentFingerprint,
     pub component_name: ComponentName,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
@@ -301,20 +365,17 @@ pub struct AgentMetadata {
 }
 
 impl AgentMetadata {
-    pub fn component_id(&self) -> ComponentId {
-        self.agent_id.component_id
+    /// The agent's canonical key `Type(parameters)` when it has one, else its ID as
+    /// `Type[<uuid>]`.
+    pub fn display_name(&self) -> String {
+        self.canonical_key
+            .clone()
+            .unwrap_or_else(|| agent_id_display(self.agent_type_name.as_ref(), &self.agent_id))
     }
 
-    pub fn raw_agent_id(&self) -> &str {
-        &self.agent_id.agent_id
-    }
-
-    pub fn agent_type_name(&self) -> Option<AgentTypeName> {
-        ParsedAgentKey::parse_agent_type_name(self.raw_agent_id()).ok()
-    }
-
-    pub fn parsed_agent_id(&self, metadata: &ComponentMetadata) -> Option<ParsedAgentKey> {
-        ParsedAgentKey::parse(self.raw_agent_id(), metadata).ok()
+    /// The key of a keyed agent, read back against the agent types of `metadata`.
+    pub fn parsed_key(&self, metadata: &ComponentMetadata) -> Option<ParsedAgentKey> {
+        ParsedAgentKey::parse(self.canonical_key.as_ref()?, metadata).ok()
     }
 
     pub fn from(
@@ -323,6 +384,10 @@ impl AgentMetadata {
     ) -> Self {
         AgentMetadata {
             agent_id: value.agent_id,
+            agent_type_name: value.agent_type_name,
+            canonical_key: value.canonical_key,
+            constructor_parameters: value.constructor_parameters,
+            fingerprint: value.fingerprint,
             component_name,
             created_by: value.created_by,
             environment_id: value.environment_id,
@@ -352,7 +417,60 @@ impl AgentMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct AgentsMetadataResponseView {
     pub agents: Vec<AgentMetadataView>,
-    pub cursors: BTreeMap<String, String>,
+    /// The cursor of the next page, while any listed agent type has more results.
+    pub cursor: Option<String>,
+}
+
+/// The `agent list` cursor. Listing is per agent type, so it holds the scan cursor of each
+/// listed agent type that still has more results. A type that the cursor does not name was
+/// fully listed. Its text form is opaque to users: base64url of a JSON object from agent type
+/// name to scan cursor.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentListCursor(BTreeMap<String, String>);
+
+impl AgentListCursor {
+    pub fn insert(&mut self, agent_type: &AgentTypeName, cursor: ScanCursor) {
+        self.0.insert(agent_type.0.clone(), cursor.into_inner());
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn agent_types(&self) -> impl Iterator<Item = &str> {
+        self.0.keys().map(String::as_str)
+    }
+
+    /// Where listing `agent_type` resumes: `None` when the type was fully listed.
+    pub fn resume_at(&self, agent_type: &AgentTypeName) -> Option<ScanCursor> {
+        self.0.get(&agent_type.0).cloned().map(ScanCursor::new)
+    }
+
+    pub fn encode(&self) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&self.0).expect("a string map serializes"))
+    }
+
+    /// Decodes a cursor that `encode` wrote. A cursor always names at least one agent type,
+    /// because `agent list` writes none when every type was fully listed.
+    pub fn decode(text: &str) -> anyhow::Result<Self> {
+        use base64::Engine;
+        let invalid = || {
+            anyhow::anyhow!(
+                "Invalid scan cursor; pass a cursor from a previous `agent list` output unchanged"
+            )
+        };
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(text.trim())
+            .map_err(|_| invalid())?;
+        let cursors: BTreeMap<String, String> =
+            serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        if cursors.is_empty() {
+            return Err(invalid());
+        }
+        Ok(Self(cursors))
+    }
 }
 
 impl Masked for AgentsMetadataResponseView {
@@ -390,10 +508,10 @@ pub struct AgentIdMatch {
     pub environment: ResolvedEnvironmentIdentity,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
+    pub agent_type: DeployedRegisteredAgentType,
     pub agent_type_name: AgentTypeName,
-    pub agent_id: RawAgentId,
+    pub address: AgentAddress,
     pub source_language: SourceLanguage,
-    pub parsed_agent_id: Option<ParsedAgentKey>,
 }
 
 impl AgentIdMatch {
@@ -404,17 +522,17 @@ impl AgentIdMatch {
         }
     }
 
-    /// Updates the canonical agent_id and the parsed form together. Use this
-    /// after re-canonicalizing or normalizing the agent id so that downstream
-    /// display code can use the language-specific renderer.
-    pub fn with_canonical_and_parsed(
-        mut self,
-        agent_id: RawAgentId,
-        parsed_agent_id: Option<ParsedAgentKey>,
-    ) -> Self {
-        self.agent_id = agent_id;
-        self.parsed_agent_id = parsed_agent_id;
-        self
+    /// The address in the agent's source language: `Type(parameters)` for a key, or
+    /// `Type[<uuid>]` for an ID.
+    pub fn display_name(&self) -> String {
+        match &self.address {
+            AgentAddress::Key(key) => crate::agent_id_display::render_agent_id_or_raw(
+                Some(key),
+                &self.source_language,
+                &key.to_string(),
+            ),
+            AgentAddress::Id(agent_id) => agent_id_display(Some(&self.agent_type_name), agent_id),
+        }
     }
 }
 
@@ -496,7 +614,9 @@ impl TextOutput for AgentTypeListView {
 #[serde(rename_all = "camelCase")]
 pub struct AgentCreateView {
     pub component_name: ComponentName,
-    pub agent_id: RawAgentId,
+    pub agent_type: AgentTypeName,
+    pub agent_id: AgentId,
+    pub agent_fingerprint: AgentFingerprint,
 }
 
 impl Masked for AgentCreateView {}
@@ -504,30 +624,71 @@ impl Masked for AgentCreateView {}
 impl MessageWithFields for AgentCreateView {
     fn message(&self) -> String {
         format!(
-            "Created new agent {}",
-            format_message_highlight(&self.agent_id)
+            "Created agent {}",
+            format_message_highlight(&agent_id_display(Some(&self.agent_type), &self.agent_id))
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        let mut fields = FieldsBuilder::new();
-
-        fields
-            .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field("Agent ID", &self.agent_id, |agent_id| {
-                format_agent_id_in(
-                    &agent_id.0,
-                    colored::control::SHOULD_COLORIZE.should_colorize(),
-                    field_value_width::<Self>(),
-                )
-            });
-
-        fields.build()
+        agent_reference_fields(
+            &self.component_name,
+            &self.agent_type,
+            &self.agent_id,
+            &self.agent_fingerprint,
+        )
     }
 }
 
 impl StructuredOutput for AgentCreateView {
-    const KIND: &'static str = "agent.new";
+    const KIND: &'static str = "agent.create";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUpsertView {
+    pub component_name: ComponentName,
+    pub agent_type: AgentTypeName,
+    pub agent_id: AgentId,
+    pub agent_fingerprint: AgentFingerprint,
+}
+
+impl Masked for AgentUpsertView {}
+
+impl MessageWithFields for AgentUpsertView {
+    fn message(&self) -> String {
+        format!(
+            "Upserted agent {}",
+            format_message_highlight(&agent_id_display(Some(&self.agent_type), &self.agent_id))
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        agent_reference_fields(
+            &self.component_name,
+            &self.agent_type,
+            &self.agent_id,
+            &self.agent_fingerprint,
+        )
+    }
+}
+
+impl StructuredOutput for AgentUpsertView {
+    const KIND: &'static str = "agent.upsert";
+}
+
+fn agent_reference_fields(
+    component_name: &ComponentName,
+    agent_type: &AgentTypeName,
+    agent_id: &AgentId,
+    agent_fingerprint: &AgentFingerprint,
+) -> Vec<(String, String)> {
+    let mut fields = FieldsBuilder::new();
+    fields
+        .fmt_field("Component name", component_name, format_id)
+        .fmt_field("Agent type", agent_type, format_id)
+        .fmt_field("Agent ID", agent_id, format_main_id)
+        .fmt_field("Agent fingerprint", agent_fingerprint, format_id);
+    fields.build()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -571,7 +732,7 @@ impl MessageWithFields for AgentGetView {
     fn message(&self) -> String {
         format!(
             "Got metadata for agent {}",
-            format_message_highlight(&self.metadata.agent_id)
+            format_message_highlight(&self.metadata.display_name())
         )
     }
 
@@ -674,13 +835,16 @@ impl MessageWithFields for AgentGetView {
                 &self.metadata.component_revision,
                 format_id,
             )
-            .fmt_field("Agent ID", &self.metadata.agent_id, |agent_id| {
+            .fmt_field("Agent ID", &self.metadata.agent_id, format_main_id)
+            .fmt_field_option("Agent type", &self.metadata.agent_type, format_id)
+            .fmt_field_option("Agent key", &self.metadata.agent_key, |key| {
                 format_agent_id_in(
-                    &agent_id.0,
+                    key,
                     colored::control::SHOULD_COLORIZE.should_colorize(),
                     field_value_width::<Self>(),
                 )
             })
+            .fmt_field("Fingerprint", &self.metadata.fingerprint, format_id)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
                 "Component size",
@@ -789,13 +953,10 @@ impl TextOutput for AgentsMetadataResponseView {
             false,
         ));
 
-        if !self.cursors.is_empty() {
+        if let Some(cursor) = &self.cursor {
             logln("");
-        }
-        for (component_name, cursor) in &self.cursors {
             logln(format!(
-                "Cursor for more results for component {}: {}",
-                component_name.log_color_highlight(),
+                "Cursor for more results: {}",
                 cursor.log_color_highlight()
             ));
         }
@@ -845,7 +1006,7 @@ impl AgentsMetadataResponseView {
         let headers = vec![
             Column::new("Component name")
                 .width_range(MIN_COMPONENT_NAME_WIDTH, MAX_COMPONENT_NAME_WIDTH),
-            Column::new("Agent ID"),
+            Column::new("Agent"),
             Column::new("Revision").content_right(),
             Column::new("Status").content_right(),
             Column::new("Pending").content_right(),
@@ -862,7 +1023,7 @@ impl AgentsMetadataResponseView {
             .map(|agent| {
                 vec![
                     TableCell::new(agent.component_name.to_string()),
-                    TableCell::new(agent.agent_id.0.clone()),
+                    TableCell::new(agent.display_name()),
                     TableCell::new(agent.component_revision.to_string()).right(),
                     TableCell::new(if agent.last_error_kind == Some(OplogErrorKind::Recovery) {
                         "Unavailable".to_string()
@@ -895,11 +1056,7 @@ impl AgentsMetadataResponseView {
 
 impl TruncatableTextOutput for AgentsMetadataResponseView {
     fn render_truncated(&self, max_lines: usize, colorize: bool) -> String {
-        let cursor_lines = if self.cursors.is_empty() {
-            0
-        } else {
-            1 + self.cursors.len()
-        };
+        let cursor_lines = if self.cursor.is_some() { 2 } else { 0 };
         let available_for_table = max_lines.saturating_sub(cursor_lines);
 
         let term_width = terminal_width();
@@ -907,16 +1064,12 @@ impl TruncatableTextOutput for AgentsMetadataResponseView {
 
         let mut out = truncate_rendered(table_str, available_for_table);
 
-        if !self.cursors.is_empty() {
-            out.push('\n');
-            for (component_name, cursor) in &self.cursors {
-                out.push('\n');
-                out.push_str(&format!(
-                    "Cursor for more results for component {}: {}",
-                    component_name.log_color_highlight(),
-                    cursor.log_color_highlight()
-                ));
-            }
+        if let Some(cursor) = &self.cursor {
+            out.push_str("\n\n");
+            out.push_str(&format!(
+                "Cursor for more results: {}",
+                cursor.log_color_highlight()
+            ));
         }
 
         out
@@ -950,11 +1103,7 @@ pub fn format_timestamp(timestamp: u64) -> String {
 }
 
 pub fn format_agent_id_match(agent_id_match: &AgentIdMatch) -> String {
-    let rendered_agent_id = crate::agent_id_display::render_agent_id_or_raw(
-        agent_id_match.parsed_agent_id.as_ref(),
-        &agent_id_match.source_language,
-        &agent_id_match.agent_id.0,
-    );
+    let rendered_agent_id = agent_id_match.display_name();
 
     format!(
         "{}{}/{}",
@@ -1014,5 +1163,35 @@ fn format_retry_count(retry_count: &u32) -> String {
         retry_count.to_string()
     } else {
         format_warn(&retry_count.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn agent_list_cursor_resumes_only_the_types_it_names() {
+        let counter = AgentTypeName("CounterAgent".to_string());
+        let chat = AgentTypeName("ChatAgent".to_string());
+        let mut cursor = AgentListCursor::default();
+        cursor.insert(&counter, ScanCursor::new("0/17".to_string()));
+
+        let decoded = AgentListCursor::decode(&cursor.encode()).unwrap();
+
+        assert_eq!(decoded, cursor);
+        assert_eq!(
+            decoded.resume_at(&counter),
+            Some(ScanCursor::new("0/17".to_string()))
+        );
+        assert_eq!(decoded.resume_at(&chat), None);
+    }
+
+    #[test]
+    fn agent_list_cursor_rejects_text_that_is_not_a_cursor() {
+        assert!(AgentListCursor::decode("0/17").is_err());
+        assert!(AgentListCursor::decode("bm90IGpzb24").is_err());
+        assert!(AgentListCursor::decode(&AgentListCursor::default().encode()).is_err());
     }
 }

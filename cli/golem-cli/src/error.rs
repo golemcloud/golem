@@ -578,7 +578,7 @@ pub mod service {
     }
 
     pub fn display_agent_id(agent_id: AgentId) -> String {
-        format!("{}/{}", agent_id.component_id, agent_id.agent_id)
+        agent_id.to_string()
     }
 
     pub fn display_promise_id(promise_id: PromiseId) -> String {

@@ -30,6 +30,8 @@ use crate::oplog_export::export::{OplogExportError, OplogExportOptions, OplogExp
 use crate::oplog_export::model::{OplogExportCoverage, ReportEntry};
 use crate::oplog_export::obfuscator::TokenKey;
 use golem_client::api::WorkerClient;
+use golem_common::model::AgentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use poem::http::StatusCode;
 use poem::listener::{Acceptor, Listener, TcpListener};
@@ -37,12 +39,11 @@ use poem::web::{Data, Html, Json, Query};
 use poem::{EndpointExt, Route, Server, get, handler};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use uuid::Uuid;
 
 pub struct OplogViewerServer {
     pub ctx: Arc<Context>,
-    pub component_id: Uuid,
-    pub agent_id: String,
+    pub environment_id: EnvironmentId,
+    pub agent_id: AgentId,
     /// The rendered viewer page in live mode.
     pub page: String,
     /// Number of entries the viewer requests per page by default.
@@ -59,8 +60,8 @@ pub struct OplogViewerServer {
 /// logs a warning, so that one entry does not hide the rest of the oplog.
 pub async fn oplog_page_entry_view(
     ctx: &Context,
-    component_id: &Uuid,
-    agent_name: &str,
+    environment_id: &EnvironmentId,
+    agent_id: &AgentId,
     page_entry: PublicOplogPageEntry,
     omit_payloads: bool,
 ) -> anyhow::Result<AgentOplogEntryView> {
@@ -76,10 +77,11 @@ pub async fn oplog_page_entry_view(
     match clients
         .worker
         .get_oplog_entry(
-            component_id,
-            agent_name,
+            &environment_id.0,
+            &agent_id.0,
             omitted.oplog_index.as_u64(),
             Some(omitted.component_revision.into()),
+            None,
         )
         .await
         .map_service_error()
@@ -177,12 +179,13 @@ async fn oplog_page(
     let result = clients
         .worker
         .get_oplog(
-            &server.component_id,
-            &server.agent_id,
+            &server.environment_id.0,
+            &server.agent_id.0,
             params.from,
             count,
             cursor.as_ref(),
             query.as_deref(),
+            None,
         )
         .await
         .map_service_error()
@@ -193,7 +196,7 @@ async fn oplog_page(
         entries.push(
             oplog_page_entry_view(
                 &server.ctx,
-                &server.component_id,
+                &server.environment_id,
                 &server.agent_id,
                 page_entry,
                 server.omit_payloads,
@@ -222,7 +225,7 @@ async fn agent_metadata(
     let clients = server.ctx.golem_clients().await.map_err(upstream_error)?;
     let metadata = clients
         .worker
-        .get_worker_metadata(&server.component_id, &server.agent_id)
+        .get_worker_metadata(&server.environment_id.0, &server.agent_id.0, None)
         .await
         .map_service_error()
         .map_err(upstream_error)?;
@@ -240,7 +243,7 @@ async fn export_agent_metadata(
     let clients = server.ctx.golem_clients().await.map_err(read_failed)?;
     let metadata = clients
         .worker
-        .get_worker_metadata(&server.component_id, &server.agent_id)
+        .get_worker_metadata(&server.environment_id.0, &server.agent_id.0, None)
         .await
         .map_service_error()
         .map_err(read_failed)?;
@@ -290,8 +293,8 @@ fn export_error(error: anyhow::Error) -> poem::Error {
 /// is interrupted. A failed pin fails the command before the server starts.
 pub async fn serve_oplog_export_viewer(
     ctx: Arc<Context>,
-    component_id: Uuid,
-    agent_id: String,
+    environment_id: EnvironmentId,
+    agent_id: AgentId,
     options: OplogExportOptions,
     port: Option<u16>,
     open_browser: bool,
@@ -301,8 +304,8 @@ pub async fn serve_oplog_export_viewer(
     let page_size = options.page_size;
     let reads = RestOplogReads {
         ctx: ctx.clone(),
-        component_id,
-        agent_name: agent_id.clone(),
+        environment_id,
+        agent_id,
     };
     let session = OplogExportSession::pin(reads, TokenKey::process(), options).await?;
     let page = render_oplog_live_export_viewer_html(&OplogLiveExportViewerDocument {
@@ -315,7 +318,7 @@ pub async fn serve_oplog_export_viewer(
     serve_oplog_viewer(
         OplogViewerServer {
             ctx,
-            component_id,
+            environment_id,
             agent_id,
             page,
             page_size,

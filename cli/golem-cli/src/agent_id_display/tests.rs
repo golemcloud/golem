@@ -208,7 +208,7 @@ fn build_parsed_agent_id(
             fields: vec![params_value],
         },
     );
-    ParsedAgentKey::new(AgentTypeName(agent_type.to_string()), typed, None)
+    ParsedAgentKey::new(AgentTypeName(agent_type.to_string()), typed)
 }
 
 #[test]
@@ -217,26 +217,6 @@ fn render_agent_id_format() {
     assert_eq!(
         render_agent_id(&parsed, &SourceLanguage::Rust),
         "my-agent(42)"
-    );
-}
-
-#[test]
-fn render_agent_id_with_phantom() {
-    let typed = TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
-            name: "p".into(),
-            body: SchemaType::u32(),
-            metadata: Default::default(),
-        }])),
-        SchemaValue::Record {
-            fields: vec![SchemaValue::U32(42)],
-        },
-    );
-    let uuid = uuid::Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let parsed = ParsedAgentKey::new(AgentTypeName("my-agent".to_string()), typed, Some(uuid));
-    assert_eq!(
-        render_agent_id(&parsed, &SourceLanguage::Rust),
-        "my-agent(42)[12345678-1234-1234-1234-123456789012]"
     );
 }
 

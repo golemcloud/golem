@@ -1443,7 +1443,7 @@ pub mod tool {
     #[derive(Debug, Args)]
     #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
     pub struct ToolInvokeArgs {
-        /// Existing agent; for --lookup use the receipt's <component-id>:<agent-id>
+        /// Existing agent; for --lookup use the receipt's agent ID
         #[arg(long)]
         pub agent: Option<RawAgentId>,
         /// Component used to create a fresh ephemeral invocation owner without constructing an agent
@@ -1615,10 +1615,9 @@ pub mod worker {
         AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogExportArgs, OplogViewerArgs,
         PostDeployArgs, StreamArgs,
     };
-    use crate::model::agent::{AgentListMode, AgentUpdateMode};
+    use crate::model::agent::{AgentListCursor, AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
     use clap::{Subcommand, ValueEnum};
-    use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent::AgentTypeName;
@@ -1639,11 +1638,19 @@ pub mod worker {
 
     #[derive(Debug, Subcommand)]
     pub enum AgentSubcommand {
-        /// Create new agent
-        #[command(after_help = crate::command_examples::AGENT_NEW)]
-        New {
+        /// Create an agent. Without `--keyed`, each call creates a new agent without a key.
+        #[command(after_help = crate::command_examples::AGENT_CREATE)]
+        Create {
             #[command(flatten)]
             agent_id: AgentIdArgs,
+            /// Create the keyed agent of the constructor parameters. Fails when the keyed agent
+            /// already exists.
+            #[clap(long)]
+            keyed: bool,
+            /// Idempotency key of the create. A create retried with the same key returns the
+            /// agent of the first create.
+            #[clap(long, short)]
+            idempotency_key: Option<IdempotencyKey>,
             /// Environment variables visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,
@@ -1655,7 +1662,14 @@ pub mod worker {
             #[arg(short, long, value_parser = parse_agent_config, verbatim_doc_comment)]
             config: Vec<AgentConfigEntryDto>,
         },
-        /// Invoke (or enqueue invocation for) agent
+        /// Get the keyed agent of constructor parameters, and create it when it does not exist
+        #[command(after_help = crate::command_examples::AGENT_UPSERT)]
+        Upsert {
+            #[command(flatten)]
+            agent_id: AgentIdArgs,
+        },
+        /// Invoke (or enqueue invocation for) agent. Addressed by its key, the agent is created
+        /// when it does not exist.
         #[command(after_help = crate::command_examples::AGENT_INVOKE)]
         Invoke {
             #[command(flatten)]
@@ -1713,6 +1727,9 @@ pub mod worker {
             /// Schedule the invocation at a specific time (ISO 8601 / RFC 3339 format, e.g. 2026-03-15T10:30:00Z)
             #[clap(long, requires = "trigger")]
             schedule_at: Option<DateTime<Utc>>,
+            /// Fail, and run nothing, unless the agent is the incarnation with this fingerprint
+            #[clap(long)]
+            expected_fingerprint: Option<Uuid>,
         },
         /// Get agent metadata
         #[command(after_help = crate::command_examples::AGENT_GET)]
@@ -1740,18 +1757,21 @@ pub mod worker {
             /// Filter for agent metadata in form of `property op value`, combined with
             /// `and`, `or`, `not` and parentheses.
             ///
-            /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
-            /// `env.<KEY>`, `config.<PATH>`.
+            /// Supported properties: `key`, `id`, `revision`, `status`, `mode`, `created_at`,
+            /// `env.<KEY>`, `config.<PATH>`. `key` compares the canonical key text
+            /// `Type(parameters)` of a keyed agent; an agent without a key never matches it.
+            /// `id` compares the agent ID, a UUID.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
             /// Spaces around the operator are required. `not` binds tightest, then `and`,
             /// then `or`; keywords are case-insensitive.
             /// Quote a value with `"` when it contains whitespace outside parentheses, starts
             /// with `(` or `"`, or has unbalanced parentheses or quotes; inside quotes use `\"`
-            /// and `\\`. Agent IDs such as `Counter("a b", 2)` need no extra quotes.
+            /// and `\\`. Keys such as `Counter("a b", 2)` need no extra quotes.
             ///
-            /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
-            /// `status == Running`, `env.var1 == value`, `name like worker`,
+            /// Filter examples: `key == CounterAgent("c1")`, `revision >= 0`,
+            /// `status == Running`, `env.var1 == value`, `key like worker`,
+            /// `id == 00000007-0000-8000-8000-000000000001`,
             /// `(status == Failed or status == Retrying) and not env.MODE == test`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
@@ -1766,17 +1786,16 @@ pub mod worker {
             /// in the previous response.
             /// The cursor is an opaque string and must be passed back unchanged.
             ///
-            /// Returned cursors: in `--format json/yaml/toon` the response includes a
-            /// `cursors` map of the form `{ "<component-name>": "<opaque-cursor>", ... }`
-            /// (one entry per component that still has more results). Pass any of
-            /// those values back as `--scan-cursor` to fetch the next page.
-            /// An entry being absent means that component has been fully scanned.
+            /// One cursor covers every listed agent type: pass it back with the same agent
+            /// type or component selection to get the next page of each type that still has
+            /// more results. In `--format json/yaml/toon` the response has a `cursor` field,
+            /// which is null when every listed agent type has been fully listed.
             ///
             /// Mutually exclusive with `--refresh`.
             #[arg(long, short, value_parser = parse_cursor)]
-            scan_cursor: Option<ScanCursor>,
+            scan_cursor: Option<AgentListCursor>,
             /// The maximum number of returned agents; returns all values if not specified.
-            /// When multiple components are selected, the limit is applied separately.
+            /// When multiple agent types are listed, the limit is applied to each separately.
             #[arg(long, short)]
             max_count: Option<u64>,
             /// When set to true it queries for most up-to-date status for each agent, default is false
@@ -1805,19 +1824,12 @@ pub mod worker {
             stream_args: StreamArgs,
         },
         /// Like stream, but for helping Bridge SDK-based REPLs. Shows the output of the
-        /// invocation whose accepted ID arrives as the first line of stdin, then exits.
+        /// invocation whose accepted ID, `<AGENT_ID>.<INVOCATION_ID>`, arrives as the first line
+        /// of stdin, then exits.
         #[clap(hide = true)]
         ReplStream {
             /// Agent type name
             agent_type_name: AgentTypeName,
-            /// Agent parameters in UntypedDataValue JSON format
-            parameters: String,
-            /// Idempotency key of the invocation
-            idempotency_key: IdempotencyKey,
-            /// Method name of the invocation, which selects an ephemeral agent's phantom ID
-            method_name: String,
-            /// Phantom ID
-            phantom_id: Option<Uuid>,
             #[command(flatten)]
             stream_args: StreamArgs,
         },
