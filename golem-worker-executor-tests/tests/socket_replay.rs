@@ -1321,3 +1321,126 @@ async fn p3_udp_disconnect_replays_from_the_entry(
     assert_eq!(other.receive().await?, (b"free".to_vec(), local));
     session.finish().await
 }
+
+async fn local_address(session: &Session<'_>, slot: &str) -> anyhow::Result<String> {
+    session
+        .call::<Result<String, String>>("p3_udp_local_address", data_value!(slot.to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)
+}
+
+async fn send_to(
+    session: &Session<'_>,
+    slot: &str,
+    port: Option<u16>,
+    data: &[u8],
+) -> anyhow::Result<()> {
+    session
+        .call::<Result<(), String>>(
+            "p3_udp_send",
+            data_value!(slot.to_string(), port, data.to_vec()),
+        )
+        .await?
+        .map_err(anyhow::Error::msg)
+}
+
+/// A disconnect after an implicit bind releases the native port, so the entry no longer
+/// reports it. The next live send binds again and records that address, and the getter
+/// reports the address the peer sees, live and after replay.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_disconnect_after_an_implicit_bind_records_the_next_endpoint(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-impl-disc").await?;
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let disconnected: Result<(), String> = session
+        .call("p3_udp_disconnect", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(disconnected, Ok(()));
+    assert_eq!(local_address(&session, "u").await?, "0.0.0.0:0");
+
+    send_to(&session, "u", Some(peer.port()), b"live").await?;
+    let (data, source) = peer.receive().await?;
+    assert_eq!(data, b"live".to_vec());
+    let local = local_address(&session, "u").await?;
+    assert_eq!(
+        local.rsplit(':').next(),
+        Some(source.port().to_string().as_str())
+    );
+
+    session.restart_executor().await?;
+    assert_eq!(local_address(&session, "u").await?, local);
+    send_to(&session, "u", Some(peer.port()), b"replayed").await?;
+    let (data, source_after) = peer.receive().await?;
+    assert_eq!((data, source_after), (b"replayed".to_vec(), source));
+    session.finish().await
+}
+
+/// A connect selects the interface address of a wildcard bind, also when a send bound the
+/// socket implicitly. The entry records that address, and the rebuilt socket sends from it.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_connect_after_a_wildcard_bind_records_the_interface_address(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-wildcard").await?;
+
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind_any", data_value!("b".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("s".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    send_to(&session, "s", Some(peer.port()), b"first").await?;
+    peer.receive().await?;
+
+    let mut expected = Vec::new();
+    for slot in ["b", "s"] {
+        let wildcard = local_address(&session, slot).await?;
+        let port = wildcard
+            .strip_prefix("0.0.0.0:")
+            .expect("wildcard address")
+            .to_string();
+        let connected: Result<(), String> = session
+            .call("p3_udp_connect", data_value!(slot.to_string(), peer.port()))
+            .await?;
+        assert_eq!(connected, Ok(()));
+        let local = local_address(&session, slot).await?;
+        assert_eq!(local, format!("127.0.0.1:{port}"));
+        expected.push(local);
+    }
+
+    session.restart_executor().await?;
+    for (slot, local) in ["b", "s"].into_iter().zip(expected) {
+        assert_eq!(local_address(&session, slot).await?, local);
+        send_to(&session, slot, None, slot.as_bytes()).await?;
+        let (data, source) = peer.receive().await?;
+        assert_eq!(
+            (data, source.to_string()),
+            (slot.as_bytes().to_vec(), local)
+        );
+    }
+    session.finish().await
+}

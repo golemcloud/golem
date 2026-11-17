@@ -32,7 +32,8 @@ use golem_common::model::oplog::host_functions::{
     P3SocketsTypesUdpSocketSend,
 };
 use golem_common::model::oplog::types::{
-    SerializableP3SocketErrorCode, SerializableP3UdpDatagram, SerializableP3UdpEndpoint,
+    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
+    SerializableP3UdpEndpoint,
 };
 use golem_common::model::oplog::{
     DeniablePair, DurableFunctionType, HostRequestNoInput, HostRequestP3SocketsBind,
@@ -125,16 +126,30 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     if entry.native_bound {
         return Ok(true);
     }
-    let restored = match entry.local_address.clone() {
+    // The native socket is bound as the guest bound it: on the address of its bind request, or
+    // the unspecified address after an implicit bind, with the recorded port. A connect then
+    // selects the same interface address again.
+    let unspecified = unspecified_address(entry.family);
+    let bind_address =
+        entry
+            .local_address
+            .clone()
+            .map(|local_address| SerializableP3IpSocketAddress {
+                port: local_address.port,
+                ..entry.bind_request.clone().unwrap_or(unspecified.clone())
+            });
+    let restored = match bind_address {
+        // No endpoint, or one that a disconnect released: the next send binds implicitly.
         None => Ok(()),
-        Some(local_address) => {
+        Some(bind_address) if bind_address == unspecified => Ok(()),
+        Some(bind_address) => {
             let remote_address = entry.remote_address.clone();
             let mut wasi = ctx.as_wasi_view();
             let mut view = wasi.sockets();
             run_at_once(types::HostUdpSocket::bind(
                 &mut view,
                 Resource::new_borrow(rep),
-                local_address.into(),
+                bind_address.into(),
             ))
             .and_then(|()| match remote_address {
                 Some(remote_address) => run_at_once(types::HostUdpSocket::connect(
@@ -161,20 +176,40 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     }
 }
 
-/// The local address the native socket got from an implicit bind, when the entry has none yet.
-fn implicit_bind<Ctx: WorkerCtx>(
+/// The new local address of the native socket after a live connect or send, when it differs
+/// from the entry: an implicit bind, or the interface address that a connect selects for a
+/// wildcard bind.
+fn endpoint_change<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     rep: u32,
-    was_unbound: bool,
-) -> Option<SerializableP3UdpEndpoint> {
-    if !was_unbound {
-        return None;
+) -> wasmtime::Result<Option<SerializableP3UdpEndpoint>> {
+    let native = {
+        let mut wasi = ctx.as_wasi_view();
+        let mut view = wasi.sockets();
+        types::HostUdpSocket::get_local_address(&mut view, Resource::new_borrow(rep))
+            .ok()
+            .map(SerializableP3IpSocketAddress::from)
+    };
+    let entry = udp_entry(ctx, rep)?;
+    Ok(native
+        .filter(|address| entry.local_address.as_ref() != Some(address))
+        .map(SerializableP3UdpEndpoint::Bound))
+}
+
+fn unspecified_address(family: types::IpAddressFamily) -> SerializableP3IpSocketAddress {
+    match family {
+        types::IpAddressFamily::Ipv4 => types::IpSocketAddress::Ipv4(types::Ipv4SocketAddress {
+            address: (0, 0, 0, 0),
+            port: 0,
+        }),
+        types::IpAddressFamily::Ipv6 => types::IpSocketAddress::Ipv6(types::Ipv6SocketAddress {
+            address: (0, 0, 0, 0, 0, 0, 0, 0),
+            port: 0,
+            flow_info: 0,
+            scope_id: 0,
+        }),
     }
-    let mut wasi = ctx.as_wasi_view();
-    let mut view = wasi.sockets();
-    types::HostUdpSocket::get_local_address(&mut view, Resource::new_borrow(rep))
-        .ok()
-        .map(|address| SerializableP3UdpEndpoint::Bound(address.into()))
+    .into()
 }
 
 /// Updates the entry from a connect result, live and on replay.
@@ -245,15 +280,13 @@ async fn send_live<Ctx: WorkerCtx, U: Send + 'static>(
 )> {
     let rep = socket.rep();
     let ready = store
-        .with(|mut access| -> wasmtime::Result<_> {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            Ok(ensure_native_endpoint(ctx, rep)?
-                .then_some(udp_entry(ctx, rep)?.local_address.is_none()))
+        .with(|mut access| {
+            ensure_native_endpoint(durable_worker_ctx::<Ctx, U>(access.data_mut()), rep)
         })
         .map_err(SocketError::trap)?;
-    let Some(was_unbound) = ready else {
+    if !ready {
         return Ok(lost_response());
-    };
+    }
     let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
     let result = <WasiSockets as types::HostUdpSocketWithStore<U>>::send(
         &sockets,
@@ -266,13 +299,9 @@ async fn send_live<Ctx: WorkerCtx, U: Send + 'static>(
         Ok(()) => Ok(()),
         Err(error) => Err(serialize_socket_error(error).map_err(SocketError::trap)?),
     };
-    let endpoint = store.with(|mut access| {
-        implicit_bind(
-            durable_worker_ctx::<Ctx, U>(access.data_mut()),
-            rep,
-            was_unbound,
-        )
-    });
+    let endpoint = store
+        .with(|mut access| endpoint_change(durable_worker_ctx::<Ctx, U>(access.data_mut()), rep))
+        .map_err(SocketError::trap)?;
     Ok((result, endpoint))
 }
 
@@ -320,6 +349,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
             Ok(address) => {
                 let entry = udp_entry(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?;
                 entry.local_address = Some(address);
+                entry.bind_request = Some(local_address.into());
                 entry.phase = SocketPhase::Bound;
                 Ok(())
             }
@@ -405,10 +435,6 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         let (result, endpoint) = if ensure_native_endpoint(self.0.durable_ctx_mut(), rep)
             .map_err(SocketError::trap)?
         {
-            let was_unbound = udp_entry(self.0.durable_ctx_mut(), rep)
-                .map_err(SocketError::trap)?
-                .local_address
-                .is_none();
             let result = {
                 let mut view = WasiSocketsView::sockets(self.0);
                 match types::HostUdpSocket::connect(&mut view, socket, remote_address).await {
@@ -418,7 +444,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
             };
             (
                 result,
-                implicit_bind(self.0.durable_ctx_mut(), rep, was_unbound),
+                endpoint_change(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?,
             )
         } else {
             lost_response()
@@ -453,7 +479,9 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         observe_function_call(&*self.0, "sockets::types::udp-socket", "disconnect");
         // Not recorded: the entry decides the result, live and on replay. The native socket is
         // disconnected only when it holds the entry's endpoint; otherwise the endpoint rebuild
-        // binds it without connecting.
+        // binds it without connecting. Linux keeps only the address and port that an explicit
+        // bind named, so the local address goes back to the bind request, or to the unspecified
+        // address and port 0 after an implicit bind. The next send records its new endpoint.
         let rep = socket.rep();
         let entry = udp_entry(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?;
         if entry.phase == SocketPhase::Lost {
@@ -467,6 +495,12 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         }
         let entry = udp_entry(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?;
         entry.remote_address = None;
+        entry.local_address = Some(
+            entry
+                .bind_request
+                .clone()
+                .unwrap_or_else(|| unspecified_address(entry.family)),
+        );
         entry.phase = SocketPhase::Bound;
         Ok(())
     }

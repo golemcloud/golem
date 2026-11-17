@@ -1051,11 +1051,16 @@ commit and notification. These tests do not establish exactly-once datagram cons
 across the receive-before-End crash window.
 
 P3 UDP keeps its endpoint in the socket's `SocketEntries` entry. Bind records the selected local
-address (`P3SocketsBind`, also for port 0); connect, send and receive record an implicit bind or a
-loss as `SerializableP3UdpEndpoint` in their response. Replay updates the entry and touches no
-native socket; `disconnect` and the address getters are not recorded and use only the entry. At
-the first live operation, `ensure_native_endpoint` binds the native socket on the recorded local
-address and connects it again when the entry is connected, without sending a packet. When that
+address (`P3SocketsBind`, also for port 0) and keeps the bind request in the entry; connect, send
+and receive record every local-address change, such as an implicit bind or a wildcard bind that
+connect narrows to an interface address, or a loss as `SerializableP3UdpEndpoint` in their
+response. Replay updates the entry and touches no native socket; `disconnect` and the address
+getters are not recorded and use only the entry. `disconnect` resets the local address to the bind
+request, or to the unspecified address with port 0 after an implicit bind, because the native
+socket releases an implicitly bound port. At the first live operation, `ensure_native_endpoint`
+binds the native socket on the bind request's address with the recorded port and connects it again
+when the entry is connected, without sending a packet; an unspecified address with port 0 stays
+unbound until the next send binds it implicitly. When that
 fails, the entry becomes `Lost` and every later operation returns `connection-broken`; the rebuild
 is not checked against grants again, each datagram still is. Send records only the target and the
 result, never the datagram. An incomplete send completes with `connection-broken` and is not sent

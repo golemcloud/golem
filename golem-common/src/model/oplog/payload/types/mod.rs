@@ -786,7 +786,8 @@ pub struct SerializableP3UdpDatagram {
 )]
 #[desert(evolution())]
 pub enum SerializableP3UdpEndpoint {
-    /// The call bound the socket implicitly on this local address.
+    /// The local address of the socket changed to this address: an implicit bind, or the
+    /// interface address that a connect selected for a wildcard bind.
     Bound(SerializableP3IpSocketAddress),
     /// The socket could not get its recorded local address back after recovery.
     Lost,

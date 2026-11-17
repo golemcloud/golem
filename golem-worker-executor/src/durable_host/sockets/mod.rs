@@ -47,6 +47,9 @@ pub(crate) struct SocketEntry {
     pub phase: SocketPhase,
     pub local_address: Option<SerializableP3IpSocketAddress>,
     pub remote_address: Option<SerializableP3IpSocketAddress>,
+    /// The address an explicit UDP bind named. A disconnect resets the local address to it,
+    /// because Linux keeps only the address and port that the bind named.
+    pub bind_request: Option<SerializableP3IpSocketAddress>,
     pub send_taken: bool,
     pub receive_taken: bool,
     pub native_bound: bool,
@@ -60,6 +63,7 @@ impl SocketEntry {
             phase: SocketPhase::Created,
             local_address: None,
             remote_address: None,
+            bind_request: None,
             send_taken: false,
             receive_taken: false,
             native_bound: false,
