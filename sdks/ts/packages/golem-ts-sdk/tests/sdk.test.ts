@@ -26,6 +26,7 @@ import {
   RemoteOutputError,
 } from '../src/client';
 import { compileSchema } from '../src/schema/adapter';
+import { SchemaRef } from '../src/schema/ref';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 import { s } from '../src/schema/markers';
 import { Uuid } from '../src/uuid';
@@ -36,6 +37,7 @@ import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorR
 import {
   schemaValueFromWit,
   schemaValueToWit,
+  typedSchemaValueFromWit,
   typedSchemaValueToWit,
   v,
 } from '../src/internal/schema-model';
@@ -1281,6 +1283,46 @@ describe('RPC client', () => {
     def.client.get({}, {});
 
     expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toEqual([]);
+  });
+
+  it('accepts native creation override names and emits canonical paths and record fields', () => {
+    const def = defineAgent({
+      name: 'NativeConfigOverrideAgent',
+      id: {},
+      config: {
+        max_chars: s.u32(),
+        display_record: z.object({ display_name: z.string() }),
+        nested_group: z.object({ min_chars: s.u32(), api_key: s.secret(z.string()) }),
+      },
+      methods: {},
+    });
+
+    def.client.get(
+      {},
+      {
+        nested_group: { min_chars: 0 },
+        display_record: { display_name: 'native record' },
+        max_chars: 7,
+      },
+    );
+
+    const entries = vi.mocked(WasmRpc).mock.calls.at(-1)![3];
+    expect(
+      entries.map((entry) => {
+        const { graph, value } = typedSchemaValueFromWit(entry.value);
+        return { path: entry.path, value: new SchemaRef(graph).unpackJson(value) };
+      }),
+    ).toEqual([
+      { path: ['maxChars'], value: 7 },
+      { path: ['displayRecord'], value: { displayName: 'native record' } },
+      { path: ['nestedGroup', 'minChars'], value: 0 },
+    ]);
+    expect(() => def.client.get({}, { maxChars: 8 } as never)).toThrow(
+      "Unknown config path 'maxChars'",
+    );
+    expect(() => def.client.get({}, { nested_group: { api_key: 'blocked' } } as never)).toThrow(
+      "Cannot override secret config field 'nestedGroup.apiKey'",
+    );
   });
 
   it('rejects undeclared config override paths before creating the RPC', () => {

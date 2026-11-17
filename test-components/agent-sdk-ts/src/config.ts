@@ -42,6 +42,10 @@ export const StaticDefaultsAgent = defineAgent({
   methods: {
     read: method({ input: {}, returns: z.string() }),
     constructorRead: method({ input: {}, returns: z.string() }),
+    readNativeOverrides: method({
+      input: { name: z.string(), label: z.string(), limit: s.u32() },
+      returns: z.string(),
+    }),
   },
 });
 
@@ -68,6 +72,44 @@ export const StaticDefaultsAgentImpl = StaticDefaultsAgent.implement({
         choice: { [choice.startsWith('selected:') ? 'Text' : 'Other']: choice },
         slots: this.config.slots,
         omitted: this.config.omitted ?? null,
+      });
+    },
+    async readNativeOverrides({ name, label, limit }) {
+      return NativeConfigAgent.client
+        .get({ name }, { max_chars: limit, display_record: { display_name: label } })
+        .read();
+    },
+  },
+});
+
+export const NativeConfigAgent = defineAgent({
+  name: 'NativeConfigAgent',
+  id: { name: z.string() },
+  config: {
+    max_chars: s.u32(),
+    display_record: z.object({ display_name: z.string() }),
+  },
+  methods: { read: method({ input: {}, returns: z.string() }) },
+});
+
+export const NativeConfigAgentImpl = NativeConfigAgent.implement({
+  init: ({ config }) => ({
+    initial: {
+      max_chars: config.max_chars,
+      display_record: config.display_record,
+    },
+    reads: 0,
+  }),
+  methods: {
+    read() {
+      this.reads += 1;
+      return JSON.stringify({
+        initial: this.initial,
+        current: {
+          max_chars: this.config.max_chars,
+          display_record: this.config.display_record,
+        },
+        reads: this.reads,
       });
     },
   },

@@ -90,6 +90,24 @@ async fn static_ts_config_defaults_and_creation_overrides_survive_reconstruction
         }
     }
 
+    let native_config = serde_json::json!({
+        "max_chars": 7,
+        "display_record": { "display_name": "native-before" },
+    });
+    let actual = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "readNativeOverrides",
+            data_value!("native-overrides", "native-before", 7u32),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&actual)?,
+        serde_json::json!({ "initial": native_config, "current": native_config, "reads": 1 }),
+    );
+
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
     let executor = start(deps, &context).await?;
@@ -105,6 +123,19 @@ async fn static_ts_config_defaults_and_creation_overrides_survive_reconstruction
             );
         }
     }
+    let actual = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "readNativeOverrides",
+            data_value!("native-overrides", "ignored-on-restart", 99u32),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&actual)?,
+        serde_json::json!({ "initial": native_config, "current": native_config, "reads": 2 }),
+    );
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     for entry in &oplog {
         if let PublicOplogEntry::Start(_) = &entry.entry {
@@ -123,7 +154,7 @@ async fn static_ts_config_defaults_and_creation_overrides_survive_reconstruction
             .iter()
             .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
             .count(),
-        5,
+        7,
     );
     Ok(())
 }
