@@ -15,9 +15,9 @@
 use super::{AdditionalTestDeps, TestOplog};
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor, ShardEpoch,
 };
@@ -267,13 +267,13 @@ impl OplogService for OplogFixtureService {
     async fn scan_for_type(
         &self,
         environment: &EnvironmentId,
-        component: &ComponentId,
+        type_id: TypeId,
         mode: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<ScanPage, WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment, component, mode, cursor, count)
+            .scan_for_type(environment, type_id, mode, cursor, count)
             .await
     }
 

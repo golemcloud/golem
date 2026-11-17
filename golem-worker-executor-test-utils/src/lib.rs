@@ -38,7 +38,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentMode, AgentTarget, ParsedAgentKey, Principal, ResolvedOwnerContext,
+    AgentMode, AgentTypeName, ParsedAgentKey, Principal, ResolvedOwnerContext,
 };
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -177,6 +177,7 @@ use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
+use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor::worker::{
     InvocationFailureDecision, RetryDecision, Worker, WorkerDeletionHook,
 };
@@ -995,9 +996,12 @@ impl TestWorkerExecutor {
         request_key: &golem_common::model::InvocationRequestKey,
         operation: &str,
     ) -> anyhow::Result<golem_common::model::InvocationId> {
-        let fingerprint = golem_test_framework::dsl::TestDsl::get_worker_metadata(self, agent_id)
-            .await?
-            .fingerprint;
+        let fingerprint = golem_test_framework::dsl::TestDsl::get_worker_metadata(
+            self,
+            &OwnedAgentId::new(self.context.default_environment_id, agent_id),
+        )
+        .await?
+        .fingerprint;
         Ok(request_key
             .finalize(agent_id.clone(), fingerprint, operation)
             .id())
@@ -2447,16 +2451,23 @@ impl TestWorkerExecutor {
         Ok(worker.memory_requirement().await?)
     }
 
+    /// Lists the running agents of one agent type of the environment.
     pub async fn get_running_workers_metadata(
         &self,
-        component_id: &ComponentId,
+        environment_id: &EnvironmentId,
+        agent_type: &AgentTypeName,
         filter: Option<AgentFilter>,
     ) -> anyhow::Result<Vec<AgentMetadataDto>> {
         let response = self
             .client
             .clone()
             .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
-                component_id: Some((*component_id).into()),
+                type_id: golem_worker_executor::services::agent_types::local_type_id(
+                    *environment_id,
+                    agent_type,
+                )
+                .get(),
+                environment_id: Some((*environment_id).into()),
                 filter: filter.map(|f| f.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -3968,7 +3979,6 @@ impl WorkerCtx for TestWorkerCtx {
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         pending_update: Option<HydratedUpdate>,
-        original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<golem_worker_executor::worker::instance::OwnerExecution>,
@@ -3993,6 +4003,9 @@ impl WorkerCtx for TestWorkerCtx {
 
         let entity_reconstruction_claim_hook =
             extra_deps.entity_reconstruction_claim_hook(worker_agent_id.clone());
+        if let ResolvedOwnerContext::Agent(key) = &owner_context {
+            extra_deps.record_agent_key(&worker_agent_id, key.to_string());
+        }
 
         if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
             return Err(WorkerExecutorError::runtime(
@@ -4036,7 +4049,6 @@ impl WorkerCtx for TestWorkerCtx {
             http_connection_pool,
             websocket_connection_pool,
             pending_update,
-            original_phantom_id,
             account_resource_limits.per_invocation_http_call_limit(),
             account_resource_limits.per_invocation_rpc_call_limit(),
             runtime,
@@ -4275,35 +4287,27 @@ impl FileSystemReading for TestWorkerCtx {
 }
 
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(
+    async fn upsert(
         &mut self,
         agent_type_name: String,
         constructor: golem_schema::schema::wit::wire::SchemaValueTree,
-        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
-        config: Vec<
-            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
-        >,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id, config)
-            .await
-    }
-
-    async fn create(
-        &mut self,
-        agent_type_name: String,
-        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
-        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
-        config: Vec<
-            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
-        >,
     ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
-        self.durable_ctx
-            .create(agent_type_name, constructor, phantom_id, config)
-            .await
+        self.durable_ctx.upsert(agent_type_name, constructor).await
     }
 
-    async fn bind_self(&mut self) -> anyhow::Result<Result<(String, Resource<WasmRpc>), RpcError>> {
+    async fn get_by_id(
+        &mut self,
+        agent_type_name: String,
+        agent_id: golem_schema::schema::wit::wire::AgentId,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx.get_by_id(agent_type_name, agent_id).await
+    }
+
+    async fn bind_self(
+        &mut self,
+    ) -> anyhow::Result<
+        Result<(golem_schema::schema::wit::wire::AgentId, Resource<WasmRpc>), RpcError>,
+    > {
         self.durable_ctx.bind_self().await
     }
 
@@ -6200,11 +6204,14 @@ impl TestOplog {
             _ => "Other",
         };
 
-        // FailOplogAdd{times}On{entry}
+        // FailOplogAdd{times}On{entry} in the agent key
         let re = Regex::new(r"FailOplogAdd(\d+)On([A-Za-z]+)").unwrap();
 
-        let agent_name = self.owned_agent_id.agent_id.agent_id.as_str();
-        if let Some(captures) = re.captures(agent_name) {
+        let agent_key = self
+            .additional_test_deps
+            .agent_key(&self.owned_agent_id.agent_id)
+            .unwrap_or_default();
+        if let Some(captures) = re.captures(&agent_key) {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
@@ -6229,7 +6236,7 @@ impl TestOplog {
                     info!("Failing worker as it hit marked oplog entry");
 
                     Err(format!(
-                        "worker {agent_name} failed on {entry_name} {} times",
+                        "worker {agent_key} failed on {entry_name} {} times",
                         failed_before + 1
                     ))
                 }
@@ -6975,11 +6982,14 @@ impl<T: RdbmsType> TestRdms<T> {
         agent_id: &AgentId,
         entry_name: &str,
     ) -> Result<(), rdbms::RdbmsError> {
-        // FailRdbmsTx{times}On{entry}
+        // FailRdbmsTx{times}On{entry} in the agent key
         let re = Regex::new(r"FailRdbmsTx(\d+)On([A-Za-z]+)").unwrap();
 
-        let agent_name = agent_id.agent_id.as_str();
-        if let Some(captures) = re.captures(agent_name) {
+        let agent_key = self
+            .additional_test_deps
+            .agent_key(agent_id)
+            .unwrap_or_default();
+        if let Some(captures) = re.captures(&agent_key) {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
@@ -6996,7 +7006,7 @@ impl<T: RdbmsType> TestRdms<T> {
                         .await;
                     Err(rdbms::RdbmsError::Other(format!(
                         "worker {} failed on {} {} times",
-                        agent_name,
+                        agent_key,
                         entry_name,
                         failed_before + 1
                     )))
@@ -7195,6 +7205,9 @@ pub struct AdditionalTestDeps {
     oplog_download_corruptions: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
     oplog_download_outage_hits: Arc<std::sync::Mutex<HashMap<AgentId, Vec<PayloadId>>>>,
     instance_load_counts: Arc<std::sync::Mutex<HashMap<AgentId, usize>>>,
+    /// The key text of each keyed agent that a worker context was created for. The
+    /// failure-injection hooks of the oplog and RDBMS wrappers read their triggers from it.
+    agent_keys: Arc<std::sync::Mutex<HashMap<AgentId, String>>>,
     runtime_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<usize>>>>,
     snapshot_download_failures: Arc<std::sync::Mutex<SnapshotDownloadFailures>>,
@@ -7284,6 +7297,7 @@ impl AdditionalTestDeps {
             oplog_download_corruptions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_outage_hits: Arc::new(std::sync::Mutex::new(HashMap::new())),
             instance_load_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            agent_keys: Arc::default(),
             runtime_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
@@ -7920,6 +7934,14 @@ impl AdditionalTestDeps {
         *count
     }
 
+    fn record_agent_key(&self, agent_id: &AgentId, key: String) {
+        self.agent_keys.lock().unwrap().insert(*agent_id, key);
+    }
+
+    fn agent_key(&self, agent_id: &AgentId) -> Option<String> {
+        self.agent_keys.lock().unwrap().get(agent_id).cloned()
+    }
+
     fn instance_load_count(&self, agent_id: &AgentId) -> usize {
         self.instance_load_counts
             .lock()
@@ -8446,10 +8468,7 @@ mod entity_body_completion_gate_tests {
     #[test]
     #[test_r::timeout("30s")]
     async fn indexed_body_completion_gate_lets_same_named_sibling_complete() {
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::nil()),
-            agent_id: "body-gate-test".to_string(),
-        };
+        let agent_id = AgentId::from_parts(1, 1);
         let deps = AdditionalTestDeps::default();
         let cancelled = OplogIndex::from_u64(7);
         let sibling = OplogIndex::from_u64(11);
@@ -8496,10 +8515,7 @@ mod replay_admission_gate_tests {
     #[test]
     #[test_r::timeout("30s")]
     async fn dropped_gate_does_not_steal_rearmed_matching_gate() {
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::nil()),
-            agent_id: "gate-test".to_string(),
-        };
+        let agent_id = AgentId::from_parts(1, 2);
         let gates = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let signals = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let deps = AdditionalTestDeps {
@@ -9579,8 +9595,8 @@ impl FailingRpc {
 impl Rpc for RecordingRpc {
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9593,7 +9609,7 @@ impl Rpc for RecordingRpc {
         self.inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -9643,8 +9659,7 @@ impl Rpc for RecordingRpc {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -9659,7 +9674,6 @@ impl Rpc for RecordingRpc {
         self.inner
             .create_demand(
                 target,
-                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -9675,8 +9689,7 @@ impl Rpc for RecordingRpc {
 
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -9697,7 +9710,6 @@ impl Rpc for RecordingRpc {
         self.inner
             .invoke_and_await(
                 target,
-                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
@@ -9716,8 +9728,7 @@ impl Rpc for RecordingRpc {
 
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -9734,7 +9745,6 @@ impl Rpc for RecordingRpc {
         self.inner
             .invoke(
                 target,
-                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
@@ -9755,8 +9765,8 @@ impl Rpc for RecordingRpc {
 impl Rpc for FailingRpc {
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9768,7 +9778,7 @@ impl Rpc for FailingRpc {
         self.inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -9816,8 +9826,7 @@ impl Rpc for FailingRpc {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -9831,7 +9840,6 @@ impl Rpc for FailingRpc {
         self.inner
             .create_demand(
                 target,
-                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -9847,8 +9855,7 @@ impl Rpc for FailingRpc {
 
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -9874,7 +9881,6 @@ impl Rpc for FailingRpc {
             self.inner
                 .invoke_and_await(
                     target,
-                    environment_id,
                     idempotency_key,
                     freshness_disposition,
                     expected_callee_fingerprint,
@@ -9894,8 +9900,7 @@ impl Rpc for FailingRpc {
 
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -9911,7 +9916,6 @@ impl Rpc for FailingRpc {
         self.inner
             .invoke(
                 target,
-                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
