@@ -6,6 +6,7 @@ tool github.com/bytecodealliance/componentize-go
 
 require (
 	github.com/golemcloud/golem/sdks/go/core v0.1.2
+	// Must match the runtime of the generator pinned in dev-tools/go-bindgen.
 	go.bytecodealliance.org/pkg v0.2.3
 )
 

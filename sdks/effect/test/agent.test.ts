@@ -394,6 +394,99 @@ describe("agent-guest exports", () => {
     ).rejects.toThrow(/already initialized/)
   })
 
+  it("normalizes escaped method failures without changing declared errors or interruption", async () => {
+    defineAgent({
+      name: "MethodFailures",
+      id: {},
+      methods: {
+        thrown: method({ input: {}, success: Schema.Void }),
+        defect: method({ input: {}, success: Schema.Void }),
+        declared: method({ input: {}, success: Schema.Void, error: Schema.String }),
+        interrupted: method({ input: {}, success: Schema.Void }),
+      },
+    }).implement({
+      init: () => Effect.void,
+      methods: () => ({
+        thrown: () => {
+          throw new Error("synchronous method error")
+        },
+        defect: () => Effect.die("method defect"),
+        declared: () => Effect.fail("declared error"),
+        interrupted: () => Effect.interrupt,
+      }),
+    })
+    await withCaller(anonymousPrincipal, () => guest.initialize("MethodFailures", wire()))
+    for (const [methodName, message] of [
+      ["thrown", "synchronous method error"],
+      ["defect", "method defect"],
+    ]) {
+      const error = await withCaller(anonymousPrincipal, () =>
+        guest.invoke(methodName!, wire()),
+      ).then(
+        () => {
+          throw new Error("method must fail")
+        },
+        (error: unknown) => error,
+      )
+      expect(error).toMatchObject({ tag: "custom-error" })
+      const payload = (error as { val: { value: Parameters<typeof schemaValueFromWit>[0] } }).val
+      expect(schemaValueFromWit(payload.value)).toEqual({
+        tag: "string",
+        value: expect.stringContaining(message!),
+      })
+    }
+    const result = await withCaller(anonymousPrincipal, () => guest.invoke("declared", wire()))
+    expect(schemaValueFromWit(result!)).toEqual({
+      tag: "result",
+      result: { tag: "err", value: { tag: "string", value: "declared error" } },
+    })
+    await expect(
+      withCaller(anonymousPrincipal, () => guest.invoke("interrupted", wire())),
+    ).rejects.not.toMatchObject({
+      tag: "custom-error",
+    })
+  })
+
+  it("keeps input and output codec failures outside the method error channel", async () => {
+    let calls = 0
+    defineAgent({
+      name: "CodecFailures",
+      id: {},
+      methods: {
+        decode: method({ input: { text: Schema.String }, success: Schema.Void }),
+        encode: method({ input: {}, success: Schema.String.check(Schema.isPattern(/^valid$/)) }),
+      },
+    }).implement({
+      init: () => Effect.void,
+      methods: () => ({
+        decode: () =>
+          Effect.sync(() => {
+            calls++
+          }),
+        encode: () => Effect.succeed("invalid"),
+      }),
+    })
+    await withCaller(anonymousPrincipal, () => guest.initialize("CodecFailures", wire()))
+    for (const methodName of ["decode", "encode"]) {
+      await expect(
+        withCaller(anonymousPrincipal, () => guest.invoke(methodName, wire())),
+      ).rejects.not.toMatchObject({
+        tag: "custom-error",
+      })
+    }
+    expect(calls).toBe(0)
+  })
+
+  it("does not normalize constructor defects as method failures", async () => {
+    defineAgent({ name: "ConstructorDefect", id: {}, methods: {} }).implement({
+      init: () => Effect.die("constructor defect"),
+      methods: () => ({}),
+    })
+    await expect(
+      withCaller(anonymousPrincipal, () => guest.initialize("ConstructorDefect", wire())),
+    ).rejects.toThrow("constructor defect")
+  })
+
   it("defining two agents with the same name surfaces from discoverAgentTypes", async () => {
     // `Greeter` is already in the registry from this file's top-level
     // `defineAgent`. Re-registering the same name with a fresh definition
@@ -476,7 +569,16 @@ describe("agent-guest exports", () => {
     await withCaller(anonymousPrincipal, () => guest.initialize("ReadOnlyPrincipalAgent", wire()))
     await expect(
       withCaller(oidcPrincipal("bypassed"), () => guest.invoke("bypass", wire())),
-    ).rejects.toThrow(/Principal|service/i)
+    ).rejects.toMatchObject({
+      tag: "custom-error",
+      val: {
+        value: {
+          valueNodes: expect.arrayContaining([
+            { tag: "string-value", val: expect.stringMatching(/Principal|service/i) },
+          ]),
+        },
+      },
+    })
   })
 
   it("provides Principal to read-only handlers with explicit PrincipalSchema input", async () => {

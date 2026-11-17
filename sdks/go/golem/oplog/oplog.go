@@ -54,6 +54,7 @@ type (
 	CreateParameters                  = oplogwit.CreateParameters
 	AgentInvocationStartedParameters  = oplogwit.AgentInvocationStartedParameters
 	AgentInvocationFinishedParameters = oplogwit.AgentInvocationFinishedParameters
+	AgentInvocationFailedParameters   = oplogwit.AgentInvocationFailedParameters
 	ErrorParameters                   = oplogwit.ErrorParameters
 	LogParameters                     = oplogwit.LogParameters
 	// Timestamp is the time of an entry: seconds and nanoseconds since the epoch.

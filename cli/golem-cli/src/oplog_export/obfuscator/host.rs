@@ -23,15 +23,17 @@ use super::value::{
     Region, Walker, field_region, normalized, number, record, resolve, text, unsigned,
 };
 use crate::oplog_export::model::{HostPayloadDirection, ReportField, ReportNode, TupleNode};
+use golem_common::model::AgentFingerprint;
 use golem_common::model::oplog::host_functions::{self, HostFunctionName};
 use golem_common::model::oplog::{
     HostPayloadPair, HostRequestGolemAgentGetConfigValue, HostRequestGolemApiForkAgent,
-    HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostRequestRandomBytes,
-    HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
-    HostResponseGolemRpcInvokeAndAwait,
+    HostRequestGolemRpcBindSelf, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
+    HostRequestRandomBytes, HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
+    HostResponseGolemApiPromiseId, HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait,
+    HostResponseGolemRpcPrepareInvocation,
 };
 use golem_common::schema::{
-    IntoSchema, SchemaGraph, SchemaType, SchemaValue, TypeId, TypedSchemaValue,
+    FromSchema, IntoSchema, SchemaGraph, SchemaType, SchemaValue, TypeId, TypedSchemaValue,
     try_into_schema_graph,
 };
 use std::collections::HashMap;
@@ -693,6 +695,10 @@ struct RuleIds {
     invoke_and_await: TypeId,
     agent_types: TypeId,
     agent_type: TypeId,
+    created_promise: TypeId,
+    rpc_bind_self: TypeId,
+    rpc_create: TypeId,
+    rpc_prepare_invocation: TypeId,
 }
 
 static RULE_IDS: LazyLock<RuleIds> = LazyLock::new(|| RuleIds {
@@ -704,6 +710,10 @@ static RULE_IDS: LazyLock<RuleIds> = LazyLock::new(|| RuleIds {
     invoke_and_await: <HostResponseGolemRpcInvokeAndAwait as IntoSchema>::type_id(),
     agent_types: <HostResponseGolemAgentAgentTypes as IntoSchema>::type_id(),
     agent_type: <HostResponseGolemAgentAgentType as IntoSchema>::type_id(),
+    created_promise: <HostResponseGolemApiPromiseId as IntoSchema>::type_id(),
+    rpc_bind_self: <HostRequestGolemRpcBindSelf as IntoSchema>::type_id(),
+    rpc_create: <HostResponseGolemRpcCreate as IntoSchema>::type_id(),
+    rpc_prepare_invocation: <HostResponseGolemRpcPrepareInvocation as IntoSchema>::type_id(),
 });
 
 impl Walker<'_, '_> {
@@ -788,6 +798,16 @@ impl Walker<'_, '_> {
                     self.kept_result(graph, body, value, |walker, graph, ty, ok| {
                         walker.kept_container(graph, ty, ok)
                     })
+                } else if is(&ids.created_promise) && name == "promiseid" {
+                    self.created_promise_id(graph, body, value)
+                } else if is(&ids.rpc_bind_self) && name == "fingerprint" {
+                    self.kept_fingerprint(graph, body, value)
+                } else if (is(&ids.rpc_create) || is(&ids.rpc_prepare_invocation))
+                    && name == "result"
+                {
+                    self.kept_result(graph, body, value, |walker, graph, ty, ok| {
+                        walker.kept_fingerprint(graph, ty, ok)
+                    })
                 } else if name == "result" && is_result(graph, body) {
                     self.kept_result(graph, body, value, |walker, graph, ty, ok| {
                         walker.typed(graph, ty, ok, Region::Trusted)
@@ -802,6 +822,60 @@ impl Walker<'_, '_> {
             })
             .collect();
         record(resolved.type_name, fields)
+    }
+
+    /// The promise ID that `create_promise` returns. Golem writes its fingerprint, the
+    /// incarnation of the agent, as a plain `uuid`, so it is kept here by path. The fields
+    /// that the guest chooses, in requests that name a promise, stay customer data.
+    fn created_promise_id(
+        &mut self,
+        graph: &SchemaGraph,
+        ty: &SchemaType,
+        value: &SchemaValue,
+    ) -> ReportNode {
+        let Some(resolved) = resolve(graph, ty) else {
+            return self.typed(graph, ty, value, Region::Trusted);
+        };
+        let (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: values }) =
+            (resolved.body, value)
+        else {
+            return self.typed(graph, ty, value, Region::Trusted);
+        };
+        if fields.len() != values.len() {
+            return self.typed(graph, ty, value, Region::Trusted);
+        }
+        let fields = fields
+            .iter()
+            .zip(values)
+            .map(|(field, value)| ReportField {
+                name: Some(field.name.clone()),
+                value: match value {
+                    SchemaValue::Uuid(fingerprint) if normalized(&field.name) == "fingerprint" => {
+                        text(fingerprint.to_string())
+                    }
+                    _ => self.typed(
+                        graph,
+                        &field.body,
+                        value,
+                        field_region(Region::Trusted, field),
+                    ),
+                },
+            })
+            .collect();
+        record(resolved.type_name, fields)
+    }
+
+    /// A fingerprint that Golem writes: the incarnation of an agent, with no customer data.
+    fn kept_fingerprint(
+        &mut self,
+        graph: &SchemaGraph,
+        ty: &SchemaType,
+        value: &SchemaValue,
+    ) -> ReportNode {
+        match AgentFingerprint::from_value(value) {
+            Ok(fingerprint) => text(fingerprint.0.to_string()),
+            Err(_) => self.typed(graph, ty, value, Region::Trusted),
+        }
     }
 
     fn kept_string(
