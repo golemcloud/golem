@@ -514,7 +514,9 @@ async fn dynamic_worker_creation(
     assert_eq!(
         args,
         SchemaValue::Result(ResultValuePayload::Ok {
-            value: Some(Box::new(SchemaValue::List { elements: vec![] }))
+            value: Some(Box::new(SchemaValue::List {
+                elements: vec![SchemaValue::String("golem-it:host-api-tests".to_string())]
+            }))
         })
     );
     assert_eq!(
