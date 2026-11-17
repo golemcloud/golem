@@ -34,7 +34,7 @@ For structured data, use the JSON variants which require an implicit `zio.blocks
 import golem.HostApi
 import golem.HostApi.PromiseId
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import zio.blocks.schema.Schema
 ```
 
@@ -87,7 +87,7 @@ import golem.*
 import golem.host.js.JsUuid
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import zio.blocks.schema.Schema
 
 case class Decision(status: String) derives Schema

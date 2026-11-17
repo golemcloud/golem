@@ -63,22 +63,38 @@ A fresh VM for each call, durable by default through waits and interruptions. Pr
 
 **Actor examples**
 
-- Agent
-- App
-- Shopping cart
+- Agent | Keeps context between turns.
+- App | Keeps its data and files.
+- Shopping cart | Keeps items through checkout.
 
 **Function examples**
 
-- Tool
-- HTTP handler
-- Background job
+- Tool | Takes action for an agent.
+- HTTP handler | Handles a web or API request.
+- Background job | Generates reports or exports.
+
+**Examples heading**
+
+In practice
+
+**Interfaces heading**
+
+Call actors and functions.
+
+**Client heading**
+
+Type-safe clients
+
+**Client description**
+
+The bridge generator creates clients for your actors and tools.
 
 **Interfaces**
 
-- HTTP
-- MCP
-- A2A
-- CLI
+- HTTP / REST | Apps & APIs
+- MCP | Agent tools
+- A2A | Agent peers
+- CLI | Your terminal
 
 **Link**
 

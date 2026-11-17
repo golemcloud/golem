@@ -17,7 +17,7 @@ use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::card::{Card, CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, Empty, InvocationId, OplogIndex};
+use golem_common::model::{AgentId, InvocationId, OplogIndex};
 use golem_registry_service::RegistryService as RegistryServer;
 use golem_registry_service::config::{
     ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
@@ -26,6 +26,7 @@ use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, RegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_schema::Empty;
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
 };

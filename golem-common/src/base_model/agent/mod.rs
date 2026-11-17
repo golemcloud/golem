@@ -19,19 +19,18 @@ use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use crate::base_model::diff::Hash as DiffHash;
 use crate::base_model::environment::EnvironmentId;
-use crate::model::Empty;
 use crate::schema::AgentTypeSchema;
+use golem_schema::Empty;
 pub use golem_schema::http::{
     DurableStreamInputSlotSource, DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions,
     DurableStreamRouteOptions, DurableStreamSlotOptions, DurableStreamSlotSource, HttpRouteMode,
 };
+use golem_schema::http::{FileMapping, FileResponseHeader, HeaderVariable, QueryVariable};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
-
-pub mod http_files;
 
 /// Authoritative kind of an execution owner.
 ///
@@ -611,58 +610,6 @@ pub struct PhantomIdBindingDetails {
     pub optional: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct FileResponseHeader {
-    pub name: String,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-pub enum FileMapping {
-    Exact(ExactFileMapping),
-    Subtree(SubtreeFileMapping),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct ExactFileMapping {
-    pub public_path: Vec<String>,
-    pub file_path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct SubtreeFileMapping {
-    pub public_prefix: Vec<String>,
-    pub filesystem_root: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
@@ -697,22 +644,12 @@ pub struct HttpEndpointDetails {
 )]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
+#[serde(rename = "AgentHttpMethod", tag = "type", content = "value")]
 pub enum HttpMethod {
-    Get(Empty),
-    Head(Empty),
-    Post(Empty),
-    Put(Empty),
-    Delete(Empty),
-    Connect(Empty),
-    Options(Empty),
-    Trace(Empty),
-    Patch(Empty),
-    Custom(CustomHttpMethod),
+    Method(golem_schema::http::HttpMethod),
     Any(Empty),
 }
 
@@ -722,48 +659,12 @@ impl TryFrom<HttpMethod> for http::Method {
 
     fn try_from(value: HttpMethod) -> Result<Self, Self::Error> {
         match value {
-            HttpMethod::Get(_) => Ok(http::Method::GET),
-            HttpMethod::Head(_) => Ok(http::Method::HEAD),
-            HttpMethod::Post(_) => Ok(http::Method::POST),
-            HttpMethod::Put(_) => Ok(http::Method::PUT),
-            HttpMethod::Delete(_) => Ok(http::Method::DELETE),
-            HttpMethod::Connect(_) => Ok(http::Method::CONNECT),
-            HttpMethod::Options(_) => Ok(http::Method::OPTIONS),
-            HttpMethod::Trace(_) => Ok(http::Method::TRACE),
-            HttpMethod::Patch(_) => Ok(http::Method::PATCH),
-            HttpMethod::Custom(custom) => {
-                let converted = http::Method::from_bytes(custom.value.as_bytes())?;
-                Ok(converted)
-            }
+            HttpMethod::Method(method) => Ok(method.try_into()?),
             HttpMethod::Any(_) => {
                 anyhow::bail!("Any is a route matcher, not an HTTP request method")
             }
         }
     }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    IntoSchema,
-    FromSchema,
-)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct CustomHttpMethod {
-    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -781,28 +682,13 @@ pub struct CorsOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
+#[serde(rename = "AgentPathSegment", tag = "type", content = "value")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum PathSegment {
-    Literal(LiteralSegment),
+    Segment(golem_schema::http::PathSegment),
     SystemVariable(SystemVariableSegment),
-    PathVariable(PathVariable),
-    RemainingPathVariable(PathVariable),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct LiteralSegment {
-    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -834,44 +720,6 @@ impl Display for SystemVariable {
         };
         write!(f, "{s}")
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PathVariable {
-    pub variable_name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct HeaderVariable {
-    pub header_name: String,
-    pub variable_name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct QueryVariable {
-    pub query_param_name: String,
-    pub variable_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -1226,7 +1074,9 @@ mod tests {
 
     fn durable_stream_endpoints() -> Vec<HttpEndpointDetails> {
         let base = HttpEndpointDetails {
-            http_method: HttpMethod::Post(Empty {}),
+            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(
+                Default::default(),
+            )),
             path_suffix: Vec::new(),
             header_vars: Vec::new(),
             query_vars: Vec::new(),

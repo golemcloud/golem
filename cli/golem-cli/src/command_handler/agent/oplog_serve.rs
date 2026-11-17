@@ -18,10 +18,17 @@
 //! the requests to the worker service with the CLI's credentials. The browser never sees the
 //! authentication token, and the worker service needs no CORS configuration for the viewer.
 
+use crate::command_handler::agent::oplog_export::{RestOplogReads, read_failed};
 use crate::context::Context;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, log_action, log_warn};
 use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog_html::{
+    OplogLiveExportViewerDocument, OplogViewerMode, render_oplog_live_export_viewer_html,
+};
+use crate::oplog_export::export::{OplogExportError, OplogExportOptions, OplogExportSession};
+use crate::oplog_export::model::{OplogExportCoverage, ReportEntry};
+use crate::oplog_export::obfuscator::TokenKey;
 use golem_client::api::WorkerClient;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use poem::http::StatusCode;
@@ -42,6 +49,9 @@ pub struct OplogViewerServer {
     pub page_size: u64,
     /// Show the entries that oplog pages omit in their omitted form instead of reading them.
     pub omit_payloads: bool,
+    /// The export session of `--serve --obfuscate`. It holds the `Start` functions for the whole
+    /// server process, and the mutex serialises the page calls.
+    pub export: Option<tokio::sync::Mutex<OplogExportSession<RestOplogReads>>>,
 }
 
 /// The output view of an oplog page entry. Unless `omit_payloads` is set, an entry that the page
@@ -102,6 +112,27 @@ struct OplogPageResponse {
     next: Option<OplogCursor>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OplogExportPageResponse {
+    entries: Vec<ReportEntry>,
+    next: Option<OplogCursor>,
+    coverage: OplogExportCoverage,
+}
+
+/// A page of `/api/oplog`, serialised directly so its fields keep their declared order.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum OplogPage {
+    Plain(OplogPageResponse),
+    Export(OplogExportPageResponse),
+}
+
+const EXPORT_FAILED_TEXT: &str = "The export of the agent failed.";
+
+const ROOT_CHANGED_TEXT: &str =
+    "The agent was deleted and created again. Restart the viewer to read the new agent.";
+
 #[handler]
 async fn viewer_page(server: Data<&Arc<OplogViewerServer>>) -> Html<String> {
     Html(server.page.clone())
@@ -111,7 +142,7 @@ async fn viewer_page(server: Data<&Arc<OplogViewerServer>>) -> Html<String> {
 async fn oplog_page(
     server: Data<&Arc<OplogViewerServer>>,
     Query(params): Query<OplogPageQuery>,
-) -> poem::Result<Json<OplogPageResponse>> {
+) -> poem::Result<Json<OplogPage>> {
     let cursor = match (params.cursor_index, params.cursor_revision) {
         (Some(next_oplog_index), Some(current_component_revision)) => Some(OplogCursor {
             next_oplog_index,
@@ -124,6 +155,21 @@ async fn oplog_page(
         .unwrap_or(server.page_size)
         .clamp(1, server.page_size.max(1));
     let query = params.query.filter(|query| !query.trim().is_empty());
+
+    if let Some(export) = &server.export {
+        let mut session = export.lock().await;
+        session.check_root().await.map_err(export_error)?;
+        let page = session
+            .render_page(params.from, cursor.as_ref(), count, query.as_deref())
+            .await
+            .map_err(export_error)?;
+        session.check_root().await.map_err(export_error)?;
+        return Ok(Json(OplogPage::Export(OplogExportPageResponse {
+            entries: page.entries,
+            next: page.next,
+            coverage: page.coverage,
+        })));
+    }
 
     let clients = server.ctx.golem_clients().await.map_err(upstream_error)?;
     let result = clients
@@ -155,16 +201,22 @@ async fn oplog_page(
         );
     }
 
-    Ok(Json(OplogPageResponse {
+    Ok(Json(OplogPage::Plain(OplogPageResponse {
         entries,
         next: result.next,
-    }))
+    })))
 }
 
 #[handler]
 async fn agent_metadata(
     server: Data<&Arc<OplogViewerServer>>,
 ) -> poem::Result<Json<serde_json::Value>> {
+    if let Some(export) = &server.export {
+        return export_agent_metadata(&server, export)
+            .await
+            .map(Json)
+            .map_err(export_error);
+    }
     let clients = server.ctx.golem_clients().await.map_err(upstream_error)?;
     let metadata = clients
         .worker
@@ -177,8 +229,101 @@ async fn agent_metadata(
     ))
 }
 
+/// The agent metadata of the served export: only the fields of the status line, and only while
+/// the agent is the pinned root.
+async fn export_agent_metadata(
+    server: &OplogViewerServer,
+    export: &tokio::sync::Mutex<OplogExportSession<RestOplogReads>>,
+) -> anyhow::Result<serde_json::Value> {
+    let clients = server.ctx.golem_clients().await.map_err(read_failed)?;
+    let metadata = clients
+        .worker
+        .get_worker_metadata(&server.component_id, &server.agent_id)
+        .await
+        .map_service_error()
+        .map_err(read_failed)?;
+    export
+        .lock()
+        .await
+        .check_fingerprint(metadata.fingerprint.0)?;
+    let metadata = serde_json::to_value(metadata)?;
+    let mut out = serde_json::Map::new();
+    for field in EXPORT_AGENT_METADATA_FIELDS {
+        if let Some(value) = metadata.get(field) {
+            out.insert(field.to_string(), value.clone());
+        }
+    }
+    Ok(serde_json::Value::Object(out))
+}
+
+/// The fields of the agent metadata that the viewer reads for its status line. The served
+/// viewer of an export answers only these, never the agent ID, the last error, env or config.
+const EXPORT_AGENT_METADATA_FIELDS: [&str; 7] = [
+    "status",
+    "lastOplogIndex",
+    "retryCount",
+    "componentRevision",
+    "pendingInvocationCount",
+    "skippedRegions",
+    "deletedRegions",
+];
+
 fn upstream_error(error: impl std::fmt::Display) -> poem::Error {
     poem::Error::from_string(error.to_string(), StatusCode::BAD_GATEWAY)
+}
+
+/// The response of a failed request of the served export. It holds only fixed texts: the text of
+/// an [`OplogExportError`], or one text for every other error.
+fn export_error(error: anyhow::Error) -> poem::Error {
+    match error.downcast_ref::<OplogExportError>() {
+        Some(OplogExportError::RootChanged) => {
+            poem::Error::from_string(ROOT_CHANGED_TEXT, StatusCode::CONFLICT)
+        }
+        Some(error) => poem::Error::from_string(error.to_string(), StatusCode::BAD_GATEWAY),
+        None => poem::Error::from_string(EXPORT_FAILED_TEXT, StatusCode::BAD_GATEWAY),
+    }
+}
+
+/// Pins the export session, then serves the viewer of the obfuscated export until the process
+/// is interrupted. A failed pin fails the command before the server starts.
+pub async fn serve_oplog_export_viewer(
+    ctx: Arc<Context>,
+    component_id: Uuid,
+    agent_id: String,
+    options: OplogExportOptions,
+    port: Option<u16>,
+    open_browser: bool,
+) -> anyhow::Result<()> {
+    let from = options.from;
+    let query = options.query.clone();
+    let page_size = options.page_size;
+    let reads = RestOplogReads {
+        ctx: ctx.clone(),
+        component_id,
+        agent_name: agent_id.clone(),
+    };
+    let session = OplogExportSession::pin(reads, TokenKey::process(), options).await?;
+    let page = render_oplog_live_export_viewer_html(&OplogLiveExportViewerDocument {
+        mode: OplogViewerMode::LiveExport,
+        header: session.header(),
+        from,
+        query,
+        page_size,
+    })?;
+    serve_oplog_viewer(
+        OplogViewerServer {
+            ctx,
+            component_id,
+            agent_id,
+            page,
+            page_size,
+            omit_payloads: false,
+            export: Some(tokio::sync::Mutex::new(session)),
+        },
+        port,
+        open_browser,
+    )
+    .await
 }
 
 /// Serves the viewer until the process is interrupted. Returns the error of the listener or of
