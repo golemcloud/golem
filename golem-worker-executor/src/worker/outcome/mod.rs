@@ -112,7 +112,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         // Forks retain invocation keys from their source. Find the initialization by its
         // payload, not by interpreting a caller-controlled idempotency-key prefix.
-        let status = self.state_actor.status().await;
+        let status = self.try_get_last_known_status().await?;
         let mut first = OplogIndex::INITIAL;
         while first <= status.oplog_idx {
             let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(256);
@@ -176,12 +176,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     // Warm invocation-cache errors can be synthetic. Resolve through the durable result index
-    // before changing any failure into AgentCreationFailed.
+    // before changing any failure into AgentCreationFailed. The caller holds no task-scope bind,
+    // so a deletion may already have stopped the state actor.
     async fn recorded_initialization_result(
         &self,
         key: &InvocationId,
     ) -> Result<bool, WorkerExecutorError> {
-        let status = self.state_actor.status().await;
+        let status = self.try_get_last_known_status().await?;
         let index = if let Some(index) = status.invocation_results.get(key) {
             Some(*index)
         } else if !status.invocation_results.is_exact_complete()

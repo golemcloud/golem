@@ -12330,34 +12330,124 @@ async fn expected_fingerprint_after_a_failed_deletion_gets_the_deletion_refusal(
 }
 
 // A deletion that fails after stopping the incarnation's state actor leaves the stopped generation
-// resident. The management calls resolve it and read its status before any deletion check, so
-// each must get the deletion's refusal instead of panicking on the stopped actor, which aborts an
-// executor built with panic = "abort". A cancel of a key that only the Bloom filter of the result
-// index may contain is the one that reads the status. The executor keeps serving: the retried
-// deletion succeeds.
+// resident. The management calls, a create that waits for initialization, and the scheduler's wake
+// of a delayed invocation resolve it and read its status before any deletion check. Each must get
+// the deletion's refusal instead of panicking on the stopped actor, which aborts an executor built
+// with panic = "abort". A cancel of a key that only the Bloom filter of the result index may contain
+// is the one that reads the status. The executor keeps serving: the retried deletion succeeds.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn management_calls_after_a_failed_deletion_get_the_deletion_refusal(
+async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
-        ActivatePluginRequest, InterruptWorkerRequest, activate_plugin_response,
-        interrupt_worker_response,
+        ActivatePluginRequest, CreateWorkerRequest, InterruptWorkerRequest,
+        activate_plugin_response, create_worker_response, interrupt_worker_response,
     };
-    use golem_common::model::OwnedInvocationId;
+    use golem_common::model::{
+        OwnedInvocationId, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
+    };
     use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
     use golem_worker_executor::storage::keyvalue::fault_injecting::{
         FaultInjectingKeyValueStorage, KeyValueStorageFaults,
     };
+    use golem_worker_executor::storage::scheduler::{
+        ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
+    };
+
+    /// Claims nothing until armed, so a wake is delivered only to the generation the failed
+    /// deletion left. Counts the claims that follow the claim of the wake of `target`: the
+    /// scheduler processes what it claimed before it claims again. Records whether that wake was
+    /// acknowledged, which only a delivery to a live generation does.
+    #[derive(Debug)]
+    struct WakeAfterArming {
+        inner: Arc<dyn SchedulerStorage + Send + Sync>,
+        target: std::sync::OnceLock<AgentId>,
+        armed: AtomicBool,
+        wakes: std::sync::Mutex<Vec<ScheduleId>>,
+        wake_acked: AtomicBool,
+        processed: tokio::sync::Semaphore,
+    }
+
+    #[async_trait]
+    impl SchedulerStorage for WakeAfterArming {
+        async fn insert(
+            &self,
+            id: ScheduleId,
+            due: chrono::DateTime<Utc>,
+            shard: ShardId,
+            action: &[u8],
+        ) -> Result<(), SchedulerStorageError> {
+            self.inner.insert(id, due, shard, action).await
+        }
+
+        async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+            self.inner.cancel(id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: chrono::DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+            if !self.armed.load(Ordering::Acquire) {
+                return Ok(Vec::new());
+            }
+            if !self.wakes.lock().unwrap().is_empty() {
+                self.processed.add_permits(1);
+            }
+            let claimed = self.inner.claim_due(now, assignment, limit, ttl).await?;
+            self.wakes
+                .lock()
+                .unwrap()
+                .extend(claimed.iter().filter_map(|claimed| {
+                    matches!(&claimed.action, ScheduledAction::WakeInvocation { owned_agent_id, .. }
+                    if self.target.get() == Some(&owned_agent_id.agent_id))
+                    .then_some(claimed.schedule_id)
+                }));
+            Ok(claimed)
+        }
+
+        async fn count_due(
+            &self,
+            now: chrono::DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, SchedulerStorageError> {
+            self.inner.count_due(now, assignment).await
+        }
+
+        async fn extend_lease(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+            until: chrono::DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.extend_lease(id, owner, until).await
+        }
+
+        async fn ack(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+        ) -> Result<bool, SchedulerStorageError> {
+            if self.wakes.lock().unwrap().contains(id) {
+                self.wake_acked.store(true, Ordering::Release);
+            }
+            self.inner.ack(id, owner).await
+        }
+    }
 
     let name = "failed-delete-management";
     crate::panic_watch::watch_panics_naming(name);
     let context = TestContext::new(last_unique_id);
     let faults = KeyValueStorageFaults::default();
+    let scheduler = Arc::new(std::sync::OnceLock::<Arc<WakeAfterArming>>::new());
     let executor = start_with_overrides(
         deps,
         &context,
@@ -12370,6 +12460,23 @@ async fn management_calls_after_a_failed_deletion_get_the_deletion_refusal(
             wrap_key_value_storage: Some(Arc::new({
                 let faults = faults.clone();
                 move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            wrap_scheduler_storage: Some(Arc::new({
+                let scheduler = scheduler.clone();
+                move |inner| {
+                    scheduler
+                        .get_or_init(|| {
+                            Arc::new(WakeAfterArming {
+                                inner,
+                                target: std::sync::OnceLock::new(),
+                                armed: AtomicBool::new(false),
+                                wakes: std::sync::Mutex::new(Vec::new()),
+                                wake_acked: AtomicBool::new(false),
+                                processed: tokio::sync::Semaphore::new(0),
+                            })
+                        })
+                        .clone()
+                }
             })),
             ..TestExecutorOverrides::default()
         },
@@ -12406,6 +12513,39 @@ async fn management_calls_after_a_failed_deletion_get_the_deletion_refusal(
         oldest_key.as_ref(),
     )
     .id();
+
+    // Due before the deletion fails, and woken only once the scheduler is armed after it.
+    let scheduler = scheduler
+        .get()
+        .expect("the executor wraps its scheduler storage");
+    scheduler.target.set(worker_id.clone()).unwrap();
+    executor
+        .invoke_agent_session(golem_api_grpc::proto::golem::worker::InvocationStart {
+            agent_id: Some(worker_id.clone().into()),
+            method_name: Some("increment".to_string()),
+            input: Some(
+                SchemaValue::Record { fields: vec![] }
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            ),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: Some(prost_types::Timestamp {
+                seconds: chrono::Utc::now().timestamp() + 1,
+                nanos: 0,
+            }),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            request_key: Some(
+                golem_common::model::InvocationRequestKey::external(None, None).into(),
+            ),
+            ..Default::default()
+        })
+        .await?;
 
     let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let hook = Arc::new(DeletionStageHook::new(
@@ -12472,7 +12612,28 @@ async fn management_calls_after_a_failed_deletion_get_the_deletion_refusal(
             None => Err(anyhow!("no result")),
         }
     };
+    let create = async {
+        let response = executor
+            .client
+            .clone()
+            .create_worker(CreateWorkerRequest {
+                agent_id: Some(worker_id.clone().into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(component.environment_id.into()),
+                ignore_already_existing: true,
+                auth_ctx: Some(executor.auth_ctx().into()),
+                ..Default::default()
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(create_worker_response::Result::Success(_)) => Ok(()),
+            Some(create_worker_response::Result::Failure(error)) => Err(anyhow!("{error:?}")),
+            None => Err(anyhow!("no result")),
+        }
+    };
     let answers = [
+        ("create", format!("{:?}", create.await)),
         ("interrupt", format!("{:?}", interrupt.await)),
         (
             "resume",
@@ -12503,8 +12664,19 @@ async fn management_calls_after_a_failed_deletion_get_the_deletion_refusal(
         .filter(|(_, answer)| !answer.contains("being deleted"))
         .collect();
     assert!(failures.is_empty(), "{failures:#?}");
+
+    scheduler.armed.store(true, Ordering::Release);
+    let woken = tokio::time::timeout(Duration::from_secs(30), scheduler.processed.acquire()).await;
     let panics = crate::panic_watch::panics_naming(name);
     assert!(panics.is_empty(), "{panics:#?}");
+    woken
+        .map_err(|_| anyhow!("the scheduler did not process the wake of the agent"))?
+        .unwrap()
+        .forget();
+    assert!(
+        !scheduler.wake_acked.load(Ordering::Acquire),
+        "the wake must reach the generation the failed deletion left, which refuses it"
+    );
 
     executor.delete_worker(&worker_id).await?;
     assert!(
