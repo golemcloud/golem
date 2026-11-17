@@ -18,7 +18,7 @@ use super::raw_handler::RawHandler;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RichRouteBehaviour, RouteExecutionResult};
 use golem_common::model::AgentId;
-use golem_common::model::agent::{FileMapping, FileResponseHeader};
+use golem_schema::http::{FileMapping, FileResponseHeader};
 use golem_service_base::custom_api::{MountFileSource, MountTarget, RouterFileIndexEntry};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use http::{HeaderName, HeaderValue, Method, StatusCode};
@@ -45,7 +45,7 @@ impl MountedDispatch {
         Self {
             worker_service,
             initial_files,
-            file_timeout: limits.exchange_timeout,
+            file_timeout: limits.file_lookup_timeout,
         }
     }
 

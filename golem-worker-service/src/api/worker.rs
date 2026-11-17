@@ -1296,7 +1296,6 @@ mod tests {
     use chrono::Utc;
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentId;
-    use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::application::{ApplicationId, ApplicationName};
@@ -1308,6 +1307,7 @@ mod tests {
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
         SchemaGraph,
     };
+    use golem_schema::Empty;
     use golem_service_base::model::component::Component;
     use test_r::test;
     use uuid::Uuid;

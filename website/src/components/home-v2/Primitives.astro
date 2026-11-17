@@ -1,6 +1,12 @@
 ---
-import { text as t, paragraphs, lines } from "../../data/home-preview/golem-2";
+import { text as t, paragraphs, details } from "../../data/home-preview/golem-2";
+import PrimitiveExamples from "./PrimitiveExamples.astro";
 const calls = [1, 2, 3];
+const topics = [
+  { id: "actor", title: "Actor lifetime and calls" },
+  { id: "invocation", title: "Function durability and state" },
+  { id: "function", title: "Function identity and middleware" },
+];
 ---
 
 <div class="primitive-comparison">
@@ -15,7 +21,7 @@ const calls = [1, 2, 3];
         {kind === "Actors" ? (
           <figure
             class="primitive-diagram"
-            role="img"
+            role="group"
             aria-label="Three calls to the same actor ID reach one actor inside its durable, permissioned VM. The actor retains private state across calls."
           >
             <div class="actor-flow" aria-hidden="true">
@@ -38,19 +44,55 @@ const calls = [1, 2, 3];
                 </div>
               </div>
             </div>
+            <div class="annotation-footer actor-annotation">
+              <button
+                class="diagram-hotspot"
+                data-topic="actor"
+                type="button"
+                aria-label="Explore actor lifetime and calls"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="primitive-info-actor"
+              >
+                <span class="hotspot-label">Lifetime &amp; calls</span>
+                <span class="hotspot-icon" aria-hidden="true">
+                  +
+                </span>
+              </button>
+            </div>
           </figure>
         ) : (
           <figure
             class="primitive-diagram"
-            role="img"
+            role="group"
             aria-label="Three independent calls run the same function f. Each call has its own input, output and fresh durable, permissioned VM. No private instance state carries into the next call."
           >
+            <div class="function-label">
+              <span>
+                Function <i>f</i>
+              </span>
+              <span class="inline-annotation-wire" aria-hidden="true" />
+              <button
+                class="diagram-hotspot"
+                data-topic="function"
+                type="button"
+                aria-label="Explore function identity and middleware"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="primitive-info-function"
+              >
+                <span class="hotspot-label">Identity &amp; middleware</span>
+                <span class="hotspot-icon" aria-hidden="true">
+                  +
+                </span>
+              </button>
+            </div>
             <div class="function-flow" aria-hidden="true">
               {calls.map((n) => (
                 <div class="function-call">
                   <span class="call-label">Call {n}</span>
                   <span class="primitive-arrow" />
-                  <div class="primitive-enclosure function-enclosure">
+                  <div class="primitive-enclosure function-enclosure" data-invocation={n}>
                     <span class="primitive-vm-label">Durable, permissioned VM</span>
                     <span class="primitive-symbol">ƒ</span>
                   </div>
@@ -59,22 +101,61 @@ const calls = [1, 2, 3];
                 </div>
               ))}
             </div>
+            <div class="annotation-footer function-annotation">
+              <button
+                class="diagram-hotspot"
+                data-topic="invocation"
+                type="button"
+                aria-label="Explore function durability and state"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="primitive-info-invocation"
+              >
+                <span class="hotspot-label">Durability &amp; state</span>
+                <span class="hotspot-icon" aria-hidden="true">
+                  +
+                </span>
+              </button>
+            </div>
           </figure>
         )}
-        <div class="primitive-examples">
-          <p>Examples</p>
-          <ul>
-            {lines(t(2, kind === "Actors" ? "Actor examples" : "Function examples")).map(
-              (example) => (
-                <li>{example}</li>
-              )
-            )}
-          </ul>
-        </div>
       </article>
     ))
   }
 </div>
+
+<PrimitiveExamples />
+
+{
+  topics.map(({ id, title }) => (
+    <div
+      class="primitive-popover"
+      id={`primitive-info-${id}`}
+      data-primitive-card={id}
+      popover="manual"
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby={`primitive-title-${id}`}
+      tabindex="-1"
+    >
+      <svg class="primitive-leader" aria-hidden="true">
+        <path />
+      </svg>
+      <div class="primitive-popover-content">
+        <h4 id={`primitive-title-${id}`}>{title}</h4>
+        <button class="primitive-close" type="button" aria-label={`Close ${title.toLowerCase()}`}>
+          ×
+        </button>
+        <p>{details[1][title]}</p>
+      </div>
+    </div>
+  ))
+}
+
+<script>
+  import { setupPrimitiveHotspots } from "./primitive-hotspots";
+  setupPrimitiveHotspots();
+</script>
 
 <style>
   .primitive-comparison {
@@ -107,10 +188,217 @@ const calls = [1, 2, 3];
     line-height: 1.75;
   }
   .primitive-diagram {
+    position: relative;
+    padding-top: 44px;
     margin: 0;
     font-family: var(--font-mono);
     font-size: 12px;
     color: #43563c;
+  }
+  .function-label {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    height: 44px;
+    gap: 6px;
+    color: #344b31;
+    font-size: 12px;
+  }
+  .function-label i {
+    font-family: Georgia, serif;
+    font-size: 18px;
+  }
+  .diagram-hotspot {
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    flex-shrink: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    color: #805014;
+    font:
+      500 13px/1.5 Inter,
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
+    white-space: nowrap;
+  }
+  .hotspot-label {
+    text-decoration: underline;
+    text-decoration-color: #b78645;
+    text-underline-offset: 4px;
+  }
+  .diagram-hotspot .hotspot-icon {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border: 1px solid #ae7631;
+    border-radius: 50%;
+    background: #ffce8a;
+    color: #49300f;
+    font: 16px/1 var(--font-mono);
+    transition:
+      transform 0.16s,
+      box-shadow 0.16s;
+  }
+  .diagram-hotspot:hover .hotspot-icon,
+  .diagram-hotspot:focus-visible .hotspot-icon,
+  .diagram-hotspot[aria-expanded="true"] .hotspot-icon {
+    border-color: #8d5410;
+    background: #ffce8a;
+    color: #49300f;
+    transform: scale(1.08);
+    box-shadow: 0 0 0 4px #ffce8a33;
+  }
+  .annotation-footer {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    padding-top: 18px;
+    min-height: 62px;
+  }
+  .actor-annotation {
+    margin-left: 100px;
+  }
+  .function-annotation {
+    margin-left: 74px;
+    margin-right: 92px;
+  }
+  .annotation-footer::before,
+  .inline-annotation-wire::before {
+    content: "";
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #ae7631;
+  }
+  .annotation-footer::before {
+    top: -2px;
+    left: calc(50% - 2px);
+  }
+  .annotation-footer::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 0;
+    height: 18px;
+    border-left: 1px solid #b78645;
+  }
+  .inline-annotation-wire {
+    position: relative;
+    width: 16px;
+    height: 1px;
+    background: #b78645;
+    flex-shrink: 0;
+  }
+  .inline-annotation-wire::before {
+    top: -1.5px;
+    left: -2px;
+  }
+  .diagram-hotspot.is-introduced .hotspot-icon {
+    animation: callout-intro 0.9s ease-out 1;
+  }
+  @keyframes callout-intro {
+    0% {
+      transform: scale(0.92);
+      box-shadow: 0 0 0 0 #d699424d;
+    }
+    45% {
+      transform: scale(1.08);
+      box-shadow: 0 0 0 6px #d6994229;
+    }
+    100% {
+      transform: scale(1);
+      box-shadow: 0 0 0 11px #d6994200;
+    }
+  }
+  .primitive-comparison[data-active-topic="actor"] .actor-id,
+  .primitive-comparison[data-active-topic="function"] .function-enclosure .primitive-symbol {
+    color: #8d5410;
+    text-decoration: underline;
+    text-underline-offset: 5px;
+  }
+  .primitive-comparison[data-active-topic="invocation"] .function-enclosure {
+    border-color: #9e6b29;
+    box-shadow: 0 0 0 1px #9e6b29;
+  }
+  .primitive-popover {
+    position: fixed;
+    left: var(--card-left, 20px);
+    top: var(--card-top, 20px);
+    width: 336px;
+    max-width: calc(100vw - 40px);
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    border: 1px solid #b6c3aa;
+    border-radius: 6px;
+    background: #fffef7;
+    color: #18221d;
+    box-shadow: 0 12px 32px #18221d20;
+    font:
+      14px/1.65 Inter,
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
+  }
+  .primitive-popover-content {
+    position: relative;
+    padding: 22px;
+  }
+  .primitive-popover h4 {
+    margin: 0 30px 12px 0;
+    font-size: 16px;
+    line-height: 1.4;
+    font-weight: 500;
+    letter-spacing: -0.025em;
+  }
+  .primitive-popover p {
+    margin: 0;
+    color: #4d5b4c;
+  }
+  .primitive-close {
+    position: absolute;
+    right: 4px;
+    top: 6px;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    background: transparent;
+    color: #43563c;
+    font-size: 22px;
+    cursor: pointer;
+  }
+  .primitive-popover :focus-visible,
+  .primitive-popover:focus-visible {
+    outline: 2px solid #a56b16;
+    outline-offset: 3px;
+  }
+  .primitive-leader {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .primitive-leader path {
+    fill: none;
+    stroke: #9e773e;
+    stroke-width: 1;
+    stroke-dasharray: 3 4;
   }
   .actor-flow {
     display: grid;
@@ -220,35 +508,11 @@ const calls = [1, 2, 3];
   .function-enclosure .primitive-symbol {
     font-size: 34px;
   }
-  .primitive-examples {
-    margin-top: 24px;
-  }
-  .primitive-examples > p {
-    margin: 0 0 9px;
-    font-size: 11px;
-    color: #59664f;
-  }
-  .primitive-examples ul {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .primitive-examples li {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 11px 8px;
-    border: 1px solid #d0dac7;
-    border-radius: 3px;
-    color: #344b31;
-    font-size: 13px;
-    line-height: 1.5;
-    white-space: nowrap;
-  }
   @media (max-width: 1100px) {
+    .function-annotation {
+      margin-left: 60px;
+      margin-right: 80px;
+    }
     .primitive-comparison {
       gap: 32px;
     }
@@ -257,9 +521,6 @@ const calls = [1, 2, 3];
     }
     .primitive-title h3 {
       font-size: 25px;
-    }
-    .primitive-examples li {
-      padding-inline: 4px;
     }
     .function-call {
       grid-template-columns: 40px 20px minmax(0, 1fr) 20px 60px;
@@ -278,21 +539,64 @@ const calls = [1, 2, 3];
     }
   }
   @media (max-width: 600px) {
-    .primitive-examples ul {
-      gap: 4px;
+    .actor-annotation {
+      margin-left: 80px;
     }
-    .primitive-examples li {
-      padding: 10px 2px;
+    .diagram-hotspot {
       font-size: 12px;
-      letter-spacing: -0.01em;
+    }
+    .primitive-popover {
+      left: 16px;
+      right: 16px;
+      top: auto;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      width: auto;
+      max-width: none;
+      max-height: calc(50dvh - 16px);
+      overflow: auto;
+    }
+    .primitive-leader {
+      display: none;
     }
     .actor-flow {
       grid-template-columns: 58px 22px minmax(0, 1fr);
     }
   }
+  @media (prefers-reduced-motion: reduce) {
+    .primitive-comparison .diagram-hotspot .hotspot-icon {
+      animation: none;
+      transition: none;
+      transform: none;
+    }
+  }
   @media (forced-colors: active) {
-    .primitive-enclosure,
-    .primitive-examples li {
+    .diagram-hotspot {
+      forced-color-adjust: none;
+      color: LinkText;
+    }
+    .hotspot-label {
+      text-decoration-color: LinkText;
+    }
+    .primitive-comparison .diagram-hotspot .hotspot-icon {
+      animation: none;
+    }
+    .diagram-hotspot .hotspot-icon {
+      background: Canvas;
+      color: CanvasText;
+    }
+    .diagram-hotspot[aria-expanded="true"] .hotspot-icon {
+      background: Highlight;
+      color: HighlightText;
+      border-color: Highlight;
+    }
+    .diagram-hotspot .hotspot-icon,
+    .primitive-popover {
+      border-color: CanvasText;
+    }
+    .primitive-leader path {
+      stroke: CanvasText;
+    }
+    .primitive-enclosure {
       border-color: CanvasText;
     }
     .primitive-arrow {

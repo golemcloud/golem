@@ -102,7 +102,7 @@ impl From<RequestHandlerError> for CustomApiEndpointError {
                 "BadGateway",
                 false,
             )),
-            RequestHandlerError::RawDeadline => Some((
+            RequestHandlerError::RawDeadline | RequestHandlerError::RawAcceptanceTimeout => Some((
                 http::StatusCode::GATEWAY_TIMEOUT,
                 api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
                 "GatewayTimeout",
@@ -262,14 +262,19 @@ mod tests {
             false,
         )
         .await;
-        assert_raw_error(
+        for error in [
             RequestHandlerError::RawDeadline,
-            http::StatusCode::GATEWAY_TIMEOUT,
-            api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
-            "GatewayTimeout",
-            false,
-        )
-        .await;
+            RequestHandlerError::RawAcceptanceTimeout,
+        ] {
+            assert_raw_error(
+                error,
+                http::StatusCode::GATEWAY_TIMEOUT,
+                api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+                "GatewayTimeout",
+                false,
+            )
+            .await;
+        }
     }
 
     #[test]

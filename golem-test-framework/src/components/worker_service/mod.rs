@@ -14,6 +14,8 @@
 
 pub mod cloud;
 pub mod provided;
+pub mod relayed;
+pub mod restartable;
 pub mod spawned;
 
 use super::rdb::Rdb;

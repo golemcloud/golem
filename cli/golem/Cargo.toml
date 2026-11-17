@@ -29,6 +29,7 @@ golem-common = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
 golem-component-compilation-service = { workspace = true }
 golem-registry-service = { workspace = true }
+golem-schema = { workspace = true }
 golem-shard-manager = { workspace = true }
 golem-worker-executor = { workspace = true }
 golem-worker-service = { workspace = true }

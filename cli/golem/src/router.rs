@@ -229,6 +229,10 @@ impl StartingRouter {
                 worker_service_api.clone(),
             )
             .at(
+                "/v1/components/:component_id/workers/:agent_name/oplog/:oplog_index",
+                worker_service_api.clone(),
+            )
+            .at(
                 "/v1/components/:component_id/workers/:agent_name/resume",
                 worker_service_api.clone(),
             )

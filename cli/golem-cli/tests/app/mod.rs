@@ -42,6 +42,7 @@ mod moonbit_native_tool;
 mod moonbit_reflection;
 mod moonbit_tool_middleware;
 mod multipart_snapshot;
+mod oplog_export;
 mod quantity_interop;
 mod remote_releases;
 mod rust_http_router;
@@ -152,6 +153,7 @@ tag_suite!(moonbit_native_tool, agents_guest_bridge);
 tag_suite!(moonbit_reflection, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(multipart_snapshot, deploy);
+tag_suite!(oplog_export, deploy);
 tag_suite!(rust_http_router, agents_guest_bridge);
 tag_suite!(rust_minimal_exports, deploy);
 tag_suite!(rust_refined_tool_args, deploy);
@@ -702,6 +704,16 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.cli_with_env(args, &[]).await
+    }
+
+    /// Runs the CLI with `env` added to the environment of the context.
+    #[must_use]
+    async fn cli_with_env<I, S>(&self, args: I, env: &[(&str, &str)]) -> Output
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         self.rewrite_local_http_domain_ports();
 
         let args = {
@@ -728,6 +740,7 @@ impl TestContext {
             .args(args)
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
+            .envs(env.iter().copied())
             .current_dir(&working_dir)
             .kill_on_drop(true)
             .stdout(Stdio::piped())
