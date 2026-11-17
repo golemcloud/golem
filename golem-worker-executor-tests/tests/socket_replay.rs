@@ -1444,3 +1444,78 @@ async fn p3_udp_connect_after_a_wildcard_bind_records_the_interface_address(
     }
     session.finish().await
 }
+
+/// On Linux a UDP connect that fails with `EINVAL` dissolves the old association before it tries
+/// again, so the failed connect leaves the socket disconnected. The getter and a send to the
+/// connected peer then fail, live and after reconstruction, and the rebuild does not connect the
+/// socket to the old peer again.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_failed_connect_that_disconnects_replays_as_disconnected(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "udp-failed-connect",
+    )
+    .await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let failed: Result<(), String> = session
+        .call(
+            "p3_udp_connect_ipv4",
+            data_value!("u".to_string(), "240.0.0.1:9".to_string()),
+        )
+        .await?;
+    assert_eq!(failed, Err("ErrorCode::InvalidArgument".to_string()));
+
+    let disconnected = (
+        Err::<String, String>("ErrorCode::InvalidState".to_string()),
+        Err::<(), String>("ErrorCode::InvalidArgument".to_string()),
+    );
+    let live = (
+        session
+            .call::<Result<String, String>>("p3_udp_remote_address", data_value!("u".to_string()))
+            .await?,
+        session
+            .call::<Result<(), String>>(
+                "p3_udp_send",
+                data_value!("u".to_string(), None::<u16>, b"live".to_vec()),
+            )
+            .await?,
+    );
+    assert_eq!(live, disconnected);
+
+    session.restart_executor().await?;
+    let replayed = (
+        session
+            .call::<Result<String, String>>("p3_udp_remote_address", data_value!("u".to_string()))
+            .await?,
+        session
+            .call::<Result<(), String>>(
+                "p3_udp_send",
+                data_value!("u".to_string(), None::<u16>, b"replayed".to_vec()),
+            )
+            .await?,
+    );
+    assert_eq!(replayed, disconnected);
+    send_to(&session, "u", Some(other.port()), b"free").await?;
+    assert_eq!(other.receive().await?, (b"free".to_vec(), local));
+    session.finish().await
+}

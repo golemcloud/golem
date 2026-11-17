@@ -770,6 +770,7 @@ oplog_payload! {
         P3SocketsUdpConnect {
             result: Result<(), SerializableP3SocketErrorCode>,
             endpoint: Option<SerializableP3UdpEndpoint>,
+            disconnected: bool,
         },
         P3SocketsTcpConnect {
             result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableP3SocketErrorCode>,

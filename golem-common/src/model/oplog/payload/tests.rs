@@ -1564,8 +1564,9 @@ fn p3_udp_socket_host_payload_pairs_roundtrip() {
             remote_address: remote_address.clone(),
         },
         super::HostResponseP3SocketsUdpConnect {
-            result: Ok(()),
+            result: Err(SerializableP3SocketErrorCode::InvalidArgument),
             endpoint: Some(SerializableP3UdpEndpoint::Bound(local_address)),
+            disconnected: true,
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketSend>(
