@@ -30,8 +30,8 @@ pub fn[T : @schema.WireSchema] wire_local_entry(@schema.WireTypeEncoder, @schema
 // Errors
 
 // Types and methods
-pub(all) struct Config[T] {
-  value : T
+pub struct Config[T] {
+  mut value : T
 }
 
 pub(all) struct Secret[T] {

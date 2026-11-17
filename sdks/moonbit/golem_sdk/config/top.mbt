@@ -3,9 +3,10 @@
 
 ///|
 /// A loaded configuration value of type `T`. Generated constructor glue
-/// materializes `Config[T]` parameters via `load_config`.
-pub(all) struct Config[T] {
-  value : T
+/// materializes `Config[T]` parameters via `load_config`. Constructor-held
+/// handles refresh before each method with the host's captured configuration.
+pub struct Config[T] {
+  mut value : T
 }
 
 ///|
@@ -144,7 +145,9 @@ pub fn[T : @schema.WireSchema + @schema.FromWire] Secret::get(
 pub fn[T : ConfigField] load_config(
   _tag : @schema.TypeTag[T],
 ) -> Config[T] raise @common.AgentError {
-  { value: T::load([]), }
+  let config = Config::{ value: T::load([]), }
+  @agents.register_config_refresh(() => config.value = T::load([]))
+  config
 }
 
 ///|

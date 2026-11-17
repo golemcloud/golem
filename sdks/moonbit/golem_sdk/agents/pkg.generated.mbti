@@ -63,6 +63,8 @@ pub fn principal_to_json(@common.Principal) -> Json
 
 pub fn register_agent(RegisteredAgent) -> Unit
 
+pub fn register_config_refresh(() -> Unit raise @common.AgentError) -> Unit
+
 pub async fn restore_and_set_instance(String, SnapshotData, SnapshotRestoreContext) -> Result[Unit, String]
 
 pub fn set_agent_instance(AgentInstance) -> Unit

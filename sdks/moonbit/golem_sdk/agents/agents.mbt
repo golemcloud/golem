@@ -9,12 +9,55 @@ let state : AgentState = AgentState::new()
 priv struct AgentState {
   registered_agents : @hashmap.HashMap[String, RegisteredAgent]
   mut agent_instance : AgentInstance?
+  mut constructing_config : Array[() -> Unit raise @common.AgentError]?
 }
 
 ///|
 /// Creates a new empty agent state.
 fn AgentState::new() -> AgentState {
-  { registered_agents: @hashmap.HashMap([]), agent_instance: None, }
+  {
+    registered_agents: @hashmap.HashMap([]),
+    agent_instance: None,
+    constructing_config: None,
+  }
+}
+
+///|
+/// Retains constructor-loaded config handles for refresh before method dispatch.
+/// Method-local loads are not retained by the agent instance.
+pub fn register_config_refresh(
+  refresh : () -> Unit raise @common.AgentError,
+) -> Unit {
+  if state.constructing_config is Some(refreshers) {
+    refreshers.push(refresh)
+  }
+}
+
+///|
+priv struct ConfigRefreshingAgent {
+  raw : &RawAgent
+  refreshers : Array[() -> Unit raise @common.AgentError]
+}
+
+///|
+#warnings("-result_error_return")
+impl RawAgent for ConfigRefreshingAgent with fn invoke(
+  self,
+  method_name,
+  input,
+  principal,
+) {
+  // Ordinary recorded reads preserve each historical invocation's config during
+  // replay; new invocations see the host's capture from the selected revision.
+  for refresh in self.refreshers {
+    refresh() catch {
+      error => {
+        discard_wire_value(input)
+        return Err(error)
+      }
+    }
+  }
+  self.raw.invoke(method_name, input, principal)
 }
 
 ///|
@@ -150,11 +193,16 @@ fn install_constructed_agent(
   principal : @common.Principal,
   constructed : ConstructedAgent,
 ) -> Unit {
+  let interface : &RawAgent = match state.constructing_config {
+    Some(refreshers) if !refreshers.is_empty() =>
+      (ConfigRefreshingAgent::{ raw: constructed.raw, refreshers, } : &RawAgent)
+    _ => constructed.raw
+  }
   set_agent_instance({
     name: registered_agent.name,
     agent_type: registered_agent.agent_type,
     principal,
-    interface: constructed.raw,
+    interface,
     snapshottable: constructed.snapshottable,
     snapshot_format: constructed.snapshot_format,
     multipart_snapshottable: constructed.multipart_snapshottable,
@@ -192,6 +240,10 @@ pub async fn construct_and_set_instance(
         "Agent type not found: \{agent_type}",
       )
     Some(registered_agent) => {
+      state.constructing_config = Some([])
+      defer {
+        state.constructing_config = None
+      }
       let constructed = (registered_agent.construct)(input, principal)
       match constructed {
         Ok(constructed) => {
@@ -219,6 +271,10 @@ pub async fn restore_and_set_instance(
       match registered_agent.load_snapshot {
         None => Err("Agent does not support snapshots")
         Some(load_snapshot) => {
+          state.constructing_config = Some([])
+          defer {
+            state.constructing_config = None
+          }
           let principal = context.principal
           let restored = match load_snapshot(snapshot, context) {
             Ok(restored) => restored
