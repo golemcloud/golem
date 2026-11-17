@@ -17,6 +17,7 @@ import {
   makeServices,
   paidPlanId,
   polarProductId,
+  polarSettlementProductId,
   polarWebToken,
   queryPool,
   registryBillingToken,
@@ -69,7 +70,7 @@ describe("Polar billing", () => {
     await pool.query(
       `TRUNCATE "${schema}"."user", "${schema}".polar_subscriptions, "${schema}".polar_orders,
          "${schema}".polar_webhook_deliveries, "${schema}".usage_events, "${schema}".deletion_holds,
-         "${schema}".usage_settlements CASCADE`
+         "${schema}".usage_settlements, "${schema}".overage_settlements CASCADE`
     )
   })
 
@@ -101,25 +102,37 @@ describe("Polar billing", () => {
   })
 
   /** A renewal order of `sub_1`: the price of the next period and, by default, paid overage. */
-  const order = (accountId: string, overrides: Record<string, unknown> = {}) => ({
-    id: "order_1",
-    status: "pending",
-    paid: false,
-    created_at: new Date().toISOString(),
-    modified_at: null,
-    billing_reason: "subscription_cycle",
-    customer_id: "cus_1",
-    customer: { id: "cus_1", external_id: accountId },
-    product_id: polarProductId,
-    subscription_id: "sub_1",
-    items: [
-      { product_price_id: fixedPriceId, amount: 2000 },
-      { product_price_id: meteredPriceId, amount: 345 }
-    ],
-    ...overrides
-  })
+  /** An order as Polar sends it: no discount and no tax unless `overrides` give them. */
+  const order = (accountId: string, overrides: Record<string, unknown> = {}) => {
+    const items = (overrides["items"] as ReadonlyArray<{ readonly amount: number }> | undefined) ?? [
+      { product_price_id: fixedPriceId, amount: 2000, tax_amount: 0, proration: false },
+      { product_price_id: meteredPriceId, amount: 345, tax_amount: 0, proration: false }
+    ]
+    const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
+    return {
+      id: "order_1",
+      status: "pending",
+      paid: false,
+      created_at: new Date().toISOString(),
+      modified_at: null,
+      billing_reason: "subscription_cycle",
+      customer_id: "cus_1",
+      customer: { id: "cus_1", external_id: accountId },
+      product_id: polarProductId,
+      subscription_id: "sub_1",
+      subtotal_amount: subtotal,
+      discount_amount: 0,
+      net_amount: subtotal,
+      tax_amount: 0,
+      total_amount: subtotal,
+      applied_balance_amount: 0,
+      due_amount: subtotal,
+      items,
+      ...overrides
+    }
+  }
 
-  const priceOnly = { items: [{ product_price_id: fixedPriceId, amount: 2000 }] }
+  const priceOnly = { items: [{ product_price_id: fixedPriceId, amount: 2000, tax_amount: 0, proration: false }] }
   const paidLater = { status: "paid", paid: true, modified_at: new Date(Date.now() + MINUTE).toISOString() }
 
   /** Delivers a webhook as Polar does: Standard Webhooks headers, signed with the secret. */
@@ -867,7 +880,7 @@ describe("Polar billing", () => {
       "Golem Cloud billing: The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid."
     const unsettledHold =
       "Golem Cloud billing: The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
-    const unpaidHold = `Golem Cloud billing: An invoice for paid overage is not paid. Pay it in Manage billing at ${baseUrl}.`
+    const unpaidHold = `Golem Cloud billing: An invoice for paid overage is not paid. Pay it on the billing page at ${baseUrl}.`
     /** The state of `sub_1` after Polar ended it at its period end, December 4. */
     const endedAtPeriodEnd = { status: "canceled", modified_at: "2026-12-04T10:00:00Z", ended_at: "2026-12-04T10:00:00Z" }
 
@@ -1233,6 +1246,296 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.get(accountId)).toBe(
         `${subscriptionHold} ${sentence(unbilledHold)} ${sentence(unpaidHold)}`
       )
+    })
+  })
+
+  describe("settlement of unpaid paid overage", () => {
+    const unpaidHold = `Golem Cloud billing: An invoice for paid overage is not paid. Pay it on the billing page at ${baseUrl}.`
+    const ended = { status: "canceled", modified_at: "2026-12-04T10:00:00Z", ended_at: "2026-12-04T10:00:00Z" }
+    /** The last order of `sub_1` after a cancellation: created after the period end, unpaid for two hours. */
+    const lastOrder = { created_at: new Date(Date.now() - 120 * MINUTE).toISOString() }
+
+    /** An order of the settlement product, paid through the checkout of `POST /billing/settle`. */
+    const settlementOrder = (accountId: string, overrides: Record<string, unknown> = {}) => ({
+      id: "order_settlement_1",
+      status: "paid",
+      paid: true,
+      created_at: new Date().toISOString(),
+      modified_at: null,
+      billing_reason: "purchase",
+      customer_id: "cus_1",
+      customer: { id: "cus_1", external_id: accountId },
+      product_id: polarSettlementProductId,
+      subscription_id: null,
+      subtotal_amount: 345,
+      discount_amount: 0,
+      net_amount: 345,
+      tax_amount: 0,
+      items: [{ product_price_id: "price_ad_hoc", amount: 345, tax_amount: 0 }],
+      metadata: { golem_settled_order_ids: "order_1" },
+      ...overrides
+    })
+
+    /** An account whose subscription ended with an unpaid last order of $3.45 of paid overage. */
+    const unpaidAfterEnd = async (accountId: string) => {
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      await deliver("order.created", order(accountId, lastOrder))
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unpaidHold)
+    }
+
+    const postSettle = (jar: CookieJar) =>
+      request(app.handler, jar, "POST", "/billing/settle", {
+        origin: baseUrl,
+        "x-forwarded-for": "203.0.113.7, 198.51.100.7"
+      })
+
+    const settledOrders = async () =>
+      (await pool.query("SELECT order_id, settlement_order_id, amount::int AS amount FROM overage_settlements")).rows
+
+    it("lets the person settle the unpaid last order of an ended subscription, which frees the account", async () => {
+      const { jar, accountId } = await signedIn()
+      await unpaidAfterEnd(accountId)
+
+      const html = await page(jar)
+      expect(html).toContain("The subscription has ended, so Polar does not charge the invoice again.")
+      expect(html).toContain(`action="/billing/settle"`)
+      expect(html).toContain("Settle $3.45")
+      expect(html).toContain("When the account owes no more paid overage, your plan is Free")
+      expect(html).not.toContain("Pay the invoice")
+
+      const response = await postSettle(jar)
+      expect(response.status).toBe(303)
+      expect(response.headers.get("location")).toBe("https://sandbox.polar.sh/checkout/polar_c_test")
+      const [checkout, ...others] = upstreams.polarRequests("/v1/checkouts/")
+      expect(others).toEqual([])
+      expect(checkout!.headers.get("authorization")).toBe(`Bearer ${polarWebToken}`)
+      expect(checkout!.body).toEqual({
+        products: [polarSettlementProductId],
+        prices: {
+          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 345, price_currency: "usd", tax_behavior: "inclusive" }]
+        },
+        external_customer_id: accountId,
+        customer_email: "octocat@example.com",
+        customer_name: "Octo Cat",
+        customer_ip_address: "198.51.100.7",
+        success_url: `${baseUrl}/?settlement_orders=order_1`,
+        return_url: `${baseUrl}/`,
+        allow_discount_codes: false,
+        metadata: { golem_settled_order_ids: "order_1" }
+      })
+      const returned = await page(jar, "/?settlement_orders=order_1")
+      expect(returned).toContain("Golem records the payment within one minute")
+      expect(returned).not.toContain("Settle $")
+
+      await deliver("order.created", settlementOrder(accountId))
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+      expect(await settledOrders()).toEqual([{ order_id: "order_1", settlement_order_id: "order_settlement_1", amount: 345 }])
+      const reloaded = await page(jar, "/?settlement_orders=order_1")
+      expect(reloaded).not.toContain("Polar has your payment")
+      expect(reloaded).toContain("<h1>Free</h1>")
+
+      // Polar delivers the paid order again in `order.updated` and `order.paid`.
+      await deliver("order.updated", settlementOrder(accountId))
+      await deliver("order.paid", settlementOrder(accountId))
+      expect(await settledOrders()).toHaveLength(1)
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+      expect(await page(jar)).not.toContain("Settle $")
+    })
+
+    it("settles the oldest orders first, and after their webhook the returned page offers the rest", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      const orderIds = Array.from({ length: 14 }, (_, index) => `order_${String(index + 1).padStart(2, "0")}`)
+      for (const [index, id] of orderIds.entries()) {
+        await deliver("order.created", order(accountId, { id, created_at: new Date(Date.now() - (200 - index) * MINUTE).toISOString() }))
+      }
+      expect(await page(jar)).toContain("Settle $44.85")
+
+      const batch = orderIds.slice(0, 13)
+      await postSettle(jar)
+      const [checkout] = upstreams.polarRequests("/v1/checkouts/")
+      expect(checkout!.body).toMatchObject({
+        prices: {
+          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 4485, price_currency: "usd", tax_behavior: "inclusive" }]
+        },
+        success_url: `${baseUrl}/?settlement_orders=${batch.join("%2C")}`,
+        metadata: { golem_settled_order_ids: batch.join(",") }
+      })
+      const returnedPath = `/?settlement_orders=${batch.join("%2C")}`
+      expect(await page(jar, returnedPath)).toContain("Polar has your payment")
+
+      await deliver(
+        "order.paid",
+        settlementOrder(accountId, { subtotal_amount: 4485, net_amount: 4485, metadata: { golem_settled_order_ids: batch.join(",") } })
+      )
+
+      const returned = await page(jar, returnedPath)
+      expect(returned).not.toContain("Polar has your payment")
+      expect(returned).toContain("Settle $3.45")
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+    })
+
+    /**
+     * The last order of `sub_1` with tax: $20.00 for the price and $3.45 of paid overage. Polar
+     * computes the tax for the whole order, and the items have none.
+     */
+    const taxedLastOrder = (taxOnTop: boolean) => ({
+      ...lastOrder,
+      subtotal_amount: 2345,
+      discount_amount: 0,
+      // Polar adds the tax on top, or takes it out of the subtotal.
+      net_amount: taxOnTop ? 2345 : 2094,
+      tax_amount: taxOnTop ? 281 : 251,
+      total_amount: taxOnTop ? 2626 : 2345,
+      due_amount: taxOnTop ? 2626 : 2345
+    })
+
+    it("charges the paid overage with the tax that the invoice added on top, and records a payment that includes the tax", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      await deliver("order.created", order(accountId, taxedLastOrder(true)))
+      expect(await page(jar)).toContain("Settle $3.86")
+
+      await postSettle(jar)
+      const [checkout] = upstreams.polarRequests("/v1/checkouts/")
+      expect(checkout!.body).toMatchObject({
+        prices: {
+          [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 386, price_currency: "usd", tax_behavior: "inclusive" }]
+        }
+      })
+
+      // Polar takes the tax out of the inclusive price, so the net amount is below the price.
+      await deliver("order.paid", settlementOrder(accountId, { subtotal_amount: 386, net_amount: 345, tax_amount: 41, total_amount: 386 }))
+
+      expect(await settledOrders()).toEqual([{ order_id: "order_1", settlement_order_id: "order_settlement_1", amount: 386 }])
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+    })
+
+    it("charges the paid overage of an invoice with inclusive tax as the invoice did", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      await deliver("order.created", order(accountId, taxedLastOrder(false)))
+
+      expect(await page(jar)).toContain("Settle $3.45")
+    })
+
+    it("charges the paid overage of a discounted invoice after the discount, with the tax on what is left", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      // The last order after a cancellation bills only the paid overage: $10.00 with a coupon of
+      // 50%, and 12% tax on top of the $5.00 after the discount.
+      await deliver(
+        "order.created",
+        order(accountId, {
+          ...lastOrder,
+          items: [{ product_price_id: meteredPriceId, amount: 1000, tax_amount: 0, proration: false }],
+          subtotal_amount: 1000,
+          discount_amount: 500,
+          net_amount: 500,
+          tax_amount: 60,
+          total_amount: 560,
+          due_amount: 560
+        })
+      )
+
+      expect(await page(jar)).toContain("Settle $5.60")
+    })
+
+    it("takes the credit that a pending order used off the settlement, and charges the total of a void order", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, ended))
+      // $10.00 of credit from the wallet of the customer, for example after a downgrade, pays part
+      // of the order. It stays used while the order is pending.
+      const withCredit = { ...taxedLastOrder(true), applied_balance_amount: -1000, due_amount: 1626 }
+      await deliver("order.created", order(accountId, withCredit))
+      expect(await page(jar)).toContain("Settle $2.39")
+
+      // A void gives the credit back to the wallet, so the person owes the whole order again.
+      await deliver("order.updated", order(accountId, { ...withCredit, status: "void", modified_at: new Date().toISOString() }))
+      expect(await page(jar)).toContain("Settle $3.86")
+    })
+
+    it("keeps the debt when Polar voids the unpaid order of a revoked subscription", async () => {
+      const accountId = randomUUID()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("order.created", order(accountId, { created_at: new Date(Date.now() - 10 * MINUTE).toISOString() }))
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, { ...ended, past_due_at: "2026-11-13T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+
+      await deliver("order.updated", order(accountId, { status: "void", modified_at: new Date().toISOString() }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unpaidHold)
+    })
+
+    it("offers no settlement while Polar collects the order, and the route refuses one", async () => {
+      const { jar, accountId } = await signedIn()
+      const failedAt = new Date()
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("order.created", order(accountId))
+      await deliver(
+        "subscription.past_due",
+        subscription(accountId, { status: "past_due", past_due_at: failedAt.toISOString(), modified_at: "2026-12-04T10:00:00Z" })
+      )
+      await sweep(new Date(failedAt.getTime() + config.pastDueGraceMs + MINUTE))
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+
+      const html = await page(jar)
+      expect(html).toContain("Pay the invoice")
+      expect(html).not.toContain("Settle $")
+      const response = await postSettle(jar)
+      expect(response.status).toBe(303)
+      expect(response.headers.get("location")).toBe("/")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toEqual([])
+    })
+
+    it("refuses a settlement on the free plan, from another site, and without a sign-in", async () => {
+      const { jar } = await signedIn()
+
+      const free = await postSettle(jar)
+      expect(free.headers.get("location")).toBe("/")
+      const crossSite = await request(app.handler, jar, "POST", "/billing/settle", { origin: "https://evil.test" })
+      expect(crossSite.status).toBe(403)
+      const signedOut = await postSettle(new CookieJar())
+      expect(signedOut.headers.get("location")).toBe("/")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toEqual([])
+    })
+
+    it("settles nothing for a payment below the paid overage or for an order that the account does not owe", async () => {
+      const accountId = randomUUID()
+      await unpaidAfterEnd(accountId)
+
+      await deliver("order.paid", settlementOrder(accountId, { subtotal_amount: 344, net_amount: 344 }))
+      await deliver("order.paid", settlementOrder(accountId, { id: "order_settlement_2", metadata: { golem_settled_order_ids: "order_9" } }))
+      await deliver("order.paid", settlementOrder(randomUUID(), { id: "order_settlement_3" }))
+      await deliver("order.created", settlementOrder(accountId, { id: "order_settlement_4", status: "pending", paid: false }))
+
+      expect(await settledOrders()).toEqual([])
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unpaidHold)
+    })
+
+    it("keeps the account free when Polar charges the original order after its settlement", async () => {
+      const accountId = randomUUID()
+      await unpaidAfterEnd(accountId)
+      await deliver("order.paid", settlementOrder(accountId))
+
+      await deliver("order.paid", order(accountId, { ...lastOrder, ...paidLater }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+      expect(await settledOrders()).toHaveLength(1)
     })
   })
 })

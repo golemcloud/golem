@@ -49,8 +49,9 @@ is gone.
 
 The connections of the app set `search_path` to its schema (`billing` by default). The app keeps
 its tables there: the tables of Better Auth (`user`, `session`, `account` and `verification`),
-`polar_subscriptions`, `polar_orders`, `polar_webhook_deliveries`, `usage_events`,
-`deleted_account_cleanups`, `deletion_holds`, `usage_settlements` and `usage_settlement_history`.
+`polar_subscriptions`, `polar_orders`, `overage_settlements`, `polar_webhook_deliveries`,
+`usage_events`, `deleted_account_cleanups`, `deletion_holds`, `usage_settlements` and
+`usage_settlement_history`.
 
 `node main.mjs migrate` creates and changes these tables. It is the only DDL of the app. It runs
 once and exits, with a nonzero exit code when it fails, and needs only the `GOLEM__DB__*`
@@ -74,15 +75,16 @@ same grants.
 - `golem_cloud_billing_web`, for the web app: SELECT, INSERT and UPDATE on `user`, `account`,
   `polar_subscriptions` and `polar_orders`; SELECT, INSERT, UPDATE and DELETE on `session` and
   `deletion_holds`; SELECT, INSERT and DELETE on `verification`; SELECT and INSERT on
-  `polar_webhook_deliveries`; SELECT on `usage_events` and `usage_settlements`; SELECT
-  (`account_id`, `deleted_at`) on `public.accounts`.
+  `overage_settlements` and `polar_webhook_deliveries`; SELECT on `usage_events` and
+  `usage_settlements`; SELECT (`account_id`, `deleted_at`) on `public.accounts`.
 - `golem_cloud_billing_push`, for `push-usage`: SELECT, INSERT and UPDATE on `usage_events`;
   SELECT on `polar_subscriptions`, `public.account_monthly_policy_revisions` and
   `public.account_monthly_policy_attribution`.
 - `golem_cloud_billing_cleanup`, for `cleanup-deleted-accounts`: SELECT (`golem_account_id`) and
   DELETE on `user`; SELECT and INSERT on `deleted_account_cleanups`; SELECT and DELETE on
-  `deletion_holds`; SELECT on `polar_subscriptions`, `polar_orders`, `usage_events` and
-  `usage_settlements`; SELECT (`account_id`, `deleted_at`) on `public.accounts`. The ON DELETE
+  `deletion_holds`; SELECT on `polar_subscriptions`, `polar_orders`, `overage_settlements`,
+  `usage_events` and `usage_settlements`; SELECT (`account_id`, `deleted_at`) on
+  `public.accounts`. The ON DELETE
   CASCADE of `session` and `account` runs as the owner of those tables, so a delete of a user also
   deletes its sessions and GitHub accounts.
 
@@ -112,7 +114,7 @@ between three plans. The Polar customer has the Golem account ID as its external
 
 | Plan | Variable | When |
 | --- | --- | --- |
-| suspended | `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | paid overage is not paid: a `pending` order has an amount for a metered price, its subscription is not in the past-due grace, and a payment of the subscription failed or the order is older than one hour |
+| suspended | `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | paid overage is not paid: the account owes an unpaid order (see [Unpaid orders](#unpaid-orders)), its subscription is not in the past-due grace, and a payment of the subscription failed or the order is older than one hour |
 | paid | `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | an `active` subscription that does not end within 15 minutes, or a `past_due` subscription in the past-due grace |
 | free | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID` | otherwise: no subscription, a declined payment of the price alone after the past-due grace, a cancellation, a trial, a pause |
 
@@ -121,7 +123,7 @@ When a payment fails, the account keeps the paid plan for the past-due grace. Wh
 the price is still open after the past-due grace, the account is on the free plan until the
 payment, as without a subscription. Paid overage is billed after the period, for resources that
 the account has used: when that payment is still open after the past-due grace, the account is
-suspended until the order is paid, also with a new subscription. The suspended plan has no monthly amounts and `overage_eligible: false`, so the
+suspended until the order is paid or settled, also with a new subscription. The suspended plan has no monthly amounts and `overage_eligible: false`, so the
 agents of the account stop. A renewal order that has the next price and the overage of the last
 period counts as overage.
 
@@ -140,12 +142,18 @@ plan.
   database fails.
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
+- **Settlement.** `POST /billing/settle` creates a checkout session of the settlement product for
+  the paid overage of the orders that Polar no longer collects, and redirects to it (see
+  [Unpaid orders](#unpaid-orders)). After the payment Polar redirects to
+  `/?settlement_orders=...`, with the IDs of the orders that the settlement pays. While one of them
+  is unpaid, the page says that Golem records the payment. After the webhook, the page shows the
+  plan and any remaining debt.
 - **Webhooks.** Polar delivers `subscription.*`, `order.created`, `order.updated` and `order.paid`
   events to `POST /api/auth/polar/webhooks`. A request without the Standard Webhooks headers gets
   403 before the app reads its body, and a body above 1 MiB gets 413. The handler verifies the
   Standard Webhooks signature with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a
   `webhook-id` that it handled before, and stores the subscription in `polar_subscriptions` or the
-  order in `polar_orders`. A state never replaces a state with a later `modified_at`, so a late
+  order in `polar_orders`. A paid order of the settlement product records a settlement instead. A state never replaces a state with a later `modified_at`, so a late
   delivery cannot undo a newer one. Then it sets the [deletion hold](#deletion-hold) and the plan
   from the table above. A failed payment (`subscription.past_due`) also logs `payment_failed`. An
   account on any other plan, for example an internal plan that an administrator gave it, keeps it,
@@ -232,6 +240,58 @@ Polar bills:
 The usage push does not send an event that Polar would not bill (see
 [Billable overage](#billable-overage)).
 
+### Unpaid orders
+
+An order is unpaid while it is `pending`, or `void` with no settlement in `overage_settlements`.
+The account owes the paid overage of an unpaid order: the amount of its items of metered prices.
+Its price alone does not count.
+
+Polar collects a `pending` order of a billable subscription: it retries the payment, and a new
+default card in the customer portal pays it at once. Polar collects no other unpaid order:
+
+- It does not retry the order of a subscription that has ended, such as the last order after a
+  cancellation. The customer portal has no pay button for it, and the merchant API cannot charge
+  it.
+- It voids the pending orders of a subscription that it revokes, also after the failed retries of
+  a payment. A void collects nothing, so the app does not let a void remove a debt.
+
+The person pays the orders that Polar no longer collects with a settlement. On the suspended plan
+the page offers "Settle $X" in place of the customer portal, and `POST /billing/settle` accepts it
+only then (`canSettle` in `src/Page.ts`, `settlementFor` in `src/Settlement.ts`). The route reads
+the orders and the amount from the database, and opens a checkout of the private one-time product
+`POLAR_SETTLEMENT_PRODUCT_ID` with an ad-hoc fixed price of that amount, discount codes off, and
+the order IDs in the metadata `golem_settled_order_ids`. The amount is what the invoices charged
+for the paid overage, after the discount and with the tax, and the price includes tax
+(`tax_behavior` `inclusive`), so the person pays what the invoices asked. Polar gives the discount
+and the tax only for a whole order, so the webhook shares them over the items
+(`src/OrderTotals.ts`): the discount over the items that are not a proration, by their amounts,
+and the total of the order over all items, by their amounts after the discount. The total holds
+the tax when Polar adds it on top, and the subtotal holds it when the tax is inclusive, so no tax
+setting of the organization or of a price changes the amount. Credit from the wallet of the
+customer, for example after a downgrade, pays part of an order. A pending order keeps that credit,
+so it shares its due amount. A void gives the credit back to the wallet, so a void order shares its
+total. Polar also takes credit that the customer gained after the order against a void, and the
+order does not show it; such a person pays that part twice, and an operator refunds it. One
+settlement pays the oldest orders
+that fit: at most 13, the most IDs that fit in a metadata value, and at most $999,999.99, the
+largest price of Polar.
+
+A paid order of the settlement product records a settlement for each order in its metadata that
+the account still owes, and the account moves to the free plan. It settles nothing when its
+price, the subtotal after the discount, is less than the amount of those orders, and logs an
+error. An order that the account
+does not owe logs a warning; an operator refunds that part in the Polar dashboard. Polar sends a
+paid order in several events, and the later ones change nothing. If Polar charges an original
+order after its settlement, the app logs `An order was paid after its settlement`, and an operator
+refunds the settlement order. The app has no `refunds:write`.
+
+Polar refuses a fixed price below $0.50. When the paid overage of an order that Polar no longer
+collects is below that, the app writes the order off for good: it does not suspend or hold the
+account, and other unpaid orders do not change this.
+
+Only Polar support can void an original order or charge it again. Until then, the customer portal
+lists it as pending, also after its settlement.
+
 ### Deletion hold
 
 Golem does not charge early, and a cancellation runs to the end of the period: Polar bills paid
@@ -246,7 +306,7 @@ when none is:
 | `canceledSubscription` | a billable subscription is canceled at the period end and runs to the end of the period |
 | `unbilledUsage` | a billable subscription, and a usage event that no order bills yet |
 | `unsettledUsage` | no billable subscription, and a usage event that no order bills yet |
-| `unpaidOverage` | a `pending` order has an amount for a metered price |
+| `unpaidOverage` | the account owes an unpaid order (see [Unpaid orders](#unpaid-orders)) |
 
 A usage event that no order bills yet is not held, and is not sent yet, or was sent after the
 newest order of the account while the latest subscription of the account can still create an
@@ -263,8 +323,9 @@ Polar). An ended subscription creates no more orders when:
   No order bills anything after it, so it settles every sent event, also one whose `sent_at` the
   app recorded after that order.
 
-A `pending` order with an amount for a metered price holds the account as `unpaidOverage`, also
-when it is the only reason, because the customer can still pay it.
+An unpaid order with paid overage holds the account as `unpaidOverage`, also when it is the only
+reason, because the customer can still pay it: in the customer portal while Polar collects it, and
+with a settlement after that.
 
 The hold stays for the whole life of a billable subscription, also after a cancellation. Paid
 overage needs the paid plan, and the paid plan needs a billable subscription, so the account has a
@@ -403,6 +464,7 @@ until the cleanup has deleted the user of the deleted account (see
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
 | `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` and `customer_sessions:write`, `push-usage` needs `events:write`, and `cleanup-deleted-accounts` needs `customers:write`. Each gets its own token. |
 | `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |
+| `POLAR_SETTLEMENT_PRODUCT_ID` | | The Polar product of a settlement: a private one-time product with a fixed price, which each checkout replaces with an ad-hoc price. It must differ from `POLAR_PRODUCT_ID` and have the same tax category. |
 | `POLAR_WEBHOOK_SECRET` | | The secret that Polar signs the webhooks with (`whsec_...`). |
 
 ## Endpoints
@@ -411,7 +473,7 @@ until the cleanup has deleted the user of the deleted account (see
 | --- | --- |
 | `GET /` | Landing page: the sign-in form, or the plan, the account and the CLI command. |
 | `POST /sign-in/github`, `POST /sign-out` | Form targets of the landing page. |
-| `POST /billing/checkout`, `POST /billing/portal` | Form targets of the plan: redirect to the checkout or the customer portal of Polar. |
+| `POST /billing/checkout`, `POST /billing/settle`, `POST /billing/portal` | Form targets of the plan: redirect to the checkout of the paid plan, the checkout of a settlement, or the customer portal of Polar. |
 | `POST /billing/overage` | Form target of the paid-overage switch of the paid plan. It sets the monthly usage mode of the account (`allowOverage` or `hardLimit`) with the registry token of the session: the registry accepts paid overage only from the owner, and records the consent. The executors apply the change within 5 minutes, and the page says so. |
 | `POST /api/auth/polar/webhooks` | The webhooks of Polar (see [Subscriptions](#subscriptions)). |
 | `GET /api/auth/callback/github` | The GitHub OAuth callback of Better Auth. The other Better Auth endpoints are not routed; the pages call them on the server. |

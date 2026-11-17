@@ -160,7 +160,7 @@ describe("cleanup of deleted accounts", () => {
     await pool.query(
       `INSERT INTO polar_orders (order_id, account_id, subscription_id, status, created_at, modified_at, items)
        VALUES ('order_1', $1, $2, 'pending', now(), now(), $3)`,
-      [unpaid.accountId, `sub_${unpaid.accountId}`, JSON.stringify([{ productPriceId: meteredPriceId, amount: 345 }])]
+      [unpaid.accountId, `sub_${unpaid.accountId}`, JSON.stringify([{ productPriceId: meteredPriceId, amount: 345, total: 345 }])]
     )
     const unbilled = await deletedAccount()
     await pool.query(

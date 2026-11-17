@@ -15,6 +15,7 @@ import { BillingConfig } from "./BillingConfig.ts"
 import { Database } from "./Database.ts"
 import {
   canCheckOut,
+  canSettle,
   cliBootstrapCommand,
   type OverageNotice,
   type PlanState,
@@ -24,7 +25,7 @@ import {
 } from "./Page.ts"
 import { Polar } from "./Polar.ts"
 import { type Account, type AccountLimits, Registry } from "./Registry.ts"
-import { pastDueGraceEnd } from "./Settlement.ts"
+import { pastDueGraceEnd, type SettlementOffer, settlementFor } from "./Settlement.ts"
 import { type Subscription, Subscriptions } from "./Subscriptions.ts"
 import * as Webhooks from "./Webhooks.ts"
 
@@ -126,6 +127,20 @@ export const routes = HttpRouter.use((router) =>
     const handleWebhook = yield* Webhooks.makeHandler
     const cliCommand = cliBootstrapCommand(config.publicApiUrl)
     const home = new URL("/", config.baseUrl).href
+    // The query parameter of the page after a settlement: the IDs of the orders that it pays.
+    const settlementOrdersParam = "settlement_orders"
+
+    // The settlement that the account can pay, from the subscriptions and unpaid orders in the
+    // database, never from the request, and the IDs of the unpaid orders.
+    const settlementOf = (accountId: string) =>
+      Effect.gen(function* () {
+        const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
+        const unpaidOrders = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
+        return {
+          offer: settlementFor(accountSubscriptions, unpaidOrders),
+          unpaidOrderIds: unpaidOrders.map((order) => order.orderId)
+        }
+      })
 
     const planOf = (account: Account | undefined): PlanState => {
       if (account === undefined) return "unknown"
@@ -207,6 +222,23 @@ export const routes = HttpRouter.use((router) =>
         // Polar redirects here with the checkout ID after a payment; the webhook that changes the
         // plan can arrive a few seconds later.
         const checkoutPending = params.has("checkout_id") && (plan === "free" || plan === "suspended")
+        const debt =
+          plan === "suspended"
+            ? yield* settlementOf(user.golemAccountId).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Cannot read the unpaid orders").pipe(
+                    Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                    Effect.as(undefined)
+                  )
+                )
+              )
+            : undefined
+        const settlement: SettlementOffer | undefined = debt?.offer
+        // After the payment of a settlement, Polar redirects here with the orders that it pays. The
+        // webhook that records the settlement can arrive a few seconds later, so the page waits
+        // only while one of those orders is unpaid. Then it shows the plan and any remaining debt.
+        const paidOrderIds = (params.get(settlementOrdersParam) ?? "").split(",").filter((id) => id !== "")
+        const settlementPending = debt !== undefined && paidOrderIds.some((id) => debt.unpaidOrderIds.includes(id))
         const limits: AccountLimits | undefined =
           plan === "paid"
             ? yield* registry.getLimits(user.golemToken, user.golemAccountId).pipe(
@@ -230,6 +262,8 @@ export const routes = HttpRouter.use((router) =>
                 ? pastDueGraceEnd(subscription, config.pastDueGraceMs)
                 : undefined,
             checkoutPending,
+            settlement,
+            settlementPending,
             cliCommand,
             limits,
             overagePrices: config.overagePrices,
@@ -349,6 +383,77 @@ export const routes = HttpRouter.use((router) =>
           }).pipe(
             Effect.catch((error) =>
               Effect.logError("Cannot start the checkout").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
+    )
+
+    // A settlement pays the paid overage of the orders that Polar no longer collects. The route
+    // reads the amount and the orders from the database, and accepts only a settlement that the
+    // page offers. When the registry or the database fails, it refuses, as for a checkout.
+    yield* router.add("POST", "/billing/settle", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            const signedIn = yield* getSignedIn(toWebHeaders(request)).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the session for the settlement").pipe(
+                  Effect.annotateLogs({ error: error.message }),
+                  Effect.as(Option.none<SignedIn>())
+                )
+              )
+            )
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const user = signedIn.value
+            const offered = yield* Effect.gen(function* () {
+              const plan = planOf(yield* registry.getAccount(user.golemToken, user.golemAccountId))
+              const settlement = plan === "suspended" ? (yield* settlementOf(user.golemAccountId)).offer : undefined
+              if (settlement === undefined || !canSettle(plan, settlement)) {
+                yield* Effect.logWarning("Refused a settlement that the page does not offer").pipe(
+                  Effect.annotateLogs({ golemAccountId: user.golemAccountId, plan })
+                )
+                return undefined
+              }
+              return settlement
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the unpaid orders for the settlement").pipe(
+                  Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                  Effect.as(undefined)
+                )
+              )
+            )
+            if (offered === undefined) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const successUrl = new URL(home)
+            successUrl.searchParams.set(settlementOrdersParam, offered.orders.map((order) => order.orderId).join(","))
+            const url = yield* polar.createSettlementCheckout({
+              productId: config.polar.settlementProductId,
+              externalCustomerId: user.golemAccountId,
+              customerEmail: user.email,
+              customerName: user.name === "" ? undefined : user.name,
+              customerIpAddress: clientAddress(request),
+              amount: offered.amount,
+              orderIds: offered.orders.map((order) => order.orderId),
+              successUrl: successUrl.href,
+              returnUrl: home
+            })
+            yield* Effect.logInfo("Started a settlement of paid overage").pipe(
+              Effect.annotateLogs({
+                golemAccountId: user.golemAccountId,
+                amount: offered.amount,
+                orderIds: offered.orders.map((order) => order.orderId).join(",")
+              })
+            )
+            return HttpServerResponse.redirect(url, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot start the settlement").pipe(
                 Effect.annotateLogs({ error: error.message }),
                 Effect.as(errorPage)
               )
