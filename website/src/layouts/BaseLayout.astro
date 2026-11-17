@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import Analytics from "../components/Analytics.astro";
 import { site } from "../data/site";
 
 interface Props {
@@ -7,9 +8,10 @@ interface Props {
   description?: string;
   image?: string;
   frontmatter?: { title?: string };
+  preview?: boolean;
 }
 
-const { title, description, image, frontmatter } = Astro.props;
+const { title, description, image, frontmatter, preview = false } = Astro.props;
 const pageTitle = title ?? frontmatter?.title ?? site.title;
 const pageDescription = description ?? site.description;
 const canonicalURL = new URL(Astro.url.pathname, Astro.site).href;
@@ -19,15 +21,13 @@ const ogImage = new URL(image ?? "/og-image.jpg", Astro.site).href;
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    {preview && <meta name="robots" content="noindex, nofollow" />}
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="icon" type="image/png" sizes="192x192" href="/favicon.png" />
     <link rel="canonical" href={canonicalURL} />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="generator" content={Astro.generator} />
-    <meta
-      name="google-site-verification"
-      content="KAcSFOLtxxv0lh8e1l9qZuyIkzGg9CpWHnfeUH5UNrk"
-    />
+    <meta name="google-site-verification" content="KAcSFOLtxxv0lh8e1l9qZuyIkzGg9CpWHnfeUH5UNrk" />
     <meta name="description" content={pageDescription} />
 
     <!-- Open Graph -->
@@ -46,30 +46,9 @@ const ogImage = new URL(image ?? "/og-image.jpg", Astro.site).href;
 
     <title>{pageTitle}</title>
 
-    <!-- Google tag (gtag.js) -->
-    <script
-      is:inline
-      async
-      src="https://www.googletagmanager.com/gtag/js?id=AW-18172281472"
-    ></script>
-    <script is:inline>
-      window.dataLayer = window.dataLayer || [];
-      function gtag() {
-        dataLayer.push(arguments);
-      }
-      gtag("js", new Date());
-
-      gtag("config", "AW-18172281472");
-    </script>
-
-    <!-- Contentsquare tag -->
-    <script
-      is:inline
-      async
-      src="https://t.contentsquare.net/uxa/ed8fdf824ed4d.js"
-    ></script>
+    {!preview && <Analytics />}
   </head>
-  <body>
+  <body data-pagefind-ignore={preview || undefined}>
     <slot />
   </body>
 </html>

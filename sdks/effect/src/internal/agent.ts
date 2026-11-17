@@ -75,9 +75,10 @@ import {
 import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../Config.js"
 import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
+import { withCustomScopes } from "./customScope.js"
 import { mergeGraphDefs } from "./schema-model/builder.js"
-import type { SchemaGraph } from "./schema-model/model.js"
-import { GraphEncoder } from "./schema-model/wit.js"
+import { t, v, type SchemaGraph } from "./schema-model/model.js"
+import { GraphEncoder, typedSchemaValueToWit } from "./schema-model/wit.js"
 
 /**
  * Combined Logger + Tracer layer applied automatically to every piece
@@ -130,7 +131,9 @@ const userRuntime = ManagedRuntime.make(userRuntimeLayer)
  * `TracingHost` service.
  */
 const runUserPromise = <A, E, R>(eff: Effect.Effect<A, E, R>): Promise<A> =>
-  userRuntime.runPromise(GolemTracing.withInvocationParent(eff) as Effect.Effect<A, E, never>)
+  userRuntime.runPromise(
+    withCustomScopes(GolemTracing.withInvocationParent(eff)) as Effect.Effect<A, E, never>,
+  )
 
 type AnyMethodSpec = MethodSpec<any, any, any>
 
@@ -1203,7 +1206,23 @@ export const dispatchInvoke = async (
       inputSchema: compiled.agentType.methods.find((method) => method.name === methodName)!
         .inputSchema,
     },
-    handler,
+    (decoded) =>
+      Effect.suspend(() => handler(decoded)).pipe(
+        Effect.catchCause((cause) => {
+          // Declared failures remain result values. Interruption stays separate
+          // from application errors for cooperative cancellation.
+          if (Cause.hasInterrupts(cause) || (mc.errorWrapped && !Cause.hasDies(cause))) {
+            return Effect.failCause(cause)
+          }
+          return Effect.die({
+            tag: "custom-error",
+            val: typedSchemaValueToWit({
+              graph: { defs: new Map(), root: t.string() },
+              value: v.string(Cause.pretty(cause)),
+            }),
+          } satisfies AgentCommon.AgentError)
+        }),
+      ),
     input,
   ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
   if (mc.readOnly === undefined || mc.readOnly.usesPrincipal) {
@@ -1482,7 +1501,9 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   )
   const agentIdEntry = env.find(([k]) => k === "GOLEM_AGENT_ID")
   if (agentIdEntry === undefined) {
-    throw new Error("load-snapshot: GOLEM_AGENT_ID is not set in the process environment")
+    throw new Error(
+      "load-snapshot: GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+    )
   }
   const agentIdString = agentIdEntry[1]
   const [agentTypeName, typedConstructor, phantomId] = decodeAgentId(

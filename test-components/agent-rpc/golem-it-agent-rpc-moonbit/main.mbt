@@ -57,7 +57,8 @@ async fn collect_uint_stream(
   let values : Array[UInt32] = []
   for ;; {
     match stream.read() {
-      Some(value) => values.push(value)
+      Some(Ok(value)) => values.push(value)
+      Some(Err(error)) => raise error
       None => return values
     }
   }
@@ -71,7 +72,8 @@ async fn collect_string_stream(
   let values : Array[String] = []
   for ;; {
     match stream.read() {
-      Some(value) => values.push(value)
+      Some(Ok(value)) => values.push(value)
+      Some(Err(error)) => raise error
       None => return values
     }
   }
@@ -85,7 +87,8 @@ async fn collect_result_stream(
   let values : Array[Result[UInt32, String]] = []
   for ;; {
     match stream.read() {
-      Some(value) => values.push(value)
+      Some(Ok(value)) => values.push(value)
+      Some(Err(error)) => raise error
       None => return values
     }
   }
@@ -131,10 +134,11 @@ pub fn MoonbitStreamingRpcTarget::transform(
       defer input.drop()
       for ;; {
         match input.read() {
-          Some(value) =>
+          Some(Ok(value)) =>
             if writer.write_one(value + 100U) is @schema.PeerDropped {
               return
             }
+          Some(Err(error)) => raise error
           None => return
         }
       }
@@ -287,7 +291,7 @@ pub async fn MoonbitStreamingRpcCrossTarget::consume_one_then_drop(
 ) -> UInt32 {
   let _ = self
   defer input.drop()
-  input.read().unwrap()
+  input.read().unwrap().unwrap()
 }
 
 ///|
@@ -309,10 +313,11 @@ pub fn MoonbitStreamingRpcCrossTarget::transform(
       defer input.drop()
       for ;; {
         match input.read() {
-          Some(value) =>
+          Some(Ok(value)) =>
             if writer.write_one(value + 100U) is @schema.PeerDropped {
               return
             }
+          Some(Err(error)) => raise error
           None => return
         }
       }
@@ -474,10 +479,11 @@ pub async fn MoonbitStreamingRpcCaller::run(
     let nested_item_values : Array[Array[UInt32]] = []
     for ;; {
       match nested_items.read() {
-        Some(item) => {
+        Some(Ok(item)) => {
           nested_item_labels.push(item.label)
           nested_item_values.push(collect_uint_stream(item.values))
         }
+        Some(Err(error)) => raise error
         None => break
       }
     }
@@ -496,7 +502,7 @@ pub async fn MoonbitStreamingRpcCaller::run(
       target.produce_recoverable_results(),
     )
     let early_stream = target.produce_many()
-    let early_value = early_stream.read().unwrap()
+    let early_value = early_stream.read().unwrap().unwrap()
     early_stream.drop()
     let ping = target.ping()
     let increment = target.increment()
@@ -540,7 +546,7 @@ pub async fn MoonbitStreamingRpcCaller::call_producer_cancellation(
     target,
   ) {
     let stream = target.produce_cancellable()
-    let first = stream.read().unwrap()
+    let first = stream.read().unwrap().unwrap()
     stream.drop()
     (first, target.ping())
   })
@@ -575,7 +581,7 @@ pub async fn MoonbitStreamingRpcCaller::drop_output_early(
     target,
   ) {
     let stream = target.produce_many()
-    let first = stream.read().unwrap()
+    let first = stream.read().unwrap().unwrap()
     stream.drop()
     (first, target.ping())
   })

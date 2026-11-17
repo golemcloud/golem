@@ -761,6 +761,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         self.await_invocation_result(idempotency_key, result).await
     }
+    /// Runs `invoke_and_await` and calls `on_admitted` once the invocation is admitted. With
+    /// `expected_fingerprint`, a refusal before admission is answered `AgentNotFound` when a
+    /// deletion retires this incarnation. After admission the caller already knows the
+    /// invocation exists, so its outcome is returned unchanged.
+    pub(crate) async fn invoke_and_await_pinned(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+        expected_fingerprint: Option<AgentFingerprint>,
+        on_admitted: impl FnOnce() -> Result<(), WorkerExecutorError>,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        let (admission_tx, admission_rx) = tokio::sync::oneshot::channel();
+        let output = self
+            .clone()
+            .invoke_and_await_with_notifier(invocation, Some(admission_tx));
+        let mut admitted = false;
+        let output = await_scalar_invocation(output, admission_rx, || {
+            admitted = true;
+            on_admitted()
+        })
+        .await;
+        if admitted {
+            output
+        } else {
+            self.deleted_incarnation_as_not_found(expected_fingerprint, output)
+                .await
+        }
+    }
     pub(crate) async fn invoke_and_start(
         self: Arc<Self>,
         invocation: AgentInvocation,
@@ -827,7 +854,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: InvocationId,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let subscription = self.events().subscribe();
-        let result = match self.lookup_invocation_result(&idempotency_key).await {
+        // A local RPC caller holds no task-scope bind, so a deletion may already have stopped the
+        // state actor.
+        let result = match self.try_lookup_invocation_result(&idempotency_key).await? {
             LookupResult::Complete(result) => ResultOrSubscription::Finished(result),
             LookupResult::Pending => ResultOrSubscription::Pending(subscription),
             LookupResult::Interrupted => {
@@ -853,7 +882,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation: &AgentInvocation,
     ) -> Result<LookupResult, WorkerExecutorError> {
         let key = Self::require_idempotency_key(invocation)?;
-        let result = self.lookup_invocation_result(&key).await;
+        let result = self.try_lookup_invocation_result(&key).await?;
         if result != LookupResult::New {
             self.ensure_matching_invocation_payload(&key, &invocation.clone().into_parts().1)
                 .await?;
@@ -875,6 +904,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         Ok(())
     }
+
     pub(crate) fn ensure_component_agent_ingress(
         &self,
         operation: &str,
@@ -1139,8 +1169,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let admission_index = if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
                 drop(caller_instance_guard.take());
                 loop {
-                    let status = self.state_actor.status().await;
-                    if self.lookup_invocation_result(idempotency_key).await != LookupResult::New {
+                    let status = self.state_actor.try_status().await?;
+                    if self.try_lookup_invocation_result(idempotency_key).await?
+                        != LookupResult::New
+                    {
                         self.ensure_matching_invocation_payload(idempotency_key, &caller_payload)
                             .await?;
                         return Ok((None, None));
@@ -1162,6 +1194,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     if self.owner_retirement_requested.is_cancelled() {
                         return Err(self.retirement_error());
+                    }
+                    if status.status == AgentStatus::Failed
+                        && status.last_error_kind == Some(OplogErrorKind::Recovery)
+                    {
+                        let mut startup_events = self.events().subscribe();
+                        if let Some(start_attempt) = self.pending_startup_attempt() {
+                            // Wait for this recovery, not for already queued methods to finish.
+                            drop(instance_guard);
+                            startup_events
+                                .wait_for(|event| match event {
+                                    Event::WorkerLoaded {
+                                        agent_id,
+                                        start_attempt: completed_attempt,
+                                        result,
+                                    } if *agent_id == self.agent_id()
+                                        && *completed_attempt == start_attempt =>
+                                    {
+                                        Some(result.clone())
+                                    }
+                                    _ => None,
+                                })
+                                .await
+                                .map_err(|error| {
+                                    WorkerExecutorError::unknown(format!(
+                                        "Failed to receive worker startup result: {error}"
+                                    ))
+                                })??;
+                            continue;
+                        }
                     }
                     if !self
                         .state_actor
@@ -1251,7 +1312,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
         }
-        let status = self.state_actor.status().await;
+        // A local caller holds no task-scope bind, so a deletion or a retirement may have stopped
+        // the state actor after the enqueue. Failing here leaves the wake to a same-key retry,
+        // which returns this receipt and registers the wake of the committed invocation.
+        let status = self.try_get_last_known_status().await?;
         if let Some(pending) = status
             .pending_invocations
             .iter()
@@ -1601,6 +1665,45 @@ impl EphemeralInvocationState {
             }
             Self::Accepted(Some(accepted_key)) if accepted_key == idempotency_key => Ok(()),
             Self::Accepted(_) => Err(inactive_ephemeral_agent_error()),
+        }
+    }
+}
+
+pub(crate) async fn await_scalar_invocation<T>(
+    invocation: impl std::future::Future<Output = Result<T, WorkerExecutorError>>,
+    mut admission: tokio::sync::oneshot::Receiver<crate::worker::read_only_cache::AdmissionSignal>,
+    on_admitted: impl FnOnce() -> Result<(), WorkerExecutorError>,
+) -> Result<T, WorkerExecutorError> {
+    use crate::worker::read_only_cache::AdmissionSignal;
+
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => {
+            // Polling the invocation can both publish admission and complete. Preserve
+            // that admission even if its completed result is an execution failure.
+            let admitted = matches!(
+                admission.try_recv(),
+                Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate)
+            );
+            if admitted || result.is_ok() {
+                on_admitted()?;
+            }
+            result
+        }
+        signal = &mut admission => match signal {
+            Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate) => {
+                on_admitted()?;
+                invocation.await
+            }
+            Ok(AdmissionSignal::Failure(error)) => Err(error),
+            Ok(AdmissionSignal::Waiting) => unreachable!("waiting admission is never published"),
+            Err(_) => {
+                let result = invocation.await;
+                if result.is_ok() {
+                    on_admitted()?;
+                }
+                result
+            }
         }
     }
 }

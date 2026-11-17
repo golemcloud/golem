@@ -65,6 +65,7 @@ async fn deployed_scala_streams_context() -> TestContext {
             fn nested(&self, input: AgentStream<AgentStream<Item>>) -> AgentStream<AgentStream<Item>>;
             fn produce(&self) -> AgentStream<Item>;
             fn application_error(&self) -> AgentStream<Result<String, String>>;
+            fn declared_failure(&self) -> AgentStream<u32>;
             fn malformed(&self) -> AgentStream<u32>;
             async fn consume(&self, input: AgentStream<Item>) -> String;
             async fn hold(&self, input: AgentStream<Item>) -> String;
@@ -82,6 +83,7 @@ async fn deployed_scala_streams_context() -> TestContext {
                 let (mut writer, stream) = AgentStream::new();
                 spawn_local(async move {
                     let _ = writer.write_all(vec![Item { label: "remote".into(), children: vec![] }]).await;
+                    let _ = writer.close().await;
                 });
                 stream
             }
@@ -89,17 +91,33 @@ async fn deployed_scala_streams_context() -> TestContext {
                 let (mut writer, stream) = AgentStream::new();
                 spawn_local(async move {
                     writer.write_all([Ok("before".into()), Err("recoverable".into()), Ok("after".into())]).await.unwrap();
+                    writer.close().await.unwrap();
+                });
+                stream
+            }
+            fn declared_failure(&self) -> AgentStream<u32> {
+                let (mut writer, stream) = AgentStream::new();
+                spawn_local(async move {
+                    writer.write_all([17, 29]).await.unwrap();
+                    let value = golem_rust::schema::try_into_typed_schema_value(&73u32).unwrap();
+                    writer.finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(value)))).await.unwrap();
                 });
                 stream
             }
             fn malformed(&self) -> AgentStream<u32> {
                 let (mut writer, stream) = golem_rust::schema::wit::new_schema_value_stream();
+                let (completion, outcome) = golem_rust::schema::wit::new_schema_stream_outcome();
                 spawn_local(async move {
                     let _ = writer.write_one(golem_rust::schema::wit::wire::SchemaValueTree {
                         value_nodes: vec![], root: 0,
                     }).await;
+                    drop(writer);
+                    let _ = completion.write(Some(Ok(()))).await;
                 });
-                AgentStream::from_raw(stream)
+                AgentStream::from_schema_stream_with_wire_decoder(
+                    golem_rust::schema::SchemaValueStream::from_native(stream, outcome),
+                    |tree| golem_rust::schema::wit::direct::decode(tree).map_err(|e| e.to_string()),
+                )
             }
             async fn consume(&self, input: AgentStream<Item>) -> String {
                 input.collect().await.unwrap().into_iter().map(|item| item.label).collect::<Vec<_>>().join(",")
@@ -215,7 +233,24 @@ async fn deployed_scala_streams_context() -> TestContext {
           }
           def fatal(): Future[String] = {
             val provider = StreamProviderClient.get(name + "-fatal")
-            provider.malformed().flatMap(collect).map(_ => "unexpected-clean-eof")
+            for {
+              sibling <- provider.produce()
+              input <- provider.declaredFailure()
+              first <- input.pull()
+              second <- input.pull()
+              failed <- input.pull().map(_ => false).recover {
+                case golem.schema.StreamError.Failed(value) =>
+                  require(value.value == golem.schema.SchemaValue.U32Value(73))
+                  true
+              }
+              end <- input.pull()
+              siblingItems <- collect(sibling)
+              ready <- provider.status()
+            } yield {
+              require(first.contains(golem.UInt(17)) && second.contains(golem.UInt(29)) && failed && end.isEmpty)
+              require(siblingItems.map(_.label) == List("remote") && ready == "ready")
+              "scala-failure-caught"
+            }
           }
           def invalidToolTarget(): String = {
             val definition = ToolClientDefinition.named("NOT-valid")(
@@ -316,19 +351,7 @@ async fn test_scala_agent_guest_stream_producer_errors_e2e() {
         ]),
     )
     .await
-    .expect("fatal producer invocation timed out");
-    assert!(
-        !fatal.success(),
-        "malformed producer unexpectedly completed successfully"
-    );
-    assert!(
-        !fatal.stdout_contains("unexpected-clean-eof"),
-        "fatal producer was converted to clean EOF"
-    );
-    assert!(
-        fatal.stderr_contains("stream terminated: Failed(Interrupted(")
-            && fatal.stderr_contains("value-node index out of range: 0"),
-        "expected a fatal stream operation failure: {}",
-        fatal.stderr().collect::<Vec<_>>().join("\n")
-    );
+    .expect("catchable producer failure invocation timed out");
+    assert!(fatal.success_or_dump());
+    assert!(fatal.stdout_contains("scala-failure-caught"));
 }

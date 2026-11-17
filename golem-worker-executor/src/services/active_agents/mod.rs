@@ -532,7 +532,21 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let result = worker
             .ensure_existing_with_fingerprint(principal, expected_fingerprint)
             .in_current_span()
-            .await;
+            .await
+            .and_then(|()| {
+                // A worker that was already resolved, or that another caller loaded, has not
+                // been compared with this caller's expected incarnation.
+                match expected_fingerprint {
+                    Some(expected)
+                        if worker.get_initial_worker_metadata().fingerprint != expected =>
+                    {
+                        Err(WorkerExecutorError::worker_not_found(
+                            owned_agent_id.agent_id(),
+                        ))
+                    }
+                    _ => Ok(()),
+                }
+            });
         if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
             && Arc::strong_count(&active_agent) == 2
             && Arc::strong_count(&worker) == 2

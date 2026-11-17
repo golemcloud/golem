@@ -88,6 +88,10 @@ impl OplogEntry {
                 entity_parent_start_index,
                 ..
             }
+            | OplogEntry::AgentInvocationFailed {
+                entity_parent_start_index,
+                ..
+            }
             | OplogEntry::Jump {
                 entity_parent_start_index,
                 ..
@@ -194,6 +198,7 @@ impl OplogEntry {
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
             | OplogEntry::Log { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::Restart { .. }
             | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
@@ -260,6 +265,7 @@ impl OplogEntry {
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
             | OplogEntry::RecoverySucceeded { .. }
@@ -270,6 +276,7 @@ impl OplogEntry {
             | OplogEntry::PendingUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
@@ -356,6 +363,7 @@ impl OplogScopeProjection {
                 ..
             } => self.starts.contains(parent_start_index),
             OplogEntry::Error { .. }
+            | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
@@ -404,6 +412,7 @@ impl OplogScopeProjection {
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::Log {
                 parent_start_index: None,
                 ..

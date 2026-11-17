@@ -28,7 +28,6 @@ use golem_api_grpc::proto::golem::account::PlanId;
 use golem_api_grpc::proto::golem::auth::{AuthCtx, AuthEffectiveSurface, UserAuthCtx, auth_ctx};
 use golem_api_grpc::proto::golem::common::AccountId;
 use golem_api_grpc::proto::golem::worker::{InvocationRejectionReason, InvocationStart};
-use golem_common::base_model::Empty;
 use golem_common::base_model::agent::Snapshotting;
 use golem_common::base_model::component::{ComponentId, ComponentRevision};
 use golem_common::base_model::component_metadata::{ComponentMetadata, KnownExports};
@@ -48,6 +47,7 @@ use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
     OutputSchema,
 };
+use golem_schema::Empty;
 use golem_schema::proto::golem::common::Uuid;
 use golem_schema::proto::golem::schema::{
     BinaryValue, SchemaValue as ProtoSchemaValue, schema_value as proto_schema_value,
@@ -1032,19 +1032,29 @@ fn invocation_freshness_decodes_known_fresh_explicitly() {
 #[test]
 fn durable_streaming_requires_matching_callee_fingerprint() {
     let actual = AgentFingerprint::new();
-    let missing = require_expected_callee_fingerprint(None, actual).unwrap_err();
+    let agent_id = AgentId {
+        component_id: ComponentId(uuid::Uuid::from_u128(1)),
+        agent_id: "Counter(\"a\")".to_string(),
+    };
+    let missing = require_expected_callee_fingerprint(None, actual, &agent_id).unwrap_err();
     assert!(
         missing
             .to_string()
             .contains("require the expected callee fingerprint")
     );
 
-    let mismatch =
-        require_expected_callee_fingerprint(Some(AgentFingerprint::new().0.into()), actual)
-            .unwrap_err();
-    assert!(mismatch.to_string().contains("does not match"));
+    let mismatch = require_expected_callee_fingerprint(
+        Some(AgentFingerprint::new().0.into()),
+        actual,
+        &agent_id,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&mismatch, WorkerExecutorError::AgentNotFound { agent_id: found } if found == &agent_id),
+        "unexpected error: {mismatch}"
+    );
 
-    require_expected_callee_fingerprint(Some(actual.0.into()), actual).unwrap();
+    require_expected_callee_fingerprint(Some(actual.0.into()), actual, &agent_id).unwrap();
 }
 
 #[test]

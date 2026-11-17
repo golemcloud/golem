@@ -82,8 +82,8 @@ pub async fn MoonBitStreaming::stream(
 ///|
 #derive.golem_schema
 pub(all) struct MatrixDimensions {
-  width : UInt
-  height : UInt
+  width : UInt32
+  height : UInt32
 }
 
 ///|

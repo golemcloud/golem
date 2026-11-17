@@ -12,13 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::initiation::InitiationAccess;
+use super::super::initiation_owner::{
+    InitiationOwner, InitiationRequestContext, OwnedInitiationAccess,
+};
 use super::*;
 
-impl<Req, T: 'static, D: HasData + ?Sized + 'static, E> AccessRequest<Req, T, D, E> {
-    async fn build(self, context: AccessStartContext, store: &Accessor<T, D>) -> Result<Req, E> {
+impl<Req, T: 'static, D: HasData + ?Sized + 'static, Ctx: WorkerCtx, E>
+    AccessRequest<Req, T, D, Ctx, E>
+{
+    async fn build(
+        self,
+        context: AccessStartContext,
+        access: InitiationRequestContext<'_, T, D, Ctx>,
+    ) -> Result<Req, E> {
         match self {
             Self::Ready(request) => Ok(request),
-            Self::Built(build) => build(context, store).await,
+            Self::Built(build) => build(context, access).await,
         }
     }
 }
@@ -77,7 +87,11 @@ where
             started,
             _activity,
         } = self;
-        let build_request = async move |context, _| request.build(context, accessor).await;
+        let build_request = async move |context, _| {
+            request
+                .build(context, InitiationRequestContext::Inline(accessor, get_ctx))
+                .await
+        };
         let start = async {
             match stage {
                 OwnedStartStage::Prepared(prepared) => {
@@ -394,9 +408,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     ///
     /// The builder runs on **both** the live and the replay path, but its
     /// returned request is only persisted on the live path. It receives an [`AccessStartContext`]
-    /// with the liveness flag, and the accessor of the task that runs the start, which is not the
-    /// accessor of the guest's call when the start is owned (see
-    /// [`Self::start_access_with_options`]).
+    /// with the liveness flag and synchronous context windows. On cutoff-enabled bodies those
+    /// windows remain available to native initiation jobs after the guest returns.
     ///
     /// A builder error aborts the call like any other start failure: any already-written
     /// durable-scope `Start` is left incomplete,
@@ -413,7 +426,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         F: for<'a> FnOnce(
                 AccessStartContext,
-                &'a Accessor<T, D>,
+                InitiationRequestContext<'a, T, D, Ctx>,
             ) -> BoxFuture<'a, Result<Pair::Req, WorkerExecutorError>>
             + Send
             + 'static,
@@ -423,9 +436,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             AccessClaimOptions::default(),
-            AccessRequest::<_, T, D, wasmtime::Error>::Built(Box::new(move |context, accessor| {
-                Box::pin(async move { Ok(build_request(context, accessor).await?) })
-            })),
+            AccessRequest::<_, T, D, Ctx, wasmtime::Error>::Built(Box::new(
+                move |context, access| {
+                    Box::pin(async move { Ok(build_request(context, access).await?) })
+                },
+            )),
             None,
             None,
         )
@@ -466,7 +481,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::<_, T, D, wasmtime::Error>::Ready(request),
+            AccessRequest::<_, T, D, Ctx, wasmtime::Error>::Ready(request),
             None,
             None,
         )
@@ -522,7 +537,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::<_, T, D, wasmtime::Error>::Ready(request),
+            AccessRequest::<_, T, D, Ctx, wasmtime::Error>::Ready(request),
             Some(Box::new(move |_| Ok(span_started))),
             None,
         )
@@ -552,7 +567,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         F: for<'a> FnOnce(
                 AccessStartContext,
-                &'a Accessor<T, D>,
+                InitiationRequestContext<'a, T, D, Ctx>,
             ) -> BoxFuture<'a, Result<Pair::Req, wasmtime::Error>>
             + Send
             + 'static,
@@ -586,7 +601,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
-        request: AccessRequest<Pair::Req, T, D, E>,
+        request: AccessRequest<Pair::Req, T, D, Ctx, E>,
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
     ) -> Result<Self, E>
@@ -603,6 +618,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             &function_type,
             &claim_options,
         )?;
+        let owner = store.with(|mut access| get_ctx(access.data_mut()).host_initiations.clone());
+        if let Some(owner) = owner.filter(|_| {
+            store.has_guest_visible_subtask() && claim_options.host_internal_owner.is_none()
+        }) {
+            return Self::start_owned_initiation(
+                store,
+                get_ctx,
+                owner,
+                identity,
+                function_type,
+                claim_options,
+                move |context, access| {
+                    Box::pin(request.build(context, InitiationRequestContext::Owned(access)))
+                },
+                build_span,
+                span_observer,
+            )
+            .await;
+        }
         if !store.has_guest_visible_subtask() || claim_options.host_internal_owner.is_some() {
             return Self::start_identified(
                 store,
@@ -611,7 +645,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 function_type,
                 claim_options,
                 false,
-                async move |context, _| request.build(context, store).await,
+                async move |context, _| {
+                    request
+                        .build(context, InitiationRequestContext::Inline(store, get_ctx))
+                        .await
+                },
                 build_span,
                 span_observer,
                 None::<fn(&mut DurableWorkerCtx<Ctx>)>,
@@ -657,6 +695,106 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .map_err(|error| E::from_durable_call_trap(error.into()))?;
         receiver.await.map_err(|_| {
             WorkerExecutorError::runtime("owned durable call start ended without a result")
+        })?
+    }
+
+    async fn start_owned_initiation<T, D, Ctx, E, F>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        owner: Arc<InitiationOwner<Ctx>>,
+        identity: AccessCallIdentity,
+        function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
+        build_request: F,
+        build_span: Option<BuildSpanCallback>,
+        span_observer: Option<Arc<dyn CallSpanObserver>>,
+    ) -> Result<Self, E>
+    where
+        T: 'static,
+        D: HasData + ?Sized + 'static,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError + Send + 'static,
+        F: FnOnce(
+                AccessStartContext,
+                OwnedInitiationAccess<Ctx>,
+            ) -> BoxFuture<'static, Result<Pair::Req, E>>
+            + Send
+            + 'static,
+    {
+        let registration = owner.register()?;
+        let (tasks, activity, stage) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            let stage = if ctx.state.durable_call_is_live() {
+                OwnedStartStage::Prepared(Box::new(PreparedContextStart {
+                    prepared: Self::prepare_access_start(
+                        ctx,
+                        function_type,
+                        claim_options,
+                        identity.custom_invocation_scope,
+                        false,
+                        identity.invocation_id,
+                    )?,
+                }))
+            } else {
+                OwnedStartStage::Identified {
+                    identity,
+                    function_type,
+                    claim_options: Box::new(claim_options),
+                }
+            };
+            Ok::<_, WorkerExecutorError>((
+                ctx.public_state.worker().tasks.clone(),
+                ctx.tail_work_tracker().activity(),
+                stage,
+            ))
+        })?;
+        let (started, receiver) = oneshot::channel();
+        let mut access = owner.access();
+        let builder_access = access.clone();
+        drop(tasks.spawn_metadata(async move {
+            let _activity = activity;
+            let result = owner.run(async {
+                let prepared = match stage {
+                    OwnedStartStage::Prepared(prepared) => prepared.prepared,
+                    OwnedStartStage::Identified { identity, function_type, claim_options } => {
+                        crate::durable_host::call_coordinator::process_pending_replay_events_initiation(&mut access).await?;
+                        access.window(move |ctx| {
+                            Self::prepare_access_start(ctx, function_type, *claim_options, identity.custom_invocation_scope, false, identity.invocation_id)
+                        }).await??
+                    }
+                };
+                let host_internal_calls = prepared.claim_options.host_internal_calls;
+                super::super::drop_events::drain_dropped_call_events_initiation(&mut access).await?
+                    .map_err(|error| E::from_durable_call_trap(error.into_marked_anyhow()))?;
+                let executed = Self::execute_initiation_start(
+                    &mut access,
+                    prepared,
+                    async move |context, _| build_request(context, builder_access).await,
+                    build_span,
+                    span_observer,
+                    None::<fn(&mut DurableWorkerCtx<Ctx>)>,
+                ).await?;
+                access.window(move |ctx| {
+                    let mut session = Self::finish_access_start(ctx, executed);
+                    session.host_internal_calls = host_internal_calls;
+                    session
+                }).await.map_err(E::from)
+            }).await.unwrap_or_else(|error| Err(E::from(error))).map_err(|error: E| {
+                let error: anyhow::Error = error.into();
+                let failure = error.chain().find_map(|cause| cause.downcast_ref::<WorkerExecutorError>()).cloned()
+                    .unwrap_or_else(|| WorkerExecutorError::runtime(format!("host initiation failed: {error}")));
+                owner.fail(failure);
+                E::from_durable_call_trap(error)
+            });
+            match started.send(result) {
+                Ok(()) => {}
+                Err(Ok(session)) => session.discard_after_guest_drop(),
+                Err(Err(_)) => {}
+            }
+            registration.complete();
+        }).map_err(WorkerExecutorError::runtime)?);
+        receiver.await.map_err(|_| {
+            WorkerExecutorError::runtime("host-owned initiation ended without a result")
         })?
     }
 
@@ -759,7 +897,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
-        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
+        R: Send + 'static,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
     {
         Self::start_context_with_capture_and_span_builder(
@@ -791,7 +930,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
-        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
+        R: Send + 'static,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
     {
         // Capture the immutable task-context snapshot synchronously, before the first await. The
@@ -836,7 +976,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
-        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
+        R: Send + 'static,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
         E: DurableCallTrapError,
     {
@@ -939,9 +1080,51 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             &function_type,
             &claim_options,
         )?;
+        let owner = store.with(|mut access| get_ctx(access.data_mut()).host_initiations.clone());
         // A claim made by the guest runs in an owned task for the reason a start does; see
-        // [`Self::start_access_with_options`].
-        let outcome = if store.has_guest_visible_subtask() {
+        // [`Self::start_access_with_options`]. Cutoff-enabled bodies retain it outside the Store.
+        let outcome = if let Some(owner) = owner.filter(|_| {
+            store.has_guest_visible_subtask() && claim_options.host_internal_owner.is_none()
+        }) {
+            let registration = owner.register()?;
+            let (tasks, activity) = store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                (
+                    ctx.public_state.worker().tasks.clone(),
+                    ctx.tail_work_tracker().activity(),
+                )
+            });
+            let (claimed, receiver) = oneshot::channel();
+            let mut access = owner.access();
+            drop(
+                tasks
+                    .spawn_metadata(async move {
+                        let _activity = activity;
+                        let result = owner
+                            .run(Self::claim_replay_initiation(
+                                &mut access,
+                                identity,
+                                function_type,
+                                claim_options,
+                            ))
+                            .await
+                            .unwrap_or_else(Err);
+                        if let Err(error) = &result {
+                            owner.fail(error.clone());
+                        }
+                        if let Err(Ok(ReplayAccessStartOutcome::Claimed(session))) =
+                            claimed.send(result)
+                        {
+                            session.discard_after_guest_drop();
+                        }
+                        registration.complete();
+                    })
+                    .map_err(WorkerExecutorError::runtime)?,
+            );
+            receiver.await.map_err(|_| {
+                WorkerExecutorError::runtime("host-owned replay claim ended without a result")
+            })??
+        } else if store.has_guest_visible_subtask() {
             let (claimed, receiver) = oneshot::channel();
             let activity =
                 store.with(|mut access| get_ctx(access.data_mut()).tail_work_tracker().activity());

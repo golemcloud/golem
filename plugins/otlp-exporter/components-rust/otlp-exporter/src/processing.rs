@@ -61,58 +61,27 @@ pub(crate) fn process_entries_from(
             OplogEntry::AgentInvocationFinished(params) => {
                 handle_invocation_finished(state, params, &mut completed_spans, &mut metrics);
             }
-            OplogEntry::Error(params) => {
-                let error_msg = worker_error_to_string(&params.error);
+            OplogEntry::AgentInvocationFailed(params) => {
                 let time_ns = datetime_to_nanos(&params.timestamp);
-                state.terminal_error = Some((error_msg.clone(), time_ns));
-                let error_kind = oplog_error_kind_name(&params.kind);
-
-                metrics.push(counter_metric(
-                    "golem.error.count",
-                    "1",
-                    "Agent errors",
-                    &time_ns.to_string(),
-                    vec![
-                        KeyValue {
-                            key: "error.type".to_string(),
-                            value: OtlpValue {
-                                string_value: worker_error_variant_name(&params.error),
-                            },
-                        },
-                        KeyValue {
-                            key: "error.kind".to_string(),
-                            value: OtlpValue {
-                                string_value: error_kind.to_string(),
-                            },
-                        },
-                    ],
-                ));
-
-                log_records.push(OtlpLogRecord {
-                    time_unix_nano: time_ns.to_string(),
-                    observed_time_unix_nano: time_ns.to_string(),
-                    severity_number: 17,
-                    severity_text: "ERROR".to_string(),
-                    body: Some(OtlpValue {
-                        string_value: error_msg,
-                    }),
-                    attributes: vec![
-                        KeyValue {
-                            key: "error.type".to_string(),
-                            value: OtlpValue {
-                                string_value: worker_error_variant_name(&params.error),
-                            },
-                        },
-                        KeyValue {
-                            key: "error.kind".to_string(),
-                            value: OtlpValue {
-                                string_value: error_kind.to_string(),
-                            },
-                        },
-                    ],
-                    trace_id: non_empty_trace_id(&state.trace_id),
-                    span_id: None,
-                });
+                handle_error(
+                    state,
+                    &params.error,
+                    time_ns,
+                    "invocation-local",
+                    &mut log_records,
+                    &mut metrics,
+                );
+                finish_invocation(state, time_ns, true, &mut completed_spans, &mut metrics);
+            }
+            OplogEntry::Error(params) => {
+                handle_error(
+                    state,
+                    &params.error,
+                    datetime_to_nanos(&params.timestamp),
+                    oplog_error_kind_name(&params.kind),
+                    &mut log_records,
+                    &mut metrics,
+                );
             }
             OplogEntry::Interrupted(ts) => {
                 let time_ns = timestamp_to_nanos(&ts);
@@ -182,6 +151,16 @@ pub(crate) fn process_entries_from(
             }
             OplogEntry::GrowMemory(params) => {
                 handle_grow_memory(state, params, &mut metrics);
+            }
+            OplogEntry::MemorySizeReconciled(params) => {
+                state.total_memory_bytes = params.bytes;
+                metrics.push(gauge_metric(
+                    "golem.memory.total_bytes",
+                    "By",
+                    "Total linear memory and GC heap size",
+                    &datetime_to_nanos(&params.timestamp).to_string(),
+                    state.total_memory_bytes,
+                ));
             }
             OplogEntry::Start(params) => {
                 handle_start(state, params, entry_index, &mut metrics);
@@ -362,6 +341,51 @@ fn discard_openings_in_region(
     state
         .implicit_spans
         .retain(|span| !span.opening_index.is_some_and(is_inside));
+}
+
+fn handle_error(
+    state: &mut WorkerState,
+    error: &golem_rust::bindings::golem::api::oplog::WorkerError,
+    time_ns: u128,
+    error_kind: &str,
+    log_records: &mut Vec<OtlpLogRecord>,
+    metrics: &mut Vec<OtlpMetric>,
+) {
+    let error_msg = worker_error_to_string(error);
+    state.terminal_error = Some((error_msg.clone(), time_ns));
+    let attributes = vec![
+        KeyValue {
+            key: "error.type".to_string(),
+            value: OtlpValue {
+                string_value: worker_error_variant_name(error),
+            },
+        },
+        KeyValue {
+            key: "error.kind".to_string(),
+            value: OtlpValue {
+                string_value: error_kind.to_string(),
+            },
+        },
+    ];
+    metrics.push(counter_metric(
+        "golem.error.count",
+        "1",
+        "Agent errors",
+        &time_ns.to_string(),
+        attributes.clone(),
+    ));
+    log_records.push(OtlpLogRecord {
+        time_unix_nano: time_ns.to_string(),
+        observed_time_unix_nano: time_ns.to_string(),
+        severity_number: 17,
+        severity_text: "ERROR".to_string(),
+        body: Some(OtlpValue {
+            string_value: error_msg,
+        }),
+        attributes,
+        trace_id: non_empty_trace_id(&state.trace_id),
+        span_id: None,
+    });
 }
 
 fn oplog_error_kind_name(
@@ -576,7 +600,7 @@ fn handle_create(
     metrics.push(gauge_metric(
         "golem.memory.initial_bytes",
         "By",
-        "Initial linear memory size",
+        "Initial linear memory and GC heap size",
         &time_ns,
         params.initial_total_linear_memory_size,
     ));
@@ -584,7 +608,7 @@ fn handle_create(
     metrics.push(gauge_metric(
         "golem.memory.total_bytes",
         "By",
-        "Total linear memory size",
+        "Total linear memory and GC heap size",
         &time_ns,
         state.total_memory_bytes,
     ));
@@ -610,7 +634,7 @@ fn handle_grow_memory(
     metrics.push(OtlpMetric {
         name: "golem.memory.growth_bytes".to_string(),
         unit: "By".to_string(),
-        description: "Linear memory growth".to_string(),
+        description: "Linear memory and GC heap growth".to_string(),
         sum: Some(OtlpSum {
             aggregation_temporality: 1,
             is_monotonic: true,
@@ -628,7 +652,7 @@ fn handle_grow_memory(
     metrics.push(gauge_metric(
         "golem.memory.total_bytes",
         "By",
-        "Total linear memory size",
+        "Total linear memory and GC heap size",
         &time_ns,
         state.total_memory_bytes,
     ));
@@ -861,30 +885,8 @@ fn handle_invocation_finished(
     metrics: &mut Vec<OtlpMetric>,
 ) {
     let end_time_ns = datetime_to_nanos(&params.timestamp);
-    flush_implicit_spans(state, end_time_ns, false, completed);
-
+    finish_invocation(state, end_time_ns, false, completed, metrics);
     let time_ns = end_time_ns.to_string();
-
-    if let Some(start_ns) = state.invocation_start_ns.take() {
-        let duration_ns = end_time_ns.saturating_sub(start_ns);
-        metrics.push(OtlpMetric {
-            name: "golem.invocation.duration_ns".to_string(),
-            unit: "ns".to_string(),
-            description: "Invocation duration".to_string(),
-            sum: Some(OtlpSum {
-                aggregation_temporality: 1,
-                is_monotonic: true,
-                data_points: vec![OtlpNumberDataPoint {
-                    start_time_unix_nano: time_ns.clone(),
-                    time_unix_nano: time_ns.clone(),
-                    as_int: Some(duration_ns.to_string()),
-                    as_double: None,
-                    attributes: Vec::new(),
-                }],
-            }),
-            gauge: None,
-        });
-    }
 
     if params.consumed_fuel > 0 {
         metrics.push(OtlpMetric {
@@ -898,6 +900,36 @@ fn handle_invocation_finished(
                     start_time_unix_nano: time_ns.clone(),
                     time_unix_nano: time_ns,
                     as_int: Some(params.consumed_fuel.to_string()),
+                    as_double: None,
+                    attributes: Vec::new(),
+                }],
+            }),
+            gauge: None,
+        });
+    }
+}
+
+fn finish_invocation(
+    state: &mut WorkerState,
+    end_time_ns: u128,
+    is_error: bool,
+    completed: &mut Vec<OtlpSpan>,
+    metrics: &mut Vec<OtlpMetric>,
+) {
+    flush_implicit_spans(state, end_time_ns, is_error, completed);
+    if let Some(start_ns) = state.invocation_start_ns.take() {
+        let time_ns = end_time_ns.to_string();
+        metrics.push(OtlpMetric {
+            name: "golem.invocation.duration_ns".to_string(),
+            unit: "ns".to_string(),
+            description: "Invocation duration".to_string(),
+            sum: Some(OtlpSum {
+                aggregation_temporality: 1,
+                is_monotonic: true,
+                data_points: vec![OtlpNumberDataPoint {
+                    start_time_unix_nano: time_ns.clone(),
+                    time_unix_nano: time_ns,
+                    as_int: Some(end_time_ns.saturating_sub(start_ns).to_string()),
                     as_double: None,
                     attributes: Vec::new(),
                 }],
@@ -1294,6 +1326,81 @@ mod tests {
         })
     }
 
+    #[test]
+    fn memory_reconciliation_resets_total_without_counting_growth_across_batches() {
+        use golem_rust::bindings::golem::api::oplog::MemorySizeReconciledParameters;
+
+        for reconciled_bytes in [0, 40, 180] {
+            for split in 1..=4 {
+                let mut state = state();
+                let mut entries = vec![
+                    create(10, 100),
+                    OplogEntry::GrowMemory(GrowMemoryParameters {
+                        timestamp: instant(11, 3),
+                        delta: 20,
+                    }),
+                    OplogEntry::MemorySizeReconciled(MemorySizeReconciledParameters {
+                        timestamp: instant(12, 7),
+                        bytes: reconciled_bytes,
+                    }),
+                    OplogEntry::GrowMemory(GrowMemoryParameters {
+                        timestamp: instant(13, 9),
+                        delta: 7,
+                    }),
+                ];
+                let remaining = entries.split_off(split);
+                let first = process_entries_from(&mut state, 0, entries);
+                let second = process_entries_from(&mut state, split as u64, remaining);
+                assert_eq!(state.total_memory_bytes, reconciled_bytes + 7);
+
+                let metrics: Vec<_> = first.metrics.into_iter().chain(second.metrics).collect();
+                let totals: Vec<_> = metrics
+                    .iter()
+                    .filter(|metric| metric.name == "golem.memory.total_bytes")
+                    .map(|metric| {
+                        assert!(metric.sum.is_none());
+                        let points = &metric.gauge.as_ref().unwrap().data_points;
+                        assert_eq!(points.len(), 1);
+                        (points[0].time_unix_nano.clone(), points[0].as_int.clone())
+                    })
+                    .collect();
+                assert_eq!(
+                    totals,
+                    vec![
+                        ("10000000000".to_string(), Some("100".to_string())),
+                        ("11000000003".to_string(), Some("120".to_string())),
+                        (
+                            "12000000007".to_string(),
+                            Some(reconciled_bytes.to_string())
+                        ),
+                        (
+                            "13000000009".to_string(),
+                            Some((reconciled_bytes + 7).to_string())
+                        ),
+                    ]
+                );
+                let growth: Vec<_> = metrics
+                    .iter()
+                    .filter(|metric| metric.name == "golem.memory.growth_bytes")
+                    .map(|metric| {
+                        assert!(metric.gauge.is_none());
+                        let sum = metric.sum.as_ref().unwrap();
+                        assert!(sum.is_monotonic);
+                        assert_eq!(sum.data_points.len(), 1);
+                        (
+                            sum.data_points[0].time_unix_nano.as_str(),
+                            sum.data_points[0].as_int.as_deref(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    growth,
+                    vec![("11000000003", Some("20")), ("13000000009", Some("7"))]
+                );
+            }
+        }
+    }
+
     fn local_span(span_id: &str, parent: Option<&str>, inherited: bool) -> SpanData {
         SpanData::LocalSpan(LocalSpanData {
             span_id: span_id.to_string(),
@@ -1306,17 +1413,20 @@ mod tests {
     }
 
     fn invocation_started(trace_id: &str, context: Vec<SpanData>) -> OplogEntry {
-        invocation_started_with_key("invocation", trace_id, context)
+        invocation_started_with_id(1, trace_id, context)
     }
 
-    fn invocation_started_with_key(
-        idempotency_key: &str,
+    fn invocation_started_with_id(
+        invocation_id: u64,
         trace_id: &str,
         context: Vec<SpanData>,
     ) -> OplogEntry {
         OplogEntry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
             timestamp: instant(12, 0),
-            invocation_id: idempotency_key.to_string(),
+            invocation_id: Uuid {
+                high_bits: 0,
+                low_bits: invocation_id,
+            },
             payload: OplogPayload::Inline(Vec::new()),
             trace_id: trace_id.to_string(),
             trace_states: Vec::new(),
@@ -1335,7 +1445,10 @@ mod tests {
     fn invocation_finished() -> OplogEntry {
         OplogEntry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
             timestamp: instant(20, 0),
-            invocation_id: "invocation".to_string(),
+            invocation_id: Uuid {
+                high_bits: 0,
+                low_bits: 1,
+            },
             result: OplogPayload::Inline(Vec::new()),
             method_name: None,
             consumed_fuel: 0,
@@ -1834,22 +1947,97 @@ mod tests {
     }
 
     #[test]
+    fn invocation_local_failure_finishes_implicit_spans_and_duration_without_another_invocation() {
+        let mut state = state();
+        handle_span_started(&mut state, opening("explicit"), None);
+        let failed = process_entries(
+            &mut state,
+            vec![
+                invocation_started(
+                    "trace-failed",
+                    vec![local_span("failed-invocation", None, false)],
+                ),
+                OplogEntry::AgentInvocationFailed(
+                    golem_rust::bindings::golem::api::oplog::RawAgentInvocationFailedParameters {
+                        timestamp: instant(18, 0),
+                        invocation_id: Uuid {
+                            high_bits: 0,
+                            low_bits: 1,
+                        },
+                        error: WorkerError::Unknown("boom".to_string()),
+                        start_index: 0,
+                    },
+                ),
+            ],
+        );
+
+        assert_eq!(failed.spans.len(), 1);
+        assert_eq!(failed.spans[0].span_id, "failed-invocation");
+        assert_eq!(failed.spans[0].trace_id, "trace-failed");
+        assert_eq!(failed.spans[0].end_time_unix_nano, "18000000000");
+        assert_eq!(failed.spans[0].status.as_ref().unwrap().code, 2);
+        assert_eq!(
+            failed.spans[0].status.as_ref().unwrap().message.as_deref(),
+            Some("unknown: boom")
+        );
+        let duration = failed
+            .metrics
+            .iter()
+            .find(|metric| metric.name == "golem.invocation.duration_ns")
+            .unwrap();
+        let points = &duration.sum.as_ref().unwrap().data_points;
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].as_int.as_deref(), Some("6000000000"));
+        assert_eq!(points[0].time_unix_nano, "18000000000");
+        assert!(failed.log_records[0].attributes.iter().any(|attribute| {
+            attribute.key == "error.kind" && attribute.value.string_value == "invocation-local"
+        }));
+        assert!(state.invocation_start_ns.is_none());
+        assert!(state.implicit_spans.is_empty());
+        assert_eq!(state.pending_spans.len(), 1);
+
+        let later = process_entries(
+            &mut state,
+            vec![OplogEntry::End(RawEndParameters {
+                timestamp: instant(30, 0),
+                start_index: 0,
+                response: None,
+                forced_commit: false,
+                span_finished: Some(close("explicit", SpanOutcome::Completed)),
+                span_attributes: None,
+            })],
+        );
+        assert_eq!(later.spans.len(), 1);
+        assert_eq!(later.spans[0].span_id, "explicit");
+        assert_eq!(later.spans[0].trace_id, "trace-a");
+        assert!(later.spans[0].status.is_none());
+        assert!(later.metrics.is_empty());
+        assert!(state.pending_spans.is_empty());
+    }
+
+    #[test]
     fn next_invocation_start_closes_failed_implicit_span_after_revert() {
-        for next_key in ["failed-key", "next-key"] {
+        for (next_id, kind, expected_kind) in [
+            (1, OplogErrorKind::Invocation, "invocation"),
+            (2, OplogErrorKind::Invocation, "invocation"),
+        ] {
             let mut state = state();
             handle_span_started(&mut state, opening("explicit"), None);
             let failed = process_entries(
                 &mut state,
                 vec![
-                    invocation_started_with_key(
-                        "failed-key",
+                    invocation_started_with_id(
+                        1,
                         "trace-failed",
                         vec![local_span("failed-invocation", None, false)],
                     ),
                     OplogEntry::Error(RawErrorParameters {
                         timestamp: instant(18, 0),
-                        kind: OplogErrorKind::Invocation,
-                        invocation_id: Some("failed-key".to_string()),
+                        kind,
+                        invocation_id: Some(Uuid {
+                            high_bits: 0,
+                            low_bits: 1,
+                        }),
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
                         retry_policy_state: None,
@@ -1857,6 +2045,9 @@ mod tests {
                 ],
             );
 
+            assert!(failed.log_records[0].attributes.iter().any(|attribute| {
+                attribute.key == "error.kind" && attribute.value.string_value == expected_kind
+            }));
             assert!(failed.spans.is_empty());
             assert_eq!(state.implicit_spans.len(), 1);
             assert_eq!(state.pending_spans.len(), 1);
@@ -1865,8 +2056,8 @@ mod tests {
                 &mut state,
                 vec![
                     revert_original_start(),
-                    invocation_started_with_key(
-                        next_key,
+                    invocation_started_with_id(
+                        next_id,
                         "trace-retry",
                         vec![local_span("retry-invocation", None, false)],
                     ),

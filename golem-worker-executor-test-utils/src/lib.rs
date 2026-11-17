@@ -605,6 +605,13 @@ type PrimaryContextProbe = Box<
         + Send,
 >;
 
+type InstancePreparationProbe = Box<
+    dyn for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
+        ) -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send,
+>;
+
 #[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
@@ -1242,6 +1249,37 @@ impl TestWorkerExecutor {
         receive
     }
 
+    /// Runs once around the next primary instance preparation. The first probe owns the Store
+    /// before recovery; the second observes it only after successful preparation. Both probes
+    /// are consumed by that attempt, including when preparation fails or requests a retry.
+    pub fn probe_next_instance_preparation(
+        &self,
+        agent_id: &AgentId,
+        before: impl for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
+        )
+            -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send
+        + 'static,
+        after: impl for<'a> FnOnce(
+            &'a mut Store<TestWorkerCtx>,
+        )
+            -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send
+        + 'static,
+    ) {
+        let mut probes = self
+            .additional_test_deps
+            .instance_preparation_probes
+            .lock()
+            .unwrap();
+        assert!(
+            !probes.contains_key(agent_id),
+            "instance preparation probe already armed"
+        );
+        probes.insert(agent_id.clone(), (Box::new(before), Box::new(after)));
+    }
+
     pub fn probe_runtime_disposal(
         &self,
         agent_id: &AgentId,
@@ -1790,9 +1828,9 @@ impl TestWorkerExecutor {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<Arc<golem_worker_executor::services::active_agents::ActiveAgent<TestWorkerCtx>>>
     {
-        self.additional_test_deps
-            .active_agents
-            .get()?
+        self.services
+            .as_ref()?
+            .active_agents()
             .try_get_active_agent(owned_agent_id)
             .await
     }
@@ -1879,8 +1917,13 @@ impl TestWorkerExecutor {
     /// Returns whether a Worker shell is currently in `ActiveAgents` without
     /// refreshing its last-access time.
     pub async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        match self.additional_test_deps.active_agents.get() {
-            Some(active_agents) => active_agents.contains_cached_agent(owned_agent_id).await,
+        match self.services.as_ref() {
+            Some(services) => {
+                services
+                    .active_agents()
+                    .contains_cached_agent(owned_agent_id)
+                    .await
+            }
             None => false,
         }
     }
@@ -2609,7 +2652,7 @@ impl TestContext {
 
     /// Waits until the workers of every shut-down executor previously started on this context
     /// stopped executing. Executors that are still running are left alone.
-    async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
+    pub async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
         let previous = self.executor_invocation_loops.lock().unwrap().clone();
         let mut drained = Vec::new();
         for loops in &previous {
@@ -3606,8 +3649,26 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         instance: &Instance,
         store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        let probes = store
+            .data()
+            .additional_test_deps
+            .instance_preparation_probes
+            .lock()
+            .unwrap()
+            .remove(agent_id);
+        let after = if let Some((before, after)) = probes {
+            before(store).await?;
+            Some(after)
+        } else {
+            None
+        };
         let result =
             DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await;
+        if matches!(result, Ok(None))
+            && let Some(after) = after
+        {
+            after(store).await?;
+        }
         let gate = store
             .data()
             .additional_test_deps
@@ -3698,6 +3759,16 @@ impl InvocationHooks for TestWorkerCtx {
     ) -> InvocationFailureDecision {
         self.durable_ctx
             .on_invocation_failure(full_function_name, trap_type)
+            .await
+    }
+
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx
+            .record_agent_method_failure(full_function_name, error)
             .await
     }
 
@@ -4159,16 +4230,16 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             .await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
-        self.durable_memory_grown(current, desired, kind);
+    fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {
+        self.durable_memory_grown(current, desired);
     }
 
     fn memory_grow_failed(
         &mut self,
         _error: wasmtime::Error,
-        kind: MemoryKind,
+        _kind: MemoryKind,
     ) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed(kind)
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(
@@ -4224,6 +4295,10 @@ impl HostWasmRpc for TestWorkerCtx {
         self.durable_ctx
             .create(agent_type_name, constructor, phantom_id, config)
             .await
+    }
+
+    async fn bind_self(&mut self) -> anyhow::Result<Result<(String, Resource<WasmRpc>), RpcError>> {
+        self.durable_ctx.bind_self().await
     }
 
     async fn invoke_and_await(
@@ -4833,6 +4908,20 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _golem_config: &GolemConfig,
     ) -> Arc<dyn DirectInvocationAuthService> {
         Arc::new(NoOpDirectInvocationAuthService)
+    }
+}
+
+/// Returns the same supplied resource entry for every account initialization.
+/// Tests can retain the entry to observe or change its limits and usage.
+pub struct SharedResourceLimits(pub Arc<AtomicResourceEntry>);
+
+#[async_trait]
+impl ResourceLimits for SharedResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+        Ok(self.0.clone())
     }
 }
 
@@ -6706,6 +6795,7 @@ impl Oplog for TestOplog {
             }
             result => result?,
         };
+        self.pause_at_test_append(&ordered.entry, true).await?;
         self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
@@ -6763,6 +6853,7 @@ impl Oplog for TestOplog {
             }
             result => result?,
         };
+        self.pause_at_test_append(&ordered.entry, true).await?;
         self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
@@ -7085,6 +7176,9 @@ type EntitySettlementAccess =
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
     primary_context_probes: Arc<std::sync::Mutex<HashMap<AgentId, PrimaryContextProbe>>>,
+    instance_preparation_probes: Arc<
+        std::sync::Mutex<HashMap<AgentId, (InstancePreparationProbe, InstancePreparationProbe)>>,
+    >,
     rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
     native_test_effects: Arc<AtomicUsize>,
     native_test_helper_effects: Arc<AtomicUsize>,
@@ -7173,6 +7267,7 @@ impl AdditionalTestDeps {
         let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
             primary_context_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            instance_preparation_probes: Arc::default(),
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,
@@ -9447,6 +9542,7 @@ pub struct RecordingRpc {
     inner: Arc<dyn Rpc>,
     method_name: String,
     attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
+    call_count: Arc<AtomicUsize>,
 }
 
 impl RecordingRpc {
@@ -9459,7 +9555,12 @@ impl RecordingRpc {
             inner,
             method_name: method_name.into(),
             attempts,
+            call_count: Arc::default(),
         }
+    }
+
+    pub fn call_count(&self) -> Arc<AtomicUsize> {
+        self.call_count.clone()
     }
 }
 
@@ -9474,6 +9575,34 @@ impl FailingRpc {
 
 #[async_trait]
 impl Rpc for RecordingRpc {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
@@ -9482,6 +9611,7 @@ impl Rpc for RecordingRpc {
         owner: &AgentId,
         auth: &AuthCtx,
     ) -> Result<bool, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .cancel_scheduled_invocation(target, key, receipt, owner, auth)
             .await
@@ -9496,6 +9626,7 @@ impl Rpc for RecordingRpc {
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .schedule_invocation(
                 owned_agent_id,
@@ -9522,6 +9653,7 @@ impl Rpc for RecordingRpc {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .create_demand(
                 target,
@@ -9545,6 +9677,7 @@ impl Rpc for RecordingRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -9555,6 +9688,7 @@ impl Rpc for RecordingRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<SchemaValue, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         if method_name == self.method_name {
             self.attempts.lock().unwrap().push(idempotency_key.clone());
         }
@@ -9564,6 +9698,7 @@ impl Rpc for RecordingRpc {
                 environment_id,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 method_name,
                 method_parameters,
                 self_created_by,
@@ -9583,6 +9718,7 @@ impl Rpc for RecordingRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -9592,12 +9728,14 @@ impl Rpc for RecordingRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .invoke(
                 target,
                 environment_id,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 method_name,
                 method_parameters,
                 self_created_by,
@@ -9613,6 +9751,33 @@ impl Rpc for RecordingRpc {
 
 #[async_trait]
 impl Rpc for FailingRpc {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
@@ -9684,6 +9849,7 @@ impl Rpc for FailingRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -9709,6 +9875,7 @@ impl Rpc for FailingRpc {
                     environment_id,
                     idempotency_key,
                     freshness_disposition,
+                    expected_callee_fingerprint,
                     method_name,
                     method_parameters,
                     self_created_by,
@@ -9729,6 +9896,7 @@ impl Rpc for FailingRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -9744,6 +9912,7 @@ impl Rpc for FailingRpc {
                 environment_id,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 method_name,
                 method_parameters,
                 self_created_by,

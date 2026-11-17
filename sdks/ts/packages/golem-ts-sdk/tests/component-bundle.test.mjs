@@ -149,7 +149,9 @@ describe('Node HTTP automatic registration', () => {
     const exports = await instantiate(output.code, {}, 'es');
     const [agent] = exports.guest.discoverAgentTypes();
     expect(agent.typeName).toBe('AutoWeb');
-    expect(agent.httpMount.pathPrefix).toEqual([{ tag: 'literal', val: 'auto' }]);
+    expect(agent.httpMount.pathPrefix).toEqual([
+      { tag: 'segment', val: { tag: 'literal', val: 'auto' } },
+    ]);
     expect(agent.httpMount.authDetails.required).toBe(true);
     expect(agent.httpMount.corsOptions.allowedPatterns).toEqual(['https://example.test']);
     expect(globalThis.__golemAutoServer.listening).toBe(true);
@@ -803,8 +805,11 @@ describe('component exports', () => {
         }
       },
       SchemaValueStream: {
-        wrap: async (iterable) => ({ iterable }),
-        unwrap: async (wrapped) => wrapped.iterable,
+        wrap: async (iterable, outcome) => ({ iterable, outcome }),
+        unwrap: async (wrapped) => [
+          wrapped.iterable,
+          wrapped.outcome ?? Promise.resolve({ tag: 'ok', val: undefined }),
+        ],
       },
     });
     expect(runtime.guest.discoverAgentTypes()).toHaveLength(1);
@@ -1333,5 +1338,5 @@ describe('component exports', () => {
       plugins: [create()],
     });
     await fresh.close();
-  });
+  }, 30000);
 });

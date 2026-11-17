@@ -46,6 +46,7 @@ where
         request: &InvocationStart,
         acceptance_committed: tokio::sync::oneshot::Sender<()>,
         accepted: tokio::sync::oneshot::Sender<AcceptedInvocation>,
+        scope: &crate::worker::tasks::TaskScope,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         use golem_api_grpc::proto::golem::worker::AgentInvocationMode as Mode;
 
@@ -58,6 +59,24 @@ where
                 "existing tool target must be a real agent",
             ));
         }
+        // An existing owner is named by its fingerprint, and the guard pins that incarnation in
+        // every mode. A virtual owner has no incarnation a caller can name.
+        let expected_fingerprint = match (tool.fresh_owner, request.expected_callee_fingerprint) {
+            (false, Some(fingerprint)) => {
+                Some(golem_common::model::AgentFingerprint(fingerprint.into()))
+            }
+            (true, None) => None,
+            (true, Some(_)) => {
+                return Err(WorkerExecutorError::invalid_request(
+                    "a fresh external tool owner cannot have an expected agent fingerprint",
+                ));
+            }
+            (false, None) => {
+                return Err(WorkerExecutorError::invalid_request(
+                    "an external tool invocation on an existing agent requires its expected agent fingerprint",
+                ));
+            }
+        };
         let principal = request
             .principal
             .clone()
@@ -106,20 +125,43 @@ where
                     ))
                 })?;
             response.idempotency_key = Some(key);
-            let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
-            let Some(metadata) = metadata else {
-                response.invocation_status = Some(InvocationStatus::Unknown);
-                publish_acceptance(acceptance_committed, accepted, &key, None)?;
-                return Ok(response);
+            let (worker, metadata, _response_lease) = if let Some(expected) = expected_fingerprint {
+                // The guard pins the named incarnation, and the response describes that worker,
+                // so a delete or re-create between reads cannot answer for another incarnation.
+                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
+                    self,
+                    &owned,
+                    principal,
+                    Some(expected),
+                )
+                .await?;
+                let bound = scope
+                    .bind(&worker.tasks)
+                    .map_err(WorkerExecutorError::runtime);
+                worker
+                    .deleted_incarnation_as_not_found(Some(expected), bound)
+                    .await?;
+                let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned)
+                    .await?
+                    .filter(|metadata| metadata.fingerprint == expected)
+                    .ok_or_else(|| WorkerExecutorError::worker_not_found(owned.agent_id()))?;
+                (worker, metadata, response_lease)
+            } else {
+                let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
+                let Some(metadata) = metadata else {
+                    response.invocation_status = Some(InvocationStatus::Unknown);
+                    publish_acceptance(acceptance_committed, accepted, &key, None)?;
+                    return Ok(response);
+                };
+                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
+                    self, &owned, principal, None,
+                )
+                .await?;
+                scope
+                    .bind(&worker.tasks)
+                    .map_err(WorkerExecutorError::runtime)?;
+                (worker, metadata, response_lease)
             };
-            if !tool.fresh_owner || request.expected_callee_fingerprint.is_some() {
-                require_expected_callee_fingerprint(
-                    request.expected_callee_fingerprint,
-                    metadata.fingerprint,
-                )?;
-            }
-            let (worker, _response_lease) =
-                Worker::get_exact_existing_suspended_for_response(self, &owned, principal).await?;
             response.component_revision = Some(metadata.last_known_status.component_revision);
             response.agent_fingerprint = Some(metadata.fingerprint);
             match worker.lookup_invocation_result(&key).await {
@@ -269,6 +311,9 @@ where
                     principal.clone(),
                 )
                 .await?;
+            scope
+                .bind(&worker.tasks)
+                .map_err(WorkerExecutorError::runtime)?;
             let metadata = worker.get_initial_worker_metadata();
             let key = request_key
                 .finalize(metadata.agent_id, metadata.fingerprint, &operation)
@@ -310,15 +355,22 @@ where
                 )
                 .await?;
         }
-        let (worker, _response_lease) =
-            Worker::get_exact_existing_suspended_for_response(self, &owned, principal.clone())
-                .await?;
-        if !tool.fresh_owner {
-            require_expected_callee_fingerprint(
-                request.expected_callee_fingerprint,
-                worker.get_initial_worker_metadata().fingerprint,
-            )?;
-        }
+        // A missing, replaced or deleting incarnation is answered before the call reads or
+        // prepares it. A deletion that starts later cancels this session and waits for it before
+        // it stops the agent.
+        let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
+            self,
+            &owned,
+            principal.clone(),
+            expected_fingerprint,
+        )
+        .await?;
+        let bound = scope
+            .bind(&worker.tasks)
+            .map_err(WorkerExecutorError::runtime);
+        worker
+            .deleted_incarnation_as_not_found(expected_fingerprint, bound)
+            .await?;
         let metadata = worker.get_latest_worker_metadata().await;
         let key = request_key
             .finalize(owned.agent_id.clone(), metadata.fingerprint, &operation)

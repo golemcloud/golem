@@ -1272,6 +1272,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::AgentAlreadyExists { agent_id } => {
             format!("Worker already exists: {:?}", agent_id)
         }
+        WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id } => {
+            format!("Create idempotency key conflict: {agent_id}")
+        }
         WorkerExecutorError::AgentCreationFailed { agent_id, details } => {
             format!("Worker creation failed: {:?}: {}", agent_id, details)
         }
@@ -1291,7 +1294,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         ),
         error @ (WorkerExecutorError::ComponentServiceUnavailable { .. }
         | WorkerExecutorError::ComponentServiceRefused { .. }
-        | WorkerExecutorError::OplogFailed { .. }) => error.to_string(),
+        | WorkerExecutorError::OplogFailed { .. }
+        | WorkerExecutorError::StaleCursor { .. }) => error.to_string(),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
             component_revision,

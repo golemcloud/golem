@@ -123,6 +123,7 @@ pub async fn invoke_tool(
             proto_principal,
             None,
             None,
+            None,
         )
         .await
         .map_err(|e| {

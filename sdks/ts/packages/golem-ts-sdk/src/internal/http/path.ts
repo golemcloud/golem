@@ -56,8 +56,8 @@ function parseSegment(segment: string, isLast: boolean): PathSegment {
       rejectEmptyString(variableName, 'remaining path variable');
 
       return {
-        tag: 'remaining-path-variable',
-        val: { variableName },
+        tag: 'segment',
+        val: { tag: 'remaining-path-variable', val: { variableName } },
       };
     }
 
@@ -71,8 +71,8 @@ function parseSegment(segment: string, isLast: boolean): PathSegment {
     rejectEmptyString(name, 'path variable');
 
     return {
-      tag: 'path-variable',
-      val: { variableName: name },
+      tag: 'segment',
+      val: { tag: 'path-variable', val: { variableName: name } },
     };
   }
 
@@ -85,7 +85,7 @@ function parseSegment(segment: string, isLast: boolean): PathSegment {
   rejectEmptyString(segment, `Literal path segment cannot be an empty string`);
 
   return {
-    tag: 'literal',
-    val: segment,
+    tag: 'segment',
+    val: { tag: 'literal', val: segment },
   };
 }

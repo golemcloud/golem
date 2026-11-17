@@ -718,6 +718,16 @@ impl InvocationHooks for Context {
             .await
     }
 
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx
+            .record_agent_method_failure(full_function_name, error)
+            .await
+    }
+
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
@@ -770,8 +780,8 @@ impl ResourceLimiterAsync for Context {
             .await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
-        if self.durable_memory_grown(current, desired, kind) {
+    fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {
+        if self.durable_memory_grown(current, desired) {
             record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
     }
@@ -779,9 +789,9 @@ impl ResourceLimiterAsync for Context {
     fn memory_grow_failed(
         &mut self,
         _error: wasmtime::Error,
-        kind: MemoryKind,
+        _kind: MemoryKind,
     ) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed(kind)
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(
@@ -935,6 +945,10 @@ impl HostWasmRpc for Context {
         self.durable_ctx
             .create(agent_type_name, constructor, phantom_id, config)
             .await
+    }
+
+    async fn bind_self(&mut self) -> anyhow::Result<Result<(String, Resource<WasmRpc>), RpcError>> {
+        self.durable_ctx.bind_self().await
     }
 
     async fn invoke_and_await(

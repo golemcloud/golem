@@ -135,6 +135,12 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         consumed_fuel: consumed_fuel,
         component_revision: component_revision.get(),
     } }
+    AgentInvocationFailed { record AgentInvocationFailedParams => AgentInvocationFailedParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        error: error,
+        start_index: start_index.into(),
+    } }
     Suspend { override (PublicOplogEntry::Suspend(SuspendParams { timestamp })) => Ok({
                     Self::Suspend(timestamp.into())
                 }) }
@@ -206,6 +212,10 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     GrowMemory { record GrowMemoryParams => GrowMemoryParameters {
         timestamp: timestamp.into(),
         delta: delta,
+    } }
+    MemorySizeReconciled { record MemorySizeReconciledParams => MemorySizeReconciledParameters {
+        timestamp: timestamp.into(),
+        bytes: bytes,
     } }
     CreateResource { record CreateResourceParams => CreateResourceParameters {
         timestamp: timestamp.into(),

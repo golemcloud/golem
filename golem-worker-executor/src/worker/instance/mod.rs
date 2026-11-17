@@ -37,11 +37,11 @@ use golem_common::model::entity::{
     EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
     InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::regions::DeletedRegions;
 #[cfg(any(test, feature = "test-utils"))]
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
@@ -103,18 +103,20 @@ pub(super) enum LinearMemoryEnumerationError {
     Overflow,
 }
 
-pub(super) fn allocated_linear_memory_bytes<T>(
+/// Sums the unshared linear memories and the GC heap of the store. Golem accounts both the same
+/// way, so this is the total that the memory tracker reconciles to.
+pub(super) fn allocated_memory_bytes<T>(
     store: &Store<T>,
 ) -> Result<u64, LinearMemoryEnumerationError> {
-    store
-        .linear_memories()
-        .iter()
-        .try_fold(0u64, |allocated_bytes, memory| match memory {
+    store.linear_memories().iter().try_fold(
+        store.gc_heap_capacity() as u64,
+        |allocated_bytes, memory| match memory {
             StoreMemory::Unshared(memory) => allocated_bytes
                 .checked_add(memory.data_size(store) as u64)
                 .ok_or(LinearMemoryEnumerationError::Overflow),
             StoreMemory::Shared(_) => Err(LinearMemoryEnumerationError::Shared),
-        })
+        },
+    )
 }
 
 struct StoreFuelGuard<Ctx: crate::workerctx::FuelManagement + 'static> {
@@ -161,6 +163,86 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> DerefMut for StoreFuelGuar
 impl<Ctx: crate::workerctx::FuelManagement + 'static> Drop for StoreFuelGuard<Ctx> {
     fn drop(&mut self) {
         self.settle();
+    }
+}
+
+/// A primary runtime keeps its original host context after disposing a trapped Store.
+pub(super) struct PrimaryStore<Ctx: 'static> {
+    state: Option<PrimaryStoreState<Ctx>>,
+}
+
+enum PrimaryStoreState<Ctx: 'static> {
+    Resident(Store<Ctx>),
+    Disposed(Ctx),
+}
+
+impl<Ctx: 'static> PrimaryStore<Ctx> {
+    pub(super) fn new(store: Store<Ctx>) -> Self {
+        Self {
+            state: Some(PrimaryStoreState::Resident(store)),
+        }
+    }
+
+    pub(super) fn data(&self) -> &Ctx {
+        match self.state.as_ref().unwrap() {
+            PrimaryStoreState::Resident(store) => store.data(),
+            PrimaryStoreState::Disposed(context) => context,
+        }
+    }
+
+    pub(super) fn data_mut(&mut self) -> &mut Ctx {
+        match self.state.as_mut().unwrap() {
+            PrimaryStoreState::Resident(store) => store.data_mut(),
+            PrimaryStoreState::Disposed(context) => context,
+        }
+    }
+}
+
+impl<Ctx: crate::workerctx::FuelManagement + 'static> PrimaryStore<Ctx> {
+    pub(super) fn dispose(&mut self) {
+        self.state = self.state.take().map(|state| match state {
+            PrimaryStoreState::Resident(mut store) => {
+                if let Ok(current_fuel_level) = store.get_fuel() {
+                    store.data_mut().settle_fuel(current_fuel_level);
+                }
+                PrimaryStoreState::Disposed(store.into_data())
+            }
+            state @ PrimaryStoreState::Disposed(_) => state,
+        });
+    }
+}
+
+impl<Ctx: 'static> Deref for PrimaryStore<Ctx> {
+    type Target = Store<Ctx>;
+
+    fn deref(&self) -> &Self::Target {
+        match self.state.as_ref().unwrap() {
+            PrimaryStoreState::Resident(store) => store,
+            PrimaryStoreState::Disposed(_) => panic!("guest execution after Store disposal"),
+        }
+    }
+}
+
+impl<Ctx: 'static> DerefMut for PrimaryStore<Ctx> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self.state.as_mut().unwrap() {
+            PrimaryStoreState::Resident(store) => store,
+            PrimaryStoreState::Disposed(_) => panic!("guest execution after Store disposal"),
+        }
+    }
+}
+
+impl<Ctx: 'static> AsContext for PrimaryStore<Ctx> {
+    type Data = Ctx;
+
+    fn as_context(&self) -> wasmtime::StoreContext<'_, Ctx> {
+        self.deref().as_context()
+    }
+}
+
+impl<Ctx: 'static> AsContextMut for PrimaryStore<Ctx> {
+    fn as_context_mut(&mut self) -> wasmtime::StoreContextMut<'_, Ctx> {
+        self.deref_mut().as_context_mut()
     }
 }
 
@@ -892,9 +974,31 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let instance = instance_pre
             .instantiate_async(&mut *store)
             .await
-            .map_err(|error| {
-                instantiation_failure(&self.runtime, &error)
-                    .unwrap_or_else(|| self.creation_error(error.into()))
+            .map_err(|error| match instantiation_failure(&self.runtime, &error) {
+                Some(failure) => failure,
+                None if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>()
+                    || matches!(
+                        error.root_cause().downcast_ref::<GolemSpecificWasmTrap>(),
+                        Some(
+                            GolemSpecificWasmTrap::WorkerExceededMemoryLimit
+                                | GolemSpecificWasmTrap::WorkerOutOfMemory
+                        )
+                    ) =>
+                {
+                    let error = store
+                        .data()
+                        .durable_ctx()
+                        .linear_memory_tracker()
+                        .annotate_gc_heap_error(error);
+                    crate::model::TrapType::from_error::<Ctx>(
+                        &error.into(),
+                        OplogIndex::INITIAL,
+                        store.data().agent_mode(),
+                    )
+                    .as_golem_error("")
+                    .expect("memory exhaustion must classify as a memory failure")
+                }
+                None => self.creation_error(error.into()),
             })?;
 
         let current_level = store.get_fuel().unwrap_or(0);
@@ -924,7 +1028,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let tracker = durable.linear_memory_tracker();
         let limit = durable.max_linear_memory_size();
         let allocated_bytes =
-            allocated_linear_memory_bytes(&hosted.store).map_err(|error| match error {
+            allocated_memory_bytes(&hosted.store).map_err(|error| match error {
                 LinearMemoryEnumerationError::Shared => super::shared_linear_memory_error(&owner),
                 LinearMemoryEnumerationError::Overflow => {
                     WorkerExecutorError::runtime("linear-memory allocation total overflowed")
@@ -942,22 +1046,14 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         }
 
         let retained_grant = tracker.retained_growth_grant();
-        let (grant_is_tracked, granted_bytes) = {
-            let grant = retained_grant.lock().unwrap();
-            (grant.is_tracked(), grant.bytes())
-        };
+        let grant_is_tracked = retained_grant.lock().unwrap().is_tracked();
+        let granted_bytes = tracker.reserved_bytes();
         if grant_is_tracked && required_grant_bytes > granted_bytes {
             let additional_grant = owner
                 .active_agents()
                 .acquire_memory(required_grant_bytes - granted_bytes)
                 .await;
             retained_grant.lock().unwrap().merge(additional_grant);
-        }
-        if grant_is_tracked {
-            retained_grant
-                .lock()
-                .unwrap()
-                .shrink_to(required_grant_bytes);
         }
 
         if self.runtime == OwnerRuntime::Agent {
@@ -966,19 +1062,24 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 .store(false, Ordering::Release);
         }
 
-        let live_instantiation_growth =
-            tracker.reconcile(allocated_bytes, std::time::Instant::now());
-        crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
-        if self.runtime == OwnerRuntime::Agent && live_instantiation_growth > 0 {
-            // Commit the growth oplog entry before publishing the primary instance. Otherwise a
-            // process crash can replay and persist the same instantiation growth again.
+        if self.runtime == OwnerRuntime::Agent {
+            // Join any earlier baseline and commit the residual before exposing the instance.
             owner
-                .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
+                .finalize_instantiation_memory(&tracker, allocated_bytes)
                 .await?;
-            owner
-                .startup_linear_memory_bytes
-                .store(allocated_bytes, Ordering::Release);
+        } else {
+            tracker.reconcile(allocated_bytes, std::time::Instant::now());
         }
+        // Preparation keeps the replay reservation floor and shrinks after reconciliation's
+        // quota callbacks and grant merge. Preserve the pre-merge tracked decision: merging
+        // can adopt a controller, while shrinking an inert grant changes its historical bytes.
+        if grant_is_tracked {
+            retained_grant
+                .lock()
+                .unwrap()
+                .shrink_to(required_grant_bytes);
+        }
+        crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
 
         Ok(())
     }
@@ -1446,8 +1547,8 @@ mod monthly_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ObservedPrimaryStore, StoreFuelGuard, instantiation_failure, interrupt_kind_in,
-        resource_capacity_trap,
+        ObservedPrimaryStore, PrimaryStore, StoreFuelGuard, instantiation_failure,
+        interrupt_kind_in, resource_capacity_trap,
     };
     use crate::metrics::resource_release::{Cause, tests::TestMetrics};
     use crate::workerctx::FuelManagement;
@@ -1675,6 +1776,40 @@ mod tests {
         drop(StoreFuelGuard::new(store));
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
+        assert!(dropped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    fn primary_disposal_retains_context_after_releasing_the_physical_runtime() -> anyhow::Result<()>
+    {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let returned_at = Arc::new(AtomicU64::new(u64::MAX));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let runtime = super::super::suspension::RuntimeStore::new(
+            super::super::suspension::OwnerSuspension::new(),
+        );
+        let observer = Arc::downgrade(&runtime);
+        let mut store = wasmtime::Store::new(
+            &engine,
+            FuelTestContext {
+                borrowed: true,
+                returned_at: returned_at.clone(),
+                dropped: dropped.clone(),
+            },
+        );
+        store.as_context_mut().set_runtime_observer(runtime)?;
+        store.set_fuel(137)?;
+        let mut store = PrimaryStore::new(store);
+        store.dispose();
+        assert!(observer.upgrade().is_none());
+        assert!(!dropped.load(Ordering::Acquire));
+        assert!(Arc::ptr_eq(&store.data().returned_at, &returned_at));
+        assert_eq!(returned_at.load(Ordering::Acquire), 137);
+        store.data_mut().borrowed = false;
+        store.dispose();
+        drop(store);
         assert!(dropped.load(Ordering::Acquire));
         Ok(())
     }

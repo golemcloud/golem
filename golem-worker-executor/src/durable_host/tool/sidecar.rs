@@ -28,7 +28,12 @@ use super::{
     rollback_live_attachment_admission_rejection, streams, tool_guest_exports,
     tool_middleware_guest_exports, validate_declared_tool_error, validate_declared_tool_result,
 };
-use crate::worker::invocation::run_tool_guest_call;
+use crate::durable_host::stream_outcome::supervise_schema_outputs;
+use crate::worker::invocation::{
+    SettlementDeadline, run_guest_call_settled, run_guest_call_settled_at, run_tool_guest_call,
+};
+use futures::FutureExt;
+use wasmtime::component::Accessor;
 
 async fn replay_disposal_termination<T>(
     replay: crate::durable_host::replay_state::ReplayState,
@@ -101,7 +106,7 @@ impl Drop for UnderlyingToolRevocationGuard {
     }
 }
 
-pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
+async fn materialize_returned_tool_response<Ctx: WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     result: Result<
         golem_common::schema::tool::wit::wire::InvocationResult,
@@ -109,7 +114,6 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
     >,
     output_contract: &ToolOutputContract,
     allow_undeclared_custom_error: bool,
-    result_streams: &crate::durable_host::durable_session::StreamSession,
 ) -> wasmtime::Result<HostResponseEntityInvocation> {
     let scope = ctx
         .tool_frontends
@@ -118,6 +122,7 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         .clone();
     scope.begin_return();
     let _retirement = scope.retirement();
+    ctx.settle_schema_producers(Ok(()));
     let response = match result {
         Ok(result) => {
             if result.stdout.is_some() || result.stderr.is_some() {
@@ -144,7 +149,6 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
             allow_undeclared_custom_error,
         )),
     };
-    let revision = ctx.component_metadata().revision;
     super::host::abandon_tool_writers(ctx).map_err(wasmtime::Error::from_anyhow)?;
     let interrupt = ctx.create_interrupt_signal();
     let closing = scope.finish_returned_frontends();
@@ -154,7 +158,15 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         result = async {
             let finalization = async {
                 durability::finish_producer_disposals(ctx).await.map_err(|error| wasmtime::Error::msg(error.to_string()))?;
-                let response = streams::materialize_terminal(result_streams, revision, response)
+                let response = response.map(|result| super::SerializableToolStructuredResult {
+                    result: result
+                        .result
+                        .as_deref()
+                        .map(super::SerializableToolResultValue::from_typed)
+                        .transpose()
+                        .expect("a validated non-stream tool result is serializable"),
+                });
+                let response = encode_tool_operation_terminal(response)
                     .await.map_err(|error| wasmtime::Error::msg(error.to_string()))?;
                 scope.finish_recording().await;
                 Ok(response)
@@ -165,6 +177,133 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
                 _ = closing => finalization.await,
             }
         } => result,
+    }
+}
+
+pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
+    accessor: &Accessor<Ctx>,
+    result: Result<
+        golem_common::schema::tool::wit::wire::InvocationResult,
+        golem_common::schema::tool::wit::wire::ToolError,
+    >,
+    output_contract: &ToolOutputContract,
+    allow_undeclared_custom_error: bool,
+    result_streams: &crate::durable_host::durable_session::StreamSession,
+) -> wasmtime::Result<HostResponseEntityInvocation> {
+    let response = accessor
+        .with(
+            |mut access| -> Result<super::ToolInvokeResponse, WorkerExecutorError> {
+                let ctx = access.data_mut().durable_ctx_mut();
+                Ok(match result {
+                    Ok(result) => {
+                        if result.stdout.is_some() || result.stderr.is_some() {
+                            return Err(WorkerExecutorError::runtime(
+                                "tool guest returned attachment streams instead of using the supplied output writers",
+                            ));
+                        }
+                        let value = result
+                            .result
+                            .map(|value| decode_typed_tool_value(value, ctx))
+                            .transpose()
+                            .map_err(|_| {
+                                WorkerExecutorError::runtime(
+                                    "tool guest returned an invalid result payload",
+                                )
+                            })?;
+                        validate_declared_tool_result(value, output_contract).map(|result| {
+                            SerializableToolInvocationResult {
+                                result: result.map(Box::new),
+                            }
+                        })
+                    }
+                    Err(error) => Err(validate_declared_tool_error(
+                        decode_guest_tool_error(error, ctx),
+                        output_contract,
+                        allow_undeclared_custom_error,
+                    )),
+                })
+            },
+        )
+        .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+    let (completed, completion) = super::oneshot::channel();
+    accessor.with(|mut access| {
+        let ctx = access.data_mut().durable_ctx_mut();
+        let activity = ctx.tail_work_tracker().activity();
+        let revision = ctx.component_metadata().revision;
+        let output_tasks = ctx.schema_output_spawner()?;
+        let task = streams::MaterializeResponse {
+            streams: result_streams.clone().with_runtime_source(
+                ctx.runtime_suspension
+                    .as_ref()
+                    .map(|runtime| runtime.source()),
+            ),
+            revision,
+            response,
+            completed,
+            activity,
+            output_tasks,
+        };
+        access.spawn(async move |access| task.run(access).await)
+    })?;
+    completion
+        .await
+        .map_err(|_| wasmtime::Error::msg("tool result materialization task stopped"))?
+        .map_err(|error| wasmtime::Error::msg(error.to_string()))
+}
+
+async fn run_tool_command<Ctx: WorkerCtx>(
+    store: &mut wasmtime::StoreContextMut<'_, Ctx>,
+    call: impl AsyncFnOnce(
+        &Accessor<Ctx>,
+    ) -> wasmtime::Result<
+        Result<
+            golem_common::schema::tool::wit::wire::InvocationResult,
+            golem_common::schema::tool::wit::wire::ToolError,
+        >,
+    >,
+    deadline: SettlementDeadline,
+    output_contract: &ToolOutputContract,
+    allow_undeclared_custom_error: bool,
+    result_streams: &crate::durable_host::durable_session::StreamSession,
+) -> Result<wasmtime::Result<HostResponseEntityInvocation>, GuestCallSettlementError> {
+    match deadline {
+        SettlementDeadline::RootReturned => match run_tool_guest_call(store, call).await {
+            Ok(Ok(result)) => {
+                let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
+                let _deadline = store
+                    .data()
+                    .durable_ctx()
+                    .arm_tail_work_deadline(drain_started.clone());
+                drain_started.notify_one();
+                Ok(materialize_returned_tool_response(
+                    store.data_mut().durable_ctx_mut(),
+                    result,
+                    output_contract,
+                    allow_undeclared_custom_error,
+                )
+                .await)
+            }
+            Ok(Err(error)) => Ok(Err(error)),
+            Err(error) => Err(error),
+        },
+        SettlementDeadline::GuestTasksExited => {
+            run_guest_call_settled_at(
+                store,
+                async move |accessor| {
+                    let result = call(accessor).await?;
+                    materialize_guest_tool_response(
+                        accessor,
+                        result,
+                        output_contract,
+                        allow_undeclared_custom_error,
+                        result_streams,
+                    )
+                    .await
+                },
+                deadline,
+            )
+            .await
+        }
     }
 }
 
@@ -274,7 +413,33 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     let instance_pre = instance.instance_pre(&store);
     let replay = store.data().durable_ctx().state.replay_state.clone();
     let replay_operation = operation.clone();
-    let result = match position.layer() {
+    let output_watch = tokio_util::sync::CancellationToken::new();
+    let output_watch_guard = output_watch.clone().drop_guard();
+    let output_monitor = store.data().durable_ctx().schema_output_drain_monitor()?;
+    let output_runtime = store.data().durable_ctx().runtime_suspension.clone();
+    let deadline = if output_contract
+        .result
+        .as_ref()
+        .is_some_and(|graph| graph.contains_stream_type())
+        || output_contract
+            .errors
+            .iter()
+            .any(|error| error.payload.contains_stream_type())
+        || matches!(
+            position.layer(),
+            golem_common::model::entity::EntityInvocationPlanLayer::Middleware {
+                presented_definition: None,
+                ..
+            }
+        ) {
+        SettlementDeadline::GuestTasksExited
+    } else {
+        SettlementDeadline::RootReturned
+    };
+    if matches!(deadline, SettlementDeadline::GuestTasksExited) {
+        store.data_mut().durable_ctx_mut().tool_frontends = None;
+    }
+    let mut result = match position.layer() {
         golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => {
             let indices =
                 tool_guest_exports::GuestIndices::new(&instance_pre).map_err(|error| {
@@ -287,27 +452,43 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                     "failed to load tool guest export: {error}"
                 ))
             })?;
-            run_tool_guest_call(&mut store, async move |accessor| {
-                replay_disposal_termination(
-                    replay,
-                    replay_operation,
-                    guest.call_invoke(
-                        accessor,
-                        tool_name,
-                        command_path,
-                        input,
-                        stdin,
-                        stdout,
-                        stderr,
-                    ),
-                )
-                .await
-            })
+            run_tool_command(
+                &mut store,
+                async move |accessor| {
+                    accessor.with(|mut access| {
+                        supervise_schema_outputs(
+                            &mut access,
+                            output_monitor,
+                            output_runtime,
+                            output_watch,
+                        )
+                    })?;
+                    replay_disposal_termination(
+                        replay,
+                        replay_operation,
+                        guest.call_invoke(
+                            accessor,
+                            tool_name,
+                            command_path,
+                            input,
+                            stdin,
+                            stdout,
+                            stderr,
+                        ),
+                    )
+                    .await
+                },
+                deadline,
+                &output_contract,
+                false,
+                &result_streams,
+            )
             .await
         }
         golem_common::model::entity::EntityInvocationPlanLayer::Middleware {
             activation,
             parameters,
+            presented_definition,
             next_effective_definition,
             ..
         } => {
@@ -341,56 +522,63 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                     "failed to load tool middleware guest export: {error}"
                 ))
             })?;
-            run_tool_guest_call(&mut store, async move |accessor| {
-                replay_disposal_termination(
-                    replay,
-                    replay_operation,
-                    guest.call_invoke_tool_middleware(
-                        accessor,
-                        middleware_name,
-                        tool_name,
-                        metadata,
-                        parameters,
-                        command_path,
-                        input,
-                        stdin,
-                        stdout,
-                        stderr,
-                        wrapped,
-                    ),
-                )
-                .await
-            })
+            run_tool_command(
+                &mut store,
+                async move |accessor| {
+                    accessor.with(|mut access| {
+                        supervise_schema_outputs(
+                            &mut access,
+                            output_monitor,
+                            output_runtime,
+                            output_watch,
+                        )
+                    })?;
+                    let result = replay_disposal_termination(
+                        replay,
+                        replay_operation,
+                        guest.call_invoke_tool_middleware(
+                            accessor,
+                            middleware_name,
+                            tool_name,
+                            metadata,
+                            parameters,
+                            command_path,
+                            input,
+                            stdin,
+                            stdout,
+                            stderr,
+                            wrapped,
+                        ),
+                    )
+                    .await;
+                    revoke.revoke();
+                    result
+                },
+                deadline,
+                &output_contract,
+                presented_definition.is_none(),
+                &result_streams,
+            )
             .await
         }
     };
-    let guest_returned = matches!(&result, Ok(Ok(_)));
-    store.data().durable_ctx().entity_body_finalization.begin();
-    let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
-    let _deadline = store
+    drop(output_watch_guard);
+    let guest_returned = store
         .data()
         .durable_ctx()
-        .arm_tail_work_deadline(drain_started.clone());
-    drain_started.notify_one();
-    let result = match result {
-        Ok(Ok(result)) => Ok(materialize_guest_tool_response(
-            store.data_mut().durable_ctx_mut(),
-            result,
-            &output_contract,
-            matches!(
-                position.layer(),
-                golem_common::model::entity::EntityInvocationPlanLayer::Middleware {
-                    presented_definition: None,
-                    ..
-                }
-            ),
-            &result_streams,
-        )
-        .await),
-        Ok(Err(error)) => Ok(Err(error)),
-        Err(error) => Err(error),
-    };
+        .entity_body_finalization
+        .guest_returned();
+    store.data().durable_ctx().entity_body_finalization.begin();
     let finish = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await;
+    if let Some(error) = store
+        .data()
+        .durable_ctx()
+        .schema_output_drain_monitor()?
+        .wait_for_failure()
+        .now_or_never()
+    {
+        return Err(error);
+    }
     let locally_cancelled = match &result {
         Ok(Err(error))
         | Err(GuestCallSettlementError::Interrupted(error))
@@ -423,6 +611,10 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         && !operation.has_pending_live_admission_rejection().await
     {
         finish?;
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .settle_schema_producers(Err(details.clone()));
         // A successful encoded body terminal requests Store destruction in the entity runner.
         // Its original host context, not the poisoned guest scheduler, drains admitted work.
         let response = encode_tool_terminal(
@@ -451,6 +643,30 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         drop(cancellation_epoch);
         return Ok(EntityBodyOutcome::Completed(response));
     }
+    if matches!(deadline, SettlementDeadline::GuestTasksExited)
+        && matches!(&result, Ok(Ok(_)))
+        && finish.is_ok()
+        && !operation.has_pending_live_admission_rejection().await
+    {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .settle_schema_producers(Ok(()));
+        match run_guest_call_settled(&mut store, async move |accessor| {
+            crate::durable_host::stream_outcome::drain_schema_outputs(accessor).await
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error @ WorkerExecutorError::Interrupted { .. })) => {
+                result = Err(GuestCallSettlementError::Interrupted(wasmtime::Error::new(
+                    error,
+                )));
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(error) => result = Err(error),
+        }
+    }
     store
         .data_mut()
         .durable_ctx_mut()
@@ -467,8 +683,23 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         durability::native_finalization_failures(store.data().durable_ctx(), errors).await
     };
     if matches!(&result, Ok(Ok(_))) && finish.is_ok() && parent_end.is_ok() {
-        parent_end =
-            durability::finish_producer_disposals(store.data_mut().durable_ctx_mut()).await;
+        parent_end = if guest_returned {
+            durability::finish_producer_disposals(store.data_mut().durable_ctx_mut()).await
+        } else {
+            store
+                .as_context_mut()
+                .run_concurrent(async move |accessor| {
+                    durability::finish_producer_disposals(
+                        &mut crate::durable_host::concurrent::AccessorContext::new(
+                            accessor,
+                            |ctx| ctx.durable_ctx_mut(),
+                        ),
+                    )
+                    .await
+                })
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        };
     }
     drop(cancellation_epoch);
     if let Err(
@@ -513,6 +744,11 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         Ok(Err(error))
         | Err(GuestCallSettlementError::Interrupted(error))
         | Err(GuestCallSettlementError::Trap(error)) => {
+            let error = store
+                .data()
+                .durable_ctx()
+                .linear_memory_tracker()
+                .annotate_gc_heap_error(error);
             let error: anyhow::Error = error.into();
             if durability::is_entity_cancellation(&error) {
                 operation.claim_local_cancellation_interruption();

@@ -23,7 +23,6 @@ use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use golem_common::model::AgentFingerprint;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
@@ -31,7 +30,6 @@ use golem_common::model::OwnedInvocationId;
 use golem_common::model::RetryProperties;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
@@ -79,16 +77,6 @@ pub struct CancellationTokenEntry {
     pub metadata: InvocationMetadata,
     pub owner: OwnedAgentId,
     pub recipient: OwnedAgentId,
-}
-
-struct OutboundRpcDenial {
-    error: RpcError,
-    activation_decision: Option<IdempotencyKey>,
-}
-
-enum RpcTargetAdmission {
-    Recorded,
-    LiveOnly(Box<PermissionTarget>),
 }
 
 #[derive(Clone)]
@@ -169,10 +157,6 @@ pub enum WasmRpcTargetActivation {
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
     },
-    DeferredDurable {
-        env: Vec<(String, String)>,
-        config: Vec<AgentConfigEntryDto>,
-    },
     Activated {
         #[allow(dead_code)]
         demand: Box<dyn RpcDemand>,
@@ -189,7 +173,7 @@ pub enum WasmRpcTargetActivation {
 
 #[derive(Clone)]
 struct RpcTargetActivation {
-    target_fingerprint: Option<AgentFingerprint>,
+    target_fingerprint: AgentFingerprint,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
 }
@@ -232,6 +216,9 @@ enum FutureInvokeResultState {
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
         deferred_activation: Option<RpcTargetActivation>,
+        /// The incarnation each scalar dispatch of the call is pinned to. `None` for an ephemeral
+        /// target, and for a streaming call, which carries the fingerprint in `streaming`.
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         span_id: SpanId,
         cancel_token: tokio_util::sync::CancellationToken,
     },

@@ -5,16 +5,17 @@ import * as DurabilityHost from "golem:durability/durability@1.6.0"
 
 export interface DurabilityClientShape {
   readonly observeFunctionCall: (iface: string, function_: string) => void
-  readonly beginCustomDurableInvocation: (
+  readonly beginCustomDurableInvocationAsync: (
     functionName: string,
     request: CoreTypes.TypedSchemaValue,
     functionType: DurabilityHost.DurableFunctionType,
-  ) => DurabilityHost.CustomDurableInvocation
-  readonly finish: (
+  ) => Promise<DurabilityHost.CustomDurableInvocation>
+  /** Borrows the invocation; the caller still drops it afterwards. */
+  readonly finishAsync: (
     invocation: DurabilityHost.LiveCustomDurableInvocation,
     response: CoreTypes.TypedSchemaValue,
     forcedCommit: boolean,
-  ) => void
+  ) => Promise<void>
   readonly drop: (invocation: DurabilityHost.LiveCustomDurableInvocation) => void
 }
 
@@ -22,22 +23,15 @@ export class DurabilityClient extends Context.Service<DurabilityClient, Durabili
   "effect-golem/host/Durability",
 ) {}
 
-const finishedInvocations = new WeakSet<object>()
-
 export const DurabilityLive: Layer.Layer<DurabilityClient> = Layer.succeed(
   DurabilityClient,
   DurabilityClient.of({
     observeFunctionCall: (iface, function_) => DurabilityHost.observeFunctionCall(iface, function_),
-    beginCustomDurableInvocation: (functionName, request, functionType) =>
-      DurabilityHost.beginCustomDurableInvocation(functionName, request, functionType),
-    finish: (invocation, response, forcedCommit) => {
-      DurabilityHost.LiveCustomDurableInvocation.finish(invocation, response, forcedCommit)
-      finishedInvocations.add(invocation)
-    },
-    drop: (invocation) => {
-      if (!finishedInvocations.delete(invocation)) {
-        ;(invocation as unknown as { [Symbol.dispose]: () => void })[Symbol.dispose]()
-      }
-    },
+    beginCustomDurableInvocationAsync: (functionName, request, functionType) =>
+      DurabilityHost.beginCustomDurableInvocationAsync(functionName, request, functionType),
+    finishAsync: (invocation, response, forcedCommit) =>
+      DurabilityHost.LiveCustomDurableInvocation.finishAsync(invocation, response, forcedCommit),
+    drop: (invocation) =>
+      (invocation as unknown as { [Symbol.dispose]: () => void })[Symbol.dispose](),
   }),
 )

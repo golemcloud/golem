@@ -93,7 +93,7 @@ func wasm_future_drop_readable_result_option_fields_error_code(handle int32)
 func wasm_future_drop_writable_result_option_fields_error_code(handle int32)
 
 func wasm_future_lift_result_option_fields_error_code(src unsafe.Pointer) witTypes.Result[witTypes.Option[*Fields], ErrorCode] {
-	var result witTypes.Result[witTypes.Option[*Fields], ErrorCode]
+	var result0 witTypes.Result[witTypes.Option[*Fields], ErrorCode]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
 		var option witTypes.Option[*Fields]
@@ -108,427 +108,16 @@ func wasm_future_lift_result_option_fields_error_code(src unsafe.Pointer) witTyp
 			panic("unreachable")
 		}
 
-		result = witTypes.Ok[witTypes.Option[*Fields], ErrorCode](option)
+		result0 = witTypes.Ok[witTypes.Option[*Fields], ErrorCode](option)
 	case 1:
-		var variant ErrorCode
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
-		case 0:
+		result := wasm_lift_1_t1257(unsafe.Add(unsafe.Pointer(src), 8))
 
-			variant = MakeErrorCodeDnsTimeout()
-
-		case 1:
-			var option0 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option0 = witTypes.None[string]()
-			case 1:
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option0 = witTypes.Some[string](value)
-			default:
-				panic("unreachable")
-			}
-			var option1 witTypes.Option[uint16]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
-			case 0:
-
-				option1 = witTypes.None[uint16]()
-			case 1:
-
-				option1 = witTypes.Some[uint16](uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (18 + 3*4))))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeDnsError(DnsErrorPayload{Rcode: option0, InfoCode: option1})
-
-		case 2:
-
-			variant = MakeErrorCodeDestinationNotFound()
-
-		case 3:
-
-			variant = MakeErrorCodeDestinationUnavailable()
-
-		case 4:
-
-			variant = MakeErrorCodeDestinationIpProhibited()
-
-		case 5:
-
-			variant = MakeErrorCodeDestinationIpUnroutable()
-
-		case 6:
-
-			variant = MakeErrorCodeConnectionRefused()
-
-		case 7:
-
-			variant = MakeErrorCodeConnectionTerminated()
-
-		case 8:
-
-			variant = MakeErrorCodeConnectionTimeout()
-
-		case 9:
-
-			variant = MakeErrorCodeConnectionReadTimeout()
-
-		case 10:
-
-			variant = MakeErrorCodeConnectionWriteTimeout()
-
-		case 11:
-
-			variant = MakeErrorCodeConnectionLimitReached()
-
-		case 12:
-
-			variant = MakeErrorCodeTlsProtocolError()
-
-		case 13:
-
-			variant = MakeErrorCodeTlsCertificateError()
-
-		case 14:
-			var option2 witTypes.Option[uint8]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option2 = witTypes.None[uint8]()
-			case 1:
-
-				option2 = witTypes.Some[uint8](uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 17)))))
-			default:
-				panic("unreachable")
-			}
-			var option4 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))) {
-			case 0:
-
-				option4 = witTypes.None[string]()
-			case 1:
-				value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4))))
-
-				option4 = witTypes.Some[string](value3)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeTlsAlertReceived(TlsAlertReceivedPayload{AlertId: option2, AlertMessage: option4})
-
-		case 15:
-
-			variant = MakeErrorCodeHttpRequestDenied()
-
-		case 16:
-
-			variant = MakeErrorCodeHttpRequestLengthRequired()
-
-		case 17:
-			var option5 witTypes.Option[uint64]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option5 = witTypes.None[uint64]()
-			case 1:
-
-				option5 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 24))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestBodySize(option5)
-
-		case 18:
-
-			variant = MakeErrorCodeHttpRequestMethodInvalid()
-
-		case 19:
-
-			variant = MakeErrorCodeHttpRequestUriInvalid()
-
-		case 20:
-
-			variant = MakeErrorCodeHttpRequestUriTooLong()
-
-		case 21:
-			var option6 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option6 = witTypes.None[uint32]()
-			case 1:
-
-				option6 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 20))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestHeaderSectionSize(option6)
-
-		case 22:
-			var option10 witTypes.Option[FieldSizePayload]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option10 = witTypes.None[FieldSizePayload]()
-			case 1:
-				var option8 witTypes.Option[string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))) {
-				case 0:
-
-					option8 = witTypes.None[string]()
-				case 1:
-					value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4))))
-
-					option8 = witTypes.Some[string](value7)
-				default:
-					panic("unreachable")
-				}
-				var option9 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))) {
-				case 0:
-
-					option9 = witTypes.None[uint32]()
-				case 1:
-
-					option9 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (20 + 4*4)))))
-				default:
-					panic("unreachable")
-				}
-
-				option10 = witTypes.Some[FieldSizePayload](FieldSizePayload{FieldName: option8, FieldSize: option9})
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestHeaderSize(option10)
-
-		case 23:
-			var option11 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option11 = witTypes.None[uint32]()
-			case 1:
-
-				option11 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 20))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestTrailerSectionSize(option11)
-
-		case 24:
-			var option13 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option13 = witTypes.None[string]()
-			case 1:
-				value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option13 = witTypes.Some[string](value12)
-			default:
-				panic("unreachable")
-			}
-			var option14 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
-			case 0:
-
-				option14 = witTypes.None[uint32]()
-			case 1:
-
-				option14 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (20 + 3*4)))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestTrailerSize(FieldSizePayload{FieldName: option13, FieldSize: option14})
-
-		case 25:
-
-			variant = MakeErrorCodeHttpResponseIncomplete()
-
-		case 26:
-			var option15 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option15 = witTypes.None[uint32]()
-			case 1:
-
-				option15 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 20))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseHeaderSectionSize(option15)
-
-		case 27:
-			var option17 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option17 = witTypes.None[string]()
-			case 1:
-				value16 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option17 = witTypes.Some[string](value16)
-			default:
-				panic("unreachable")
-			}
-			var option18 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
-			case 0:
-
-				option18 = witTypes.None[uint32]()
-			case 1:
-
-				option18 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (20 + 3*4)))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseHeaderSize(FieldSizePayload{FieldName: option17, FieldSize: option18})
-
-		case 28:
-			var option19 witTypes.Option[uint64]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option19 = witTypes.None[uint64]()
-			case 1:
-
-				option19 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 24))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseBodySize(option19)
-
-		case 29:
-			var option20 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option20 = witTypes.None[uint32]()
-			case 1:
-
-				option20 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 20))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseTrailerSectionSize(option20)
-
-		case 30:
-			var option22 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option22 = witTypes.None[string]()
-			case 1:
-				value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option22 = witTypes.Some[string](value21)
-			default:
-				panic("unreachable")
-			}
-			var option23 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
-			case 0:
-
-				option23 = witTypes.None[uint32]()
-			case 1:
-
-				option23 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (20 + 3*4)))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseTrailerSize(FieldSizePayload{FieldName: option22, FieldSize: option23})
-
-		case 31:
-			var option25 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option25 = witTypes.None[string]()
-			case 1:
-				value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option25 = witTypes.Some[string](value24)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseTransferCoding(option25)
-
-		case 32:
-			var option27 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option27 = witTypes.None[string]()
-			case 1:
-				value26 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option27 = witTypes.Some[string](value26)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseContentCoding(option27)
-
-		case 33:
-
-			variant = MakeErrorCodeHttpResponseTimeout()
-
-		case 34:
-
-			variant = MakeErrorCodeHttpUpgradeFailed()
-
-		case 35:
-
-			variant = MakeErrorCodeHttpProtocolError()
-
-		case 36:
-
-			variant = MakeErrorCodeLoopDetected()
-
-		case 37:
-
-			variant = MakeErrorCodeConfigurationError()
-
-		case 38:
-			var option29 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option29 = witTypes.None[string]()
-			case 1:
-				value28 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option29 = witTypes.Some[string](value28)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeInternalError(option29)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Option[*Fields], ErrorCode](variant)
+		result0 = witTypes.Err[witTypes.Option[*Fields], ErrorCode](result)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result0
 }
 
 func wasm_future_lower_result_option_fields_error_code(
@@ -564,479 +153,7 @@ func wasm_future_lower_result_option_fields_error_code(
 	case witTypes.ResultErr:
 		payload := value.Err()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-
-		switch payload.Tag() {
-		case ErrorCodeDnsTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
-
-		case ErrorCodeDnsError:
-			payload := payload.DnsError()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
-
-			switch (payload).Rcode.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).Rcode.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf8 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf8)))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).InfoCode.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).InfoCode.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
-				*(*int16)(unsafe.Add(unsafe.Pointer(dst), (18 + 3*4))) = int16(int32(payload))
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeDestinationNotFound:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(2))
-
-		case ErrorCodeDestinationUnavailable:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(3))
-
-		case ErrorCodeDestinationIpProhibited:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(4))
-
-		case ErrorCodeDestinationIpUnroutable:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(5))
-
-		case ErrorCodeConnectionRefused:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(6))
-
-		case ErrorCodeConnectionTerminated:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(7))
-
-		case ErrorCodeConnectionTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(8))
-
-		case ErrorCodeConnectionReadTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(9))
-
-		case ErrorCodeConnectionWriteTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(10))
-
-		case ErrorCodeConnectionLimitReached:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(11))
-
-		case ErrorCodeTlsProtocolError:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(12))
-
-		case ErrorCodeTlsCertificateError:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(13))
-
-		case ErrorCodeTlsAlertReceived:
-			payload := payload.TlsAlertReceived()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(14))
-
-			switch (payload).AlertId.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).AlertId.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 17)) = int8(int32(payload))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).AlertMessage.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).AlertMessage.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = int8(int32(1))
-				utf830 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf830)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uintptr(uintptr(utf830)))
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestDenied:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(15))
-
-		case ErrorCodeHttpRequestLengthRequired:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(16))
-
-		case ErrorCodeHttpRequestBodySize:
-			payload := payload.HttpRequestBodySize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(17))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int64)(unsafe.Add(unsafe.Pointer(dst), 24)) = int64(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestMethodInvalid:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(18))
-
-		case ErrorCodeHttpRequestUriInvalid:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(19))
-
-		case ErrorCodeHttpRequestUriTooLong:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(20))
-
-		case ErrorCodeHttpRequestHeaderSectionSize:
-			payload := payload.HttpRequestHeaderSectionSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(21))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), 20)) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestHeaderSize:
-			payload := payload.HttpRequestHeaderSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(22))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-
-				switch (payload).FieldName.Tag() {
-				case witTypes.OptionNone:
-					*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = int8(int32(0))
-
-				case witTypes.OptionSome:
-					payload := (payload).FieldName.Some()
-					*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = int8(int32(1))
-					utf831 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf831)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uintptr(uintptr(utf831)))
-
-				default:
-					panic("unreachable")
-				}
-
-				switch (payload).FieldSize.Tag() {
-				case witTypes.OptionNone:
-					*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 4*4))) = int8(int32(0))
-
-				case witTypes.OptionSome:
-					payload := (payload).FieldSize.Some()
-					*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 4*4))) = int8(int32(1))
-					*(*int32)(unsafe.Add(unsafe.Pointer(dst), (20 + 4*4))) = int32(payload)
-
-				default:
-					panic("unreachable")
-				}
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestTrailerSectionSize:
-			payload := payload.HttpRequestTrailerSectionSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(23))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), 20)) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestTrailerSize:
-			payload := payload.HttpRequestTrailerSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(24))
-
-			switch (payload).FieldName.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldName.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf832 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf832)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf832)))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).FieldSize.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldSize.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), (20 + 3*4))) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseIncomplete:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(25))
-
-		case ErrorCodeHttpResponseHeaderSectionSize:
-			payload := payload.HttpResponseHeaderSectionSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(26))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), 20)) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseHeaderSize:
-			payload := payload.HttpResponseHeaderSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(27))
-
-			switch (payload).FieldName.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldName.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf833 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf833)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf833)))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).FieldSize.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldSize.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), (20 + 3*4))) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseBodySize:
-			payload := payload.HttpResponseBodySize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(28))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int64)(unsafe.Add(unsafe.Pointer(dst), 24)) = int64(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseTrailerSectionSize:
-			payload := payload.HttpResponseTrailerSectionSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(29))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), 20)) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseTrailerSize:
-			payload := payload.HttpResponseTrailerSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(30))
-
-			switch (payload).FieldName.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldName.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf834 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf834)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf834)))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).FieldSize.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldSize.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), (20 + 3*4))) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseTransferCoding:
-			payload := payload.HttpResponseTransferCoding()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(31))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf835 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf835)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf835)))
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseContentCoding:
-			payload := payload.HttpResponseContentCoding()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(32))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf836 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf836)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf836)))
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(33))
-
-		case ErrorCodeHttpUpgradeFailed:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(34))
-
-		case ErrorCodeHttpProtocolError:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(35))
-
-		case ErrorCodeLoopDetected:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(36))
-
-		case ErrorCodeConfigurationError:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(37))
-
-		case ErrorCodeInternalError:
-			payload := payload.InternalError()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(38))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf837 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf837)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf837)))
-
-			default:
-				panic("unreachable")
-			}
-
-		default:
-			panic("unreachable")
-		}
+		wasm_lower_1_t1257(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -1088,431 +205,20 @@ func wasm_future_drop_readable_result_unit_error_code(handle int32)
 func wasm_future_drop_writable_result_unit_error_code(handle int32)
 
 func wasm_future_lift_result_unit_error_code(src unsafe.Pointer) witTypes.Result[witTypes.Unit, ErrorCode] {
-	var result witTypes.Result[witTypes.Unit, ErrorCode]
+	var result0 witTypes.Result[witTypes.Unit, ErrorCode]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, ErrorCode](witTypes.Unit{})
+		result0 = witTypes.Ok[witTypes.Unit, ErrorCode](witTypes.Unit{})
 	case 1:
-		var variant ErrorCode
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
-		case 0:
+		result := wasm_lift_1_t1257(unsafe.Add(unsafe.Pointer(src), 8))
 
-			variant = MakeErrorCodeDnsTimeout()
-
-		case 1:
-			var option witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option = witTypes.None[string]()
-			case 1:
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option = witTypes.Some[string](value)
-			default:
-				panic("unreachable")
-			}
-			var option0 witTypes.Option[uint16]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
-			case 0:
-
-				option0 = witTypes.None[uint16]()
-			case 1:
-
-				option0 = witTypes.Some[uint16](uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (18 + 3*4))))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeDnsError(DnsErrorPayload{Rcode: option, InfoCode: option0})
-
-		case 2:
-
-			variant = MakeErrorCodeDestinationNotFound()
-
-		case 3:
-
-			variant = MakeErrorCodeDestinationUnavailable()
-
-		case 4:
-
-			variant = MakeErrorCodeDestinationIpProhibited()
-
-		case 5:
-
-			variant = MakeErrorCodeDestinationIpUnroutable()
-
-		case 6:
-
-			variant = MakeErrorCodeConnectionRefused()
-
-		case 7:
-
-			variant = MakeErrorCodeConnectionTerminated()
-
-		case 8:
-
-			variant = MakeErrorCodeConnectionTimeout()
-
-		case 9:
-
-			variant = MakeErrorCodeConnectionReadTimeout()
-
-		case 10:
-
-			variant = MakeErrorCodeConnectionWriteTimeout()
-
-		case 11:
-
-			variant = MakeErrorCodeConnectionLimitReached()
-
-		case 12:
-
-			variant = MakeErrorCodeTlsProtocolError()
-
-		case 13:
-
-			variant = MakeErrorCodeTlsCertificateError()
-
-		case 14:
-			var option1 witTypes.Option[uint8]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option1 = witTypes.None[uint8]()
-			case 1:
-
-				option1 = witTypes.Some[uint8](uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 17)))))
-			default:
-				panic("unreachable")
-			}
-			var option3 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))) {
-			case 0:
-
-				option3 = witTypes.None[string]()
-			case 1:
-				value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4))))
-
-				option3 = witTypes.Some[string](value2)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeTlsAlertReceived(TlsAlertReceivedPayload{AlertId: option1, AlertMessage: option3})
-
-		case 15:
-
-			variant = MakeErrorCodeHttpRequestDenied()
-
-		case 16:
-
-			variant = MakeErrorCodeHttpRequestLengthRequired()
-
-		case 17:
-			var option4 witTypes.Option[uint64]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option4 = witTypes.None[uint64]()
-			case 1:
-
-				option4 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 24))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestBodySize(option4)
-
-		case 18:
-
-			variant = MakeErrorCodeHttpRequestMethodInvalid()
-
-		case 19:
-
-			variant = MakeErrorCodeHttpRequestUriInvalid()
-
-		case 20:
-
-			variant = MakeErrorCodeHttpRequestUriTooLong()
-
-		case 21:
-			var option5 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option5 = witTypes.None[uint32]()
-			case 1:
-
-				option5 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 20))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestHeaderSectionSize(option5)
-
-		case 22:
-			var option9 witTypes.Option[FieldSizePayload]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option9 = witTypes.None[FieldSizePayload]()
-			case 1:
-				var option7 witTypes.Option[string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))) {
-				case 0:
-
-					option7 = witTypes.None[string]()
-				case 1:
-					value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4))))
-
-					option7 = witTypes.Some[string](value6)
-				default:
-					panic("unreachable")
-				}
-				var option8 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))) {
-				case 0:
-
-					option8 = witTypes.None[uint32]()
-				case 1:
-
-					option8 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (20 + 4*4)))))
-				default:
-					panic("unreachable")
-				}
-
-				option9 = witTypes.Some[FieldSizePayload](FieldSizePayload{FieldName: option7, FieldSize: option8})
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestHeaderSize(option9)
-
-		case 23:
-			var option10 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option10 = witTypes.None[uint32]()
-			case 1:
-
-				option10 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 20))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestTrailerSectionSize(option10)
-
-		case 24:
-			var option12 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option12 = witTypes.None[string]()
-			case 1:
-				value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option12 = witTypes.Some[string](value11)
-			default:
-				panic("unreachable")
-			}
-			var option13 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
-			case 0:
-
-				option13 = witTypes.None[uint32]()
-			case 1:
-
-				option13 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (20 + 3*4)))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpRequestTrailerSize(FieldSizePayload{FieldName: option12, FieldSize: option13})
-
-		case 25:
-
-			variant = MakeErrorCodeHttpResponseIncomplete()
-
-		case 26:
-			var option14 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option14 = witTypes.None[uint32]()
-			case 1:
-
-				option14 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 20))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseHeaderSectionSize(option14)
-
-		case 27:
-			var option16 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option16 = witTypes.None[string]()
-			case 1:
-				value15 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option16 = witTypes.Some[string](value15)
-			default:
-				panic("unreachable")
-			}
-			var option17 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
-			case 0:
-
-				option17 = witTypes.None[uint32]()
-			case 1:
-
-				option17 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (20 + 3*4)))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseHeaderSize(FieldSizePayload{FieldName: option16, FieldSize: option17})
-
-		case 28:
-			var option18 witTypes.Option[uint64]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option18 = witTypes.None[uint64]()
-			case 1:
-
-				option18 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 24))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseBodySize(option18)
-
-		case 29:
-			var option19 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option19 = witTypes.None[uint32]()
-			case 1:
-
-				option19 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 20))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseTrailerSectionSize(option19)
-
-		case 30:
-			var option21 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option21 = witTypes.None[string]()
-			case 1:
-				value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option21 = witTypes.Some[string](value20)
-			default:
-				panic("unreachable")
-			}
-			var option22 witTypes.Option[uint32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
-			case 0:
-
-				option22 = witTypes.None[uint32]()
-			case 1:
-
-				option22 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (20 + 3*4)))))
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseTrailerSize(FieldSizePayload{FieldName: option21, FieldSize: option22})
-
-		case 31:
-			var option24 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option24 = witTypes.None[string]()
-			case 1:
-				value23 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option24 = witTypes.Some[string](value23)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseTransferCoding(option24)
-
-		case 32:
-			var option26 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option26 = witTypes.None[string]()
-			case 1:
-				value25 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option26 = witTypes.Some[string](value25)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeHttpResponseContentCoding(option26)
-
-		case 33:
-
-			variant = MakeErrorCodeHttpResponseTimeout()
-
-		case 34:
-
-			variant = MakeErrorCodeHttpUpgradeFailed()
-
-		case 35:
-
-			variant = MakeErrorCodeHttpProtocolError()
-
-		case 36:
-
-			variant = MakeErrorCodeLoopDetected()
-
-		case 37:
-
-			variant = MakeErrorCodeConfigurationError()
-
-		case 38:
-			var option28 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-			case 0:
-
-				option28 = witTypes.None[string]()
-			case 1:
-				value27 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
-
-				option28 = witTypes.Some[string](value27)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorCodeInternalError(option28)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, ErrorCode](variant)
+		result0 = witTypes.Err[witTypes.Unit, ErrorCode](result)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result0
 }
 
 func wasm_future_lower_result_unit_error_code(
@@ -1529,479 +235,7 @@ func wasm_future_lower_result_unit_error_code(
 	case witTypes.ResultErr:
 		payload := value.Err()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-
-		switch payload.Tag() {
-		case ErrorCodeDnsTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
-
-		case ErrorCodeDnsError:
-			payload := payload.DnsError()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
-
-			switch (payload).Rcode.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).Rcode.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf8 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf8)))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).InfoCode.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).InfoCode.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
-				*(*int16)(unsafe.Add(unsafe.Pointer(dst), (18 + 3*4))) = int16(int32(payload))
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeDestinationNotFound:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(2))
-
-		case ErrorCodeDestinationUnavailable:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(3))
-
-		case ErrorCodeDestinationIpProhibited:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(4))
-
-		case ErrorCodeDestinationIpUnroutable:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(5))
-
-		case ErrorCodeConnectionRefused:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(6))
-
-		case ErrorCodeConnectionTerminated:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(7))
-
-		case ErrorCodeConnectionTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(8))
-
-		case ErrorCodeConnectionReadTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(9))
-
-		case ErrorCodeConnectionWriteTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(10))
-
-		case ErrorCodeConnectionLimitReached:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(11))
-
-		case ErrorCodeTlsProtocolError:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(12))
-
-		case ErrorCodeTlsCertificateError:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(13))
-
-		case ErrorCodeTlsAlertReceived:
-			payload := payload.TlsAlertReceived()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(14))
-
-			switch (payload).AlertId.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).AlertId.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 17)) = int8(int32(payload))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).AlertMessage.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).AlertMessage.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = int8(int32(1))
-				utf829 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf829)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uintptr(uintptr(utf829)))
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestDenied:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(15))
-
-		case ErrorCodeHttpRequestLengthRequired:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(16))
-
-		case ErrorCodeHttpRequestBodySize:
-			payload := payload.HttpRequestBodySize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(17))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int64)(unsafe.Add(unsafe.Pointer(dst), 24)) = int64(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestMethodInvalid:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(18))
-
-		case ErrorCodeHttpRequestUriInvalid:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(19))
-
-		case ErrorCodeHttpRequestUriTooLong:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(20))
-
-		case ErrorCodeHttpRequestHeaderSectionSize:
-			payload := payload.HttpRequestHeaderSectionSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(21))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), 20)) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestHeaderSize:
-			payload := payload.HttpRequestHeaderSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(22))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-
-				switch (payload).FieldName.Tag() {
-				case witTypes.OptionNone:
-					*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = int8(int32(0))
-
-				case witTypes.OptionSome:
-					payload := (payload).FieldName.Some()
-					*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = int8(int32(1))
-					utf830 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf830)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uintptr(uintptr(utf830)))
-
-				default:
-					panic("unreachable")
-				}
-
-				switch (payload).FieldSize.Tag() {
-				case witTypes.OptionNone:
-					*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 4*4))) = int8(int32(0))
-
-				case witTypes.OptionSome:
-					payload := (payload).FieldSize.Some()
-					*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 4*4))) = int8(int32(1))
-					*(*int32)(unsafe.Add(unsafe.Pointer(dst), (20 + 4*4))) = int32(payload)
-
-				default:
-					panic("unreachable")
-				}
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestTrailerSectionSize:
-			payload := payload.HttpRequestTrailerSectionSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(23))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), 20)) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpRequestTrailerSize:
-			payload := payload.HttpRequestTrailerSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(24))
-
-			switch (payload).FieldName.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldName.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf831 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf831)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf831)))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).FieldSize.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldSize.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), (20 + 3*4))) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseIncomplete:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(25))
-
-		case ErrorCodeHttpResponseHeaderSectionSize:
-			payload := payload.HttpResponseHeaderSectionSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(26))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), 20)) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseHeaderSize:
-			payload := payload.HttpResponseHeaderSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(27))
-
-			switch (payload).FieldName.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldName.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf832 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf832)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf832)))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).FieldSize.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldSize.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), (20 + 3*4))) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseBodySize:
-			payload := payload.HttpResponseBodySize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(28))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int64)(unsafe.Add(unsafe.Pointer(dst), 24)) = int64(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseTrailerSectionSize:
-			payload := payload.HttpResponseTrailerSectionSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(29))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), 20)) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseTrailerSize:
-			payload := payload.HttpResponseTrailerSize()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(30))
-
-			switch (payload).FieldName.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldName.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf833 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf833)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf833)))
-
-			default:
-				panic("unreachable")
-			}
-
-			switch (payload).FieldSize.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).FieldSize.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(dst), (20 + 3*4))) = int32(payload)
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseTransferCoding:
-			payload := payload.HttpResponseTransferCoding()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(31))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf834 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf834)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf834)))
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseContentCoding:
-			payload := payload.HttpResponseContentCoding()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(32))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf835 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf835)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf835)))
-
-			default:
-				panic("unreachable")
-			}
-
-		case ErrorCodeHttpResponseTimeout:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(33))
-
-		case ErrorCodeHttpUpgradeFailed:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(34))
-
-		case ErrorCodeHttpProtocolError:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(35))
-
-		case ErrorCodeLoopDetected:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(36))
-
-		case ErrorCodeConfigurationError:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(37))
-
-		case ErrorCodeInternalError:
-			payload := payload.InternalError()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(38))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32(1))
-				utf836 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf836)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 1*4))) = uint32(uintptr(uintptr(utf836)))
-
-			default:
-				panic("unreachable")
-			}
-
-		default:
-			panic("unreachable")
-		}
+		wasm_lower_1_t1257(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -2771,56 +1005,20 @@ func FieldsFromList(entries []witTypes.Tuple2[string, []uint8]) witTypes.Result[
 	}
 
 	wasm_import_static_fields_from_list(uintptr(result), length, returnArea)
-	var result0 witTypes.Result[*Fields, HeaderError]
+	var result1 witTypes.Result[*Fields, HeaderError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result0 = witTypes.Ok[*Fields, HeaderError](FieldsFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result1 = witTypes.Ok[*Fields, HeaderError](FieldsFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		var variant HeaderError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result0 := wasm_lift_1_t1258(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeHeaderErrorInvalidSyntax()
-
-		case 1:
-
-			variant = MakeHeaderErrorForbidden()
-
-		case 2:
-
-			variant = MakeHeaderErrorImmutable()
-
-		case 3:
-
-			variant = MakeHeaderErrorSizeExceeded()
-
-		case 4:
-			var option witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option = witTypes.None[string]()
-			case 1:
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				option = witTypes.Some[string](value)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeHeaderErrorOther(option)
-
-		default:
-			panic("unreachable")
-		}
-
-		result0 = witTypes.Err[*Fields, HeaderError](variant)
+		result1 = witTypes.Err[*Fields, HeaderError](result0)
 	default:
 		panic("unreachable")
 	}
-	result1 := result0
-	return result1
+	result2 := result1
+	return result2
 
 }
 
@@ -2891,45 +1089,9 @@ func (self *Fields) Set(name string, value [][]uint8) witTypes.Result[witTypes.U
 
 		result1 = witTypes.Ok[witTypes.Unit, HeaderError](witTypes.Unit{})
 	case 1:
-		var variant HeaderError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result0 := wasm_lift_1_t1258(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeHeaderErrorInvalidSyntax()
-
-		case 1:
-
-			variant = MakeHeaderErrorForbidden()
-
-		case 2:
-
-			variant = MakeHeaderErrorImmutable()
-
-		case 3:
-
-			variant = MakeHeaderErrorSizeExceeded()
-
-		case 4:
-			var option witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option = witTypes.None[string]()
-			case 1:
-				value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				option = witTypes.Some[string](value0)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeHeaderErrorOther(option)
-
-		default:
-			panic("unreachable")
-		}
-
-		result1 = witTypes.Err[witTypes.Unit, HeaderError](variant)
+		result1 = witTypes.Err[witTypes.Unit, HeaderError](result0)
 	default:
 		panic("unreachable")
 	}
@@ -2949,56 +1111,20 @@ func (self *Fields) Delete(name string) witTypes.Result[witTypes.Unit, HeaderErr
 	utf8 := unsafe.Pointer(unsafe.StringData(name))
 	pinner.Pin(utf8)
 	wasm_import_method_fields_delete((self).Handle(), uintptr(utf8), uint32(len(name)), returnArea)
-	var result witTypes.Result[witTypes.Unit, HeaderError]
+	var result0 witTypes.Result[witTypes.Unit, HeaderError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, HeaderError](witTypes.Unit{})
+		result0 = witTypes.Ok[witTypes.Unit, HeaderError](witTypes.Unit{})
 	case 1:
-		var variant HeaderError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t1258(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeHeaderErrorInvalidSyntax()
-
-		case 1:
-
-			variant = MakeHeaderErrorForbidden()
-
-		case 2:
-
-			variant = MakeHeaderErrorImmutable()
-
-		case 3:
-
-			variant = MakeHeaderErrorSizeExceeded()
-
-		case 4:
-			var option witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option = witTypes.None[string]()
-			case 1:
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				option = witTypes.Some[string](value)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeHeaderErrorOther(option)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, HeaderError](variant)
+		result0 = witTypes.Err[witTypes.Unit, HeaderError](result)
 	default:
 		panic("unreachable")
 	}
-	result0 := result
-	return result0
+	result1 := result0
+	return result1
 
 }
 
@@ -3026,45 +1152,9 @@ func (self *Fields) GetAndDelete(name string) witTypes.Result[[][]uint8, HeaderE
 
 		result1 = witTypes.Ok[[][]uint8, HeaderError](result)
 	case 1:
-		var variant HeaderError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result0 := wasm_lift_1_t1258(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeHeaderErrorInvalidSyntax()
-
-		case 1:
-
-			variant = MakeHeaderErrorForbidden()
-
-		case 2:
-
-			variant = MakeHeaderErrorImmutable()
-
-		case 3:
-
-			variant = MakeHeaderErrorSizeExceeded()
-
-		case 4:
-			var option witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option = witTypes.None[string]()
-			case 1:
-				value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				option = witTypes.Some[string](value0)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeHeaderErrorOther(option)
-
-		default:
-			panic("unreachable")
-		}
-
-		result1 = witTypes.Err[[][]uint8, HeaderError](variant)
+		result1 = witTypes.Err[[][]uint8, HeaderError](result0)
 	default:
 		panic("unreachable")
 	}
@@ -3086,55 +1176,19 @@ func (self *Fields) Append(name string, value []uint8) witTypes.Result[witTypes.
 	data := unsafe.Pointer(unsafe.SliceData(value))
 	pinner.Pin(data)
 	wasm_import_method_fields_append((self).Handle(), uintptr(utf8), uint32(len(name)), uintptr(data), uint32(len(value)), returnArea)
-	var result witTypes.Result[witTypes.Unit, HeaderError]
+	var result0 witTypes.Result[witTypes.Unit, HeaderError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, HeaderError](witTypes.Unit{})
+		result0 = witTypes.Ok[witTypes.Unit, HeaderError](witTypes.Unit{})
 	case 1:
-		var variant HeaderError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t1258(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeHeaderErrorInvalidSyntax()
-
-		case 1:
-
-			variant = MakeHeaderErrorForbidden()
-
-		case 2:
-
-			variant = MakeHeaderErrorImmutable()
-
-		case 3:
-
-			variant = MakeHeaderErrorSizeExceeded()
-
-		case 4:
-			var option witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option = witTypes.None[string]()
-			case 1:
-				value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				option = witTypes.Some[string](value0)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeHeaderErrorOther(option)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, HeaderError](variant)
+		result0 = witTypes.Err[witTypes.Unit, HeaderError](result)
 	default:
 		panic("unreachable")
 	}
-	result1 := result
+	result1 := result0
 	return result1
 
 }
@@ -3226,54 +1280,9 @@ func (self *Request) GetMethod() Method {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (3 * 4), 4))
 	wasm_import_method_request_get_method((self).Handle(), returnArea)
-	var variant Method
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
-	case 0:
-
-		variant = MakeMethodGet()
-
-	case 1:
-
-		variant = MakeMethodHead()
-
-	case 2:
-
-		variant = MakeMethodPost()
-
-	case 3:
-
-		variant = MakeMethodPut()
-
-	case 4:
-
-		variant = MakeMethodDelete()
-
-	case 5:
-
-		variant = MakeMethodConnect()
-
-	case 6:
-
-		variant = MakeMethodOptions()
-
-	case 7:
-
-		variant = MakeMethodTrace()
-
-	case 8:
-
-		variant = MakeMethodPatch()
-
-	case 9:
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
-
-		variant = MakeMethodOther(value)
-
-	default:
-		panic("unreachable")
-	}
-	result := variant
-	return result
+	result := wasm_lift_1_t1246(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
 
 }
 
@@ -3454,31 +1463,14 @@ func (self *Request) GetScheme() witTypes.Option[Scheme] {
 
 		option = witTypes.None[Scheme]()
 	case 1:
-		var variant Scheme
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t1247(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeSchemeHttp()
-
-		case 1:
-
-			variant = MakeSchemeHttps()
-
-		case 2:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeSchemeOther(value)
-
-		default:
-			panic("unreachable")
-		}
-
-		option = witTypes.Some[Scheme](variant)
+		option = witTypes.Some[Scheme](result)
 	default:
 		panic("unreachable")
 	}
-	result := option
-	return result
+	result0 := option
+	return result0
 
 }
 
@@ -3732,47 +1724,19 @@ func (self *RequestOptions) SetConnectTimeout(duration witTypes.Option[uint64]) 
 		panic("unreachable")
 	}
 	wasm_import_method_request_options_set_connect_timeout((self).Handle(), option, option0, returnArea)
-	var result witTypes.Result[witTypes.Unit, RequestOptionsError]
+	var result1 witTypes.Result[witTypes.Unit, RequestOptionsError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
+		result1 = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
 	case 1:
-		var variant RequestOptionsError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t1259(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeRequestOptionsErrorNotSupported()
-
-		case 1:
-
-			variant = MakeRequestOptionsErrorImmutable()
-
-		case 2:
-			var option1 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option1 = witTypes.None[string]()
-			case 1:
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				option1 = witTypes.Some[string](value)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeRequestOptionsErrorOther(option1)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, RequestOptionsError](variant)
+		result1 = witTypes.Err[witTypes.Unit, RequestOptionsError](result)
 	default:
 		panic("unreachable")
 	}
-	result2 := result
+	result2 := result1
 	return result2
 
 }
@@ -3826,47 +1790,19 @@ func (self *RequestOptions) SetFirstByteTimeout(duration witTypes.Option[uint64]
 		panic("unreachable")
 	}
 	wasm_import_method_request_options_set_first_byte_timeout((self).Handle(), option, option0, returnArea)
-	var result witTypes.Result[witTypes.Unit, RequestOptionsError]
+	var result1 witTypes.Result[witTypes.Unit, RequestOptionsError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
+		result1 = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
 	case 1:
-		var variant RequestOptionsError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t1259(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeRequestOptionsErrorNotSupported()
-
-		case 1:
-
-			variant = MakeRequestOptionsErrorImmutable()
-
-		case 2:
-			var option1 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option1 = witTypes.None[string]()
-			case 1:
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				option1 = witTypes.Some[string](value)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeRequestOptionsErrorOther(option1)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, RequestOptionsError](variant)
+		result1 = witTypes.Err[witTypes.Unit, RequestOptionsError](result)
 	default:
 		panic("unreachable")
 	}
-	result2 := result
+	result2 := result1
 	return result2
 
 }
@@ -3920,47 +1856,19 @@ func (self *RequestOptions) SetBetweenBytesTimeout(duration witTypes.Option[uint
 		panic("unreachable")
 	}
 	wasm_import_method_request_options_set_between_bytes_timeout((self).Handle(), option, option0, returnArea)
-	var result witTypes.Result[witTypes.Unit, RequestOptionsError]
+	var result1 witTypes.Result[witTypes.Unit, RequestOptionsError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
+		result1 = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
 	case 1:
-		var variant RequestOptionsError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t1259(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeRequestOptionsErrorNotSupported()
-
-		case 1:
-
-			variant = MakeRequestOptionsErrorImmutable()
-
-		case 2:
-			var option1 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option1 = witTypes.None[string]()
-			case 1:
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				option1 = witTypes.Some[string](value)
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeRequestOptionsErrorOther(option1)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, RequestOptionsError](variant)
+		result1 = witTypes.Err[witTypes.Unit, RequestOptionsError](result)
 	default:
 		panic("unreachable")
 	}
-	result2 := result
+	result2 := result1
 	return result2
 
 }
@@ -4058,5 +1966,944 @@ func ResponseConsumeBody(this *Response, res *witTypes.FutureReader[witTypes.Res
 	result := witTypes.Tuple2[*witTypes.StreamReader[uint8], *witTypes.FutureReader[witTypes.Result[witTypes.Option[*Fields], ErrorCode]]]{F0: LiftStreamU8(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 0))), F1: LiftFutureResultOptionFieldsErrorCode(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))}
 	tuple := result
 	return tuple.F0, tuple.F1
+
+}
+
+//go:noinline
+func wasm_lift_1_t1258(src unsafe.Pointer) HeaderError {
+	var variant HeaderError
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeHeaderErrorInvalidSyntax()
+
+	case 1:
+
+		variant = MakeHeaderErrorForbidden()
+
+	case 2:
+
+		variant = MakeHeaderErrorImmutable()
+
+	case 3:
+
+		variant = MakeHeaderErrorSizeExceeded()
+
+	case 4:
+		var option witTypes.Option[string]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+		case 0:
+
+			option = witTypes.None[string]()
+		case 1:
+			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+
+			option = witTypes.Some[string](value0)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeHeaderErrorOther(option)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t1257(src unsafe.Pointer) ErrorCode {
+	var variant ErrorCode
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeErrorCodeDnsTimeout()
+
+	case 1:
+		result := wasm_lift_1_t1250(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeErrorCodeDnsError(result)
+
+	case 2:
+
+		variant = MakeErrorCodeDestinationNotFound()
+
+	case 3:
+
+		variant = MakeErrorCodeDestinationUnavailable()
+
+	case 4:
+
+		variant = MakeErrorCodeDestinationIpProhibited()
+
+	case 5:
+
+		variant = MakeErrorCodeDestinationIpUnroutable()
+
+	case 6:
+
+		variant = MakeErrorCodeConnectionRefused()
+
+	case 7:
+
+		variant = MakeErrorCodeConnectionTerminated()
+
+	case 8:
+
+		variant = MakeErrorCodeConnectionTimeout()
+
+	case 9:
+
+		variant = MakeErrorCodeConnectionReadTimeout()
+
+	case 10:
+
+		variant = MakeErrorCodeConnectionWriteTimeout()
+
+	case 11:
+
+		variant = MakeErrorCodeConnectionLimitReached()
+
+	case 12:
+
+		variant = MakeErrorCodeTlsProtocolError()
+
+	case 13:
+
+		variant = MakeErrorCodeTlsCertificateError()
+
+	case 14:
+		result0 := wasm_lift_1_t1252(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeErrorCodeTlsAlertReceived(result0)
+
+	case 15:
+
+		variant = MakeErrorCodeHttpRequestDenied()
+
+	case 16:
+
+		variant = MakeErrorCodeHttpRequestLengthRequired()
+
+	case 17:
+		var option witTypes.Option[uint64]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option = witTypes.None[uint64]()
+		case 1:
+
+			option = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16))))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpRequestBodySize(option)
+
+	case 18:
+
+		variant = MakeErrorCodeHttpRequestMethodInvalid()
+
+	case 19:
+
+		variant = MakeErrorCodeHttpRequestUriInvalid()
+
+	case 20:
+
+		variant = MakeErrorCodeHttpRequestUriTooLong()
+
+	case 21:
+		var option1 witTypes.Option[uint32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option1 = witTypes.None[uint32]()
+		case 1:
+
+			option1 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 12))))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpRequestHeaderSectionSize(option1)
+
+	case 22:
+		var option3 witTypes.Option[FieldSizePayload]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option3 = witTypes.None[FieldSizePayload]()
+		case 1:
+			result2 := wasm_lift_1_t1254(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))
+
+			option3 = witTypes.Some[FieldSizePayload](result2)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpRequestHeaderSize(option3)
+
+	case 23:
+		var option4 witTypes.Option[uint32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option4 = witTypes.None[uint32]()
+		case 1:
+
+			option4 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 12))))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpRequestTrailerSectionSize(option4)
+
+	case 24:
+		result5 := wasm_lift_1_t1254(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeErrorCodeHttpRequestTrailerSize(result5)
+
+	case 25:
+
+		variant = MakeErrorCodeHttpResponseIncomplete()
+
+	case 26:
+		var option6 witTypes.Option[uint32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option6 = witTypes.None[uint32]()
+		case 1:
+
+			option6 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 12))))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpResponseHeaderSectionSize(option6)
+
+	case 27:
+		result7 := wasm_lift_1_t1254(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeErrorCodeHttpResponseHeaderSize(result7)
+
+	case 28:
+		var option8 witTypes.Option[uint64]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option8 = witTypes.None[uint64]()
+		case 1:
+
+			option8 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16))))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpResponseBodySize(option8)
+
+	case 29:
+		var option9 witTypes.Option[uint32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option9 = witTypes.None[uint32]()
+		case 1:
+
+			option9 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 12))))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpResponseTrailerSectionSize(option9)
+
+	case 30:
+		result10 := wasm_lift_1_t1254(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeErrorCodeHttpResponseTrailerSize(result10)
+
+	case 31:
+		var option12 witTypes.Option[string]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option12 = witTypes.None[string]()
+		case 1:
+			value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 2*4))))
+
+			option12 = witTypes.Some[string](value11)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpResponseTransferCoding(option12)
+
+	case 32:
+		var option14 witTypes.Option[string]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option14 = witTypes.None[string]()
+		case 1:
+			value13 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 2*4))))
+
+			option14 = witTypes.Some[string](value13)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeHttpResponseContentCoding(option14)
+
+	case 33:
+
+		variant = MakeErrorCodeHttpResponseTimeout()
+
+	case 34:
+
+		variant = MakeErrorCodeHttpUpgradeFailed()
+
+	case 35:
+
+		variant = MakeErrorCodeHttpProtocolError()
+
+	case 36:
+
+		variant = MakeErrorCodeLoopDetected()
+
+	case 37:
+
+		variant = MakeErrorCodeConfigurationError()
+
+	case 38:
+		var option16 witTypes.Option[string]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option16 = witTypes.None[string]()
+		case 1:
+			value15 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 2*4))))
+
+			option16 = witTypes.Some[string](value15)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeErrorCodeInternalError(option16)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lower_1_t1257(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case ErrorCodeDnsTimeout:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case ErrorCodeDnsError:
+		payload := value.DnsError()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		wasm_lower_1_t1250(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case ErrorCodeDestinationNotFound:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+
+	case ErrorCodeDestinationUnavailable:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+
+	case ErrorCodeDestinationIpProhibited:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+
+	case ErrorCodeDestinationIpUnroutable:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
+
+	case ErrorCodeConnectionRefused:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(6))
+
+	case ErrorCodeConnectionTerminated:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
+
+	case ErrorCodeConnectionTimeout:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
+
+	case ErrorCodeConnectionReadTimeout:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
+
+	case ErrorCodeConnectionWriteTimeout:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(10))
+
+	case ErrorCodeConnectionLimitReached:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(11))
+
+	case ErrorCodeTlsProtocolError:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(12))
+
+	case ErrorCodeTlsCertificateError:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(13))
+
+	case ErrorCodeTlsAlertReceived:
+		payload := value.TlsAlertReceived()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(14))
+		wasm_lower_1_t1252(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case ErrorCodeHttpRequestDenied:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(15))
+
+	case ErrorCodeHttpRequestLengthRequired:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(16))
+
+	case ErrorCodeHttpRequestBodySize:
+		payload := value.HttpRequestBodySize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(17))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64(payload)
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpRequestMethodInvalid:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(18))
+
+	case ErrorCodeHttpRequestUriInvalid:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(19))
+
+	case ErrorCodeHttpRequestUriTooLong:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(20))
+
+	case ErrorCodeHttpRequestHeaderSectionSize:
+		payload := value.HttpRequestHeaderSectionSize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(21))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 12)) = int32(payload)
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpRequestHeaderSize:
+		payload := value.HttpRequestHeaderSize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(22))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t1254(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (8+1*4)))
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpRequestTrailerSectionSize:
+		payload := value.HttpRequestTrailerSectionSize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(23))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 12)) = int32(payload)
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpRequestTrailerSize:
+		payload := value.HttpRequestTrailerSize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(24))
+		wasm_lower_1_t1254(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case ErrorCodeHttpResponseIncomplete:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(25))
+
+	case ErrorCodeHttpResponseHeaderSectionSize:
+		payload := value.HttpResponseHeaderSectionSize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(26))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 12)) = int32(payload)
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpResponseHeaderSize:
+		payload := value.HttpResponseHeaderSize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(27))
+		wasm_lower_1_t1254(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case ErrorCodeHttpResponseBodySize:
+		payload := value.HttpResponseBodySize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64(payload)
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpResponseTrailerSectionSize:
+		payload := value.HttpResponseTrailerSectionSize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 12)) = int32(payload)
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpResponseTrailerSize:
+		payload := value.HttpResponseTrailerSize()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
+		wasm_lower_1_t1254(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case ErrorCodeHttpResponseTransferCoding:
+		payload := value.HttpResponseTransferCoding()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			utf8 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 2*4))) = uint32(uint32(len(payload)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uintptr(uintptr(utf8)))
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpResponseContentCoding:
+		payload := value.HttpResponseContentCoding()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			utf80 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf80)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 2*4))) = uint32(uint32(len(payload)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uintptr(uintptr(utf80)))
+
+		default:
+			panic("unreachable")
+		}
+
+	case ErrorCodeHttpResponseTimeout:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
+
+	case ErrorCodeHttpUpgradeFailed:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
+
+	case ErrorCodeHttpProtocolError:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
+
+	case ErrorCodeLoopDetected:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
+
+	case ErrorCodeConfigurationError:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(37))
+
+	case ErrorCodeInternalError:
+		payload := value.InternalError()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(38))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			utf81 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf81)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 2*4))) = uint32(uint32(len(payload)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uintptr(uintptr(utf81)))
+
+		default:
+			panic("unreachable")
+		}
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lift_1_t1246(src unsafe.Pointer) Method {
+	var variant Method
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeMethodGet()
+
+	case 1:
+
+		variant = MakeMethodHead()
+
+	case 2:
+
+		variant = MakeMethodPost()
+
+	case 3:
+
+		variant = MakeMethodPut()
+
+	case 4:
+
+		variant = MakeMethodDelete()
+
+	case 5:
+
+		variant = MakeMethodConnect()
+
+	case 6:
+
+		variant = MakeMethodOptions()
+
+	case 7:
+
+		variant = MakeMethodTrace()
+
+	case 8:
+
+		variant = MakeMethodPatch()
+
+	case 9:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeMethodOther(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t1247(src unsafe.Pointer) Scheme {
+	var variant Scheme
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeSchemeHttp()
+
+	case 1:
+
+		variant = MakeSchemeHttps()
+
+	case 2:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeSchemeOther(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t1259(src unsafe.Pointer) RequestOptionsError {
+	var variant RequestOptionsError
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeRequestOptionsErrorNotSupported()
+
+	case 1:
+
+		variant = MakeRequestOptionsErrorImmutable()
+
+	case 2:
+		var option witTypes.Option[string]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+		case 0:
+
+			option = witTypes.None[string]()
+		case 1:
+			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+
+			option = witTypes.Some[string](value0)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeRequestOptionsErrorOther(option)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t1250(src unsafe.Pointer) DnsErrorPayload {
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		option = witTypes.Some[string](value0)
+	default:
+		panic("unreachable")
+	}
+	var option1 witTypes.Option[uint16]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))) {
+	case 0:
+
+		option1 = witTypes.None[uint16]()
+	case 1:
+
+		option1 = witTypes.Some[uint16](uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 + 3*4))))))
+	default:
+		panic("unreachable")
+	}
+
+	return DnsErrorPayload{Rcode: option, InfoCode: option1}
+}
+
+//go:noinline
+func wasm_lift_1_t1252(src unsafe.Pointer) TlsAlertReceivedPayload {
+	var option witTypes.Option[uint8]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[uint8]()
+	case 1:
+
+		option = witTypes.Some[uint8](uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 1)))))
+	default:
+		panic("unreachable")
+	}
+	var option1 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+	case 0:
+
+		option1 = witTypes.None[string]()
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+
+		option1 = witTypes.Some[string](value0)
+	default:
+		panic("unreachable")
+	}
+
+	return TlsAlertReceivedPayload{AlertId: option, AlertMessage: option1}
+}
+
+//go:noinline
+func wasm_lift_1_t1254(src unsafe.Pointer) FieldSizePayload {
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		option = witTypes.Some[string](value0)
+	default:
+		panic("unreachable")
+	}
+	var option1 witTypes.Option[uint32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))) {
+	case 0:
+
+		option1 = witTypes.None[uint32]()
+	case 1:
+
+		option1 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (4 + 3*4)))))
+	default:
+		panic("unreachable")
+	}
+
+	return FieldSizePayload{FieldName: option, FieldSize: option1}
+}
+
+//go:noinline
+func wasm_lower_1_t1250(pinner *runtime.Pinner, value DnsErrorPayload, dst unsafe.Pointer) {
+
+	switch (value).Rcode.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Rcode.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).InfoCode.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).InfoCode.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(1))
+		*(*int16)(unsafe.Add(unsafe.Pointer(dst), (2 + 3*4))) = int16(int32(payload))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t1252(pinner *runtime.Pinner, value TlsAlertReceivedPayload, dst unsafe.Pointer) {
+
+	switch (value).AlertId.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).AlertId.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 1)) = int8(int32(payload))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).AlertMessage.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).AlertMessage.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t1254(pinner *runtime.Pinner, value FieldSizePayload, dst unsafe.Pointer) {
+
+	switch (value).FieldName.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).FieldName.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).FieldSize.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).FieldSize.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), (4 + 3*4))) = int32(payload)
+
+	default:
+		panic("unreachable")
+	}
 
 }

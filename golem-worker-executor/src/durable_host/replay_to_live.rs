@@ -120,6 +120,19 @@ pub(super) enum LiveFinalization {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(in crate::durable_host) async fn reconcile_memory_accounting(
+        &self,
+        reset: bool,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.runtime == OwnerRuntime::Agent {
+            self.public_state
+                .worker()
+                .reconcile_memory_accounting(&self.linear_memory, reset)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub(in crate::durable_host) async fn begin_switch_to_live(
         &self,
     ) -> Result<BeginReplayToLive, WorkerExecutorError> {
@@ -160,11 +173,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) fn parks_incomplete_tool_guest_replay(&self) -> bool {
-        matches!(
-            self.runtime,
-            OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
-        ) && self.entity_invocation_scope().map(|scope| scope.mode())
-            == Some(InvocationExecutionMode::ReplayingCompleted)
+        self.tool_frontends.is_some()
+            && matches!(
+                self.runtime,
+                OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+            )
+            && self.entity_invocation_scope().map(|scope| scope.mode())
+                == Some(InvocationExecutionMode::ReplayingCompleted)
     }
 
     pub(crate) fn prepare_live_continuation_at_replay_tail(
@@ -490,7 +505,13 @@ pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
         ReplayToLiveOutcome::Live { replay_target }
     } else {
         match store_replay_state {
-            StoreReplayState::Primary => replay_state.publish_primary_live(linear_memory).await?,
+            StoreReplayState::Primary => {
+                public_state
+                    .worker()
+                    .reconcile_memory_accounting(linear_memory, false)
+                    .await?;
+                replay_state.publish_primary_live(linear_memory).await?
+            }
             _ => {
                 let replay_target = replay_state.exhaust_replay_prefix().await?;
                 linear_memory.switch_to_live();

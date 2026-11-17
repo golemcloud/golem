@@ -56,6 +56,7 @@ pub use state::{CallRecording, ResolvingReplay, SessionState};
 #[cfg(test)]
 use terminal::encode_response;
 pub(crate) use terminal::end_durable_function_access;
+pub(crate) use terminal::end_durable_function_initiation;
 pub(crate) use terminal::finish_span_in_memory;
 pub(crate) use terminal::record_released_resource_span;
 #[cfg(test)]
@@ -241,16 +242,25 @@ pub(crate) struct PreparedContextStart<Pair: HostPayloadPair, P: DropPolicy, Ctx
 }
 
 /// The request of an accessor call's `Start`.
-enum AccessRequest<Req, T: 'static, D: HasData + ?Sized + 'static, E = WorkerExecutorError> {
+enum AccessRequest<
+    Req,
+    T: 'static,
+    D: HasData + ?Sized + 'static,
+    Ctx: WorkerCtx,
+    E = WorkerExecutorError,
+> {
     /// A request known when the call is made.
     Ready(Req),
     /// A request built between the durable-scope open and the `Start` write or claim; see
     /// [`DurableCallSession::start_access_with`].
-    Built(AccessRequestBuilder<Req, T, D, E>),
+    Built(AccessRequestBuilder<Req, T, D, Ctx, E>),
 }
 
-type AccessRequestBuilder<Req, T, D, E> = Box<
-    dyn for<'a> FnOnce(AccessStartContext, &'a Accessor<T, D>) -> BoxFuture<'a, Result<Req, E>>
+type AccessRequestBuilder<Req, T, D, Ctx, E> = Box<
+    dyn for<'a> FnOnce(
+            AccessStartContext,
+            super::initiation_owner::InitiationRequestContext<'a, T, D, Ctx>,
+        ) -> BoxFuture<'a, Result<Req, E>>
         + Send,
 >;
 
@@ -287,7 +297,7 @@ struct OwnedAccessStart<
 > {
     stage: OwnedStartStage<Pair, P, Ctx>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    request: AccessRequest<Pair::Req, T, D, E>,
+    request: AccessRequest<Pair::Req, T, D, Ctx, E>,
     build_span: Option<BuildSpanCallback>,
     span_observer: Option<Arc<dyn CallSpanObserver>>,
     started: oneshot::Sender<Result<DurableCallSession<Pair, P>, E>>,
@@ -501,13 +511,6 @@ struct AcceptedAccessStart<P: DropPolicy> {
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
     teardown: TeardownProbe,
     _policy: PhantomData<P>,
-}
-
-impl<P: DropPolicy> AcceptedAccessStart<P> {
-    fn take(mut self) -> (OplogIndex, PendingUpload) {
-        self.call = None;
-        self.result.take().expect("accepted Start result")
-    }
 }
 
 impl<P: DropPolicy> Drop for AcceptedAccessStart<P> {

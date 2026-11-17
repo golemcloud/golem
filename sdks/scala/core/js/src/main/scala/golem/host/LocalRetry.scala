@@ -19,7 +19,7 @@ package golem.host
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration._
 import scala.concurrent.{Future, Promise}
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.scalajs.js
 import scala.scalajs.js.timers.setTimeout
 import scala.util.control.NonFatal

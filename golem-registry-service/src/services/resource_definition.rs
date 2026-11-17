@@ -334,6 +334,7 @@ impl ResourceDefinitionService {
             .resource_definition_repo
             .get_revision(resource_definition_id.0, revision.into())
             .await?
+            .filter(|record| !record.resource_definition.revision.audit.deleted)
             .ok_or_else(|| {
                 ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id)
             })?;

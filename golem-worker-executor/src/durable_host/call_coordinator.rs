@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::concurrent::DurableAccess;
+use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
+use crate::durable_host::concurrent::{AccessorContext, DurableAccess};
 use crate::durable_host::{
     LiveAuthorizationPermit, authority_snapshot_is_current_at, authorize_effective_surface,
     record_permission_decisions,
@@ -240,48 +241,63 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    let mut context = AccessorContext::new(store, get_ctx);
+    authorize_live_permissions_at_serialized_initiation(
+        &mut InlineInitiationAccess::new(&mut context),
+        targets,
+    )
+    .await
+}
+
+pub(crate) async fn authorize_live_permissions_at_serialized_initiation<Ctx: WorkerCtx>(
+    access: &mut (impl InitiationAccess<Ctx> + ?Sized),
+    targets: &[golem_common::model::card::PermissionTarget],
+) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError> {
     enum FastResult {
         OperatorAuthorized,
         Stable(Result<(), AuthorizationError>),
         Slow,
     }
 
-    process_pending_replay_events_access(store, get_ctx).await?;
-    let fast_result = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        assert!(
-            ctx.state.is_live(),
-            "live permission authorization must not run during replay"
-        );
-        if !ctx.state.replay_applications.is_empty() {
-            return FastResult::Slow;
-        }
-        if ctx.operator_authorizes_current_invocation() {
-            return FastResult::OperatorAuthorized;
-        }
-        let published_generation = ctx
-            .state
-            .published_authority_generation
-            .load(Ordering::Acquire);
-        let now = chrono::Utc::now();
-        if authority_snapshot_is_current_at(
-            ctx.state.authority_initialized,
-            ctx.state.card_interest_index.authority_is_open(),
-            ctx.state.processed_authority_generation,
-            published_generation,
-            ctx.state.next_authority_expiration,
-            now,
-        ) {
-            let result = authorize_effective_surface(&ctx.state.agent_effective_surface, targets);
-            if ctx.authority_snapshot_is_stable(published_generation) {
-                FastResult::Stable(result)
+    process_pending_replay_events_initiation(access).await?;
+    let owned_targets = targets.to_vec();
+    let fast_result = access
+        .window(move |ctx| {
+            assert!(
+                ctx.state.is_live(),
+                "live permission authorization must not run during replay"
+            );
+            if !ctx.state.replay_applications.is_empty() {
+                return FastResult::Slow;
+            }
+            if ctx.operator_authorizes_current_invocation() {
+                return FastResult::OperatorAuthorized;
+            }
+            let published_generation = ctx
+                .state
+                .published_authority_generation
+                .load(Ordering::Acquire);
+            let now = chrono::Utc::now();
+            if authority_snapshot_is_current_at(
+                ctx.state.authority_initialized,
+                ctx.state.card_interest_index.authority_is_open(),
+                ctx.state.processed_authority_generation,
+                published_generation,
+                ctx.state.next_authority_expiration,
+                now,
+            ) {
+                let result =
+                    authorize_effective_surface(&ctx.state.agent_effective_surface, &owned_targets);
+                if ctx.authority_snapshot_is_stable(published_generation) {
+                    FastResult::Stable(result)
+                } else {
+                    FastResult::Slow
+                }
             } else {
                 FastResult::Slow
             }
-        } else {
-            FastResult::Slow
-        }
-    });
+        })
+        .await?;
     match fast_result {
         FastResult::OperatorAuthorized => {
             record_permission_decisions(targets, true);
@@ -298,29 +314,32 @@ where
     let started = std::time::Instant::now();
     loop {
         let boundary_guard =
-            lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+            lock_synchronized_card_event_boundary_initiation_inner(access, true, true)
                 .await?
                 .expect("waiting authority boundary always returns a guard");
-        let result = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            if ctx.operator_authorizes_current_invocation() {
-                return Some(Ok(()));
-            }
-            let generation = ctx
-                .state
-                .published_authority_generation
-                .load(Ordering::Acquire);
-            let result = authorize_effective_surface(&ctx.state.agent_effective_surface, targets);
-            // A due cached deadline sent us through synchronization. Recompute it from the
-            // synchronized wallet before deciding whether the snapshot is stable.
-            ctx.refresh_authority_expiration_deadline();
-            if ctx.authority_snapshot_is_stable(generation) {
-                ctx.adopt_authority_generation(generation);
-                Some(result)
-            } else {
-                None
-            }
-        });
+        let owned_targets = targets.to_vec();
+        let result = access
+            .window(move |ctx| {
+                if ctx.operator_authorizes_current_invocation() {
+                    return Some(Ok(()));
+                }
+                let generation = ctx
+                    .state
+                    .published_authority_generation
+                    .load(Ordering::Acquire);
+                let result =
+                    authorize_effective_surface(&ctx.state.agent_effective_surface, &owned_targets);
+                // A due cached deadline sent us through synchronization. Recompute it from the
+                // synchronized wallet before deciding whether the snapshot is stable.
+                ctx.refresh_authority_expiration_deadline();
+                if ctx.authority_snapshot_is_stable(generation) {
+                    ctx.adopt_authority_generation(generation);
+                    Some(result)
+                } else {
+                    None
+                }
+            })
+            .await?;
         if let Some(result) = result {
             crate::metrics::wasm::record_agent_permission_authority_slow_path(started.elapsed());
             record_permission_decisions(targets, result.is_ok());
@@ -339,14 +358,14 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    let mut context = AccessorContext::new(store, get_ctx);
+    let mut access = InlineInitiationAccess::new(&mut context);
     let Some(_boundary_guard) =
-        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, false).await?
+        lock_synchronized_card_event_boundary_initiation_inner(&mut access, true, false).await?
     else {
         return Ok(None);
     };
-    Ok(Some(store.with(|mut access| {
-        get_ctx(access.data_mut()).agent_auth_ctx()
-    })))
+    Ok(Some(access.window(|ctx| ctx.agent_auth_ctx()).await?))
 }
 
 pub(crate) async fn agent_auth_ctx_at_serialized_access<T, D, Ctx>(
@@ -358,11 +377,13 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    let mut context = AccessorContext::new(store, get_ctx);
+    let mut access = InlineInitiationAccess::new(&mut context);
     let _boundary_guard =
-        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+        lock_synchronized_card_event_boundary_initiation_inner(&mut access, true, true)
             .await?
             .expect("waiting authority boundary always returns a guard");
-    Ok(store.with(|mut access| get_ctx(access.data_mut()).agent_auth_ctx()))
+    access.window(|ctx| ctx.agent_auth_ctx()).await
 }
 
 pub(crate) async fn synchronize_live_agent_authority_access<T, D, Ctx>(
@@ -381,39 +402,57 @@ where
 pub(crate) async fn capture_live_agent_authority_access<T, D, Ctx, R>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    mut capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+    capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
 ) -> Result<Option<R>, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
+    R: Send + 'static,
 {
-    if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
-        return Ok(None);
+    let mut context = AccessorContext::new(store, get_ctx);
+    capture_live_agent_authority_initiation(&mut InlineInitiationAccess::new(&mut context), capture)
+        .await
+        .map(|(_, captured)| captured)
+}
+
+pub(crate) async fn capture_live_agent_authority_initiation<Ctx, R, C>(
+    access: &mut (impl InitiationAccess<Ctx> + ?Sized),
+    mut capture: C,
+) -> Result<(C, Option<R>), WorkerExecutorError>
+where
+    Ctx: WorkerCtx,
+    R: Send + 'static,
+    C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
+{
+    if !access.window(|ctx| ctx.state.is_live()).await? {
+        return Ok((capture, None));
     }
     loop {
         let boundary_guard =
-            lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+            lock_synchronized_card_event_boundary_initiation_inner(access, true, true)
                 .await?
                 .expect("waiting authority boundary always returns a guard");
-        let (captured, stable) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            let generation = ctx
-                .state
-                .published_authority_generation
-                .load(Ordering::Acquire);
-            let captured = ctx.state.is_live().then(|| capture(ctx));
-            ctx.refresh_authority_expiration_deadline();
-            if ctx.authority_snapshot_is_stable(generation) {
-                ctx.adopt_authority_generation(generation);
-                (captured, true)
-            } else {
-                (captured, false)
-            }
-        });
+        let (returned_capture, captured, stable) = access
+            .window(move |ctx| {
+                let generation = ctx
+                    .state
+                    .published_authority_generation
+                    .load(Ordering::Acquire);
+                let captured = ctx.state.is_live().then(|| capture(ctx));
+                ctx.refresh_authority_expiration_deadline();
+                if ctx.authority_snapshot_is_stable(generation) {
+                    ctx.adopt_authority_generation(generation);
+                    (capture, captured, true)
+                } else {
+                    (capture, captured, false)
+                }
+            })
+            .await?;
+        capture = returned_capture;
         drop(boundary_guard);
         if stable {
-            return Ok(captured);
+            return Ok((capture, captured));
         }
     }
 }
@@ -427,36 +466,39 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    let mut context = AccessorContext::new(store, get_ctx);
+    lock_synchronized_card_event_boundary_initiation(&mut InlineInitiationAccess::new(&mut context))
+        .await
+}
+
+pub(crate) async fn lock_synchronized_card_event_boundary_initiation<Ctx: WorkerCtx>(
+    access: &mut (impl InitiationAccess<Ctx> + ?Sized),
+) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError> {
     Ok(
-        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, false, true)
+        lock_synchronized_card_event_boundary_initiation_inner(access, false, true)
             .await?
             .expect("unrestricted card boundary always returns a guard"),
     )
 }
 
-async fn lock_synchronized_card_event_boundary_access_inner<T, D, Ctx>(
-    store: &(impl DurableAccess<T, D> + ?Sized),
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+async fn lock_synchronized_card_event_boundary_initiation_inner<Ctx: WorkerCtx>(
+    access: &mut (impl InitiationAccess<Ctx> + ?Sized),
     requires_agent_authority: bool,
     wait_for_authority: bool,
-) -> Result<Option<Option<tokio::sync::OwnedMutexGuard<()>>>, WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
+) -> Result<Option<Option<tokio::sync::OwnedMutexGuard<()>>>, WorkerExecutorError> {
     loop {
-        process_pending_replay_events_access(store, get_ctx).await?;
-        let live_inputs = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            ctx.state.is_live().then(|| {
-                (
-                    ctx.state.owner_wallet.clone(),
-                    ctx.public_state.worker().clone(),
-                    ctx.authority_scope_inputs(),
-                )
+        process_pending_replay_events_initiation(access).await?;
+        let live_inputs = access
+            .window(|ctx| {
+                ctx.state.is_live().then(|| {
+                    (
+                        ctx.state.owner_wallet.clone(),
+                        ctx.public_state.worker().clone(),
+                        ctx.authority_scope_inputs(),
+                    )
+                })
             })
-        });
+            .await?;
         if let Some((owner, worker, inputs)) = live_inputs {
             let work = owner.synchronize(
                 worker.clone(),
@@ -477,15 +519,16 @@ where
             else {
                 return Ok(None);
             };
-            let accepted = store.with(|mut access| {
-                let ctx = get_ctx(access.data_mut());
-                let accepted = ctx.apply_owner_authority_snapshot(observation)?;
-                Ok::<_, WorkerExecutorError>(
-                    accepted
-                        && (!requires_agent_authority
-                            || ctx.state.card_interest_index.authority_is_open()),
-                )
-            })?;
+            let accepted = access
+                .window(move |ctx| {
+                    let accepted = ctx.apply_owner_authority_snapshot(observation)?;
+                    Ok::<_, WorkerExecutorError>(
+                        accepted
+                            && (!requires_agent_authority
+                                || ctx.state.card_interest_index.authority_is_open()),
+                    )
+                })
+                .await??;
             if accepted {
                 return Ok(Some(None));
             }
@@ -504,19 +547,29 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    let mut context = AccessorContext::new(store, get_ctx);
+    process_pending_replay_events_initiation(&mut InlineInitiationAccess::new(&mut context)).await
+}
+
+pub(crate) async fn process_pending_replay_events_initiation<Ctx: WorkerCtx>(
+    access: &mut (impl InitiationAccess<Ctx> + ?Sized),
+) -> Result<(), WorkerExecutorError> {
     loop {
-        let application = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            super::replay_application::reserve(ctx)?;
-            Ok::<_, WorkerExecutorError>(ctx.state.replay_applications.front().cloned())
-        })?;
+        let application = access
+            .window(|ctx| {
+                super::replay_application::reserve(ctx)?;
+                Ok::<_, WorkerExecutorError>(ctx.state.replay_applications.front().cloned())
+            })
+            .await??;
         let Some(application) = application else {
             return Ok(());
         };
         let prepared = application.result.clone().await?;
-        store.with(|mut access| {
-            super::replay_application::apply(get_ctx(access.data_mut()), &application, &prepared);
-        });
+        access
+            .window(move |ctx| {
+                super::replay_application::apply(ctx, &application, &prepared);
+            })
+            .await?;
     }
 }
 

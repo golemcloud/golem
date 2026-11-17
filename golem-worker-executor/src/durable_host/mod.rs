@@ -111,6 +111,7 @@ pub use schema_value_stream::CoreTypesHost;
 pub mod rpc;
 mod sockets;
 pub mod stream_bus;
+pub(crate) mod stream_outcome;
 pub mod stream_session;
 pub mod stream_transport;
 mod suspendable_wait;
@@ -393,6 +394,9 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub(crate) tool_trap_disposal: Arc<AtomicBool>,
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     pub(crate) tool_frontends: Option<Arc<stream_transport::ToolFrontendScope>>,
+    pub(crate) host_initiations: Option<Arc<concurrent::initiation_owner::InitiationOwner<Ctx>>>,
+    pub(crate) schema_producers: stream_outcome::ProducerOutcomeScope,
+    schema_output_tasks: Mutex<Option<crate::worker::tasks::NativeReconstructionTasks>>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
     invocation_id: Option<golem_common::model::OwnedInvocationId>,
@@ -422,16 +426,18 @@ pub(crate) struct PrimaryInvocationBody {
     permit: Option<OwnerInvocationPermit>,
 }
 
-/// Golem's memory accounting covers guest linear memory only.
+/// Golem accounts every Wasmtime memory the same way: guest linear memories and the GC heaps
+/// that Wasmtime grows for the GC proposal through the same limiter callbacks
+/// (`MemoryKind::GcHeap`). GC heap growth takes an admission grant, counts toward the agent's
+/// memory limit and plan quotas. Refusing growth of an existing GC heap allows Wasmtime to
+/// collect before reporting allocation failure; linear memory and initial GC allocation
+/// retain immediate typed failures.
 ///
-/// Wasmtime also grows its internal GC heaps through the same limiter
-/// callbacks, tagged `MemoryKind::GcHeap`. That capacity belongs to the
-/// collector rather than to memory the guest declared, so it is admitted
-/// without taking a grant and correspondingly never releases one. Golem's
-/// engine config leaves the GC proposal disabled (see
-/// `golem_common::wasmtime_config`), so no store should allocate a GC heap in
-/// the first place; the arm is here so that enabling it does not silently start
-/// billing collector capacity as guest memory.
+/// GC heap growth depends on collector timing, so replay can grow differently than the live run
+/// did. Reconstruction reuses prepaid startup bytes and records an absolute
+/// `MemorySizeReconciled` hint at the accounting cutover. Subsequent committed growth records
+/// `GrowMemory` deltas once allocation reconciliation and accounting activation are complete,
+/// even if replay settlement still prevents live effects. Growth is not a checked replay fact.
 pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Ctx>;
 
@@ -444,20 +450,12 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     ) -> impl Future<Output = wasmtime::Result<bool>> + Send {
         let ctx = self.durable_worker_ctx();
         async move {
-            match kind {
-                MemoryKind::LinearMemory => {
-                    ctx.admit_unshared_memory_growth(current, desired, maximum)
-                        .await
-                }
-                MemoryKind::GcHeap => Ok(true),
-            }
+            ctx.admit_unshared_memory_growth(current, desired, maximum, kind)
+                .await
         }
     }
 
-    fn durable_memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) -> bool {
-        if kind != MemoryKind::LinearMemory {
-            return false;
-        }
+    fn durable_memory_grown(&mut self, current: usize, desired: usize) -> bool {
         let delta = desired.saturating_sub(current) as u64;
         if delta > 0 {
             self.durable_worker_ctx().increase_memory(delta);
@@ -467,10 +465,8 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
         }
     }
 
-    fn durable_memory_grow_failed(&mut self, kind: MemoryKind) -> wasmtime::Result<()> {
-        if kind == MemoryKind::LinearMemory {
-            self.durable_worker_ctx().unshared_memory_growth_failed();
-        }
+    fn durable_memory_grow_failed(&mut self) -> wasmtime::Result<()> {
+        self.durable_worker_ctx().unshared_memory_growth_failed();
         Ok(())
     }
 }
@@ -742,11 +738,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         direction: TcpSocketStreamDirection,
     ) -> bool {
         self.state
-            .tcp_taken_streams
+            .socket_entries
             .get(&socket_rep)
             .map(|taken| match direction {
-                TcpSocketStreamDirection::Send => taken.send,
-                TcpSocketStreamDirection::Receive => taken.receive,
+                TcpSocketStreamDirection::Send => taken.send_taken,
+                TcpSocketStreamDirection::Receive => taken.receive_taken,
             })
             .unwrap_or(false)
     }
@@ -757,18 +753,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         socket_rep: u32,
         direction: TcpSocketStreamDirection,
     ) {
-        let taken = self.state.tcp_taken_streams.entry(socket_rep).or_default();
+        let taken = self
+            .state
+            .socket_entries
+            .get_mut(&socket_rep)
+            .expect("TCP socket entry");
         match direction {
-            TcpSocketStreamDirection::Send => taken.send = true,
-            TcpSocketStreamDirection::Receive => taken.receive = true,
+            TcpSocketStreamDirection::Send => taken.send_taken = true,
+            TcpSocketStreamDirection::Receive => taken.receive_taken = true,
         }
-    }
-
-    /// Drops the shadow taken-state for a TCP socket resource. Called from the
-    /// socket `drop` so a later resource-table rep reuse cannot inherit stale
-    /// taken flags.
-    pub(crate) fn forget_tcp_taken_streams(&mut self, socket_rep: u32) {
-        self.state.tcp_taken_streams.remove(&socket_rep);
     }
 
     fn io_ctx(&mut self) -> &mut IoCtx {
@@ -1096,15 +1089,6 @@ pub(crate) enum TcpSocketStreamDirection {
     Receive,
 }
 
-/// Tracks which of a TCP socket's one-shot `send`/`receive` streams have been
-/// acquired by the durable wrappers. Mirrors the wasmtime native per-socket
-/// taken flags so replay can rehydrate them deterministically.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct TcpTakenStreams {
-    send: bool,
-    receive: bool,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct WebSocketConnectionState {
     pub url: String,
@@ -1202,14 +1186,7 @@ struct PrivateDurableWorkerState {
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
     p2_timer_deadlines: HashMap<u32, std::time::Instant>,
 
-    /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
-    /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
-    /// from the oplog instead of invoking the native host call, so the native
-    /// "taken" state is not advanced on replay. This map records which directions
-    /// were acquired so a post-replay second call returns `InvalidState` exactly as
-    /// uninterrupted execution would. Reconstructed on replay from the durable
-    /// acquire calls and cleared when the socket resource is dropped.
-    tcp_taken_streams: HashMap<u32, TcpTakenStreams>,
+    socket_entries: sockets::SocketEntries,
 
     snapshotting_mode: bool,
 

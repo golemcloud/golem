@@ -13,23 +13,27 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::call_coordinator::process_pending_replay_events_initiation;
+use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 
 /// Retains an accepted replay claim independently of the Store task that requested it.
 ///
 /// The claim reads only the shared replay state, never the Store, so a Store-holding caller can
 /// await it as well as an accessor call can.
 pub(super) async fn owned_access_claim<Ctx: WorkerCtx>(
-    access: &mut impl DurableContext<Ctx>,
+    access: &mut impl InitiationAccess<Ctx>,
     recorded_start_required: bool,
     claim: impl Future<Output = Result<ReplayStartClaimOutcome, WorkerExecutorError>> + Send + 'static,
 ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
-    let (tasks, sink, context) = access.with_ctx(|ctx| {
-        (
-            ctx.public_state.worker().tasks.clone(),
-            ctx.state.dropped_call_event_sender(),
-            ambient_trap_context(ctx),
-        )
-    });
+    let (tasks, sink, context) = access
+        .window(|ctx| {
+            (
+                ctx.public_state.worker().tasks.clone(),
+                ctx.state.dropped_call_event_sender(),
+                ambient_trap_context(ctx),
+            )
+        })
+        .await?;
     let (send, receive) = oneshot::channel();
     let (settled, settlement) = oneshot::channel();
     drop(
@@ -172,6 +176,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
         access: &mut impl DurableContext<Ctx>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
     ) -> Result<Option<ReplayCallHandle>, WorkerExecutorError> {
+        self.resolve_against_history_initiation(
+            &mut InlineInitiationAccess::new(access),
+            span_observer,
+        )
+        .await
+    }
+
+    pub(super) async fn resolve_against_history_initiation(
+        &mut self,
+        access: &mut impl InitiationAccess<Ctx>,
+        span_observer: Option<Arc<dyn CallSpanObserver>>,
+    ) -> Result<Option<ReplayCallHandle>, WorkerExecutorError> {
         if self.is_live {
             return Ok(None);
         }
@@ -181,10 +197,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                 &self.execution_scope,
                 &self.retry,
             )?;
-            let observer = span_observer.clone().map(|observer| {
-                let activity = access.with_ctx(|ctx| ctx.tail_work_tracker().activity());
-                (observer, Arc::new(activity))
-            });
+            let observer = if let Some(observer) = span_observer.clone() {
+                let activity = access
+                    .window(|ctx| ctx.tail_work_tracker().activity())
+                    .await?;
+                Some((observer, Arc::new(activity)))
+            } else {
+                None
+            };
             let claiming = self.replay_state.clone();
             let admission = self
                 .tool_operation
@@ -271,7 +291,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
             if finished == FinishReplayToLive::Live
                 && self.replay_to_live_role() == ReplayToLiveRole::PrimaryAgent
             {
-                access.process_replay_events().await?;
+                process_pending_replay_events_initiation(access).await?;
             }
             finished.require_live()?;
             let previous = self.retry.durable_execution_state();
@@ -317,7 +337,7 @@ async fn prepare_replay_continuation<Pair: HostPayloadPair, Ctx: WorkerCtx>(
     live_call_permit: &mut Option<LiveCallPermit>,
     counter: Arc<AtomicUsize>,
     unpersisted: bool,
-    access: &mut impl DurableContext<Ctx>,
+    access: &mut impl InitiationAccess<Ctx>,
 ) -> Result<(), WorkerExecutorError> {
     if unpersisted {
         return Ok(());
@@ -328,11 +348,13 @@ async fn prepare_replay_continuation<Pair: HostPayloadPair, Ctx: WorkerCtx>(
     let readiness = recovery.await_new_call_readiness::<Pair>().await;
     if let Err(error) = readiness {
         replay_state.abandon_replay_for_failure().await?;
-        access.with_ctx(|ctx| {
-            ctx.state
-                .authoritative_replay_failure
-                .store(true, Ordering::Release)
-        });
+        access
+            .window(|ctx| {
+                ctx.state
+                    .authoritative_replay_failure
+                    .store(true, Ordering::Release)
+            })
+            .await?;
         return Err(error);
     }
     Ok(())
@@ -508,25 +530,40 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        let primary_live = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            ctx.state.durable_call_is_live() && ctx.runtime == OwnerRuntime::Agent
-        });
+        Self::claim_replay_initiation(
+            &mut InlineInitiationAccess::new(&mut AccessorContext::new(store, get_ctx)),
+            identity,
+            function_type,
+            claim_options,
+        )
+        .await
+    }
+
+    pub(super) async fn claim_replay_initiation<Ctx: WorkerCtx>(
+        access: &mut impl InitiationAccess<Ctx>,
+        identity: AccessCallIdentity,
+        function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
+    ) -> Result<ReplayAccessStartOutcome<Self>, WorkerExecutorError> {
+        let primary_live = access
+            .window(|ctx| ctx.state.durable_call_is_live() && ctx.runtime == OwnerRuntime::Agent)
+            .await?;
         if primary_live {
             return Ok(ReplayAccessStartOutcome::ReplayEnded);
         }
-        process_pending_replay_events_access(store, get_ctx).await?;
-        let mut prepared = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(
-                ctx,
-                function_type,
-                claim_options,
-                identity.custom_invocation_scope,
-                false,
-                identity.invocation_id,
-            )
-        })?;
+        process_pending_replay_events_initiation(access).await?;
+        let mut prepared = access
+            .window(move |ctx| {
+                Self::prepare_access_start(
+                    ctx,
+                    function_type,
+                    claim_options,
+                    identity.custom_invocation_scope,
+                    false,
+                    identity.invocation_id,
+                )
+            })
+            .await??;
         let claim = Self::replay_start_claim(
             &prepared.claim_options,
             &prepared.execution_scope,
@@ -540,7 +577,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 &mut prepared.live_call_permit,
                 prepared.live_host_calls.clone(),
                 prepared.unpersisted,
-                &mut AccessorContext::new(store, get_ctx),
+                access,
             )
             .await?;
             prepared.switch_to_live().await?;
@@ -555,12 +592,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ))
             };
         }
-        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+        if let Err(err) =
+            super::super::drop_events::drain_dropped_call_events_initiation(access).await?
+        {
             return Err(err.source);
         }
 
         match prepared
-            .resolve_against_history(&mut AccessorContext::new(store, get_ctx), None)
+            .resolve_against_history_initiation(access, None)
             .await?
         {
             Some(handle) => {
@@ -577,10 +616,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     cleanup_sink: prepared.cleanup_sink,
                     _phantom: PhantomData,
                 };
-                let handle = store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    Self::finish_access_start(ctx, executed)
-                });
+                let handle = access
+                    .window(move |ctx| Self::finish_access_start(ctx, executed))
+                    .await?;
                 Ok(ReplayAccessStartOutcome::Claimed(handle))
             }
             None => Ok(ReplayAccessStartOutcome::ReplayEnded),

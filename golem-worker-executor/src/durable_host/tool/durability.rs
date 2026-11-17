@@ -8,6 +8,8 @@ use super::attachment::{
     AttachmentController, AttachmentObserver, AttachmentWriteAcceptance, AttachmentWriteBody,
     AttachmentWriter, PreparedAttachmentTerminal, StagedAttachmentWrite,
 };
+use crate::durable_host::call_coordinator::process_pending_replay_events_initiation;
+use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessorContext, Cancellable, CompletionDelivery,
     DeferredCallReplayOutcome, DurableAccess, DurableCallSession, DurableContext, OrderedAppend,
@@ -1153,14 +1155,26 @@ impl ProducerDisposal {
         &mut self,
         access: &mut impl DurableContext<Ctx>,
     ) -> Result<(), WorkerExecutorError> {
-        if self.pending.is_none() && access.with_ctx(|ctx| ctx.producer_disposal_tasks.is_none()) {
+        self.finish_initiation(&mut InlineInitiationAccess::new(access))
+            .await
+    }
+
+    pub(crate) async fn finish_initiation<Ctx: WorkerCtx>(
+        &mut self,
+        access: &mut impl InitiationAccess<Ctx>,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.pending.is_none()
+            && access
+                .window(|ctx| ctx.producer_disposal_tasks.is_none())
+                .await?
+        {
             return Ok(());
         }
         if let Some(error) = &self.admission_error {
             return Err(error.clone());
         }
         if self.primary_transition {
-            access.process_replay_events().await?;
+            process_pending_replay_events_initiation(access).await?;
             self.primary_transition = false;
         }
         if self.pending.is_none() && self.controller.producer_disposal_owned_elsewhere() {

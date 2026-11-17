@@ -67,42 +67,21 @@ func wasm_stream_drop_readable_result_list_u8_golem_tool_streams_byte_stream_fai
 func wasm_stream_drop_writable_result_list_u8_golem_tool_streams_byte_stream_failure(handle int32)
 
 func wasm_stream_lift_result_list_u8_golem_tool_streams_byte_stream_failure(src unsafe.Pointer) witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure] {
-	var result witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]
+	var result0 witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
 		value := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 
-		result = witTypes.Ok[[]uint8, golem_tool_streams.ByteStreamFailure](value)
+		result0 = witTypes.Ok[[]uint8, golem_tool_streams.ByteStreamFailure](value)
 	case 1:
-		var variant golem_tool_streams.ByteStreamFailure
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
-		case 0:
+		result := wasm_lift_1_t661(unsafe.Add(unsafe.Pointer(src), 4))
 
-			variant = golem_tool_streams.MakeByteStreamFailureCancelled()
-
-		case 1:
-
-			variant = golem_tool_streams.MakeByteStreamFailureAbandoned()
-
-		case 2:
-
-			variant = golem_tool_streams.MakeByteStreamFailureResourceExhausted()
-
-		case 3:
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
-
-			variant = golem_tool_streams.MakeByteStreamFailureFailed(value0)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[[]uint8, golem_tool_streams.ByteStreamFailure](variant)
+		result0 = witTypes.Err[[]uint8, golem_tool_streams.ByteStreamFailure](result)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result0
 }
 
 func wasm_stream_lower_result_list_u8_golem_tool_streams_byte_stream_failure(
@@ -123,31 +102,7 @@ func wasm_stream_lower_result_list_u8_golem_tool_streams_byte_stream_failure(
 	case witTypes.ResultErr:
 		payload := value.Err()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-
-		switch payload.Tag() {
-		case golem_tool_streams.ByteStreamFailureCancelled:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(0))
-
-		case golem_tool_streams.ByteStreamFailureAbandoned:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(1))
-
-		case golem_tool_streams.ByteStreamFailureResourceExhausted:
-
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(2))
-
-		case golem_tool_streams.ByteStreamFailureFailed:
-			payload := payload.Failed()
-			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(3))
-			utf8 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uintptr(uintptr(utf8)))
-
-		default:
-			panic("unreachable")
-		}
+		wasm_lower_1_t661(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	default:
 		panic("unreachable")
@@ -177,4 +132,62 @@ func MakeStreamResultListU8GolemToolStreamsByteStreamFailure() (*witTypes.Stream
 
 func LiftStreamResultListU8GolemToolStreamsByteStreamFailure(handle int32) *witTypes.StreamReader[witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]] {
 	return witTypes.MakeStreamReader[witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]](&wasm_stream_vtable_result_list_u8_golem_tool_streams_byte_stream_failure, handle)
+}
+
+//go:noinline
+func wasm_lift_1_t661(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
+	var variant golem_tool_streams.ByteStreamFailure
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = golem_tool_streams.MakeByteStreamFailureCancelled()
+
+	case 1:
+
+		variant = golem_tool_streams.MakeByteStreamFailureAbandoned()
+
+	case 2:
+
+		variant = golem_tool_streams.MakeByteStreamFailureResourceExhausted()
+
+	case 3:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = golem_tool_streams.MakeByteStreamFailureFailed(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lower_1_t661(pinner *runtime.Pinner, value golem_tool_streams.ByteStreamFailure, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case golem_tool_streams.ByteStreamFailureCancelled:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case golem_tool_streams.ByteStreamFailureAbandoned:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+
+	case golem_tool_streams.ByteStreamFailureResourceExhausted:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+
+	case golem_tool_streams.ByteStreamFailureFailed:
+		payload := value.Failed()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
 }

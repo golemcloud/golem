@@ -144,9 +144,9 @@ func Id(s *golem_core_types.Secret) SecretId {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (2 * 4), 4))
 	wasm_import_id((s).Handle(), returnArea)
-	value := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
-	result := SecretId{Bytes: value}
-	return result
+	result := wasm_lift_1_t918(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
 
 }
 
@@ -159,49 +159,77 @@ func Metadata(s *golem_core_types.Secret) SecretMetadata {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (24 + 8*4), 8))
 	wasm_import_metadata((s).Handle(), returnArea)
+	result := wasm_lift_1_t924(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
+
+}
+
+//go:noinline
+func wasm_lift_1_t918(src unsafe.Pointer) SecretId {
+	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+
+	return SecretId{Bytes: value0}
+}
+
+//go:noinline
+func wasm_lift_1_t924(src unsafe.Pointer) SecretMetadata {
 	var option witTypes.Option[[]string]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
 
 		option = witTypes.None[[]string]()
 	case 1:
-		result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(2*4))
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+		result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(2*4))
+			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-			result = append(result, value)
+			result = append(result, value0)
 		}
 
 		option = witTypes.Some[[]string](result)
 	default:
 		panic("unreachable")
 	}
-	var option1 witTypes.Option[SecretVersion]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))) {
+	var option2 witTypes.Option[SecretVersion]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))) {
 	case 0:
 
-		option1 = witTypes.None[SecretVersion]()
+		option2 = witTypes.None[SecretVersion]()
 	case 1:
-		value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
+		result1 := wasm_lift_1_t919(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
 
-		option1 = witTypes.Some[SecretVersion](SecretVersion{Bytes: value0})
+		option2 = witTypes.Some[SecretVersion](result1)
 	default:
 		panic("unreachable")
 	}
-	var option3 witTypes.Option[string]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 6*4)))) {
+	result3 := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), (6 * 4)))
+	var option5 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 6*4)))) {
 	case 0:
 
-		option3 = witTypes.None[string]()
+		option5 = witTypes.None[string]()
 	case 1:
-		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 8*4))))
+		value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 8*4))))
 
-		option3 = witTypes.Some[string](value2)
+		option5 = witTypes.Some[string](value4)
 	default:
 		panic("unreachable")
 	}
-	result4 := SecretMetadata{ConfigKey: option, Version: option1, ResolvedAt: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (6 * 4))), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4))))}, Category: option3}
-	return result4
 
+	return SecretMetadata{ConfigKey: option, Version: option2, ResolvedAt: result3, Category: option5}
+}
+
+//go:noinline
+func wasm_lift_1_t919(src unsafe.Pointer) SecretVersion {
+	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+
+	return SecretVersion{Bytes: value0}
+}
+
+//go:noinline
+func wasm_lift_1_t113(src unsafe.Pointer) wasi_clocks_0_3_0_system_clock.Instant {
+
+	return wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(src), 0)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))}
 }

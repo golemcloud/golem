@@ -53,6 +53,40 @@ object AgentClientRuntime {
         .map(remote => WireResolvedAgent(agentType, remote))
     }
 
+  /**
+   * Bind the current durable incarnation without creating it or waiting for
+   * initialization.
+   *
+   * Use this to schedule work on self from inside the constructor. Normal
+   * client construction reuses an initialized agent without rerunning its
+   * constructor, but waits for an unfinished constructor. Calling it on self
+   * from that constructor would therefore deadlock.
+   *
+   * Scheduled work runs after construction finishes. This does not make awaited
+   * self-calls reentrant or bypass method permissions. A different client type
+   * returns an error. Replay preserves the recorded incarnation.
+   */
+  def bindSelfWire[Trait, Constructor](
+    agentType: WireAgentClientType[Trait, Constructor]
+  ): Either[String, WireResolvedAgent[Trait]] =
+    AgentIdentity.bindSelf(agentType.metadata.name).map(remote => WireResolvedAgent(agentType, remote))
+
+  /**
+   * Bind self using a typed reflective agent definition, without waiting for
+   * initialization.
+   *
+   * Use this for constructor-time self-scheduling, as described by
+   * [[bindSelfWire]]. Normal client construction on self would wait for the
+   * executing constructor to finish and deadlock. This does not make awaited
+   * self-calls reentrant.
+   */
+  def bindSelf[Trait, Constructor](
+    agentType: AgentType[Trait, Constructor]
+  ): Either[String, ResolvedAgent[Trait]] =
+    AgentIdentity.bindSelf(agentType.typeName).map { remote =>
+      ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote)
+    }
+
   private def encodeWireSync[A](
     codec: ConcreteCodec[A],
     containsStream: Boolean,
@@ -97,7 +131,7 @@ object AgentClientRuntime {
   ): Future[AwaitedInput] =
     if (scopeCard.exists(!_.isPresent)) Future.failed(new IllegalStateException(ScopeCardMoved))
     else {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       (try encode
       catch { case NonFatal(error) => Future.failed(error) }).map { case (wit, lowered) =>
         new AwaitedInput(wit, lowered, scopeCard)
@@ -113,7 +147,7 @@ object AgentClientRuntime {
     wit: => WitSchemaValueTree
   ): Future[AwaitedInput] =
     awaitedInput(scopeCard) {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       val tree        = wit
       SchemaWireInterop.ownedValueTreeToJsAsync(tree).map(lowered => (tree, lowered))
     }
@@ -292,7 +326,7 @@ object AgentClientRuntime {
       runScheduledCancelable(method, datetime, input)
 
     def awaitWithMetadata[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[InvocationResult[Out]] = {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       encodeInputAsync(method.inputCodec, input, scopeCard).flatMap { params =>
         FutureInterop
           .fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, _, scopeCard)))
@@ -306,7 +340,7 @@ object AgentClientRuntime {
       method: AgentMethod[Trait, In, Out],
       input: In
     ): Future[CancelableAsyncInvocation[Out]] = {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       encodeInputAsync(method.inputCodec, input, scopeCard).flatMap { params =>
         FutureInterop
           .fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, _, scopeCard)))
@@ -347,7 +381,7 @@ object AgentClientRuntime {
       } yield receipt)
 
     private def runAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       encodeInputAsync(method.inputCodec, input, scopeCard)
         .flatMap(params => params.call(client.rpc.asyncInvokeAndAwait(method.functionName, _, scopeCard)))
         .flatMap(decodeOutputAsync(method.outputCodec, _))
@@ -357,7 +391,7 @@ object AgentClientRuntime {
       method: AgentMethod[Trait, In, Out],
       input: In
     ): (Future[Out], CancellationToken) = {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       var underlying  = Option.empty[CancellationToken]
       var cancelled   = false
       val token       = CancellationToken.fromFunction { () =>
@@ -441,7 +475,7 @@ object AgentClientRuntime {
       method: WireClientMethod[Trait] { type Input = In; type Output = Out },
       input: In
     ): Future[Out] = {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       encodeWireAsync(method.input, input, scopeCard)
         .flatMap(params => params.call(client.rpc.asyncInvokeAndAwait(method.name, _, scopeCard)))
         .map(r => decodeWire(method.output, r))
@@ -451,7 +485,7 @@ object AgentClientRuntime {
       method: WireClientMethod[Trait] { type Input = In; type Output = Out },
       input: In
     ): (Future[Out], CancellationToken) = {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       var underlying  = Option.empty[CancellationToken]
       var cancelled   = false
       val token       = CancellationToken.fromFunction { () => cancelled = true; underlying.foreach(_.cancel()) }
@@ -484,7 +518,7 @@ object AgentClientRuntime {
       method: WireClientMethod[Trait] { type Input = In; type Output = Out },
       input: In
     ): Future[InvocationResult[Out]] = {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       encodeWireAsync(method.input, input, scopeCard)
         .flatMap(params =>
           FutureInterop.fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, _, scopeCard)))
@@ -495,7 +529,7 @@ object AgentClientRuntime {
       method: WireClientMethod[Trait] { type Input = In; type Output = Out },
       input: In
     ): Future[CancelableAsyncInvocation[Out]] = {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
       encodeWireAsync(method.input, input, scopeCard)
         .flatMap(params =>
           FutureInterop.fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, _, scopeCard)))

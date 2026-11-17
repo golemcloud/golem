@@ -24,14 +24,14 @@ use crate::ingress::TrustedIngress;
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::model::agent::http_files::HttpRequestTarget;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeLogin};
+use golem_schema::http::HttpRequestTarget;
 use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
-    CompiledRoutes, CorsOptions, OriginPattern, PathSegment, RouteMatch, RouteSecurity,
-    SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
+    CompiledRoutes, CorsOptions, MountFileSource, OriginPattern, PathSegment, RouteMatch,
+    RouteSecurity, SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -418,8 +418,8 @@ impl RouteResolver {
                 // TODO: Have some helper for synthethic vs user defined routes
                 route_id: -1,
                 route_match: RouteMatch::Method {
-                    method: golem_common::model::agent::HttpMethod::Get(
-                        golem_common::model::Empty {},
+                    method: golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(Default::default()),
                     ),
                     trailing_slash: target.trailing_slash(),
                 },
@@ -443,14 +443,18 @@ impl RouteResolver {
             };
             for (method, path, behavior) in [
                 (
-                    golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {}),
+                    golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(Default::default()),
+                    ),
                     pkce_authorization_path(&scheme.id),
                     RichRouteBehaviour::OidcPkceAuthorize(OidcPkceBehaviour {
                         security_scheme: scheme.clone(),
                     }),
                 ),
                 (
-                    golem_common::model::agent::HttpMethod::Post(golem_common::model::Empty {}),
+                    golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Post(Default::default()),
+                    ),
                     pkce_token_path(&scheme.id),
                     RichRouteBehaviour::OidcPkceToken(OidcPkceBehaviour {
                         security_scheme: scheme.clone(),
@@ -635,7 +639,7 @@ impl DomainHttpApi {
             .or_else(|| self.typed[index].route(method, path))
             .or_else(|| {
                 self.mounts.iter().find_map(|mount| {
-                    if matches!(mount.behavior, RichRouteBehaviour::AgentFilesystem(_))
+                    if matches!(&mount.behavior, RichRouteBehaviour::Mount(mount) if matches!(mount.files, MountFileSource::Live { .. }))
                         && method != http::Method::GET
                         && method != http::Method::HEAD
                     {
@@ -661,11 +665,11 @@ impl DomainHttpApi {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::HttpMethod;
     use golem_common::model::component::ComponentId;
     use golem_common::model::deployment::DeploymentRevision;
+    use golem_schema::Empty;
     use golem_service_base::custom_api::{
         CompiledRoute, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
     };
@@ -681,8 +685,8 @@ pub(super) mod tests {
         use golem_common::model::component::ComponentRevision;
         use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
         use golem_service_base::custom_api::{
-            AgentFilesystemBehaviour, CallAgentBehaviour, CompiledInputSchema,
-            CompiledOutputSchema, HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
+            CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, MountAgent,
+            MountBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
         };
         let input = || CompiledInputSchema {
             graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
@@ -692,24 +696,27 @@ pub(super) mod tests {
         let component_revision = ComponentRevision::INITIAL;
         let agent_type = AgentTypeName(format!("agent{id}"));
         let behavior = match kind {
-            "router" => RouteBehaviour::HttpRouter(HttpRouterBehaviour {
-                component_id,
-                component_revision,
-                agent_type,
-                constructor_input: input(),
+            "router" | "filesystem" => RouteBehaviour::Mount(MountBehaviour {
                 handler: None,
-                openapi_provider_method: None,
-                static_bindings: vec![],
-                file_index: vec![],
-                file_response_headers: vec![],
-            }),
-            "filesystem" => RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
-                component_id,
-                component_revision,
-                agent_type,
-                constructor_input: input(),
-                constructor_parameters: vec![],
-                filesystem_bindings: vec![],
+                openapi_provider: None,
+                files: {
+                    let agent = MountAgent {
+                        component_id,
+                        component_revision,
+                        agent_type,
+                        constructor_input: input(),
+                        constructor_parameters: vec![],
+                    };
+                    if kind == "router" {
+                        MountFileSource::Router {
+                            agent,
+                            file_index: vec![],
+                        }
+                    } else {
+                        MountFileSource::Live { agent }
+                    }
+                },
+                file_bindings: vec![],
                 file_response_headers: vec![],
             }),
             "reserved" => RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
@@ -757,9 +764,11 @@ pub(super) mod tests {
             route_id: id,
             route_match: method
                 .map(|method| RouteMatch::Method {
-                    method: HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
-                        value: method.into(),
-                    }),
+                    method: HttpMethod::Method(golem_schema::http::HttpMethod::Custom(
+                        golem_schema::http::CustomHttpMethod {
+                            value: method.into(),
+                        },
+                    )),
                     trailing_slash: path.len() > 1 && path.ends_with('/'),
                 })
                 .unwrap_or(RouteMatch::MountPrefix),
@@ -871,14 +880,12 @@ pub(super) mod tests {
         assert_ne!(baseline, key(changed_deployment, "example.com").await);
 
         let mut changed_provider = routes();
-        let RouteBehaviour::HttpRouter(provider) = &mut changed_provider.routes[1].behavior else {
+        let RouteBehaviour::Mount(provider) = &mut changed_provider.routes[1].behavior else {
             unreachable!()
         };
-        provider
-            .openapi_provider_method
-            .as_mut()
-            .unwrap()
-            .method_name = "describe-v2".into();
+        let golem_service_base::custom_api::MountTarget::AgentMethod(target) =
+            provider.openapi_provider.as_mut().unwrap();
+        target.method.method_name = "describe-v2".into();
         assert_ne!(baseline, key(changed_provider, "example.com").await);
 
         let mut changed_call = routes();
@@ -1618,7 +1625,10 @@ pub(super) mod tests {
                 security_schemes: HashMap::new(),
                 routes: vec![CompiledRoute {
                     route_id: 7,
-                    route_match: HttpMethod::Get(Empty {}).into(),
+                    route_match: HttpMethod::Method(golem_schema::http::HttpMethod::Get(
+                        Default::default(),
+                    ))
+                    .into(),
                     path: self
                         .0
                         .iter()

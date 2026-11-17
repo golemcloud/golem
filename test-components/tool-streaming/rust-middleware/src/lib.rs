@@ -332,24 +332,20 @@ impl
     ) -> Result<AgentStream<presented_typed_output::Item>, ToolInvokeError<Infallible>> {
         let mut source = underlying.produce(tag).await?;
         let (mut writer, output) = AgentStream::new();
-        let wrapped = golem_rust::schema::wit::wire::SchemaValueStream::wrap(
-            output.into_raw().await.unwrap(),
-        )
-        .await;
-        while let Some(item) = source.next().await.expect("read provider typed output") {
-            writer
-                .write_one(presented_typed_output::Item {
-                    label: item.label,
-                    ordinal: item.ordinal,
-                })
-                .await
-                .expect("accept projected typed output before return");
-        }
-        drop(writer);
-        Ok(AgentStream::from_schema_stream_with_wire_decoder(
-            golem_rust::schema::SchemaValueStream::from_wrapped(wrapped),
-            |tree| golem_rust::schema::wit::direct::decode(tree).map_err(|error| error.to_string()),
-        ))
+        spawn_local(async move {
+            while let Some(item) = source.next().await {
+                let item = item.expect("read provider typed output");
+                writer
+                    .write_one(presented_typed_output::Item {
+                        label: item.label,
+                        ordinal: item.ordinal,
+                    })
+                    .await
+                    .expect("write projected typed output");
+            }
+            writer.close().await.unwrap();
+        });
+        Ok(output)
     }
 }
 

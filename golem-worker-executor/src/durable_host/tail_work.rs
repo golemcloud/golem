@@ -207,6 +207,9 @@ mod context {
     impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
         fn drop(&mut self) {
             self.begin_stream_runtime_teardown();
+            if let Some(initiations) = &self.host_initiations {
+                initiations.close();
+            }
             self.linear_memory.clear_limit_exceeded_callback();
         }
     }
@@ -282,6 +285,9 @@ mod context {
 
         pub(crate) fn begin_stream_runtime_teardown(&self) {
             self.stream_runtime_teardown.store(true, Ordering::Release);
+            self.schema_producers.revoke();
+            let tasks = self.schema_output_tasks.lock().unwrap().take();
+            drop(tasks);
         }
 
         /// Arms the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`)

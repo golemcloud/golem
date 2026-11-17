@@ -224,8 +224,9 @@ func (self *Span) StartedAt() wasi_clocks_0_3_0_system_clock.Instant {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 16, 8))
 	wasm_import_method_span_started_at((self).Handle(), returnArea)
-	result := wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 0)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 8)))}
-	return result
+	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
 
 }
 
@@ -270,23 +271,7 @@ func (self *Span) SetAttributes(attributes []Attribute) {
 	result := witRuntime.Allocate(pinner, uintptr(length*(5*4)), 4)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(5*4))
-		utf8 := unsafe.Pointer(unsafe.StringData((element).Key))
-		pinner.Pin(utf8)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Key)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
-
-		switch (element).Value.Tag() {
-		case AttributeValueString:
-			payload := (element).Value.String()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(0))
-			utf80 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf80)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf80)))
-
-		default:
-			panic("unreachable")
-		}
+		wasm_lower_1_t121(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -381,23 +366,14 @@ func (self *InvocationContext) GetAttribute(key string, inherited bool) witTypes
 
 		option = witTypes.None[AttributeValue]()
 	case 1:
-		var variant AttributeValue
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result0 := wasm_lift_1_t120(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeAttributeValueString(value)
-
-		default:
-			panic("unreachable")
-		}
-
-		option = witTypes.Some[AttributeValue](variant)
+		option = witTypes.Some[AttributeValue](result0)
 	default:
 		panic("unreachable")
 	}
-	result0 := option
-	return result0
+	result1 := option
+	return result1
 
 }
 
@@ -419,19 +395,9 @@ func (self *InvocationContext) GetAttributes(inherited bool) []Attribute {
 	result1 := make([]Attribute, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(5*4))
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-		var variant AttributeValue
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
-		case 0:
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+		result0 := wasm_lift_1_t121(unsafe.Add(unsafe.Pointer(base), 0))
 
-			variant = MakeAttributeValueString(value0)
-
-		default:
-			panic("unreachable")
-		}
-
-		result1 = append(result1, Attribute{Key: value, Value: variant})
+		result1 = append(result1, result0)
 	}
 
 	result2 := result1
@@ -450,25 +416,16 @@ func (self *InvocationContext) GetAttributeChain(key string) []AttributeValue {
 	utf8 := unsafe.Pointer(unsafe.StringData(key))
 	pinner.Pin(utf8)
 	wasm_import_method_invocation_context_get_attribute_chain((self).Handle(), uintptr(utf8), uint32(len(key)), returnArea)
-	result := make([]AttributeValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
+	result0 := make([]AttributeValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(3*4))
-		var variant AttributeValue
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+		result := wasm_lift_1_t120(unsafe.Add(unsafe.Pointer(base), 0))
 
-			variant = MakeAttributeValueString(value)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = append(result, variant)
+		result0 = append(result0, result)
 	}
 
-	result0 := result
-	return result0
+	result1 := result0
+	return result1
 
 }
 
@@ -481,32 +438,16 @@ func (self *InvocationContext) GetAttributeChains() []AttributeChain {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (2 * 4), 4))
 	wasm_import_method_invocation_context_get_attribute_chains((self).Handle(), returnArea)
-	result1 := make([]AttributeChain, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
+	result0 := make([]AttributeChain, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(4*4))
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-		result := make([]AttributeValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))), index*(3*4))
-			var variant AttributeValue
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-			case 0:
-				value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+		result := wasm_lift_1_t123(unsafe.Add(unsafe.Pointer(base), 0))
 
-				variant = MakeAttributeValueString(value0)
-
-			default:
-				panic("unreachable")
-			}
-
-			result = append(result, variant)
-		}
-
-		result1 = append(result1, AttributeChain{Key: value, Values: result})
+		result0 = append(result0, result)
 	}
 
-	result2 := result1
-	return result2
+	result1 := result0
+	return result1
 
 }
 
@@ -530,5 +471,77 @@ func (self *InvocationContext) TraceContextHeaders() []witTypes.Tuple2[string, s
 
 	result1 := result
 	return result1
+
+}
+
+//go:noinline
+func wasm_lift_1_t113(src unsafe.Pointer) wasi_clocks_0_3_0_system_clock.Instant {
+
+	return wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(src), 0)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))}
+}
+
+//go:noinline
+func wasm_lower_1_t121(pinner *runtime.Pinner, value Attribute, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Key))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Key)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+	wasm_lower_1_t120(pinner, (value).Value, unsafe.Add(unsafe.Pointer(dst), (2*4)))
+
+}
+
+//go:noinline
+func wasm_lift_1_t120(src unsafe.Pointer) AttributeValue {
+	var variant AttributeValue
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeAttributeValueString(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t121(src unsafe.Pointer) Attribute {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	result := wasm_lift_1_t120(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+
+	return Attribute{Key: value0, Value: result}
+}
+
+//go:noinline
+func wasm_lift_1_t123(src unsafe.Pointer) AttributeChain {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	result1 := make([]AttributeValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(3*4))
+		result := wasm_lift_1_t120(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result1 = append(result1, result)
+	}
+
+	return AttributeChain{Key: value0, Values: result1}
+}
+
+//go:noinline
+func wasm_lower_1_t120(pinner *runtime.Pinner, value AttributeValue, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case AttributeValueString:
+		payload := value.String()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
 
 }

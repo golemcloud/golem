@@ -84,17 +84,14 @@ async fn start_pending_return_tail(tail: impl Future<Output = ()> + 'static) {
     while !started.get() {
         golem_rust::wasip3::wit_bindgen::yield_async().await;
     }
-    // Let the queued host import establish its history before publishing the
-    // result. The integration test checks the recorded Start and internal read.
-    for _ in 0..2_000 {
-        golem_rust::wasip3::wit_bindgen::yield_async().await;
-    }
 }
 
 #[tool_definition(version = "1.0.0")]
 pub trait ReturnBoundaryProbe {
     async fn valid(&self) -> String;
     async fn malformed(&self) -> String;
+    async fn unpadded(&self) -> String;
+    async fn pending_http(&self, authority: String) -> String;
 }
 
 struct ReturnBoundaryProbeImpl;
@@ -109,21 +106,45 @@ impl ReturnBoundaryProbe for ReturnBoundaryProbeImpl {
         unreachable!("the raw invoker handles this command")
     }
 
+    async fn unpadded(&self) -> String {
+        unreachable!("the raw invoker handles this command")
+    }
+
+    async fn pending_http(&self, _authority: String) -> String {
+        unreachable!("the raw invoker handles this command")
+    }
+
     // Return raw wire data so the SDK cannot turn the malformed payload into a typed error.
     fn __tool_invoke(
         command_path: Vec<String>,
-        _input: wire::TypedSchemaValue,
+        input: wire::TypedSchemaValue,
         _stdin: Option<InputStream>,
         _stdout: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
         _stderr: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
         _principal: Principal,
     ) -> golem_rust::agentic::ToolInvokeFuture {
         Box::pin(async move {
-            start_pending_return_tail(async {
-                sleep_ms(1_000).await;
-                let _ = golem_rust::create_promise();
-            })
-            .await;
+            if command_path == ["pending-http"] {
+                let input = golem_rust::decode_typed_schema_value_owned(input).unwrap();
+                let SchemaValue::Record { fields } = input.value() else {
+                    panic!("expected probe input record");
+                };
+                let SchemaValue::String(authority) = &fields[0] else {
+                    panic!("expected HTTP authority");
+                };
+                let authority = authority.clone();
+                start_pending_return_tail(async move {
+                    fetch_checkpoint(&authority).await;
+                    let _ = golem_rust::create_promise();
+                })
+                .await;
+            } else {
+                start_pending_return_tail(async {
+                    sleep_ms(1_000).await;
+                    let _ = golem_rust::create_promise();
+                })
+                .await;
+            }
             let mut result = golem_rust::encode_typed_schema_value(
                 &"raw-return-control"
                     .to_string()
@@ -792,11 +813,19 @@ impl Typed for TypedImpl {
     fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Ok(Some(value)) = input.next().await {
+            while let Some(value) = input.next().await {
+                let value = match value {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = writer.finish(Err(error)).await;
+                        return;
+                    }
+                };
                 if writer.write_one(value * 3 + 1).await.is_err() {
-                    break;
+                    return;
                 }
             }
+            let _ = writer.close().await;
         });
         output
     }
@@ -1060,45 +1089,38 @@ struct TypedOutputStreamImpl;
 impl TypedOutputStream for TypedOutputStreamImpl {
     async fn produce(&self, tag: String) -> AgentStream<TypedOutputItem> {
         let (mut writer, output) = AgentStream::new();
-        let wrapped = wire::SchemaValueStream::wrap(output.into_raw().await.unwrap()).await;
-        let wrapped = if tag == "return-cutoff-roundtrip" {
-            let raw = wire::SchemaValueStream::unwrap(wrapped).await;
-            wire::SchemaValueStream::wrap(raw).await
-        } else {
-            wrapped
-        };
-        // These finite fixtures fit in the frontend buffer. Every item belongs to
-        // the host before publication; no guest producer may continue afterward.
-        for (ordinal, suffix, asymmetric_extra) in [
-            (11, "first", 1_001),
-            (29, "second", 2_003),
-            (47, "third", 4_009),
-        ] {
+        spawn_local(async move {
             writer
                 .write_one(TypedOutputItem {
-                    ordinal,
-                    label: if tag == "return-cutoff-roundtrip" {
-                        format!("{tag}-{ordinal}")
-                    } else {
-                        format!("{tag}-{suffix}")
-                    },
-                    asymmetric_extra,
+                    ordinal: 11,
+                    label: format!("{tag}-first"),
+                    asymmetric_extra: 1_001,
                 })
                 .await
-                .expect("accept typed item before return");
-        }
-        drop(writer);
-        if tag == "tcp-restart" {
-            start_pending_return_tail(async move {
-                sleep_ms(250).await;
-                let _ = golem_rust::create_promise();
-            })
-            .await;
-        }
-        AgentStream::from_schema_stream_with_wire_decoder(
-            golem_rust::schema::SchemaValueStream::from_wrapped(wrapped),
-            |tree| golem_rust::schema::wit::direct::decode(tree).map_err(|error| error.to_string()),
-        )
+                .expect("write first typed tool output item");
+            if std::env::var("PROVIDER_PROMISE_CHECKPOINT_PORT").is_ok() {
+                wait_at_promise_checkpoint("typed-output-after-first").await;
+            } else {
+                wait_at_crash_checkpoint(&tag, "typed-output-after-first").await;
+            }
+            writer
+                .write_all([
+                    TypedOutputItem {
+                        ordinal: 29,
+                        label: format!("{tag}-second"),
+                        asymmetric_extra: 2_003,
+                    },
+                    TypedOutputItem {
+                        ordinal: 47,
+                        label: format!("{tag}-third"),
+                        asymmetric_extra: 4_009,
+                    },
+                ])
+                .await
+                .expect("write remaining typed tool output items");
+            writer.close().await.expect("close typed tool output");
+        });
+        output
     }
 }
 
@@ -1127,18 +1149,15 @@ impl TypedInputStream for TypedInputStreamImpl {
         let first = input
             .next()
             .await
-            .expect("read first typed tool input item")
-            .expect("typed tool input has a first item");
+            .expect("typed tool input has a first item")
+            .expect("read first typed tool input item");
         wait_at_promise_checkpoint("typed-input-provider-consumed-first").await;
         let mut evidence = vec![TypedInputEvidence {
             label: first.label,
             ordinal: first.ordinal,
         }];
-        while let Some(item) = input
-            .next()
-            .await
-            .expect("read remaining typed tool input item")
-        {
+        while let Some(item) = input.next().await {
+            let item = item.expect("read remaining typed tool input item");
             evidence.push(TypedInputEvidence {
                 label: item.label,
                 ordinal: item.ordinal,
@@ -1911,10 +1930,17 @@ impl Streaming for StreamingImpl {
                     .expect("explicit failure"),
                 "unused-live" => {
                     let (writer, output) = AgentStream::<Vec<String>>::new();
-                    let wrapped =
-                        wire::SchemaValueStream::wrap(output.into_raw().await.unwrap()).await;
-                    let raw = wire::SchemaValueStream::unwrap(wrapped).await;
-                    let rewrapped = wire::SchemaValueStream::wrap(raw).await;
+                    let wrapped = output
+                        .into_schema_stream()
+                        .take_wrapped_async()
+                        .await
+                        .unwrap();
+                    let (raw, outcome) = wire::SchemaValueStream::unwrap(wrapped).await;
+                    let rewrapped =
+                        golem_rust::schema::SchemaValueStream::from_reader(raw, outcome)
+                            .take_wrapped_async()
+                            .await
+                            .unwrap();
                     // Keep the unused bridge and guest writer pending until Store teardown.
                     std::mem::forget((writer, rewrapped));
                 }

@@ -22,9 +22,12 @@ it('starts every cancellation before waiting for a shared producer to close', as
   const next = vi.fn();
   const endpoints = await Promise.all(
     [0, 1].map(() =>
-      SchemaValueStream.wrap({
-        [Symbol.asyncIterator]: () => ({ next, return: close }),
-      }),
+      SchemaValueStream.wrap(
+        {
+          [Symbol.asyncIterator]: () => ({ next, return: close }),
+        },
+        Promise.resolve({ tag: 'ok', val: undefined }),
+      ),
     ),
   );
   const runtime = client(
@@ -66,9 +69,12 @@ it('starts every cancellation before waiting for a shared producer to close', as
 it('reports asynchronous startup cleanup through the started result, not a thrown Promise', async () => {
   const close = vi.fn(async () => ({ done: true as const, value: undefined }));
   const next = vi.fn();
-  const raw = await SchemaValueStream.wrap({
-    [Symbol.asyncIterator]: () => ({ next, return: close }),
-  });
+  const raw = await SchemaValueStream.wrap(
+    {
+      [Symbol.asyncIterator]: () => ({ next, return: close }),
+    },
+    Promise.resolve({ tag: 'ok', val: undefined }),
+  );
   const payload = {
     graph: schemaGraphToWit(compileSchema(s.stream(s.u32())).graph),
     value: { root: 0, valueNodes: [{ tag: 'stream-value' as const, val: raw }] },
@@ -134,9 +140,12 @@ it.each(['result', 'custom-error', 'raw-result'])(
     const dispose = vi.fn(() => {
       throw new Error('dispose failed');
     });
-    const raw = await SchemaValueStream.wrap({
-      [Symbol.asyncIterator]: () => ({ next, return: close }),
-    });
+    const raw = await SchemaValueStream.wrap(
+      {
+        [Symbol.asyncIterator]: () => ({ next, return: close }),
+      },
+      Promise.resolve({ tag: 'ok', val: undefined }),
+    );
     const schema = z.object({
       stream: s.stream(s.u32()),
       count: s.u32(),
@@ -203,9 +212,12 @@ it.each(['result', 'custom-error', 'raw-result'])(
 it.each(['result', 'failed', 'future'])('retains accepted stream ownership: %s', async (mode) => {
   const close = vi.fn(async () => ({ done: true as const, value: undefined }));
   const next = vi.fn();
-  const raw = await SchemaValueStream.wrap({
-    [Symbol.asyncIterator]: () => ({ next, return: close }),
-  });
+  const raw = await SchemaValueStream.wrap(
+    {
+      [Symbol.asyncIterator]: () => ({ next, return: close }),
+    },
+    Promise.resolve({ tag: 'ok', val: undefined }),
+  );
   const schema = s.stream(s.u32());
   const definition = toolDefinition('probe').body((body) =>
     body.returns(schema).error('failed', { kind: 'runtime', exitCode: 1, payload: schema }),
