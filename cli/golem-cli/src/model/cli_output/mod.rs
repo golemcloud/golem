@@ -60,6 +60,41 @@ pub fn command_output_type_names() -> anyhow::Result<Value> {
     Ok(Value::Array(names))
 }
 
+/// The output types that the command emits: those whose `x-golem-command` or
+/// `x-golem-commands` metadata names the command path, such as `agent list`.
+pub fn command_output_types(command_path: &str) -> anyhow::Result<Vec<String>> {
+    let schema = command_output_schema_value()?;
+    let definitions = schema
+        .get("definitions")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("Command output schema is missing definitions"))?;
+    let mut output_types = Vec::new();
+    for output_type in schema_output_type_entries(&schema)?
+        .iter()
+        .filter_map(|entry| entry.get("type"))
+        .filter_map(Value::as_str)
+    {
+        let definition = definitions
+            .get(output_type)
+            .ok_or_else(|| anyhow!("Command output schema is missing definition {output_type}"))?;
+        let primary = definition.get("x-golem-command").and_then(Value::as_str);
+        let others = definition
+            .get("x-golem-commands")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str);
+        if primary
+            .into_iter()
+            .chain(others)
+            .any(|command| command == command_path)
+        {
+            output_types.push(output_type.to_string());
+        }
+    }
+    Ok(output_types)
+}
+
 pub fn focused_command_output_schema(output_types: &[String]) -> anyhow::Result<Value> {
     if output_types.is_empty() {
         bail!("At least one output type must be specified");
