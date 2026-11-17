@@ -15,7 +15,7 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
-pub(crate) mod attribution;
+mod attribution;
 pub(crate) mod authorization;
 pub mod blobstore;
 mod call_coordinator;
@@ -1446,7 +1446,7 @@ impl PrivateDurableWorkerState {
 
     /// The agent-wide runtime retry policy mutations, overlaid with the retry policy scopes open
     /// in the task the running host code belongs to. The innermost scope with a name wins.
-    pub(crate) fn retry_policy_mutations(&self) -> BTreeMap<String, Option<NamedRetryPolicy>> {
+    pub fn retry_policy_mutations(&self) -> BTreeMap<String, Option<NamedRetryPolicy>> {
         let mut mutations = self.runtime_retry_policy_mutations.clone();
         if let Some(context) = self.attribution.guest_task_context() {
             overlay_retry_policy_scopes(&mut mutations, &context.retry_scopes);
@@ -1701,7 +1701,7 @@ impl PrivateDurableWorkerState {
     }
 
     /// The invocation whose entry the running host code reads; see [`Invocations::key`].
-    pub(crate) fn attributed_key(&self) -> attribution::InvocationKey {
+    pub fn attributed_key(&self) -> attribution::InvocationKey {
         self.invocations.key(self.attribution.resolve())
     }
 
@@ -1716,26 +1716,24 @@ impl PrivateDurableWorkerState {
 
     /// Ends the loop's invocation without beginning another, as an entity Store does when its
     /// entity invocation scope is removed.
-    pub(crate) fn clear_current_idempotency_key(&mut self) {
+    pub fn clear_current_idempotency_key(&mut self) {
         self.invocations
             .begin(attribution::InvocationKey::AgentLevel);
     }
 
     /// The execution state of the invocation the running host code belongs to.
-    pub(crate) fn invocation_state(&self) -> &execution_state::InvocationExecutionState {
+    pub fn invocation_state(&self) -> &execution_state::InvocationExecutionState {
         self.invocations.get(self.attribution.resolve())
     }
 
-    pub(crate) fn invocation_state_mut(
-        &mut self,
-    ) -> &mut execution_state::InvocationExecutionState {
+    pub fn invocation_state_mut(&mut self) -> &mut execution_state::InvocationExecutionState {
         let attributed = self.attribution.resolve();
         self.invocations.get_mut(attributed)
     }
 
     /// The execution state of exactly the invocation that the calling code is attributed to,
     /// while that invocation's entry lives.
-    pub(crate) fn own_invocation_state_mut(
+    pub fn own_invocation_state_mut(
         &mut self,
     ) -> Option<&mut execution_state::InvocationExecutionState> {
         let attributed = self.attribution.resolve();
@@ -1743,26 +1741,24 @@ impl PrivateDurableWorkerState {
     }
 
     /// The authority of the invocation the calling code is attributed to.
-    pub(crate) fn authority(&self) -> &execution_state::InvocationAuthority {
+    pub fn authority(&self) -> &execution_state::InvocationAuthority {
         &self.invocation_state().authority
     }
 
-    pub(crate) fn authority_mut(&mut self) -> &mut execution_state::InvocationAuthority {
+    pub fn authority_mut(&mut self) -> &mut execution_state::InvocationAuthority {
         &mut self.invocation_state_mut().authority
     }
 
     /// Marks the authority of every invocation as not synchronized, after a change to the
     /// agent's wallet.
-    pub(crate) fn invalidate_authority(&mut self) {
+    pub fn invalidate_authority(&mut self) {
         for entry in self.invocations.entries_mut() {
             entry.authority.initialized = false;
         }
     }
 
     /// The execution state of the invocation the invocation loop runs.
-    pub(crate) fn loop_invocation_state_mut(
-        &mut self,
-    ) -> &mut execution_state::InvocationExecutionState {
+    pub fn loop_invocation_state_mut(&mut self) -> &mut execution_state::InvocationExecutionState {
         self.invocations.loop_entry_mut()
     }
 

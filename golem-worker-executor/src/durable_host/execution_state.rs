@@ -43,31 +43,31 @@ use std::sync::Arc;
 /// the agent's wallet and that card, with the cache state that says whether the surface is
 /// current.
 #[derive(Clone, Default)]
-pub(crate) struct InvocationAuthority {
+pub struct InvocationAuthority {
     /// The scope card the invocation was admitted with.
-    pub(crate) scope_card: Option<ScopeCard>,
+    pub scope_card: Option<ScopeCard>,
     /// The validated root cards of the scope card.
-    pub(crate) scope_root_cards: BTreeMap<CardId, StoredCard>,
+    pub scope_root_cards: BTreeMap<CardId, StoredCard>,
     /// The wallet handles the guest holds for cards of the scope.
-    pub(crate) scope_handles: HashMap<u32, Vec<CardId>>,
+    pub scope_handles: HashMap<u32, Vec<CardId>>,
     /// The Store's interest in card events for the scope's roots.
-    pub(crate) scope_interest: Option<Arc<CardInterestContribution>>,
+    pub scope_interest: Option<Arc<CardInterestContribution>>,
     /// The surface that authorizes the invocation's host calls.
-    pub(crate) effective_surface: EffectiveSurface,
+    pub effective_surface: EffectiveSurface,
     /// Whether `effective_surface` was synchronized with the owner's authority.
-    pub(crate) initialized: bool,
+    pub initialized: bool,
     /// The published authority generation `effective_surface` was synchronized at.
-    pub(crate) processed_generation: u64,
+    pub processed_generation: u64,
     /// The earliest expiry among the cards `effective_surface` was derived from.
-    pub(crate) next_expiration: Option<DateTime<Utc>>,
+    pub next_expiration: Option<DateTime<Utc>>,
     /// Set when the invocation's guest call ends, or when its failure gives up. From then on the
     /// scope card no longer applies, and the invocation's calls have the agent's authority only.
-    pub(crate) final_outcome_reached: bool,
+    pub final_outcome_reached: bool,
 }
 
 impl InvocationAuthority {
     /// The scope card that bounds the invocation's calls: none once its final outcome is reached.
-    pub(crate) fn bound_scope_card(&self) -> Option<&ScopeCard> {
+    pub fn bound_scope_card(&self) -> Option<&ScopeCard> {
         self.scope_card
             .as_ref()
             .filter(|_| !self.final_outcome_reached)
@@ -75,47 +75,47 @@ impl InvocationAuthority {
 }
 
 #[derive(Clone)]
-pub(crate) struct InvocationExecutionState {
+pub struct InvocationExecutionState {
     /// The `AgentInvocationStarted` index of a primary-Store invocation, once it is recorded.
-    pub(crate) start_index: Option<OplogIndex>,
+    pub start_index: Option<OplogIndex>,
     /// The principal the running export call acts for.
-    pub(crate) principal: Option<Principal>,
+    pub principal: Option<Principal>,
     /// The ID of the running export call, when it is an invocation with an invocation ID.
-    pub(crate) invocation_id: Option<OwnedInvocationId>,
+    pub invocation_id: Option<OwnedInvocationId>,
     /// The spans of the invocation's invocation context.
-    pub(crate) invocation_context: InvocationContext,
+    pub invocation_context: InvocationContext,
     /// The span that host calls of the invocation open their spans under.
-    pub(crate) current_span_id: SpanId,
+    pub current_span_id: SpanId,
     /// Whether the invocation is restricted to read-only side effects. When `ReadOnly`,
     /// outgoing HTTP and RPC host calls are trapped before any oplog entry is written.
-    pub(crate) strictness: InvocationStrictness,
+    pub strictness: InvocationStrictness,
     /// The agent method invoked under read-only strictness, reported in
     /// `AgentError::ReadOnlyViolation`.
-    pub(crate) read_only_method_name: Option<String>,
+    pub read_only_method_name: Option<String>,
     /// The fallback retry point: the index attached to an `Error` entry for a trap that happens
     /// outside any in-flight durable call. `begin_function`, transaction begin and the explicit
     /// HTTP and RPC retry-point writes maintain it, so it normally tracks the last persisted side
     /// effect or open scope `Start`. An in-flight durable call carries its own retry grouping in
     /// its call-owned `execution_scope` and in the semantic-trap error marker instead.
-    pub(crate) retry_point: OplogIndex,
+    pub retry_point: OplogIndex,
     /// The outgoing HTTP calls the invocation made live, checked against the plan's
     /// per-invocation limit.
-    pub(crate) http_call_count: u64,
+    pub http_call_count: u64,
     /// The RPC calls the invocation made live, checked against the plan's per-invocation limit.
-    pub(crate) rpc_call_count: u64,
+    pub rpc_call_count: u64,
     /// Zero-based ordinal of the next invocation-local scope card the invocation derives.
-    pub(crate) scope_card_mint_ordinal: u64,
+    pub scope_card_mint_ordinal: u64,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
-    pub(crate) tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
+    pub tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// The tail work counted on the invocation: the activities of trackers obtained while the
     /// invocation was attributed. It is not carried to the next invocation.
-    pub(crate) tail_work: TailWorkTracker,
+    pub tail_work: TailWorkTracker,
     /// The retry policy scopes that a task of the invocation had open after its latest scope
     /// change. The retry decision for a guest trap, which names no task, uses them. They are not
     /// carried to the next invocation.
-    pub(crate) trap_retry_scopes: Vec<RetryPolicyScope>,
+    pub trap_retry_scopes: Vec<RetryPolicyScope>,
     /// The authority of the invocation.
-    pub(crate) authority: InvocationAuthority,
+    pub authority: InvocationAuthority,
 }
 
 impl Default for InvocationExecutionState {
@@ -142,7 +142,7 @@ impl Default for InvocationExecutionState {
     }
 }
 
-pub(crate) struct Invocations {
+pub struct Invocations {
     loop_key: InvocationKey,
     entries: HashMap<InvocationKey, InvocationExecutionState>,
 }
@@ -158,14 +158,14 @@ impl Default for Invocations {
 
 impl Invocations {
     /// The invocation the loop runs, or last ran.
-    pub(crate) fn loop_key(&self) -> InvocationKey {
+    pub fn loop_key(&self) -> InvocationKey {
         self.loop_key
     }
 
     /// Begins the entry of the invocation the loop runs next, replacing the previous
     /// invocation's entry. The new entry starts from the state of the invocation that ran
     /// before, until the loop sets the new invocation's own start index, context and principal.
-    pub(crate) fn begin(&mut self, key: InvocationKey) {
+    pub fn begin(&mut self, key: InvocationKey) {
         if key == self.loop_key {
             return;
         }
@@ -205,22 +205,19 @@ impl Invocations {
     /// otherwise the loop's invocation. Agent-level work reads the entry of the invocation the
     /// loop runs, as unattributed work does, so the agent-level entry is read only while the loop
     /// runs no invocation.
-    pub(crate) fn key(&self, attributed: Option<InvocationKey>) -> InvocationKey {
+    pub fn key(&self, attributed: Option<InvocationKey>) -> InvocationKey {
         attributed
             .filter(|key| *key != InvocationKey::AgentLevel && self.entries.contains_key(key))
             .unwrap_or(self.loop_key)
     }
 
-    pub(crate) fn get(&self, attributed: Option<InvocationKey>) -> &InvocationExecutionState {
+    pub fn get(&self, attributed: Option<InvocationKey>) -> &InvocationExecutionState {
         self.entries
             .get(&self.key(attributed))
             .expect("the loop's invocation always has an entry")
     }
 
-    pub(crate) fn get_mut(
-        &mut self,
-        attributed: Option<InvocationKey>,
-    ) -> &mut InvocationExecutionState {
+    pub fn get_mut(&mut self, attributed: Option<InvocationKey>) -> &mut InvocationExecutionState {
         let key = self.key(attributed);
         self.entries
             .get_mut(&key)
@@ -230,7 +227,7 @@ impl Invocations {
     /// The entry of exactly the `attributed` invocation while it lives, for state that only the
     /// invocation's own work may write. Work of a replaced invocation gets none, so it never
     /// writes the entry of the invocation the loop runs.
-    pub(crate) fn own_mut(
+    pub fn own_mut(
         &mut self,
         attributed: Option<InvocationKey>,
     ) -> Option<&mut InvocationExecutionState> {
@@ -238,25 +235,23 @@ impl Invocations {
     }
 
     /// Every entry, for changes to state that every invocation derives from the agent's wallet.
-    pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = &mut InvocationExecutionState> {
+    pub fn entries_mut(&mut self) -> impl Iterator<Item = &mut InvocationExecutionState> {
         self.entries.values_mut()
     }
 
-    pub(crate) fn entries(
-        &self,
-    ) -> impl Iterator<Item = (&InvocationKey, &InvocationExecutionState)> {
+    pub fn entries(&self) -> impl Iterator<Item = (&InvocationKey, &InvocationExecutionState)> {
         self.entries.iter()
     }
 
     /// The entry of exactly `key`, which must live.
-    pub(crate) fn entry_mut(&mut self, key: InvocationKey) -> &mut InvocationExecutionState {
+    pub fn entry_mut(&mut self, key: InvocationKey) -> &mut InvocationExecutionState {
         self.entries
             .get_mut(&key)
             .expect("the entry was read from the map")
     }
 
     /// The entry of the loop's invocation, for the invocation loop's own code.
-    pub(crate) fn loop_entry_mut(&mut self) -> &mut InvocationExecutionState {
+    pub fn loop_entry_mut(&mut self) -> &mut InvocationExecutionState {
         self.get_mut(None)
     }
 }

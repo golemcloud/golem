@@ -47,7 +47,7 @@ use wasmtime::component::{TaskGroupHook, TaskGroupId};
 
 /// The invocation a host call is attributed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum InvocationKey {
+pub enum InvocationKey {
     /// An agent or entity invocation of this Store, identified by its invocation ID.
     Invocation(InvocationId),
     /// Work outside any invocation, such as destructors and Store-level tasks. It never carries
@@ -57,7 +57,7 @@ pub(crate) enum InvocationKey {
 
 impl InvocationKey {
     /// The invocation ID the key names, if any.
-    pub(crate) fn invocation_id(&self) -> Option<InvocationId> {
+    pub fn invocation_id(&self) -> Option<InvocationId> {
         match self {
             Self::Invocation(id) => Some(*id),
             Self::AgentLevel => None,
@@ -76,7 +76,7 @@ struct GroupState {
 
 /// The attribution state of one Store, shared by its [`TaskGroupHook`] and its host code.
 #[derive(Clone, Default)]
-pub(crate) struct InvocationAttribution {
+pub struct InvocationAttribution {
     state: Arc<Mutex<GroupState>>,
 }
 
@@ -107,14 +107,14 @@ impl InvocationAttribution {
     }
 
     /// The hook to install on the Store this attribution belongs to.
-    pub(crate) fn hook(&self) -> impl TaskGroupHook {
+    pub fn hook(&self) -> impl TaskGroupHook {
         AttributionHook(self.clone())
     }
 
     /// Polls the future of one host-to-guest export call with `key` armed for its first poll,
     /// in which Wasmtime prepares the call and starts its task group. The group's `handle_start`
     /// consumes the key.
-    pub(crate) async fn armed<F: Future>(&self, key: InvocationKey, future: F) -> F::Output {
+    pub async fn armed<F: Future>(&self, key: InvocationKey, future: F) -> F::Output {
         let mut future = pin!(future);
         let mut first = true;
         std::future::poll_fn(move |cx| {
@@ -142,11 +142,7 @@ impl InvocationAttribution {
 
     /// Polls the instantiation of this Store's component under `key`. Instantiation runs the
     /// core initializer, whose task groups are not armed; they belong to `key`.
-    pub(crate) async fn instantiating<F: Future>(
-        &self,
-        key: InvocationKey,
-        future: F,
-    ) -> F::Output {
+    pub async fn instantiating<F: Future>(&self, key: InvocationKey, future: F) -> F::Output {
         let mut future = pin!(future);
         std::future::poll_fn(move |cx| {
             self.state.lock().unwrap().instantiating = Some(key);
@@ -157,7 +153,7 @@ impl InvocationAttribution {
     }
 
     /// The invocation the currently running host code is attributed to.
-    pub(crate) fn resolve(&self) -> Option<InvocationKey> {
+    pub fn resolve(&self) -> Option<InvocationKey> {
         {
             let state = self.state.lock().unwrap();
             if let Some(key) = state
@@ -172,7 +168,7 @@ impl InvocationAttribution {
 
     /// The context slot value of the task the running host code belongs to: the calling guest
     /// task's, or the value a store task captured when it was spawned.
-    pub(crate) fn guest_task_context(&self) -> Option<Arc<GuestTaskContext>> {
+    pub fn guest_task_context(&self) -> Option<Arc<GuestTaskContext>> {
         if self.state.lock().unwrap().current.is_none() {
             return self.scope().and_then(|scope| scope.context);
         }
@@ -190,7 +186,7 @@ impl InvocationAttribution {
     }
 
     /// Captures the attribution of the running host code for a store task it spawns.
-    pub(crate) fn capture(&self) -> CapturedAttribution {
+    pub fn capture(&self) -> CapturedAttribution {
         CapturedAttribution {
             attribution: self.clone(),
             key: self.resolve(),
@@ -199,7 +195,7 @@ impl InvocationAttribution {
     }
 
     /// Runs `f` with `key` as the scoped attribution of this Store.
-    pub(crate) fn with_scope<R>(&self, key: Option<InvocationKey>, f: impl FnOnce() -> R) -> R {
+    pub fn with_scope<R>(&self, key: Option<InvocationKey>, f: impl FnOnce() -> R) -> R {
         self.with_task_scope(key, None, f)
     }
 
@@ -220,11 +216,7 @@ impl InvocationAttribution {
     }
 
     /// Polls `future` with `key` as the scoped attribution of this Store.
-    pub(crate) async fn scoped<F: Future>(
-        &self,
-        key: Option<InvocationKey>,
-        future: F,
-    ) -> F::Output {
+    pub async fn scoped<F: Future>(&self, key: Option<InvocationKey>, future: F) -> F::Output {
         let mut future = pin!(future);
         std::future::poll_fn(move |cx| self.with_scope(key, || future.as_mut().poll(cx))).await
     }
@@ -233,7 +225,7 @@ impl InvocationAttribution {
 /// The attribution a store task keeps for its whole run. Store tasks run outside any guest
 /// thread, so without it they resolve to no invocation.
 #[derive(Clone)]
-pub(crate) struct CapturedAttribution {
+pub struct CapturedAttribution {
     attribution: InvocationAttribution,
     key: Option<InvocationKey>,
     context: Option<Arc<GuestTaskContext>>,
@@ -242,7 +234,7 @@ pub(crate) struct CapturedAttribution {
 impl CapturedAttribution {
     /// Polls `future` with the captured invocation and task context as the scoped attribution of
     /// its Store.
-    pub(crate) async fn run<F: Future>(&self, future: F) -> F::Output {
+    pub async fn run<F: Future>(&self, future: F) -> F::Output {
         let mut future = pin!(future);
         std::future::poll_fn(move |cx| {
             self.attribution
@@ -325,7 +317,7 @@ impl TaskGroupHook for AttributionHook {
 
 /// Wraps a host stream producer or consumer so polls after its first one, which the event loop
 /// makes outside any guest thread, keep the attribution of the read or write that started.
-pub(crate) struct Attributed<P> {
+pub struct Attributed<P> {
     attribution: InvocationAttribution,
     last: Option<InvocationKey>,
     context: Option<Arc<GuestTaskContext>>,
@@ -333,7 +325,7 @@ pub(crate) struct Attributed<P> {
 }
 
 impl<P> Attributed<P> {
-    pub(crate) fn new(attribution: InvocationAttribution, inner: P) -> Self {
+    pub fn new(attribution: InvocationAttribution, inner: P) -> Self {
         Self {
             attribution,
             last: None,

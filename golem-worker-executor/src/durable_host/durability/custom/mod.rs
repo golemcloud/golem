@@ -292,7 +292,7 @@ pub(crate) struct CustomInvocationScope {
 
 /// A named retry policy that a task opened with `retry-policy-scope`.
 #[derive(Debug, Clone)]
-pub(crate) struct RetryPolicyScope {
+pub struct RetryPolicyScope {
     pub scope_id: u64,
     pub policy: NamedRetryPolicy,
 }
@@ -300,7 +300,7 @@ pub(crate) struct RetryPolicyScope {
 /// The value of a guest task's context slot. A subtask copies its parent's value when it is
 /// created. Writers of one half keep the other half of the calling task's current value.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct GuestTaskContext {
+pub struct GuestTaskContext {
     /// The custom durable invocations the task runs in, innermost last.
     pub scopes: Vec<CustomInvocationScope>,
     /// The retry policy scopes the task has open, innermost last.
@@ -323,7 +323,7 @@ enum ScopeRemoval {
 impl GuestTaskContext {
     /// Installs this value in the calling task's context slot, clearing the slot when both halves
     /// are empty.
-    pub(crate) fn install<T>(self, mut store: StoreContextMut<'_, T>) -> anyhow::Result<()> {
+    pub fn install<T>(self, mut store: StoreContextMut<'_, T>) -> anyhow::Result<()> {
         if self.scopes.is_empty() && self.retry_scopes.is_empty() {
             store.clear_guest_task_context()?;
         } else {
@@ -333,7 +333,7 @@ impl GuestTaskContext {
     }
 
     /// Replaces the custom scopes of the calling task, keeping its retry policy scopes.
-    pub(crate) fn install_custom_scopes<T>(
+    pub fn install_custom_scopes<T>(
         mut store: StoreContextMut<'_, T>,
         scopes: Vec<CustomInvocationScope>,
     ) -> anyhow::Result<()> {
@@ -349,7 +349,7 @@ impl GuestTaskContext {
     }
 
     /// Replaces the retry policy scopes of the calling task, keeping its custom scopes.
-    pub(crate) fn install_retry_scopes<T>(
+    pub fn install_retry_scopes<T>(
         mut store: StoreContextMut<'_, T>,
         retry_scopes: Vec<RetryPolicyScope>,
     ) -> anyhow::Result<()> {
@@ -364,7 +364,7 @@ impl GuestTaskContext {
         .install(store)
     }
 
-    pub(crate) fn current(&self) -> Option<CustomInvocationScope> {
+    pub fn current(&self) -> Option<CustomInvocationScope> {
         self.scopes.last().copied()
     }
 
