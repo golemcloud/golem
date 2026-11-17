@@ -19,8 +19,9 @@ use std::task::{Context, Poll};
 
 use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
-    DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource, NotCancellable,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
+    DeferredCallReplayOutcome, DemandDelivery, DemandDeliveryMode, DurableCallSession,
+    DurableDemandItem, DurableDemandStream, InvocationIdSource, NotCancellable,
     ScopeReplayRecovery, access_invocation_id, closed_demand, deliver_demand, demand_channel,
     reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
@@ -30,7 +31,7 @@ use crate::durable_host::durability::{
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, run_deniable_access, run_read_access, wasi_sockets_view,
+    observe_function_call_store, run_deniable_access, wasi_sockets_view,
 };
 use crate::durable_host::sockets::{SocketEntry, SocketPhase, TcpSocketOptions};
 use crate::durable_host::tail_work::TailActivity;
@@ -1636,7 +1637,7 @@ async fn tcp_acquire_stream<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket_rep: u32,
     direction: TcpSocketStreamDirection,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
+) -> wasmtime::Result<(Result<(), types::ErrorCode>, CompletionDelivery)>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1661,7 +1662,7 @@ async fn tcp_run_acquire<Ctx, U, Pair>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket_rep: u32,
     direction: TcpSocketStreamDirection,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
+) -> wasmtime::Result<(Result<(), types::ErrorCode>, CompletionDelivery)>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1672,12 +1673,31 @@ where
     // an incomplete replay. The actual byte transmission is a `WriteRemote` call. The
     // recorded outcome is still persisted and replayed for determinism, exactly
     // like the clock `ReadLocal` calls.
-    let response = run_read_access::<_, _, Ctx, Pair, _>(
+    let call = DurableCallSession::<Pair, Cancellable>::start_access(
         accessor,
+        durable_worker_ctx::<Ctx, U>,
         HostRequestNoInput {},
         DurableFunctionType::ReadLocal,
-        || async {
-            accessor.with(
+    )
+    .await?;
+    let (call, replayed) = if call.is_live() {
+        (Some(call), None)
+    } else {
+        match call
+            .replay_access_deferred(accessor, durable_worker_ctx::<Ctx, U>)
+            .await?
+        {
+            DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                (None, Some((response, delivery)))
+            }
+            DeferredCallReplayOutcome::Incomplete(call) => (Some(call), None),
+        }
+    };
+    // The acquire is observed only when the send/receive host function returns its
+    // handles. Keep delivery deferred while that function starts its durable task.
+    let (response, delivery) = if let Some(mut call) = call {
+        let response = accessor
+            .with(
                 |mut access| -> wasmtime::Result<HostResponseP3SocketsTcpAcquire> {
                     let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
                     let phase = tcp_entry(ctx, socket_rep)?.phase.clone();
@@ -1704,9 +1724,12 @@ where
                     Ok(HostResponseP3SocketsTcpAcquire { result })
                 },
             )
-        },
-    )
-    .await?;
+            .map_err(|error| wasmtime::Error::from_anyhow(call.trap(error)))?;
+        call.complete_access_deferred(accessor, durable_worker_ctx::<Ctx, U>, response)
+            .await?
+    } else {
+        replayed.expect("a completed acquire retains its delivery")
+    };
 
     // Reapply the recorded outcome to the shadow so replay rehydrates the taken
     // flag before any later live call runs (idempotent on the live path, where
@@ -1718,7 +1741,7 @@ where
         });
     }
 
-    Ok(deserialize_tcp_stream_result(response.result))
+    Ok((deserialize_tcp_stream_result(response.result), delivery))
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for DurableP3<Ctx> {
@@ -1917,73 +1940,92 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         // socket is not connected) this returns an error, which we surface
         // without invoking the native send, mirroring the native `take_send_stream`
         // contract while keeping replay deterministic.
-        if let Err(error) =
+        let (acquired, delivery) =
             tcp_acquire_stream::<Ctx, U>(accessor, socket.rep(), TcpSocketStreamDirection::Send)
-                .await?
-        {
-            return accessor.with(|mut store| {
-                data.close(&mut store)?;
-                FutureReader::new(&mut store, async move { wasmtime::error::Ok(Err(error)) })
-            });
-        }
+                .await?;
+        let (future, delivery) = delivery
+            .continue_with(async {
+                if let Err(error) = acquired {
+                    let future = accessor.with(|mut store| {
+                        data.close(&mut store)?;
+                        FutureReader::new(
+                            &mut store,
+                            async move { wasmtime::error::Ok(Err(error)) },
+                        )
+                    })?;
+                    return Ok(future);
+                }
 
-        let call = DurableCallSession::<P3SocketsTypesTcpSocketSend, Cancellable>::start_access_with_options(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            DurableFunctionType::WriteRemote,
-            AccessClaimOptions {
-                incomplete_repair_authorized_by_scope: true,
-                ..Default::default()
-            },
-            HostRequestNoInput {},
-        )
-        .await?;
-        let (result_tx, result_rx) = oneshot::channel();
+                let call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable> =
+                    DurableCallSession::start_access_with_options(
+                        accessor,
+                        durable_worker_ctx::<Ctx, U>,
+                        DurableFunctionType::WriteRemote,
+                        AccessClaimOptions {
+                            incomplete_repair_authorized_by_scope: true,
+                            ..Default::default()
+                        },
+                        HostRequestNoInput {},
+                    )
+                    .await?;
+                let (result_tx, result_rx) = oneshot::channel();
 
-        if call.is_live() {
-            if call.is_persisted() {
-                // Fence the original send Start before any bytes can reach the socket.
-                let public_state = accessor.with(|mut store| {
-                    durable_worker_ctx::<Ctx, U>(store.data_mut())
-                        .public_state
-                        .clone()
-                });
-                public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await?;
-            }
-            // Forward the guest's outgoing bytes straight to the socket; only the
-            // transmission result is persisted (no bytes in the oplog).
-            let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-            let socket_result_future =
-                <WasiSockets as types::HostTcpSocketWithStore<U>>::send(&sockets, socket, data)
-                    .await?;
-            let (socket_result_tx, socket_result_rx) = oneshot::channel();
-            accessor.with(|mut store| {
-                socket_result_future
-                    .pipe(&mut store, TcpSocketResultConsumer::new(socket_result_tx))?;
-                let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                    .tail_work_tracker()
-                    .activity();
-                let task =
-                    TcpSocketSendTask::<Ctx>::live(call, socket_result_rx, result_tx, activity);
-                store.spawn(async move |store| task.run(store).await)?;
-                FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                let future = if call.is_live() {
+                    if call.is_persisted() {
+                        // Fence the original send Start before any bytes can reach the socket.
+                        let public_state = accessor.with(|mut store| {
+                            durable_worker_ctx::<Ctx, U>(store.data_mut())
+                                .public_state
+                                .clone()
+                        });
+                        public_state
+                            .worker()
+                            .commit_oplog_and_update_state(CommitLevel::Always)
+                            .await?;
+                    }
+                    // Forward the guest's outgoing bytes straight to the socket; only the
+                    // transmission result is persisted (no bytes in the oplog).
+                    let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+                    let socket_result_future =
+                        <WasiSockets as types::HostTcpSocketWithStore<U>>::send(
+                            &sockets, socket, data,
+                        )
+                        .await?;
+                    let (socket_result_tx, socket_result_rx) = oneshot::channel();
+                    accessor.with(|mut store| {
+                        socket_result_future
+                            .pipe(&mut store, TcpSocketResultConsumer::new(socket_result_tx))?;
+                        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .tail_work_tracker()
+                            .activity();
+                        let task = TcpSocketSendTask::<Ctx>::live(
+                            call,
+                            socket_result_rx,
+                            result_tx,
+                            activity,
+                        );
+                        store.spawn(async move |store| task.run(store).await)?;
+                        FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                    })
+                } else {
+                    // Drain the replayed bytes without repeating a possibly completed send.
+                    let (input_tx, input_rx) = oneshot::channel();
+                    accessor.with(|mut store| {
+                        data.pipe(&mut store, TcpSendDrainConsumer::new(input_tx))?;
+                        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .tail_work_tracker()
+                            .activity();
+                        let task =
+                            TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
+                        store.spawn(async move |store| task.run(store).await)?;
+                        FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                    })
+                }?;
+                wasmtime::error::Ok(future)
             })
-        } else {
-            // Drain the replayed bytes without repeating a possibly completed send.
-            let (input_tx, input_rx) = oneshot::channel();
-            accessor.with(|mut store| {
-                data.pipe(&mut store, TcpSendDrainConsumer::new(input_tx))?;
-                let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                    .tail_work_tracker()
-                    .activity();
-                let task = TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
-                store.spawn(async move |store| task.run(store).await)?;
-                FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
-            })
-        }
+            .await?;
+        delivery.deliver_at_accessor_terminal(accessor).await?;
+        Ok(future)
     }
 
     async fn receive(
@@ -2002,51 +2044,62 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         // socket is not connected) this returns an error, surfaced as an empty
         // stream plus an immediately-failing result future, mirroring the native
         // `take_receive_stream` contract while keeping replay deterministic.
-        if let Err(error) =
+        let (acquired, delivery) =
             tcp_acquire_stream::<Ctx, U>(accessor, socket.rep(), TcpSocketStreamDirection::Receive)
-                .await?
-        {
-            return accessor.with(|mut store| {
-                Ok((
-                    StreamReader::new(&mut store, std::iter::empty::<u8>())?,
-                    FutureReader::new(&mut store, async move { wasmtime::error::Ok(Err(error)) })?,
-                ))
-            });
-        }
-
-        // Capacity 1 suffices (and bounds memory as defense in depth): the
-        // producer keeps at most one demand in flight at a time.
-        let (demand_tx, demand_rx) = demand_channel();
-        let (result_tx, result_rx) = oneshot::channel();
-
-        // Build both guest-facing handles before spawning the durable task. The
-        // task appends the `receive` `Start`; the guest cannot poll either handle
-        // until this host call returns, so spawning first would risk committing a
-        // `Start` with no terminal if a later handle construction fails.
-        accessor.with(|mut store| {
-            let mut stream =
-                StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
-            let future = match FutureReader::new(&mut store, wait_tcp_receive_result(result_rx)) {
-                Ok(future) => future,
-                Err(error) => {
-                    let _ = stream.close(store.as_context_mut());
-                    return Err(error);
+                .await?;
+        let (handles, delivery) = delivery
+            .continue_with(async {
+                if let Err(error) = acquired {
+                    let handles = accessor.with(|mut store| {
+                        wasmtime::error::Ok((
+                            StreamReader::new(&mut store, std::iter::empty::<u8>())?,
+                            FutureReader::new(&mut store, async move {
+                                wasmtime::error::Ok(Err(error))
+                            })?,
+                        ))
+                    })?;
+                    return Ok(handles);
                 }
-            };
-            let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                .tail_work_tracker()
-                .activity();
-            let task = TcpSocketReceiveTask::<Ctx>::new(
-                socket,
-                demand_rx,
-                result_tx,
-                observational_owner,
-                invocation_id,
-                activity,
-            );
-            store.spawn(async move |store| task.run(store).await)?;
-            Ok((stream, future))
-        })
+
+                // Capacity 1 suffices (and bounds memory as defense in depth): the
+                // producer keeps at most one demand in flight at a time.
+                let (demand_tx, demand_rx) = demand_channel();
+                let (result_tx, result_rx) = oneshot::channel();
+
+                // Build both guest-facing handles before spawning the durable task. The
+                // task appends the `receive` `Start`; the guest cannot poll either handle
+                // until this host call returns, so spawning first would risk committing a
+                // `Start` with no terminal if a later handle construction fails.
+                let handles = accessor.with(|mut store| {
+                    let mut stream =
+                        StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
+                    let future =
+                        match FutureReader::new(&mut store, wait_tcp_receive_result(result_rx)) {
+                            Ok(future) => future,
+                            Err(error) => {
+                                let _ = stream.close(store.as_context_mut());
+                                return Err(error);
+                            }
+                        };
+                    let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                        .tail_work_tracker()
+                        .activity();
+                    let task = TcpSocketReceiveTask::<Ctx>::new(
+                        socket,
+                        demand_rx,
+                        result_tx,
+                        observational_owner,
+                        invocation_id,
+                        activity,
+                    );
+                    store.spawn(async move |store| task.run(store).await)?;
+                    Ok((stream, future))
+                })?;
+                wasmtime::error::Ok(handles)
+            })
+            .await?;
+        delivery.deliver_at_accessor_terminal(accessor).await?;
+        Ok(handles)
     }
 }
 
