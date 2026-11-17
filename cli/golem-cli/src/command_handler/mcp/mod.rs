@@ -34,7 +34,7 @@ use super::partial_match::ErrorHandler;
 use super::{CommandHandler, CommandHandlerHooks, Handlers, LazyContext};
 use crate::command::{GolemCliCommand, GolemCliCommandParseResult, GolemCliGlobalFlags};
 use crate::command_name;
-use crate::command_table::{COMMAND_TABLE, CommandClass, CommandRow};
+use crate::command_table::{COMMAND_TABLE, CommandRow};
 use crate::context::{Cancellation, Context};
 use crate::error::service::{ServiceError, ServiceErrorKind};
 use crate::error::{
@@ -262,7 +262,7 @@ fn management_tool(
     .with_title(format!("golem {path}"))
     .with_annotations(
         ToolAnnotations::new()
-            .read_only(row.class == CommandClass::ManagementRead)
+            .read_only(row.reads_only())
             .destructive(row.destructive),
     );
 

@@ -5878,6 +5878,7 @@ dependencies = [
  "futures-concurrency",
  "goldenfile",
  "golem-api-grpc",
+ "golem-cli",
  "golem-client",
  "golem-common",
  "golem-schema",

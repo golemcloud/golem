@@ -16,7 +16,7 @@
 
 use super::{TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
-use golem_cli::command_table::{COMMAND_TABLE, CommandClass, CommandRow};
+use golem_cli::command_table::{COMMAND_TABLE, CommandRow};
 use golem_cli::config::{AuthenticationConfig, Config, Profile, ProfileDeletion, ProfileName};
 use golem_cli::{fs, versions};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
@@ -319,7 +319,7 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
         let annotations = tool.annotations.as_ref().unwrap();
         assert_eq!(
             annotations.read_only_hint,
-            Some(row.class == CommandClass::ManagementRead),
+            Some(row.reads_only()),
             "{}",
             tool.name
         );
@@ -442,16 +442,22 @@ async fn mcp_serve_reads_return_the_cli_json() {
         .iter()
         .map(|(path, ..)| *path)
         .collect::<BTreeSet<_>>();
-    for row in COMMAND_TABLE
+    // The read tools are exactly the commands with a parity case, so that the
+    // read-only annotations, which come from the same table, have an
+    // expectation of their own.
+    let read_tools = COMMAND_TABLE
         .iter()
-        .filter(|row| row.class == CommandClass::ManagementRead && !row.interactive)
-    {
-        assert!(
-            covered.contains(row.path.join(" ").as_str()),
-            "no parity case for `{}`",
-            row.path.join(" ")
-        );
-    }
+        .filter(|row| row.reads_only() && !row.interactive)
+        .map(|row| row.path.join(" "))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        read_tools,
+        covered
+            .iter()
+            .map(|path| path.to_string())
+            .collect::<BTreeSet<_>>(),
+        "the read tools differ from the commands with a parity case"
+    );
 
     for (path, arguments, cli) in reads {
         let tool = path.replace(' ', "_");
