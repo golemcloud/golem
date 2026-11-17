@@ -482,7 +482,7 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
                         result: Err(lost_error()),
                         lost: true,
                         local_address: None,
-                        remote_address: None,
+                        disconnected: false,
                     });
                 }
                 let result = match native_stream(ctx, rep, remote_address).await? {
@@ -492,8 +492,11 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
                     }
                     Err(error) => Err(recorded_error(error)?),
                 };
-                // Also after a failed call: a failed connect can leave the socket disconnected.
+                // Also after a failed call. On Linux a connect that fails with `EINVAL` dissolves
+                // the old association before it tries again, so it can leave the socket
+                // disconnected, as in P3 UDP connect.
                 let (native_local, native_remote) = native_addresses(ctx, rep);
+                let disconnected = result.is_err() && native_remote.is_none();
                 let expected = stream_local_address(udp_entry(ctx, rep)?, disconnects);
                 Ok(HostResponseSocketsUdpStream {
                     result,
@@ -502,7 +505,7 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
                         expected.as_ref(),
                         native_local,
                     ),
-                    remote_address: native_remote,
+                    disconnected,
                 })
             },
         )
@@ -515,12 +518,16 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
             if let Some(address) = response.local_address {
                 entry.local_address = Some(address);
             }
-            entry.phase = if response.remote_address.is_some() {
+            if response.result.is_ok() {
+                entry.remote_address = remote_address.map(Into::into);
+            } else if response.disconnected {
+                entry.remote_address = None;
+            }
+            entry.phase = if entry.remote_address.is_some() {
                 SocketPhase::Connected
             } else {
                 SocketPhase::Bound
             };
-            entry.remote_address = response.remote_address;
         }
         response.result.map_err(SocketError::from)?;
         push_streams(self, rep, natives).map_err(SocketError::trap)

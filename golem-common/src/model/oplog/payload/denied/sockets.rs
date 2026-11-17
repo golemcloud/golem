@@ -39,6 +39,7 @@ pub fn p3_udp_connect<R>(_request: &R, _denial: &str) -> HostResponseP3SocketsUd
     HostResponseP3SocketsUdpConnect {
         result: Err(SerializableP3SocketErrorCode::AccessDenied),
         endpoint: None,
+        disconnected: false,
     }
 }
 

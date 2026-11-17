@@ -1054,7 +1054,9 @@ P3 UDP keeps its endpoint in the socket's `SocketEntries` entry. Bind records th
 address (`P3SocketsBind`, also for port 0) and keeps the bind request in the entry; connect, send
 and receive record every local-address change, such as an implicit bind or a wildcard bind that
 connect narrows to an interface address, or a loss as `SerializableP3UdpEndpoint` in their
-response. Replay updates the entry and touches no native socket; `disconnect` and the address
+response. On Linux a connect that fails with `EINVAL` dissolves the old association before it tries
+again, so the connect response also records when a failed connect left the socket disconnected,
+and the entry then loses its remote address. Replay updates the entry and touches no native socket; `disconnect` and the address
 getters are not recorded and use only the entry. `disconnect` resets the local address to the bind
 request, or to the unspecified address with port 0 after an implicit bind, because the native
 socket releases an implicitly bound port. At the first live operation, `ensure_native_endpoint`
@@ -1073,8 +1075,9 @@ permit, and `send` (`WriteRemote`) the destinations, the result and the count, n
 The local address follows the P3 rules through the shared `SocketEntry` helpers: the entry keeps
 the bind request, `stream(none)` on a connected socket resets the local address to it as P3
 `disconnect` does, and `stream` and `send` record every other change of the native local address
-(`udp_local_address_change`). `stream` also records the native remote address after the call,
-even when it fails, because a failed connect can leave the socket disconnected.
+(`udp_local_address_change`). A failed `stream` records `disconnected`, as P3 connect does, when
+it left the socket disconnected (Linux dissolves the old association on `EINVAL` before it tries
+again); the entry then loses its remote address, live and on replay.
 The guest's datagram streams are `DurableIncomingDatagramStream` and
 `DurableOutgoingDatagramStream`; a replayed `stream` pushes them without native streams, in the
 native order, so later resource reps do not change. At the first live operation the host binds the

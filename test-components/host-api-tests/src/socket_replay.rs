@@ -237,6 +237,8 @@ pub trait SocketSession {
     /// Creates a P3 UDP socket without binding it and keeps it in `slot`.
     fn p3_udp_create(&self, slot: String) -> Result<(), String>;
     fn p3_udp_connect(&self, slot: String, port: u16) -> Result<(), String>;
+    /// Connects to the IPv4 socket address `address`, such as `240.0.0.1:9`.
+    fn p3_udp_connect_ipv4(&self, slot: String, address: String) -> Result<(), String>;
     fn p3_udp_disconnect(&self, slot: String) -> Result<(), String>;
     /// Sends `data` to `127.0.0.1:port`, or to the connected peer when `port` is `None`.
     async fn p3_udp_send(
@@ -681,6 +683,20 @@ impl SocketSession for SocketSessionImpl {
     fn p3_udp_connect(&self, slot: String, port: u16) -> Result<(), String> {
         self.with_slot(&slot, |value| match value {
             Slot::P3Udp { socket } => socket.connect(p3_loopback(port)).map_err(error),
+            _ => Err(format!("slot {slot} holds no P3 UDP socket")),
+        })
+    }
+
+    fn p3_udp_connect_ipv4(&self, slot: String, address: String) -> Result<(), String> {
+        let address: std::net::SocketAddrV4 = address.parse().map_err(error)?;
+        let [a, b, c, d] = address.ip().octets();
+        self.with_slot(&slot, |value| match value {
+            Slot::P3Udp { socket } => socket
+                .connect(p3::IpSocketAddress::Ipv4(p3::Ipv4SocketAddress {
+                    address: (a, b, c, d),
+                    port: address.port(),
+                }))
+                .map_err(error),
             _ => Err(format!("slot {slot} holds no P3 UDP socket")),
         })
     }

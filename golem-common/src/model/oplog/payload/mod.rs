@@ -783,6 +783,7 @@ oplog_payload! {
         P3SocketsUdpConnect {
             result: Result<(), SerializableP3SocketErrorCode>,
             endpoint: Option<SerializableP3UdpEndpoint>,
+            disconnected: bool,
         },
         P3SocketsTcpConnect {
             result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableP3SocketErrorCode>,
@@ -798,14 +799,13 @@ oplog_payload! {
         /// address back after a reconstruction.
         /// `local_address` is the new native local address when the call changed it, as P3 UDP
         /// records an endpoint change: the interface address that a connect selects for a
-        /// wildcard bind, or a port that a failed connect released. `remote_address` is the
-        /// native remote address after the call, also after a failed call, because a failed
-        /// connect can leave the socket disconnected.
+        /// wildcard bind, or a port that a failed connect released. `disconnected` is set, as in
+        /// `P3SocketsUdpConnect`, when a failed call left the socket disconnected.
         SocketsUdpStream {
             result: Result<(), SerializableSocketError>,
             lost: bool,
             local_address: Option<SerializableP3IpSocketAddress>,
-            remote_address: Option<SerializableP3IpSocketAddress>,
+            disconnected: bool,
         },
         SocketsUdpReceive {
             result: Result<Vec<SerializableP3UdpDatagram>, SerializableSocketError>,

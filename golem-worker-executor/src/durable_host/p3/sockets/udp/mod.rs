@@ -199,6 +199,10 @@ fn apply_connect<Ctx: WorkerCtx>(
 ) -> SocketResult<()> {
     let entry = udp_entry(ctx, rep).map_err(SocketError::trap)?;
     apply_endpoint(entry, &response.endpoint);
+    if response.disconnected && entry.phase == SocketPhase::Connected {
+        entry.remote_address = None;
+        entry.phase = SocketPhase::Bound;
+    }
     match response.result {
         Ok(()) => {
             entry.remote_address = Some(remote_address.into());
@@ -410,27 +414,40 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
                 handle
             }
         };
-        let (result, endpoint) = if ensure_native_endpoint(self.0.durable_ctx_mut(), rep)
-            .map_err(SocketError::trap)?
-        {
-            let result = {
+        let (result, endpoint, disconnected) =
+            if ensure_native_endpoint(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)? {
                 let mut view = WasiSocketsView::sockets(self.0);
-                match types::HostUdpSocket::connect(&mut view, socket, remote_address).await {
+                let result = match types::HostUdpSocket::connect(
+                    &mut view,
+                    Resource::new_borrow(rep),
+                    remote_address,
+                )
+                .await
+                {
                     Ok(()) => Ok(()),
                     Err(error) => Err(serialize_socket_error(error).map_err(SocketError::trap)?),
-                }
+                };
+                // On Linux a connect that fails with `EINVAL` dissolves the old association before
+                // it tries again, so a failed connect can leave the socket disconnected.
+                let disconnected = result.is_err()
+                    && types::HostUdpSocket::get_remote_address(&mut view, socket).is_err();
+                (
+                    result,
+                    endpoint_change(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?,
+                    disconnected,
+                )
+            } else {
+                let (result, endpoint) = lost_response();
+                (result, endpoint, false)
             };
-            (
-                result,
-                endpoint_change(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?,
-            )
-        } else {
-            lost_response()
-        };
         let response = handle
             .complete(
                 self.0.durable_ctx_mut(),
-                HostResponseP3SocketsUdpConnect { result, endpoint },
+                HostResponseP3SocketsUdpConnect {
+                    result,
+                    endpoint,
+                    disconnected,
+                },
             )
             .await
             .map_err(SocketError::trap)?;
