@@ -86,9 +86,18 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
-something from the right column to survive a restart is wrong. Sockets and other OS resources are
-recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect or explicitly handle loss. Replayed websocket handles use their connect-time
+something from the right column to survive a restart is wrong. Native resources are not preserved.
+P3 TCP bind records the selected local address; connect records both endpoints. The per-Store
+`SocketEntries` table in `durable_host/sockets/mod.rs` reconstructs these addresses and the stream-taken
+flags without binding or connecting natively during replay. A replayed successful connect is `Lost`:
+recorded acquisitions still replay, but a new live send or receive acquisition returns `connection-broken`,
+even if that direction was already taken. Address getters use the entry; guest-set option getters use
+cached effective values. A successful setter invalidates its option cache; the next async getter reads
+and caches the native effective value, including OS rounding and buffer limits. Unset option getters
+still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
+socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
+than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
+reconnects as described below. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
 one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
@@ -143,6 +152,8 @@ a host call must not wait for a guard whose holder waits for that guest to stop.
 completion activates only the incarnation that created the promise, through
 `enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
 missing or re-created agent is left alone.
+
+Keyed invocation admission checks fatal agent health inside the status actor's append job, after result-generation validation and before appending the pending entry. Acquiring a worker earlier does not authorize work after its constructor fails. A failed or exited agent refuses new immediate and scheduled methods without writing to its oplog. Generation changes return the caller to same-key result lookup first; recorded outcomes keep precedence. If failed health comes from recovery and a startup attempt is pending, ingress waits for that exact attempt's `WorkerLoaded` result without holding the lifecycle guard, then retries result lookup and admission. It does not wait for queued methods to finish or bypass the serialized health check. Keyless manual updates use their separate admission path so failed agents can still be repaired.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
@@ -2323,7 +2334,35 @@ invocation loop appends `AgentInvocationStarted`, runs the guest, and
 result and waits for the commit receipt before waiters are notified. Durable agents use
 `CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
-reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+reads queued on the same state actor wait behind it. Actual traps and constructor errors go through
+`on_invocation_failure`; decoded outer method errors take the separate path below.
+
+### Invocation-local method errors
+
+A valid outer guest `agent-error` from an agent method becomes `InvokeResult::MethodFailed`, not
+a trap. `on_agent_method_failure` (`durable_host/invocation.rs`) finishes required cleanup and
+appends `AgentInvocationFailed { invocation_id, error, start_index, entity_parent_start_index }`.
+It uses the same durable `Always` / ephemeral `Deferred` completion barrier before publishing
+the existing `InvocationFailed` response for that key. A failed cleanup or commit retains its
+infrastructure failure path and does not publish the method outcome.
+
+Mutations before the error remain. Mutating methods invalidate the read-only cache before
+publication. The status fold indexes a completed failure and clears its running key without
+setting fatal `last_error_kind`. The durable serial loop keeps the same Store and runs queued
+work; it neither retries the method nor fails other keys. Ephemeral owners still archive after
+their one accepted method. A persisted local outcome is observable after archival, but a lost
+incomplete ephemeral method is never replayed to manufacture a result.
+
+`AgentInvocationFailed` is a positional terminal, not an error hint. Re-execution reconstructs partial state and validates the invocation ID, error payload, invocation anchor and entity parent before consuming the terminal. A success
+or actual trap instead of that terminal is divergence. Completed replay neither appends nor
+publishes another terminal; cold same-key lookup reads the stored failure without guest execution.
+Only an incomplete durable invocation at the natural history tail may settle live.
+
+Declared schema error values stay ordinary results. Constructors, Rust panics, actual Wasm
+traps and malformed ABI errors keep their fatal paths. Go normalizes only handler-stage panics;
+Scala marks handler throws and failed Futures before encoding; Effect catches escaped handler
+failures/defects before codecs and HTTP cleanup, leaving interruption distinct. SDK machinery
+failures are not permission to reuse a damaged instance.
 
 The live loop hydrates an ordinary invocation from its committed Pending entry into an
 executor-local `HydratedInvocation`. Started reuses that exact payload reference, including its

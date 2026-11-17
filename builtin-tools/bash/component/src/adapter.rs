@@ -30,8 +30,14 @@ pub(crate) struct Catalog {
 impl Catalog {
     pub(crate) fn new(tools: BTreeMap<String, Tool>) -> Result<Self, String> {
         for (name, tool) in &tools {
-            golem_schema::tool::validation::validate_tool(tool)
-                .map_err(|errors| format!("invalid tool {name:?}: {errors:?}"))?;
+            golem_schema::tool::validation::validate_tool(tool).map_err(|errors| {
+                let errors = errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!("invalid tool {name:?}: {errors}")
+            })?;
             for command in &tool.commands.nodes {
                 if let Some(result) = command.body.as_ref().and_then(|body| body.result.as_ref()) {
                     process_status_type(&tool.schema, &result.type_)

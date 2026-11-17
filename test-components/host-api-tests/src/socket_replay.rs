@@ -206,6 +206,12 @@ pub trait SocketSession {
     /// invocation.
     async fn p3_tcp_conversation(&self, port: u16, request: Vec<u8>) -> Result<Vec<u8>, String>;
     fn p3_tcp_addresses(&self, slot: String) -> Result<(String, String), String>;
+    async fn p3_tcp_bind(&self, slot: String, port: u16) -> Result<(), String>;
+    fn p3_tcp_listen(&self, slot: String) -> Result<(), String>;
+    async fn p3_tcp_connect_existing(&self, slot: String, port: u16) -> Result<(), String>;
+    async fn p3_tcp_receive_again(&self, slot: String) -> Result<(), String>;
+    fn p3_tcp_bound_state(&self, slot: String) -> Result<(String, Vec<u64>), String>;
+    fn p3_tcp_hop_limit(&self, slot: String, value: Option<u8>) -> Result<u8, String>;
 
     /// Binds a P3 UDP socket on `127.0.0.1:port` and keeps it in `slot`.
     fn p3_udp_bind(&self, slot: String, port: u16) -> Result<(), String>;
@@ -493,6 +499,104 @@ impl SocketSession for SocketSessionImpl {
                 p3_address(socket.get_local_address().map_err(error)?),
                 p3_address(socket.get_remote_address().map_err(error)?),
             )),
+            _ => Err(format!("slot {slot} holds no P3 TCP socket")),
+        })
+    }
+
+    async fn p3_tcp_bind(&self, slot: String, port: u16) -> Result<(), String> {
+        let socket = p3::TcpSocket::create(p3::IpAddressFamily::Ipv4).map_err(error)?;
+        socket.set_keep_alive_enabled(true).map_err(error)?;
+        socket
+            .set_keep_alive_idle_time(2_500_000_000)
+            .map_err(error)?;
+        socket
+            .set_keep_alive_interval(4_000_000_000)
+            .map_err(error)?;
+        socket.set_keep_alive_count(7).map_err(error)?;
+        socket.set_hop_limit(42).map_err(error)?;
+        socket.set_receive_buffer_size(16384).map_err(error)?;
+        socket.set_send_buffer_size(32768).map_err(error)?;
+        socket.bind(p3_loopback(port)).map_err(error)?;
+        self.insert(
+            slot,
+            Slot::P3Tcp {
+                socket,
+                send: None,
+                send_result: None,
+                receive: None,
+                receive_result: None,
+            },
+        );
+        Ok(())
+    }
+
+    async fn p3_tcp_connect_existing(&self, slot: String, port: u16) -> Result<(), String> {
+        let value = self
+            .slots
+            .borrow_mut()
+            .remove(&slot)
+            .ok_or_else(|| format!("no slot {slot}"))?;
+        let result = match &value {
+            Slot::P3Tcp { socket, .. } => socket.connect(p3_loopback(port)).await.map_err(error),
+            _ => Err(format!("slot {slot} holds no P3 TCP socket")),
+        };
+        self.insert(slot, value);
+        result
+    }
+
+    fn p3_tcp_listen(&self, slot: String) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P3Tcp { socket, .. } => {
+                drop(socket.listen().map_err(error)?);
+                Ok(())
+            }
+            _ => Err(format!("slot {slot} holds no P3 TCP socket")),
+        })
+    }
+
+    async fn p3_tcp_receive_again(&self, slot: String) -> Result<(), String> {
+        let (stream, result) = self.with_slot(&slot, |value| match value {
+            Slot::P3Tcp { socket, .. } => Ok(socket.receive()),
+            _ => Err(format!("slot {slot} holds no P3 TCP socket")),
+        })?;
+        drop(stream);
+        result.await.map_err(error)
+    }
+
+    fn p3_tcp_bound_state(&self, slot: String) -> Result<(String, Vec<u64>), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P3Tcp { socket, .. } => {
+                assert!(!socket.get_is_listening());
+                assert!(matches!(
+                    socket.get_address_family(),
+                    p3::IpAddressFamily::Ipv4
+                ));
+                assert!(socket.get_remote_address().is_err());
+                Ok((
+                    p3_address(socket.get_local_address().map_err(error)?),
+                    vec![
+                        socket.get_keep_alive_enabled().map_err(error)? as u64,
+                        socket.get_keep_alive_idle_time().map_err(error)?,
+                        socket.get_keep_alive_interval().map_err(error)?,
+                        socket.get_keep_alive_count().map_err(error)? as u64,
+                        socket.get_hop_limit().map_err(error)? as u64,
+                        socket.get_receive_buffer_size().map_err(error)?,
+                        socket.get_send_buffer_size().map_err(error)?,
+                    ],
+                ))
+            }
+            _ => Err(format!("slot {slot} holds no P3 TCP socket")),
+        })
+    }
+
+    fn p3_tcp_hop_limit(&self, slot: String, value: Option<u8>) -> Result<u8, String> {
+        self.with_slot(&slot, |entry| match entry {
+            Slot::P3Tcp { socket, .. } => {
+                if let Some(value) = value {
+                    socket.set_hop_limit(value).map_err(error)?;
+                }
+                socket.get_hop_limit().map_err(error)
+            }
             _ => Err(format!("slot {slot} holds no P3 TCP socket")),
         })
     }

@@ -208,6 +208,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .clear_invocation_scope_card().await;
                             break Err(error);
                         }
+                        let recorded_local_failure = store.as_context().data().durable_ctx()
+                            .state.replay_state.invocation_has_recorded_local_failure(oplog_index);
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -276,6 +278,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;
+                            }
+                            Ok(InvokeResult::MethodFailed { error, .. }) => {
+                                if let Err(
+                                    crate::worker::MethodFailureSettlementError::Invocation(error)
+                                    | crate::worker::MethodFailureSettlementError::Recovery(error)
+                                ) = Self::on_agent_method_failure(store, &full_function_name, error, uses_streams).await {
+                                    break Err(error);
+                                }
+                                number_of_replayed_functions += 1;
+                                continue;
+                            }
+                            Ok(ref result) if recorded_local_failure
+                                && (result.is_snapshot_replay_divergence()
+                                    || matches!(result, InvokeResult::Exited { .. })) =>
+                            {
+                                break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    "invocation-local method failure",
+                                    format!("{result:?}"),
+                                ));
                             }
                             _ => {
                                 let owner_failure = store
