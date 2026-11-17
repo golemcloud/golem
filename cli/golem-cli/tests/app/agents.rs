@@ -4743,7 +4743,12 @@ async fn test_previous_invocation_failed_revert_workflow() {
     assert!(outputs.stderr_contains("Previous Invocation Failed"));
     assert!(outputs.stderr_contains("agent revert"));
 
-    let outputs = ctx.cli([cmd::AGENT, "stream", agent_id]).await;
+    let outputs = tokio::time::timeout(
+        Duration::from_secs(30),
+        ctx.cli([cmd::AGENT, "stream", agent_id]),
+    )
+    .await
+    .expect("streaming a failed agent must return its fatal error instead of reconnecting");
     assert!(!outputs.success());
     assert!(outputs.stderr_contains("Previous Invocation Failed"));
     assert!(outputs.stderr_contains("agent revert"));
