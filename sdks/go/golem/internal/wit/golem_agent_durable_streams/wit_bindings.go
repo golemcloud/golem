@@ -302,107 +302,24 @@ func (self *DurableStreamReader) Read(request DurableStreamReadRequest) witTypes
 	returnArea := uintptr(witRuntime.Allocate(pinner, (56 + 4*4), 8))
 	params := witRuntime.Allocate(pinner, (10 * 4), 4)
 	*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 0)), 0)) = (self).Handle()
-	utf8 := unsafe.Pointer(unsafe.StringData(((request).Checkpoint).Offset))
-	pinner.Pin(utf8)
-	*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 4)) = uint32(uint32(len(((request).Checkpoint).Offset)))
-	*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 0)) = uint32(uintptr(uintptr(utf8)))
-
-	switch ((request).Checkpoint).Cursor.Tag() {
-	case witTypes.OptionNone:
-		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (2 * 4))) = int8(int32(0))
-
-	case witTypes.OptionSome:
-		payload := ((request).Checkpoint).Cursor.Some()
-		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (2 * 4))) = int8(int32(1))
-		utf80 := unsafe.Pointer(unsafe.StringData(payload))
-		pinner.Pin(utf80)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (4 * 4))) = uint32(uint32(len(payload)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (3 * 4))) = uint32(uintptr(uintptr(utf80)))
-
-	default:
-		panic("unreachable")
-	}
-	*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (5 * 4))) = int8(int32((request).Transport))
-
-	switch (request).ContentType.Tag() {
-	case witTypes.OptionNone:
-		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (6 * 4))) = int8(int32(0))
-
-	case witTypes.OptionSome:
-		payload := (request).ContentType.Some()
-		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (6 * 4))) = int8(int32(1))
-		utf81 := unsafe.Pointer(unsafe.StringData(payload))
-		pinner.Pin(utf81)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (8 * 4))) = uint32(uint32(len(payload)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), (7 * 4))) = uint32(uintptr(uintptr(utf81)))
-
-	default:
-		panic("unreachable")
-	}
+	wasm_lower_1_t511(pinner, request, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 0))
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_durable_stream_reader_read(uintptr(params), returnArea)))
-	var result witTypes.Result[DurableStreamBatch, DurableStreamError]
+	var result1 witTypes.Result[DurableStreamBatch, DurableStreamError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		value := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
-		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 3*4))))
-		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 5*4))))
-		var option witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4)))) {
-		case 0:
+		result := wasm_lift_1_t513(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			option = witTypes.None[string]()
-		case 1:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 8*4))))
-
-			option = witTypes.Some[string](value4)
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Ok[DurableStreamBatch, DurableStreamError](DurableStreamBatch{Payload: value, ContentType: value2, Next: DurableStreamCheckpoint{Offset: value3, Cursor: option}, UpToDate: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 9*4)))) != 0), Closed: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (9 + 9*4)))) != 0)})
+		result1 = witTypes.Ok[DurableStreamBatch, DurableStreamError](result)
 	case 1:
-		value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-		var option6 witTypes.Option[uint64]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 2*4)))) {
-		case 0:
+		result0 := wasm_lift_1_t520(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			option6 = witTypes.None[uint64]()
-		case 1:
-
-			option6 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 2*4)))))
-		default:
-			panic("unreachable")
-		}
-		var option7 witTypes.Option[uint64]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 2*4)))) {
-		case 0:
-
-			option7 = witTypes.None[uint64]()
-		case 1:
-
-			option7 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 2*4)))))
-		default:
-			panic("unreachable")
-		}
-		var option8 witTypes.Option[uint64]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (48 + 2*4)))) {
-		case 0:
-
-			option8 = witTypes.None[uint64]()
-		case 1:
-
-			option8 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (56 + 2*4)))))
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[DurableStreamBatch, DurableStreamError](DurableStreamError{Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8)))), Message: value5, RetryAfterMs: option6, ProducerEpoch: option7, ExpectedSequence: option8})
+		result1 = witTypes.Err[DurableStreamBatch, DurableStreamError](result0)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result1
 
 }
 
@@ -449,11 +366,182 @@ func (self *DurableStreamWriter) Append(request DurableStreamAppendRequest) witT
 	returnArea := uintptr(witRuntime.Allocate(pinner, (64 + 2*4), 8))
 	params := witRuntime.Allocate(pinner, (32 + 2*4), 8)
 	*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 0)), 0)) = (self).Handle()
+	wasm_lower_1_t516(pinner, request, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), 0))
 
-	switch (request).Payload.Tag() {
+	witAsync.SubtaskWait(uint32(wasm_import_method_durable_stream_writer_append(uintptr(params), returnArea)))
+	var result1 witTypes.Result[DurableStreamAppendReceipt, DurableStreamError]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	case 0:
+		result := wasm_lift_1_t517(unsafe.Add(unsafe.Pointer(returnArea), 8))
+
+		result1 = witTypes.Ok[DurableStreamAppendReceipt, DurableStreamError](result)
+	case 1:
+		result0 := wasm_lift_1_t520(unsafe.Add(unsafe.Pointer(returnArea), 8))
+
+		result1 = witTypes.Err[DurableStreamAppendReceipt, DurableStreamError](result0)
+	default:
+		panic("unreachable")
+	}
+
+	return result1
+
+}
+
+//go:noinline
+func wasm_lower_1_t511(pinner *runtime.Pinner, value DurableStreamReadRequest, dst unsafe.Pointer) {
+	wasm_lower_1_t509(pinner, (value).Checkpoint, unsafe.Add(unsafe.Pointer(dst), 0))
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), (5 * 4))) = int8(int32((value).Transport))
+
+	switch (value).ContentType.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (6 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).ContentType.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (6 * 4))) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (7 * 4))) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lift_1_t513(src unsafe.Pointer) DurableStreamBatch {
+	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+	result := wasm_lift_1_t509(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+
+	return DurableStreamBatch{Payload: value0, ContentType: value1, Next: result, UpToDate: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (9 * 4)))) != 0), Closed: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (1 + 9*4)))) != 0)}
+}
+
+//go:noinline
+func wasm_lift_1_t520(src unsafe.Pointer) DurableStreamError {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+	var option witTypes.Option[uint64]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 2*4)))) {
+	case 0:
+
+		option = witTypes.None[uint64]()
+	case 1:
+
+		option = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))))
+	default:
+		panic("unreachable")
+	}
+	var option1 witTypes.Option[uint64]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 2*4)))) {
+	case 0:
+
+		option1 = witTypes.None[uint64]()
+	case 1:
+
+		option1 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (32 + 2*4)))))
+	default:
+		panic("unreachable")
+	}
+	var option2 witTypes.Option[uint64]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 2*4)))) {
+	case 0:
+
+		option2 = witTypes.None[uint64]()
+	case 1:
+
+		option2 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (48 + 2*4)))))
+	default:
+		panic("unreachable")
+	}
+
+	return DurableStreamError{Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), Message: value0, RetryAfterMs: option, ProducerEpoch: option1, ExpectedSequence: option2}
+}
+
+//go:noinline
+func wasm_lower_1_t516(pinner *runtime.Pinner, value DurableStreamAppendRequest, dst unsafe.Pointer) {
+	wasm_lower_1_t515(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), 0))
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), (8 + 2*4))) = int64((value).Sequence)
+	var result int32
+	if (value).Close {
+		result = 1
+	} else {
+		result = 0
+	}
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 2*4))) = int8(result)
+
+}
+
+//go:noinline
+func wasm_lift_1_t517(src unsafe.Pointer) DurableStreamAppendReceipt {
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		option = witTypes.Some[string](value0)
+	default:
+		panic("unreachable")
+	}
+
+	return DurableStreamAppendReceipt{NextOffset: option, Epoch: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (8 + 2*4)))), Sequence: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))), Closed: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 2*4)))) != 0)}
+}
+
+//go:noinline
+func wasm_lower_1_t509(pinner *runtime.Pinner, value DurableStreamCheckpoint, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Offset))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Offset)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+
+	switch (value).Cursor.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Cursor.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(1))
+		utf80 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uintptr(uintptr(utf80)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lift_1_t509(src unsafe.Pointer) DurableStreamCheckpoint {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
+
+		option = witTypes.Some[string](value1)
+	default:
+		panic("unreachable")
+	}
+
+	return DurableStreamCheckpoint{Offset: value0, Cursor: option}
+}
+
+//go:noinline
+func wasm_lower_1_t515(pinner *runtime.Pinner, value DurableStreamAppendPayload, dst unsafe.Pointer) {
+
+	switch value.Tag() {
 	case DurableStreamAppendPayloadJson:
-		payload := (request).Payload.Json()
-		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), 0)) = int8(int32(0))
+		payload := value.Json()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
 		slice := payload
 		length := uint32(len(slice))
 		result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
@@ -466,88 +554,19 @@ func (self *DurableStreamWriter) Append(request DurableStreamAppendRequest) witT
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), (2 * 4))) = uint32(length)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), 4)) = uint32(uintptr(uintptr(result)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(length)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(result)))
 
 	case DurableStreamAppendPayloadBytes:
-		payload := (request).Payload.Bytes()
-		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), 0)) = int8(int32(1))
+		payload := value.Bytes()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
 		data := unsafe.Pointer(unsafe.SliceData(payload))
 		pinner.Pin(data)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), (2 * 4))) = uint32(uint32(len(payload)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), 4)) = uint32(uintptr(uintptr(data)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(data)))
 
 	default:
 		panic("unreachable")
 	}
-	*(*int64)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), (8 + 2*4))) = int64((request).Sequence)
-	var result0 int32
-	if (request).Close {
-		result0 = 1
-	} else {
-		result0 = 0
-	}
-	*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), (16 + 2*4))) = int8(result0)
-
-	witAsync.SubtaskWait(uint32(wasm_import_method_durable_stream_writer_append(uintptr(params), returnArea)))
-	var result5 witTypes.Result[DurableStreamAppendReceipt, DurableStreamError]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
-	case 0:
-		var option witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
-		case 0:
-
-			option = witTypes.None[string]()
-		case 1:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			option = witTypes.Some[string](value)
-		default:
-			panic("unreachable")
-		}
-
-		result5 = witTypes.Ok[DurableStreamAppendReceipt, DurableStreamError](DurableStreamAppendReceipt{NextOffset: option, Epoch: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 2*4)))), Sequence: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 2*4)))), Closed: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 2*4)))) != 0)})
-	case 1:
-		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-		var option2 witTypes.Option[uint64]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 2*4)))) {
-		case 0:
-
-			option2 = witTypes.None[uint64]()
-		case 1:
-
-			option2 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 2*4)))))
-		default:
-			panic("unreachable")
-		}
-		var option3 witTypes.Option[uint64]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 2*4)))) {
-		case 0:
-
-			option3 = witTypes.None[uint64]()
-		case 1:
-
-			option3 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 2*4)))))
-		default:
-			panic("unreachable")
-		}
-		var option4 witTypes.Option[uint64]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (48 + 2*4)))) {
-		case 0:
-
-			option4 = witTypes.None[uint64]()
-		case 1:
-
-			option4 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (56 + 2*4)))))
-		default:
-			panic("unreachable")
-		}
-
-		result5 = witTypes.Err[DurableStreamAppendReceipt, DurableStreamError](DurableStreamError{Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8)))), Message: value1, RetryAfterMs: option2, ProducerEpoch: option3, ExpectedSequence: option4})
-	default:
-		panic("unreachable")
-	}
-
-	return result5
 
 }

@@ -307,6 +307,20 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     },
                 ))
             }
+            OplogEntry::AgentInvocationFailed {
+                timestamp,
+                invocation_id,
+                error,
+                start_index,
+                ..
+            } => Ok(PublicOplogEntry::AgentInvocationFailed(
+                AgentInvocationFailedParams {
+                    timestamp,
+                    invocation_id,
+                    error: error.to_string(""),
+                    start_index,
+                },
+            )),
             OplogEntry::Suspend { timestamp } => {
                 Ok(PublicOplogEntry::Suspend(SuspendParams { timestamp }))
             }

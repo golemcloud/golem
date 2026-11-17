@@ -387,10 +387,9 @@ impl CardService {
             if let CardManagedBy::AgentInitial(managed_by) = managed_by {
                 let component = self
                     .component_service
-                    .get_component_revision(
+                    .get_source_component_revision(
                         managed_by.component_id,
                         managed_by.component_revision,
-                        false,
                         &AuthCtx::System,
                     )
                     .await
@@ -455,20 +454,18 @@ impl CardService {
                 .map_err(Into::into),
             Some(CardManagedBy::AgentInitial(managed_by)) => Ok(self
                 .component_service
-                .get_component_revision(
+                .get_internal_component_revision(
                     managed_by.component_id,
                     managed_by.component_revision,
-                    true,
                     &AuthCtx::System,
                 )
                 .await?
                 .account_email),
             Some(CardManagedBy::ComponentInitial(managed_by)) => Ok(self
                 .component_service
-                .get_component_revision(
+                .get_internal_component_revision(
                     managed_by.component_id,
                     managed_by.component_revision,
-                    true,
                     &AuthCtx::System,
                 )
                 .await?

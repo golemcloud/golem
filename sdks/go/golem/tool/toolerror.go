@@ -62,7 +62,9 @@ const (
 // ErrorSpec describes a declared error case.
 type ErrorSpec struct {
 	Kind ErrorKind
-	// ExitCode is what a command-line projection of this tool would exit with.
+	// ExitCode is what a command-line projection of this tool would exit with,
+	// from 1 to 255. Exit code 0 means success, so a declared error never has
+	// it: when ExitCode is not set (0), the case exits with 1.
 	ExitCode uint8
 	// Summary is the one-line description shown in help output.
 	Summary string
@@ -156,6 +158,9 @@ func defineToolErrorOn[P any, T any](e *toolEntry, name string, spec ErrorSpec) 
 	payload := reflect.TypeFor[P]()
 	if payload == reflect.TypeFor[golem.Unit]() {
 		payload = nil
+	}
+	if spec.ExitCode == 0 {
+		spec.ExitCode = 1
 	}
 	info := &toolErrorInfo{tool: e.name, name: name, spec: spec, payload: payload}
 	c := &ErrorCase[P, T]{info: info}

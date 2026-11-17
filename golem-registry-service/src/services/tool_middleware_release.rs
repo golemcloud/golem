@@ -69,6 +69,10 @@ pub enum ToolMiddlewareReleaseError {
     #[error("ToolMiddleware release coordinate already exists with different immutable metadata")]
     ImmutableReleaseConflict,
     #[error(
+        "ToolMiddleware release coordinate is followed by a grant in a version-checked environment; use a new version"
+    )]
+    StrictFollowingGrantConflict,
+    #[error(
         "A de-published tool_middleware release must be restored explicitly before publication"
     )]
     DePublishedReleaseRequiresExplicitRestore,
@@ -238,7 +242,7 @@ impl ToolMiddlewareReleaseService {
         for candidate in candidates {
             let name = ToolMiddlewareName::try_from(candidate.tool_middleware_name.clone())
                 .map_err(anyhow::Error::msg)?;
-            match self
+            let assessment = self
                 .assess_publication(
                     AccountId(candidate.owner_account_id),
                     &name,
@@ -247,21 +251,10 @@ impl ToolMiddlewareReleaseService {
                     candidate.metadata_digest.into(),
                     candidate.immutable,
                 )
-                .await?
-            {
-                ToolMiddlewarePublicationAssessment::NoChange(existing_id) => {
-                    candidate.tool_middleware_release_id = existing_id.0;
-                }
-                ToolMiddlewarePublicationAssessment::Publish => changed = true,
-                ToolMiddlewarePublicationAssessment::ImmutableConflict
-                | ToolMiddlewarePublicationAssessment::StrictFollowingGrantConflict => {
-                    return Err(ToolMiddlewareReleaseError::ImmutableReleaseConflict);
-                }
-                ToolMiddlewarePublicationAssessment::DePublishedConflict => {
-                    return Err(
-                        ToolMiddlewareReleaseError::DePublishedReleaseRequiresExplicitRestore,
-                    );
-                }
+                .await?;
+            match existing_release_or_conflict(assessment)? {
+                Some(existing_id) => candidate.tool_middleware_release_id = existing_id.0,
+                None => changed = true,
             }
         }
         Ok(changed)
@@ -534,12 +527,7 @@ impl ToolMiddlewareReleaseService {
         } = &provision.source;
         let component = self
             .component_service
-            .get_component_revision(
-                *component_id,
-                *component_revision,
-                false,
-                &AuthCtx::system(),
-            )
+            .get_source_component_revision(*component_id, *component_revision, &AuthCtx::system())
             .await
             .map_err(|error| {
                 anyhow::anyhow!("invalid system tool middleware component source: {error}")
@@ -616,7 +604,7 @@ impl ToolMiddlewareReleaseService {
         } = release.source;
         let component = self
             .component_service
-            .get_component_revision(component_id, component_revision, false, &AuthCtx::system())
+            .get_source_component_revision(component_id, component_revision, &AuthCtx::system())
             .await
             .map_err(|_| ToolMiddlewareReleaseError::ImmutableReleaseConflict)?;
         let deployed = self
@@ -693,6 +681,26 @@ impl ToolMiddlewareReleaseService {
     }
 }
 
+/// What a deploy does with one publication: it uses the existing release (`Some`), it
+/// publishes a new release (`None`), or it refuses the deploy with the error of the conflict.
+fn existing_release_or_conflict(
+    assessment: ToolMiddlewarePublicationAssessment,
+) -> Result<Option<ToolMiddlewareReleaseId>, ToolMiddlewareReleaseError> {
+    match assessment {
+        ToolMiddlewarePublicationAssessment::NoChange(existing_id) => Ok(Some(existing_id)),
+        ToolMiddlewarePublicationAssessment::Publish => Ok(None),
+        ToolMiddlewarePublicationAssessment::ImmutableConflict => {
+            Err(ToolMiddlewareReleaseError::ImmutableReleaseConflict)
+        }
+        ToolMiddlewarePublicationAssessment::StrictFollowingGrantConflict => {
+            Err(ToolMiddlewareReleaseError::StrictFollowingGrantConflict)
+        }
+        ToolMiddlewarePublicationAssessment::DePublishedConflict => {
+            Err(ToolMiddlewareReleaseError::DePublishedReleaseRequiresExplicitRestore)
+        }
+    }
+}
+
 fn release_lifecycle(value: i16) -> Result<ReleaseLifecycle, ToolMiddlewareReleaseError> {
     match value {
         TOOL_RELEASE_LIFECYCLE_PUBLISHED => Ok(ReleaseLifecycle::Published),
@@ -717,4 +725,41 @@ fn authorize_account_tool_middleware_release_permission(
             resource: AccountToolMiddlewareReleaseResourcePattern::Name(name),
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ToolMiddlewarePublicationAssessment, ToolMiddlewareReleaseError,
+        existing_release_or_conflict,
+    };
+    use golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId;
+    use test_r::test;
+
+    #[test]
+    fn a_deploy_refuses_each_publication_conflict_with_its_own_error() {
+        let id = ToolMiddlewareReleaseId::new();
+        assert!(matches!(
+            existing_release_or_conflict(ToolMiddlewarePublicationAssessment::NoChange(id)),
+            Ok(Some(existing)) if existing == id
+        ));
+        assert!(matches!(
+            existing_release_or_conflict(ToolMiddlewarePublicationAssessment::Publish),
+            Ok(None)
+        ));
+        assert!(matches!(
+            existing_release_or_conflict(
+                ToolMiddlewarePublicationAssessment::StrictFollowingGrantConflict
+            ),
+            Err(ToolMiddlewareReleaseError::StrictFollowingGrantConflict)
+        ));
+        assert!(matches!(
+            existing_release_or_conflict(ToolMiddlewarePublicationAssessment::ImmutableConflict),
+            Err(ToolMiddlewareReleaseError::ImmutableReleaseConflict)
+        ));
+        assert!(matches!(
+            existing_release_or_conflict(ToolMiddlewarePublicationAssessment::DePublishedConflict),
+            Err(ToolMiddlewareReleaseError::DePublishedReleaseRequiresExplicitRestore)
+        ));
+    }
 }
