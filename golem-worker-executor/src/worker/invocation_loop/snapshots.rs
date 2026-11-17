@@ -298,6 +298,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
             idempotency_key,
+            // Nothing records this caller: the call is lowered and run directly, with no invocation
+            // entry. It is the value that the guest's caller() returns through its fallback.
             caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
         };
         let lowered = match lower_invocation(
@@ -496,6 +498,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
             idempotency_key,
+            // Nothing records this caller: the call is lowered and run directly, with no invocation
+            // entry. It is the value that the guest's caller() returns through its fallback.
             caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
         };
         let lowered = match lower_invocation(
