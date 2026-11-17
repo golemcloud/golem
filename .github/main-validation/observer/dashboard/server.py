@@ -139,6 +139,8 @@ def handler(store, token):
         def do_GET(self):
             if self.path == "/":
                 self.send(200, Path(__file__).with_name("index.html").read_bytes(), "text/html; charset=utf-8")
+            elif self.path == "/brand.png":
+                self.send(200, Path(__file__).with_name("brand.png").read_bytes(), "image/png")
             elif self.path == "/data.json":
                 self.send(200, store.snapshot())
             elif self.path == "/healthz":
