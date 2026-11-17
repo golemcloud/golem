@@ -1368,6 +1368,13 @@ synthetic warm-cache failures cannot establish a recorded constructor failure. A
 failure cannot replace constructor success. Forks resolve the retained source initialization key.
 Preparation remains suspended and neither starts nor waits for initialization.
 
+`Worker::resolve_old_invocation_result_index` falls back to scanning the worker's open oplog handle,
+bounded by the status oplog index. An ephemeral completion can precede its archive write, so
+storage-only reads can falsely report a gap. The handle includes entries handed to the asynchronous
+writer but not yet stored; result lookup does not need a storage barrier.
+Test: `oplog_unreadable::an_ephemeral_constructor_completes_while_its_archive_write_is_pending`
+holds that write until Create returns.
+
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
