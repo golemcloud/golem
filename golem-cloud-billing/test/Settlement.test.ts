@@ -34,7 +34,7 @@ const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
   currentPeriodEnd: new Date("2026-12-04T10:00:00Z"),
   cancelAtPeriodEnd: false,
   endedAt: undefined,
-  modifiedAt: new Date("2026-11-04T10:00:00Z"),
+  modifiedAt: "2026-11-04T10:00:00Z",
   meteredPriceIds: ["price_compute"],
   pastDueAt: undefined,
   ...overrides
@@ -42,6 +42,10 @@ const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
 
 const endingIn = (milliseconds: number) =>
   subscription({ cancelAtPeriodEnd: true, currentPeriodEnd: new Date(now.getTime() + milliseconds) })
+
+/** A subscription canceled at the period end whose payment failed a minute ago: in the past-due grace. */
+const pastDueEndingIn = (milliseconds: number) =>
+  subscription({ ...endingIn(milliseconds), status: "past_due", pastDueAt: new Date(now.getTime() - MINUTE) })
 
 const pending = (overrides: Partial<UnpaidOrder> = {}): UnpaidOrder => ({
   orderId: "order_1",
@@ -70,6 +74,25 @@ describe("planFor", () => {
     ["a subscription that ends after the settlement margin", "paid", [endingIn(SETTLEMENT_MARGIN_MS + MINUTE)], []],
     ["a subscription that ends within the settlement margin", "free", [endingIn(SETTLEMENT_MARGIN_MS - MINUTE)], []],
     ["a subscription past its scheduled end", "free", [endingIn(-MINUTE)], []],
+    [
+      "a past_due subscription in the past-due grace that ends after the settlement margin",
+      "paid",
+      [pastDueEndingIn(SETTLEMENT_MARGIN_MS + MINUTE)],
+      []
+    ],
+    [
+      "a past_due subscription in the past-due grace that ends within the settlement margin",
+      "free",
+      [pastDueEndingIn(SETTLEMENT_MARGIN_MS - MINUTE)],
+      []
+    ],
+    ["a past_due subscription in the past-due grace past its scheduled end", "free", [pastDueEndingIn(-MINUTE)], []],
+    [
+      "a past_due subscription in the past-due grace that ends within the settlement margin, with overdue overage of an older one",
+      "suspended",
+      [subscription({ subscriptionId: "sub_0", status: "canceled" }), pastDueEndingIn(SETTLEMENT_MARGIN_MS - MINUTE)],
+      [pending({ ...overdue, subscriptionId: "sub_0" })]
+    ],
     ["a past_due subscription in the past-due grace, with an unpaid price", "paid", [pastDue], [priceOnly]],
     ["a past_due subscription in the past-due grace, with unpaid overage", "paid", [pastDue], [pending()]],
     ["a past_due subscription in the past-due grace, with overdue overage", "paid", [pastDue], [overdue]],
