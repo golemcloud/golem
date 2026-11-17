@@ -60,6 +60,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generator_runtime_matches_guest_module() {
+        let runtime = wit_bindgen_go::remote_pkg_version();
+        let go_mod = include_str!("../../../sdks/go/golem/go.mod");
+        assert!(
+            go_mod.lines().any(|line| line
+                .split_whitespace()
+                .take(2)
+                .eq(runtime.split_whitespace())),
+            "the guest module must require the generator runtime: {runtime}"
+        );
+    }
+
+    #[test]
     fn regenerates_bindings_without_touching_exports() {
         let root = env::temp_dir().join(format!("golem-go-bindgen-{}", std::process::id()));
         let wit = root.join("test.wit");
