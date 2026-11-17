@@ -163,7 +163,7 @@ async fn test_python_build_failures_keep_the_last_component() {
     let original_source = std::fs::read_to_string(&source).unwrap();
     let original_pyproject = std::fs::read_to_string(&pyproject).unwrap();
 
-    let cases: [(&str, &Path, &str, &str, &[&str]); 5] = [
+    let cases: [(&str, &Path, &str, &str, &[&str]); 6] = [
         (
             "unsupported type hint",
             &source,
@@ -200,8 +200,7 @@ async fn test_python_build_failures_keep_the_last_component() {
             "[project]\n",
             "[tool.uv.sources]\ngolem-py-sdk = { path = \"../patched-sdk\" }\n\n[project]\n",
             &[
-                "declares the package source `tool.uv.sources.golem-py-sdk",
-                "../patched-sdk",
+                "declares the package source `tool.uv.sources.golem-py-sdk`, but",
                 "set GOLEM_PYTHON_SDK_WHEEL",
             ],
         ),
@@ -209,10 +208,19 @@ async fn test_python_build_failures_keep_the_last_component() {
             "SDK Git source",
             &pyproject,
             "[project]\n",
-            "[tool.uv.sources]\ngolem-py-sdk = { git = \"https://example.com/sdk.git\" }\n\n[project]\n",
+            "[tool.uv.sources]\ngolem-py-sdk = { git = \"https://TOKENSENTINEL@example.invalid/sdk.git\" }\n\n[project]\n",
             &[
-                "declares the package source `tool.uv.sources.golem-py-sdk",
-                "https://example.com/sdk.git",
+                "declares the package source `tool.uv.sources.golem-py-sdk`, but",
+                "set GOLEM_PYTHON_SDK_WHEEL",
+            ],
+        ),
+        (
+            "authenticated index",
+            &pyproject,
+            "[project]\n",
+            "[[tool.uv.index]]\nname = \"private\"\nurl = \"https://USERSENTINEL:PASSSENTINEL@packages.example.invalid/simple\"\n\n[project]\n",
+            &[
+                "declares the package source `tool.uv.index`, but",
                 "set GOLEM_PYTHON_SDK_WHEEL",
             ],
         ),
@@ -222,6 +230,18 @@ async fn test_python_build_failures_keep_the_last_component() {
         let failed = ctx.cli([flag::YES, cmd::BUILD]).await;
         let text = format!("{}\n{}", failed.stdout_text(), failed.stderr_text());
         assert!(!failed.success(), "{case}: the build succeeded: {text}");
+        // Package source values can contain credentials, so the output omits them.
+        for output in [failed.stdout_text(), failed.stderr_text()] {
+            for value in [
+                "patched-sdk",
+                "example.invalid",
+                "TOKENSENTINEL",
+                "USERSENTINEL",
+                "PASSSENTINEL",
+            ] {
+                assert!(!output.contains(value), "{case}: {value:?} is in {output}");
+            }
+        }
         for expected in expected {
             assert!(
                 text.contains(expected),

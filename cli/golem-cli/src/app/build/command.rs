@@ -198,17 +198,19 @@ fn check_python_dependencies(pyproject: &Utf8Path) -> anyhow::Result<()> {
         .and_then(|tool| tool.get("uv"))
         .and_then(toml::Value::as_table)
     {
+        // Only the setting names go into the error: source values can contain
+        // index or Git credentials.
         let mut declared = Vec::new();
         if let Some(sources) = uv.get("sources").and_then(toml::Value::as_table) {
             declared.extend(
                 sources
-                    .iter()
-                    .map(|(name, source)| format!("`tool.uv.sources.{name} = {source}`")),
+                    .keys()
+                    .map(|name| format!("`tool.uv.sources.{name}`")),
             );
         }
         for key in ["index", "index-url", "extra-index-url", "find-links"] {
-            if let Some(value) = uv.get(key) {
-                declared.push(format!("`tool.uv.{key} = {value}`"));
+            if uv.contains_key(key) {
+                declared.push(format!("`tool.uv.{key}`"));
             }
         }
         if !declared.is_empty() {
@@ -1052,25 +1054,39 @@ mod tests {
         for (source, expected) in [
             (
                 "[tool.uv.sources]\ngolem-py-sdk = { path = \"../patched-sdk\" }\n",
-                "`tool.uv.sources.golem-py-sdk = { path = \"../patched-sdk\" }`",
+                "`tool.uv.sources.golem-py-sdk`",
             ),
             (
-                "[tool.uv.sources]\ngolem-py-sdk = { git = \"https://example.com/sdk.git\" }\n",
-                "`tool.uv.sources.golem-py-sdk = { git = \"https://example.com/sdk.git\" }`",
+                "[tool.uv.sources]\ngolem-py-sdk = { git = \"https://TOKENSENTINEL@example.invalid/sdk.git\" }\n",
+                "`tool.uv.sources.golem-py-sdk`",
+            ),
+            (
+                "[[tool.uv.index]]\nname = \"private\"\nurl = \"https://USERSENTINEL:PASSSENTINEL@packages.example.invalid/simple\"\n",
+                "`tool.uv.index`",
             ),
             (
                 "[tool.uv]\nfind-links = [\"../wheels\"]\n",
-                "`tool.uv.find-links = [\"../wheels\"]`",
+                "`tool.uv.find-links`",
             ),
         ] {
             // Sources are rejected even when the project lists no dependencies.
             for dependencies in [pin, ""] {
                 let message = error(&format!("{dependencies}{source}"));
                 assert!(
-                    message.contains(&format!("declares the package source {expected}")),
+                    message.contains(&format!("declares the package source {expected}, but")),
                     "{message}"
                 );
                 assert!(message.contains("set GOLEM_PYTHON_SDK_WHEEL"), "{message}");
+                for value in [
+                    "patched-sdk",
+                    "wheels",
+                    "example.invalid",
+                    "TOKENSENTINEL",
+                    "USERSENTINEL",
+                    "PASSSENTINEL",
+                ] {
+                    assert!(!message.contains(value), "{value} is in {message}");
+                }
             }
         }
         check(&format!("{pin}[tool.uv]\ndev-dependencies = []\n")).unwrap();

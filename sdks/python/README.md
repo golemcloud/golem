@@ -59,7 +59,8 @@ cause, when:
   `golem-py-sdk==<version>` that the CLI builds with;
 - `pyproject.toml` declares a package source, such as a `[tool.uv.sources]`
   path or Git entry or a uv index. The SDK always comes from the wheel that
-  `GOLEM_PYTHON_SDK_WHEEL` names;
+  `GOLEM_PYTHON_SDK_WHEEL` names. The error names the setting but not its
+  value, because a source URL can contain credentials;
 - an entry module or a module that it imports raises, with the original
   traceback;
 - a declaration is invalid, with the file and line of each one;
