@@ -714,7 +714,9 @@ impl RenderFragment for NetworkResourcePattern {
                     PortPattern::Range { start, end } => format!("{host}:{start}-{end}"),
                 }
             }
-            Self::SocketAddress { host, port } => format!("{}:{port}", render_network_host(host)),
+            Self::SocketAddress { host, port, .. } => {
+                format!("{}:{port}", render_network_host(host))
+            }
         })
     }
 }

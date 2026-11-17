@@ -3230,8 +3230,10 @@ grant check, `SocketPolicy::target` refuses cloud metadata and link-local destin
 executor's gRPC and HTTP ports and `agent_sockets.refused_ports` on loopback, unspecified and this
 host's own addresses. Operator authorization does not bypass it. Otherwise the target is a
 `NetworkResourcePattern::SocketAddress`: a grant with a wildcard host matches it only for an
-`AddressClass::Public` address (D28), while denials with a wildcard host still cover every
-address. HTTP and WebSocket targets keep plain host matching. A refusal is recorded as the
+`AddressClass::Public` address that is not an address of this host (D28, `this_host`), while
+denials with a wildcard host still cover every address, and a denial of an IPv4 host covers the
+NAT64, 6to4 and IPv4-compatible forms that embed it. HTTP and WebSocket targets keep plain host
+matching and refuse IPv6 hosts. A refusal is recorded as the
 call's denial, like a grant denial (the P2 check call, or the `Start` of the P3 connect or send), so
 replay returns it. The Wasmtime `socket_addr_check`
 backstop refuses TCP listen, binds other than port 0 or loopback, and the refused destinations,
