@@ -204,7 +204,7 @@ func (self *ToolOutputWriter) Write(bytes []uint8) witTypes.Result[witTypes.Unit
 
 		result0 = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t665(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t684(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, StreamWriteError](result)
 	default:
@@ -231,7 +231,7 @@ func (self *ToolOutputWriter) Finish() witTypes.Result[witTypes.Unit, StreamWrit
 
 		result0 = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t665(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t684(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, StreamWriteError](result)
 	default:
@@ -292,7 +292,7 @@ func (self *ToolOutputWriter) Fail(reason ByteStreamFailure) witTypes.Result[wit
 
 		result2 = witTypes.Ok[witTypes.Unit, StreamWriteError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t665(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t684(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[witTypes.Unit, StreamWriteError](result)
 	default:
@@ -304,11 +304,11 @@ func (self *ToolOutputWriter) Fail(reason ByteStreamFailure) witTypes.Result[wit
 }
 
 //go:noinline
-func wasm_lift_1_t665(src unsafe.Pointer) StreamWriteError {
+func wasm_lift_1_t684(src unsafe.Pointer) StreamWriteError {
 	var variant StreamWriteError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t664(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t683(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeStreamWriteErrorClosed(result)
 
@@ -324,7 +324,7 @@ func wasm_lift_1_t665(src unsafe.Pointer) StreamWriteError {
 }
 
 //go:noinline
-func wasm_lift_1_t664(src unsafe.Pointer) ByteStreamCloseCause {
+func wasm_lift_1_t683(src unsafe.Pointer) ByteStreamCloseCause {
 	var variant ByteStreamCloseCause
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -332,7 +332,7 @@ func wasm_lift_1_t664(src unsafe.Pointer) ByteStreamCloseCause {
 		variant = MakeByteStreamCloseCauseFinished()
 
 	case 1:
-		result := wasm_lift_1_t661(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t680(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeByteStreamCloseCauseFailed(result)
 
@@ -348,7 +348,7 @@ func wasm_lift_1_t664(src unsafe.Pointer) ByteStreamCloseCause {
 }
 
 //go:noinline
-func wasm_lift_1_t661(src unsafe.Pointer) ByteStreamFailure {
+func wasm_lift_1_t680(src unsafe.Pointer) ByteStreamFailure {
 	var variant ByteStreamFailure
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

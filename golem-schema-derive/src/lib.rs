@@ -101,6 +101,14 @@ pub fn derive_from_schema(input: TokenStream) -> TokenStream {
 /// format is unchanged). Unsupported serde attributes are rejected at compile
 /// time as a drift guard.
 ///
+/// Internally tagged newtype variants require a named struct payload derived
+/// with `PoemSchema`. The derive emits an unregistered object shape for those
+/// structs, so discriminator-field validation does not depend on registration
+/// order. A payload field with the discriminator's serialized name is rejected
+/// during registration.
+/// Struct-level `tag` and `content` attributes are not supported and are
+/// rejected at compile time.
+///
 /// This derive only emits `poem_openapi::*` token paths and is meant to be
 /// gated behind the consuming crate's `full` feature, e.g.
 /// `#[cfg_attr(feature = "full", derive(PoemSchema))]`.

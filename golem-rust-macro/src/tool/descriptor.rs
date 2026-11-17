@@ -103,6 +103,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
         None => quote! { env!("CARGO_PKG_VERSION").to_string() },
     };
     let requires_filesystem = ir.requires_filesystem;
+    let http_mount = crate::tool::http::mount_tokens(ir.mount.as_deref());
     let standalone = if needs_composition(ir) {
         quote! { #ident(&mut golem_rust::agentic::ToolBuildCtx::new(), __golem_wire_schema) }
     } else {
@@ -110,7 +111,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
             #[allow(unused_mut)]
             let mut commands = ::std::vec![#root];
             #(#links)*
-            ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, commands })
+            ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, http_mount: #http_mount, commands })
         }
     };
     Ok(quote! {
@@ -134,7 +135,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
                 let name = commands[0].name.clone();
                 golem_rust::agentic::reconcile_command_inherited_globals(&mut commands[0], ctx.inherited_globals(), &name)?;
                 #(#links)*
-                let mut tool = golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, commands };
+                let mut tool = golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, http_mount: #http_mount, commands };
                 if ctx.is_outermost_descriptor() {
                     golem_rust::agentic::normalize_inherited_globals(&mut tool)?;
                 }
@@ -157,6 +158,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
         None => quote! { env!("CARGO_PKG_VERSION").to_string() },
     };
     let requires_filesystem = ir.requires_filesystem;
+    let http_mount = crate::tool::http::mount_tokens(ir.mount.as_deref());
 
     // Index 0 is always the root command.
     let root_node = build_root_node(ir, &plan, DescriptorRepr::Dynamic)?;
@@ -185,6 +187,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
             ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType {
                 version: #version,
                 requires_filesystem: #requires_filesystem,
+                http_mount: #http_mount,
                 commands,
             })
         }
@@ -246,6 +249,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
                 let mut __tool = golem_rust::agentic::ExtendedToolType {
                     version: #version,
                     requires_filesystem: #requires_filesystem,
+                    http_mount: #http_mount,
                     commands,
                 };
                 // A nested subtree child descriptor returns its raw tree with
@@ -564,6 +568,7 @@ fn build_root_node(
                 name: #name.to_string(),
                 aliases: ::std::vec![ #(#aliases),* ],
                 doc: #doc,
+                http: None,
                 globals: golem_rust::agentic::ExtendedGlobals {
                     options: ::std::vec![ #(#options),* ],
                     flags: ::std::vec![ #(#flags),* ],
@@ -601,6 +606,7 @@ fn build_subtree_link(
     repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let subtree = cmd.subtree.as_ref().expect("subtree present");
+    let http = crate::tool::http::command_http_tokens(cmd.http.as_ref())?;
     let call_path = subtree_call_path(&subtree.path)?;
     let call = if repr == DescriptorRepr::Wire {
         let mut path = subtree.path.clone();
@@ -728,6 +734,7 @@ fn build_subtree_link(
                 #override_doc,
                 #override_aliases,
                 ::std::option::Option::None,
+                #http,
             )?;
             let __off = golem_rust::agentic::append_grafted_subtree(&mut commands, __graft);
             commands[0].subcommands.push(__off);
@@ -764,6 +771,7 @@ fn build_command_node(
     repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let name = command_name(cmd, tool_name, is_root);
+    let http = crate::tool::http::command_http_tokens(cmd.http.as_ref())?;
     let doc = doc_tokens(&cmd.doc);
     let aliases = cmd.aliases.iter().map(|a| quote! { #a.to_string() });
 
@@ -1046,6 +1054,7 @@ fn build_command_node(
             name: #name.to_string(),
             aliases: ::std::vec![ #(#aliases),* ],
             doc: #doc,
+            http: #http,
             globals: golem_rust::agentic::ExtendedGlobals {
                 options: ::std::vec![ #(#global_options),* ],
                 flags: ::std::vec![ #(#global_flags),* ],

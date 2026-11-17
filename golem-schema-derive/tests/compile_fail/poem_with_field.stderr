@@ -3,3 +3,9 @@ error: PoemSchema does not support `#[serde(with)]` on a field
    |
 19 |     #[serde(with = "some_module")]
    |             ^^^^
+
+error: PoemSchema does not support serde attributes on internally tagged newtype payloads
+  --> tests/compile_fail/poem_with_field.rs:30:10
+   |
+30 |     Item(#[serde(with = "some_module")] Payload),
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

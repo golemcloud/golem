@@ -166,6 +166,7 @@ fn scalar_schema_constructors_match_reference_without_calling_fallback() {
 
 fn sample_tool() -> ExtendedToolType {
     ExtendedToolType {
+        http_mount: None,
         version: "0.1.0".to_string(),
         requires_filesystem: false,
         commands: vec![
@@ -173,6 +174,7 @@ fn sample_tool() -> ExtendedToolType {
                 name: "root".to_string(),
                 aliases: vec![],
                 doc: doc("root"),
+                http: None,
                 globals: ExtendedGlobals {
                     options: vec![ExtendedOptionSpec {
                         long: "verbose".to_string(),
@@ -194,6 +196,7 @@ fn sample_tool() -> ExtendedToolType {
                 name: "run".to_string(),
                 aliases: vec!["r".to_string()],
                 doc: doc("run"),
+                http: None,
                 globals: ExtendedGlobals::default(),
                 subcommands: vec![],
                 body: Some(ExtendedCommandBody {
@@ -722,6 +725,7 @@ fn tool_with_inherited_global_and_body_option(
     body_aliases: Vec<String>,
 ) -> ExtendedToolType {
     ExtendedToolType {
+        http_mount: None,
         version: "0.1.0".to_string(),
         requires_filesystem: false,
         commands: vec![
@@ -729,6 +733,7 @@ fn tool_with_inherited_global_and_body_option(
                 name: "root".to_string(),
                 aliases: vec![],
                 doc: doc("root"),
+                http: None,
                 globals: ExtendedGlobals {
                     options: vec![ExtendedOptionSpec {
                         long: global_long.to_string(),
@@ -750,6 +755,7 @@ fn tool_with_inherited_global_and_body_option(
                 name: "leaf".to_string(),
                 aliases: vec![],
                 doc: doc("leaf"),
+                http: None,
                 globals: ExtendedGlobals::default(),
                 subcommands: vec![],
                 body: Some(ExtendedCommandBody {
@@ -829,6 +835,7 @@ fn help_contains_names() {
 
 fn dispatcher_child() -> ExtendedToolType {
     ExtendedToolType {
+        http_mount: None,
         version: "x".into(),
         requires_filesystem: false,
         commands: vec![
@@ -836,6 +843,7 @@ fn dispatcher_child() -> ExtendedToolType {
                 name: "child".into(),
                 aliases: vec![],
                 doc: doc(""),
+                http: None,
                 globals: ExtendedGlobals::default(),
                 subcommands: vec![1],
                 body: None,
@@ -844,6 +852,7 @@ fn dispatcher_child() -> ExtendedToolType {
                 name: "leaf".into(),
                 aliases: vec![],
                 doc: doc(""),
+                http: None,
                 globals: ExtendedGlobals::default(),
                 subcommands: vec![],
                 body: None,
@@ -862,6 +871,7 @@ fn graft_accepts_root_with_body() {
         "t",
         ExtendedGlobals::default(),
         &[],
+        None,
         None,
         None,
         None,
@@ -888,6 +898,7 @@ fn graft_deprojects_child_body_against_parent_globals() {
         "t",
         parent_globals,
         &[],
+        None,
         None,
         None,
         None,
@@ -926,6 +937,7 @@ fn graft_rejects_incompatible_child_body_vs_parent_global() {
         None,
         None,
         None,
+        None,
     )
     .unwrap_err();
     assert!(matches!(
@@ -940,12 +952,14 @@ fn graft_rejects_incompatible_child_body_vs_parent_global() {
 /// against `parent_globals`.
 fn leaf_tool_with_globals(globals: ExtendedGlobals) -> ExtendedToolType {
     ExtendedToolType {
+        http_mount: None,
         version: "0.1.0".to_string(),
         requires_filesystem: false,
         commands: vec![ExtendedCommandNode {
             name: "t".to_string(),
             aliases: vec![],
             doc: doc(""),
+            http: None,
             globals,
             subcommands: vec![],
             body: None,
@@ -972,6 +986,7 @@ fn graft_deprojects_child_root_globals_against_parent_globals() {
         "t",
         parent_globals,
         &[],
+        None,
         None,
         None,
         None,
@@ -1011,6 +1026,7 @@ fn graft_rejects_incompatible_child_root_global_vs_parent_global() {
         None,
         None,
         None,
+        None,
     )
     .unwrap_err();
     assert!(matches!(
@@ -1033,6 +1049,7 @@ fn graft_preserves_local_indices() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(graft.len(), 2);
@@ -1044,6 +1061,7 @@ fn graft_preserves_local_indices() {
         name: "root".into(),
         aliases: vec![],
         doc: doc(""),
+        http: None,
         globals: ExtendedGlobals::default(),
         subcommands: vec![],
         body: None,
@@ -1065,6 +1083,7 @@ fn graft_enforces_name_rule_and_rejects_annotations() {
         None,
         None,
         None,
+        None,
     )
     .unwrap_err();
     assert!(matches!(
@@ -1079,6 +1098,7 @@ fn graft_enforces_name_rule_and_rejects_annotations() {
         ExtendedGlobals::default(),
         &[],
         Some("remote".into()),
+        None,
         None,
         None,
         None,
@@ -1100,6 +1120,7 @@ fn graft_enforces_name_rule_and_rejects_annotations() {
             idempotent: false,
             open_world: false,
         }),
+        None,
     )
     .unwrap_err();
     assert!(matches!(
@@ -1245,12 +1266,14 @@ fn numeric_value_validation_rejects_malformed_restrictions() {
 
 fn leaf_tool_with_body(body: ExtendedCommandBody) -> ExtendedToolType {
     ExtendedToolType {
+        http_mount: None,
         version: "0.1.0".to_string(),
         requires_filesystem: false,
         commands: vec![ExtendedCommandNode {
             name: "t".to_string(),
             aliases: vec![],
             doc: doc(""),
+            http: None,
             globals: ExtendedGlobals::default(),
             subcommands: vec![],
             body: Some(body),
@@ -1362,6 +1385,7 @@ fn deferred_value_is_tree(
             name: "root".into(),
             aliases: vec![],
             doc: doc(""),
+            http: None,
             globals: parent_globals,
             subcommands: vec![1],
             body: None,
@@ -1370,6 +1394,7 @@ fn deferred_value_is_tree(
             name: "leaf".into(),
             aliases: vec![],
             doc: doc(""),
+            http: None,
             globals: ExtendedGlobals::default(),
             subcommands: vec![],
             body: Some(child_body),
@@ -1495,6 +1520,7 @@ fn bare_node(name: &str, subcommands: Vec<i32>) -> ExtendedCommandNode {
         name: name.into(),
         aliases: vec![],
         doc: doc(""),
+        http: None,
         globals: ExtendedGlobals::default(),
         subcommands,
         body: None,
@@ -1503,9 +1529,446 @@ fn bare_node(name: &str, subcommands: Vec<i32>) -> ExtendedCommandNode {
 
 fn tool_with_nodes(nodes: Vec<ExtendedCommandNode>) -> ExtendedToolType {
     ExtendedToolType {
+        http_mount: None,
         version: "0.1.0".into(),
         requires_filesystem: false,
         commands: nodes,
+    }
+}
+
+fn http_path(path: &str) -> Vec<golem_schema::http::PathSegment> {
+    use golem_schema::http::{LiteralSegment, PathSegment, PathVariable};
+    path.trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if let Some(name) = s.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                PathSegment::PathVariable(PathVariable {
+                    variable_name: name.into(),
+                })
+            } else {
+                PathSegment::Literal(LiteralSegment { value: s.into() })
+            }
+        })
+        .collect()
+}
+
+fn http_endpoint(method: golem_schema::http::HttpMethod, path: &str) -> CommandHttp {
+    CommandHttp::Endpoint(ToolHttpEndpoint {
+        route_id: None,
+        http_method: method,
+        path_suffix: http_path(path),
+        query_vars: vec![],
+        header_vars: vec![],
+        response_headers: vec![],
+        mode: None,
+        durable_streams: None,
+    })
+}
+
+fn report_http_tool() -> ExtendedToolType {
+    use golem_schema::Empty;
+    use golem_schema::http::HttpMethod;
+    let body = sample_tool().commands.remove(1).body;
+    let mut tool = tool_with_nodes(vec![
+        bare_node("report", vec![1, 2, 3]),
+        bare_node("generate", vec![]),
+        bare_node("status", vec![]),
+        bare_node("admin", vec![4]),
+        bare_node("purge", vec![]),
+    ]);
+    tool.http_mount = Some(ToolHttpMount {
+        path_prefix: http_path("/reports"),
+    });
+    tool.commands[1].http = Some(http_endpoint(HttpMethod::Post(Empty {}), "/generate"));
+    tool.commands[2].http = Some(http_endpoint(HttpMethod::Get(Empty {}), "/status/{id}"));
+    tool.commands[3].http = Some(CommandHttp::Prefix(ToolHttpPrefix {
+        path_suffix: http_path("/admin"),
+    }));
+    tool.commands[4].http = Some(http_endpoint(HttpMethod::Delete(Empty {}), "/purge/{id}"));
+    for index in [1, 2, 4] {
+        tool.commands[index].body = body.clone();
+        tool.commands[index]
+            .body
+            .as_mut()
+            .unwrap()
+            .positionals
+            .fixed[0]
+            .name = "id".into();
+        tool.commands[index].aliases = vec![format!("alias-{index}")];
+    }
+    tool
+}
+
+#[test]
+fn http_report_routes_compose_without_alias_or_prefix_routes() {
+    let tool = report_http_tool().try_to_native_tool().unwrap();
+    let routes = tool.http_endpoints().unwrap();
+    assert_eq!(routes.len(), 3);
+    for (route, (index, id, path)) in routes.iter().zip([
+        (1, "generate", "/reports/generate"),
+        (2, "status", "/reports/status/{id}"),
+        (4, "admin.purge", "/reports/admin/purge/{id}"),
+    ]) {
+        assert_eq!(route.command_index, index);
+        assert_eq!(route.route_id, id);
+        assert_eq!(route.command_path.join("."), id);
+        assert_eq!(route.path, http_path(path));
+    }
+    use golem_schema::http::HttpMethod;
+    assert!(matches!(
+        routes[0].endpoint.http_method,
+        HttpMethod::Post(_)
+    ));
+    assert!(matches!(routes[1].endpoint.http_method, HttpMethod::Get(_)));
+    assert!(matches!(
+        routes[2].endpoint.http_method,
+        HttpMethod::Delete(_)
+    ));
+}
+
+#[test]
+fn http_parent_endpoint_supplies_its_children_prefix() {
+    use golem_schema::Empty;
+    use golem_schema::http::HttpMethod;
+    let mut tool = report_http_tool();
+    tool.commands[3].body = tool.commands[1].body.clone();
+    tool.commands[3].http = Some(http_endpoint(HttpMethod::Post(Empty {}), "/run"));
+    let CommandHttp::Endpoint(endpoint) = tool.commands[4].http.as_mut().unwrap() else {
+        unreachable!()
+    };
+    endpoint.route_id = Some("erase".into());
+    let tool = tool.try_to_native_tool().unwrap();
+    let routes = tool.http_endpoints().unwrap();
+    assert_eq!(routes.len(), 4);
+    assert_eq!(routes[2].path, http_path("/reports/run"));
+    assert_eq!(routes[3].path, http_path("/reports/run/purge/{id}"));
+    assert_eq!(routes[3].route_id, "erase");
+    assert_eq!(routes[3].command_path, ["admin", "purge"]);
+}
+
+#[test]
+fn http_effective_mode_uses_own_streams_and_declared_override() {
+    use golem_schema::http::HttpRouteMode;
+    let mut tool = report_http_tool().try_to_native_tool().unwrap();
+    // An idempotent parent does not change the child's durable semantics.
+    tool.commands.nodes[0].body = tool.commands.nodes[1].body.clone();
+    tool.commands.nodes[0].body.as_mut().unwrap().annotations = Some(native::CommandAnnotations {
+        idempotent: true,
+        read_only: false,
+        destructive: false,
+        open_world: false,
+    });
+    for idempotent in [false, true] {
+        for stream in [None, Some("stdin"), Some("stdout"), Some("stderr")] {
+            let body = tool.commands.nodes[1].body.as_mut().unwrap();
+            body.annotations = Some(native::CommandAnnotations {
+                idempotent,
+                read_only: false,
+                destructive: false,
+                open_world: false,
+            });
+            let spec = native::StreamSpec {
+                doc: Default::default(),
+                mime: vec![],
+                required: false,
+            };
+            body.stdin = (stream == Some("stdin")).then(|| spec.clone());
+            body.stdout = (stream == Some("stdout")).then(|| spec.clone());
+            body.stderr = (stream == Some("stderr")).then_some(spec);
+            for mode in [
+                None,
+                Some(HttpRouteMode::Plain),
+                Some(HttpRouteMode::DurableStreams),
+                Some(HttpRouteMode::Sse),
+                Some(HttpRouteMode::WebSocket),
+            ] {
+                let Some(CommandHttp::Endpoint(endpoint)) = &mut tool.commands.nodes[1].http else {
+                    unreachable!()
+                };
+                endpoint.mode = mode;
+                let expected = mode.unwrap_or(if !idempotent && stream.is_some() {
+                    HttpRouteMode::DurableStreams
+                } else {
+                    HttpRouteMode::Plain
+                });
+                let routes = tool.http_endpoints().unwrap();
+                assert_eq!(
+                    routes[0].mode, expected,
+                    "{idempotent:?} {stream:?} {mode:?}"
+                );
+                assert_eq!(routes[0].endpoint.mode, mode);
+            }
+        }
+    }
+}
+
+#[test]
+fn http_validation_checks_scope_and_canonical_ingestion() {
+    let mut tool = report_http_tool();
+    tool.http_mount.as_mut().unwrap().path_prefix = http_path("/reports/{tenant}");
+    tool.commands[2]
+        .globals
+        .options
+        .push(scalar_opt("tenant", None));
+    assert!(
+        matches!(validate_tool(&tool), Err(ToolBuildError::InvalidHttpDeclaration { input: Some(name), .. }) if name == "tenant")
+    );
+    tool.commands[2].globals.options.clear();
+    tool.commands[0]
+        .globals
+        .options
+        .push(scalar_opt("tenant", None));
+    tool.commands[3].http = Some(CommandHttp::Prefix(ToolHttpPrefix {
+        path_suffix: http_path("/admin/{region}"),
+    }));
+    tool.commands[3]
+        .globals
+        .options
+        .push(scalar_opt("region", None));
+    let mut native = tool.try_to_native_tool().unwrap();
+    native::validation::validate_tool(&native).unwrap();
+    native.http_mount = None;
+    assert!(
+        native::validation::validate_tool(&native)
+            .unwrap_err()
+            .iter()
+            .any(|error| matches!(
+                error,
+                native::validation::ToolValidationError::InvalidHttpDeclaration { .. }
+            ))
+    );
+    tool.commands[3].globals.options.clear();
+    tool.commands[4]
+        .globals
+        .options
+        .push(scalar_opt("region", None));
+    assert!(
+        validate_tool(&tool).is_err(),
+        "a descendant global cannot satisfy a prefix capture"
+    );
+}
+
+#[test]
+fn http_validation_rejects_equivalent_routes_not_distinct_methods_or_literals() {
+    use golem_schema::Empty;
+    use golem_schema::http::{CustomHttpMethod, HttpMethod};
+    let mut tool = report_http_tool();
+    tool.commands[1].http = Some(http_endpoint(HttpMethod::Get(Empty {}), "/status/{other}"));
+    tool.commands[1].body.as_mut().unwrap().positionals.fixed[0].name = "other".into();
+    assert!(
+        matches!(validate_tool(&tool), Err(ToolBuildError::InvalidHttpDeclaration { detail, .. }) if detail.contains("equivalent"))
+    );
+    tool.commands[1].http = Some(http_endpoint(
+        HttpMethod::Custom(CustomHttpMethod {
+            value: "GET".into(),
+        }),
+        "/status/{other}",
+    ));
+    assert!(
+        validate_tool(&tool).is_err(),
+        "custom GET and standard GET share identity"
+    );
+    tool.commands[1].http = Some(http_endpoint(HttpMethod::Post(Empty {}), "/status/{other}"));
+    validate_tool(&tool).unwrap();
+    tool.commands[1].http = Some(http_endpoint(HttpMethod::Get(Empty {}), "/status/literal"));
+    validate_tool(&tool).unwrap();
+}
+
+#[test]
+fn http_validation_binding_shape_matrix() {
+    use golem_schema::Empty;
+    use golem_schema::http::{HeaderVariable, HttpMethod, QueryVariable};
+    for (ty, path_ok, query_ok, header_ok) in [
+        (SchemaType::string(), true, true, true),
+        (SchemaType::option(SchemaType::u32()), true, true, true),
+        (SchemaType::list(SchemaType::string()), false, true, true),
+        (
+            SchemaType::map(SchemaType::string(), SchemaType::u32()),
+            false,
+            true,
+            false,
+        ),
+        (SchemaType::record(vec![]), false, false, false),
+    ] {
+        for (source, expected) in [
+            ("path", path_ok),
+            ("query", query_ok),
+            ("header", header_ok),
+            ("body", true),
+            ("implicit", query_ok),
+        ] {
+            let mut tool = report_http_tool();
+            let body = tool.commands[1].body.as_mut().unwrap();
+            body.positionals.fixed.clear();
+            body.options = vec![scalar_opt("value", None)];
+            body.options[0].shape = ExtendedOptionShape::Scalar(SchemaGraph::anonymous(ty.clone()));
+            let mut http = http_endpoint(
+                if source == "implicit" {
+                    HttpMethod::Get(Empty {})
+                } else {
+                    HttpMethod::Post(Empty {})
+                },
+                if source == "path" {
+                    "/generate/{value}"
+                } else {
+                    "/generate"
+                },
+            );
+            let CommandHttp::Endpoint(endpoint) = &mut http else {
+                unreachable!()
+            };
+            if source == "query" {
+                endpoint.query_vars.push(QueryVariable {
+                    query_param_name: "v".into(),
+                    variable_name: "value".into(),
+                });
+            }
+            if source == "header" {
+                endpoint.header_vars.push(HeaderVariable {
+                    header_name: "X-Value".into(),
+                    variable_name: "value".into(),
+                });
+            }
+            tool.commands[1].http = Some(http);
+            assert_eq!(validate_tool(&tool).is_ok(), expected, "{source}: {ty:?}");
+        }
+    }
+    let mut tool = report_http_tool();
+    let Some(CommandHttp::Endpoint(endpoint)) = &mut tool.commands[2].http else {
+        unreachable!()
+    };
+    endpoint.query_vars.push(QueryVariable {
+        query_param_name: "q".into(),
+        variable_name: "id".into(),
+    });
+    assert!(
+        matches!(validate_tool(&tool), Err(ToolBuildError::InvalidHttpDeclaration { input: Some(name), .. }) if name == "id")
+    );
+}
+
+#[test]
+fn http_validation_plain_stdin_requires_external_required_inputs() {
+    use golem_schema::Empty;
+    use golem_schema::http::{HttpMethod, HttpRouteMode};
+    for method in [
+        HttpMethod::Post(Empty {}),
+        HttpMethod::Get(Empty {}),
+        HttpMethod::Head(Empty {}),
+        HttpMethod::Delete(Empty {}),
+    ] {
+        for mode in [
+            None,
+            Some(HttpRouteMode::Plain),
+            Some(HttpRouteMode::DurableStreams),
+        ] {
+            let mut tool = report_http_tool();
+            let body = tool.commands[1].body.as_mut().unwrap();
+            body.stdin = Some(StreamSpec {
+                doc: Doc::default(),
+                mime: vec![],
+                required: false,
+            });
+            let mut declaration = http_endpoint(method.clone(), "/generate");
+            let CommandHttp::Endpoint(endpoint) = &mut declaration else {
+                unreachable!()
+            };
+            endpoint.mode = mode;
+            tool.commands[1].http = Some(declaration);
+            let expected =
+                !matches!(method, HttpMethod::Post(_)) || mode != Some(HttpRouteMode::Plain);
+            assert_eq!(
+                validate_tool(&tool).is_ok(),
+                expected,
+                "{method:?} {mode:?}"
+            );
+            tool.commands[1].body.as_mut().unwrap().positionals.fixed[0].default =
+                Some(SchemaValue::String("default".into()));
+            validate_tool(&tool).unwrap();
+        }
+    }
+}
+
+#[test]
+fn http_validation_response_headers_use_shared_ownership_and_syntax() {
+    use golem_schema::http::FileResponseHeader;
+    for (name, value, allowed) in [
+        ("Content-Security-Policy", "default-src 'none'", true),
+        ("GoLeM-InVoCaTiOn-Id", "x", false),
+        ("Golem-Environment-Id", "x", false),
+        ("Golem-Token", "x", false),
+        ("Set-Cookie", "x", false),
+        ("Access-Control-Allow-Origin", "x", false),
+        ("Vary", "x", false),
+        ("Cache-Control", "x", false),
+        ("Content-Type", "x", false),
+        ("bad name", "x", false),
+        ("X-Policy", "x\r\ninjected: yes", false),
+    ] {
+        let mut tool = report_http_tool();
+        let Some(CommandHttp::Endpoint(endpoint)) = &mut tool.commands[1].http else {
+            unreachable!()
+        };
+        endpoint.response_headers = vec![FileResponseHeader {
+            name: name.into(),
+            value: value.into(),
+        }];
+        assert_eq!(validate_tool(&tool).is_ok(), allowed, "{name}");
+    }
+}
+
+#[test]
+fn http_graft_uses_parent_mount_and_explicit_root_override() {
+    use golem_schema::Empty;
+    use golem_schema::http::HttpMethod;
+    for override_root in [false, true] {
+        let mut child = tool_with_nodes(vec![
+            bare_node("child", vec![1]),
+            bare_node("status", vec![]),
+        ]);
+        child.http_mount = Some(ToolHttpMount {
+            path_prefix: http_path("/child"),
+        });
+        child.commands[0].http = Some(CommandHttp::Prefix(ToolHttpPrefix {
+            path_suffix: http_path("/original"),
+        }));
+        child.commands[1].http = Some(http_endpoint(HttpMethod::Get(Empty {}), "/status"));
+        child.commands[1].body = Some(empty_body());
+        let override_http = override_root.then(|| {
+            CommandHttp::Prefix(ToolHttpPrefix {
+                path_suffix: http_path("/admin"),
+            })
+        });
+        let graft = graft_subtree(
+            child,
+            "admin",
+            ExtendedGlobals::default(),
+            &[],
+            Some("admin".into()),
+            None,
+            None,
+            None,
+            override_http,
+        )
+        .unwrap();
+        let mut parent = tool_with_nodes(vec![bare_node("report", vec![])]);
+        parent.http_mount = Some(ToolHttpMount {
+            path_prefix: http_path("/reports"),
+        });
+        let offset = append_grafted_subtree(&mut parent.commands, graft);
+        parent.commands[0].subcommands.push(offset);
+        let native = parent.try_to_native_tool().unwrap();
+        let routes = native.http_endpoints().unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(
+            routes[0].path,
+            http_path(if override_root {
+                "/reports/admin/status"
+            } else {
+                "/reports/original/status"
+            })
+        );
+        assert_eq!(routes[0].route_id, "admin.status");
     }
 }
 
@@ -2173,3 +2636,184 @@ fn plain_string_matches_unrestricted_text_but_not_language_restricted() {
     // A language-restricted `Text` is a different Rust type and must conflict.
     assert!(!shapes_match(SchemaType::string(), language_restricted));
 }
+
+mod http_custom_methods {
+    use super::*;
+    use golem_schema::Empty;
+    use golem_schema::http::{CustomHttpMethod, HttpMethod, HttpRouteMode};
+    use test_r::test;
+
+    #[test]
+    fn custom_standard_methods_preserve_implicit_query_shape_rejection() {
+        let mut accepted = Vec::new();
+        for (standard, name) in [
+            (HttpMethod::Get(Empty {}), "GET"),
+            (HttpMethod::Head(Empty {}), "HEAD"),
+            (HttpMethod::Delete(Empty {}), "DELETE"),
+        ] {
+            let mut tool = report_http_tool();
+            let body = tool.commands[1].body.as_mut().unwrap();
+            body.positionals.fixed.clear();
+            body.options = vec![scalar_opt("value", None)];
+            body.options[0].shape =
+                ExtendedOptionShape::Scalar(SchemaGraph::anonymous(SchemaType::record(vec![])));
+            tool.commands[1].http = Some(http_endpoint(standard, "/generate"));
+            assert!(validate_tool(&tool).is_err(), "standard {name} control");
+            tool.commands[1].http = Some(http_endpoint(
+                HttpMethod::Custom(CustomHttpMethod { value: name.into() }),
+                "/generate",
+            ));
+            if validate_tool(&tool).is_ok() {
+                accepted.push(name);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "custom methods incorrectly accepted record inputs: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn custom_standard_methods_preserve_plain_stdin_required_input_acceptance() {
+        let mut rejected = Vec::new();
+        for (standard, name) in [
+            (HttpMethod::Get(Empty {}), "GET"),
+            (HttpMethod::Head(Empty {}), "HEAD"),
+            (HttpMethod::Delete(Empty {}), "DELETE"),
+        ] {
+            let mut tool = report_http_tool();
+            tool.commands[1].body.as_mut().unwrap().stdin = Some(StreamSpec {
+                doc: Doc::default(),
+                mime: vec![],
+                required: false,
+            });
+            tool.commands[1].http = Some(http_endpoint(standard, "/generate"));
+            let Some(CommandHttp::Endpoint(endpoint)) = &mut tool.commands[1].http else {
+                unreachable!()
+            };
+            endpoint.mode = Some(HttpRouteMode::Plain);
+            validate_tool(&tool).expect("standard method control binds required inputs to query");
+            let Some(CommandHttp::Endpoint(endpoint)) = &mut tool.commands[1].http else {
+                unreachable!()
+            };
+            endpoint.http_method = HttpMethod::Custom(CustomHttpMethod { value: name.into() });
+            if let Err(error) = validate_tool(&tool) {
+                rejected.push((name, error));
+            }
+        }
+        assert!(
+            rejected.is_empty(),
+            "custom methods incorrectly rejected required query inputs: {rejected:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod http_composition_boundaries {
+    use super::*;
+    use golem_schema::Empty;
+    use golem_schema::http::HttpMethod;
+    use test_r::test;
+
+    #[test]
+    fn ancestry_gaps_cannot_be_repaired_by_a_deeper_prefix() {
+        // Exercise every mount/declaration combination, including a root endpoint.
+        // Root HTTP ancestry comes from the mount, not a required root declaration.
+        for mount in [false, true] {
+            for root in 0..3 {
+                for parent in 0..3 {
+                    for middle in 0..3 {
+                        let mut tool = tool_with_nodes(vec![
+                            bare_node("root", vec![1]),
+                            bare_node("parent", vec![2]),
+                            bare_node("middle", vec![3]),
+                            bare_node("leaf", vec![]),
+                        ])
+                        .try_to_native_tool()
+                        .unwrap();
+                        let body = sample_tool().try_to_native_tool().unwrap().commands.nodes[1]
+                            .body
+                            .clone();
+                        tool.http_mount = mount.then(|| ToolHttpMount {
+                            path_prefix: http_path("/mount"),
+                        });
+                        for (index, kind) in [root, parent, middle, 2].into_iter().enumerate() {
+                            tool.commands.nodes[index].body = body.clone();
+                            tool.commands.nodes[index].http = match kind {
+                                0 => None,
+                                1 => Some(CommandHttp::Prefix(ToolHttpPrefix {
+                                    path_suffix: http_path("/prefix"),
+                                })),
+                                _ => Some(http_endpoint(HttpMethod::Post(Empty {}), "/endpoint")),
+                            };
+                        }
+                        let before = tool.clone();
+                        let routes = tool.http_endpoints();
+                        assert_eq!(
+                            routes.is_ok(),
+                            mount && parent != 0 && middle != 0,
+                            "mount={mount} root={root} parent={parent} middle={middle}"
+                        );
+                        if let Ok(routes) = routes {
+                            for route in routes {
+                                assert_eq!(
+                                    tool.command_index_by_path(&route.command_path),
+                                    Some(route.command_index)
+                                );
+                                assert_eq!(route.route_id, route.command_path.join("."));
+                            }
+                        }
+                        assert_eq!(tool, before);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_topological_storage_and_sibling_paths_remain_independent() {
+        let mut tool = tool_with_nodes(vec![
+            bare_node("root", vec![3, 1]),
+            bare_node("sibling", vec![]),
+            bare_node("leaf", vec![]),
+            bare_node("parent", vec![2]),
+        ])
+        .try_to_native_tool()
+        .unwrap();
+        let body = sample_tool().try_to_native_tool().unwrap().commands.nodes[1]
+            .body
+            .clone();
+        tool.http_mount = Some(ToolHttpMount {
+            path_prefix: http_path("/mount"),
+        });
+        for (index, suffix) in [(0, "/root"), (1, "/sibling"), (2, "/leaf"), (3, "/parent")] {
+            tool.commands.nodes[index].body = body.clone();
+            tool.commands.nodes[index].http =
+                Some(http_endpoint(HttpMethod::Post(Empty {}), suffix));
+        }
+        let routes = tool.http_endpoints().unwrap();
+        assert_eq!(routes.len(), 4);
+        for (index, path, invocation) in [
+            (0, "/mount/root", vec![]),
+            (1, "/mount/root/sibling", vec!["sibling".to_string()]),
+            (
+                2,
+                "/mount/root/parent/leaf",
+                vec!["parent".to_string(), "leaf".to_string()],
+            ),
+            (3, "/mount/root/parent", vec!["parent".to_string()]),
+        ] {
+            let route = routes
+                .iter()
+                .find(|route| route.command_index == index)
+                .unwrap();
+            assert_eq!(route.path, http_path(path));
+            assert_eq!(route.command_path, invocation);
+            assert_eq!(route.route_id, invocation.join("."));
+            assert_eq!(tool.command_index_by_path(&route.command_path), Some(index));
+        }
+    }
+}
+
+#[path = "http_binding_tests.rs"]
+mod http_binding_tests;

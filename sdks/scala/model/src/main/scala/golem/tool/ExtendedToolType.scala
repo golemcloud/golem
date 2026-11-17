@@ -31,7 +31,8 @@ import scala.collection.immutable.SortedSet
 final case class ExtendedToolType(
   version: String,
   commands: Vector[ExtendedCommandNode],
-  requiresFilesystem: Boolean = false
+  requiresFilesystem: Boolean = false,
+  httpMount: Option[ToolHttpMount] = None
 ) {
 
   /** The tool's identity: its root command name. */
@@ -200,7 +201,8 @@ final case class ExtendedCommandNode(
   doc: Doc,
   globals: ExtendedGlobals,
   subcommands: List[Int],
-  body: Option[ExtendedCommandBody]
+  body: Option[ExtendedCommandBody],
+  http: Option[CommandHttp] = None
 )
 
 final case class ExtendedGlobals(

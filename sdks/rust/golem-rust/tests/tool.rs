@@ -39,6 +39,157 @@ mod tests {
     use std::process::Command;
     use test_r::test;
 
+    #[tool_definition(mount = "/discarded")]
+    trait ReportAdministration {
+        #[endpoint(prefix = "/own")]
+        fn report_administration(&self);
+
+        #[endpoint(delete = "/purge/{id}")]
+        fn purge(&self, id: String);
+    }
+
+    struct ReportAdministrationSubtree;
+
+    #[tool_definition(mount = "/reports")]
+    trait HttpReport {
+        #[endpoint(post = "/generate")]
+        fn generate(&self);
+
+        #[endpoint(get = "/status/{id}")]
+        fn status(&self, id: String);
+
+        #[command(subtree = ReportAdministration, name = "admin")]
+        #[endpoint(prefix = "/admin")]
+        fn admin(&self) -> ReportAdministrationSubtree;
+    }
+
+    #[tool_definition(mount = "/retained")]
+    trait HttpGraftRetain {
+        #[command(subtree = ReportAdministration, name = "admin")]
+        fn admin(&self) -> ReportAdministrationSubtree;
+    }
+
+    #[test]
+    fn http_graft_retains_child_declaration_without_mutating_child() {
+        let child =
+            __golem_tool_descriptor_for_ReportAdministration(&mut ToolBuildCtx::new()).unwrap();
+        let parent = __golem_tool_descriptor_for_HttpGraftRetain(&mut ToolBuildCtx::new()).unwrap();
+        let child_native = child.try_to_native_tool().unwrap();
+        let parent_native = parent.try_to_native_tool().unwrap();
+        let routes = parent_native.http_endpoints().unwrap();
+        assert_eq!(routes[0].route_id, "admin.purge");
+        assert_eq!(parent.commands[1].http, child.commands[0].http);
+        assert_ne!(parent_native.http_mount, child_native.http_mount);
+        assert_eq!(child_native.http_endpoints().unwrap()[0].route_id, "purge");
+    }
+
+    #[tool_definition(mount = "/options")]
+    trait HttpOptions {
+        #[endpoint(
+            post = "/run?format={format}",
+            headers("X-Token" = "token"),
+            response_headers("X-Result" = "ready"),
+            route_id = "custom",
+            mode = "durableStreams",
+            durable_streams(
+                input("stdin", name = "upload", content_type = "text/plain"),
+                output("stdout", name = "download", content_type = "text/csv"),
+                max_concurrent_readers_per_stream = 7,
+                max_append_requests_per_second_per_stream = 11
+            )
+        )]
+        fn run(&self, format: String, token: String);
+    }
+
+    #[test]
+    fn http_options_survive_authoring_to_wire() {
+        use golem_rust::golem_schema::http::wit::wire::{DurableStreamSlotSource, HttpRouteMode};
+        use golem_rust::schema::tool::wit::wire::CommandHttp;
+        let wire = __golem_tool_descriptor_for_HttpOptions(&mut ToolBuildCtx::new())
+            .unwrap()
+            .try_to_tool()
+            .unwrap();
+        let CommandHttp::Endpoint(endpoint) = wire.commands.nodes[1].http.as_ref().unwrap() else {
+            panic!("expected endpoint")
+        };
+        assert_eq!(endpoint.route_id.as_deref(), Some("custom"));
+        assert_eq!(endpoint.mode, Some(HttpRouteMode::DurableStreams));
+        assert_eq!(endpoint.query_vars[0].query_param_name, "format");
+        assert_eq!(endpoint.query_vars[0].variable_name, "format");
+        assert_eq!(endpoint.header_vars[0].header_name, "X-Token");
+        assert_eq!(endpoint.header_vars[0].variable_name, "token");
+        assert_eq!(endpoint.response_headers[0].name, "X-Result");
+        assert_eq!(endpoint.response_headers[0].value, "ready");
+        let streams = endpoint.durable_streams.as_ref().unwrap();
+        assert!(
+            matches!(&streams.slots[0].source, DurableStreamSlotSource::Input(value) if value == "stdin")
+        );
+        assert!(
+            matches!(&streams.slots[1].source, DurableStreamSlotSource::Output(value) if value == "stdout")
+        );
+        assert_eq!(streams.slots[0].name.as_deref(), Some("upload"));
+        assert_eq!(streams.slots[0].content_type.as_deref(), Some("text/plain"));
+        assert_eq!(streams.slots[1].name.as_deref(), Some("download"));
+        assert_eq!(streams.slots[1].content_type.as_deref(), Some("text/csv"));
+        let load = streams.load.as_ref().unwrap();
+        assert_eq!(load.max_concurrent_readers_per_stream, Some(7));
+        assert_eq!(load.max_append_requests_per_second_per_stream, Some(11));
+    }
+
+    #[test]
+    fn http_report_descriptor_matches_shared_fixture() {
+        use golem_rust::schema::tool::CommandHttp;
+        let tool = __golem_tool_descriptor_for_HttpReport(&mut ToolBuildCtx::new())
+            .expect("report builds");
+        let native = tool.try_to_native_tool().expect("report validates");
+        let path = |segments: &[golem_rust::golem_schema::http::PathSegment]| {
+            use golem_rust::golem_schema::http::PathSegment;
+            segments
+                .iter()
+                .map(|segment| match segment {
+                    PathSegment::Literal(value) => value.value.clone(),
+                    PathSegment::PathVariable(value) => format!("{{{}}}", value.variable_name),
+                    PathSegment::RemainingPathVariable(value) => {
+                        format!("{{+{}}}", value.variable_name)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        let method = |value: &golem_rust::golem_schema::http::HttpMethod| {
+            serde_json::to_value(value).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_uppercase()
+        };
+        let commands = tool.commands.iter().skip(1).map(|node| {
+            let command = if node.name == "purge" { "admin.purge" } else { &node.name };
+            match node.http.as_ref().expect("command has HTTP") {
+                CommandHttp::Prefix(prefix) => serde_json::json!({ "command": command, "prefix": format!("/{}", path(&prefix.path_suffix)) }),
+                CommandHttp::Endpoint(endpoint) => serde_json::json!({ "command": command, "method": method(&endpoint.http_method), "suffix": format!("/{}", path(&endpoint.path_suffix)) }),
+            }
+        }).collect::<Vec<_>>();
+        let expected: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../test-data/tool-http-report.json"))
+                .unwrap();
+        assert_eq!(
+            serde_json::json!({ "mount": format!("/{}", path(&native.http_mount.as_ref().unwrap().path_prefix)), "commands": commands }),
+            expected
+        );
+        let endpoints = native.http_endpoints().unwrap();
+        assert_eq!(
+            endpoints
+                .iter()
+                .map(|ep| format!("{} /{}", method(&ep.endpoint.http_method), path(&ep.path)))
+                .collect::<Vec<_>>(),
+            vec![
+                "POST /reports/generate",
+                "GET /reports/status/{id}",
+                "DELETE /reports/admin/purge/{id}"
+            ]
+        );
+    }
+
     fn encoded_input(
         tool: &ExtendedToolType,
         command_path: &[&str],

@@ -464,6 +464,7 @@ pub fn ToolDef::graft_subtree(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http? : @toolCommon.CommandHttp,
 ) -> ToolDef raise ToolBuildError {
   guard self.commands.length() > 0 && child.commands.length() > 0 else {
     raise EmptyCommandTree
@@ -496,6 +497,10 @@ pub fn ToolDef::graft_subtree(
     name: graft_name,
     aliases: override_aliases.unwrap_or(child_root.aliases),
     doc: override_doc.unwrap_or(child_root.doc),
+    http: match override_http {
+      Some(http) => Some(http)
+      None => child_root.http
+    },
     globals: {
       options: append_arrays(parent_globals.options, child_globals.options),
       flags: append_arrays(parent_globals.flags, child_globals.flags),

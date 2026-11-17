@@ -958,6 +958,7 @@ dependencies = [
  "bytes",
  "chrono",
  "golem-schema-derive",
+ "http",
  "mac_address",
  "nonempty-collections",
  "num-bigint",

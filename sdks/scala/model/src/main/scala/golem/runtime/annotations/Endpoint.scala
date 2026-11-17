@@ -40,11 +40,14 @@ import scala.annotation.StaticAnnotation
 @Retention(RetentionPolicy.RUNTIME)
 @Target(Array(ElementType.METHOD))
 final class endpoint(
-  val method: String,
-  val path: String,
+  val method: String = "",
+  val path: String = "",
   val auth: Boolean = false,
   val cors: Array[String] = Array.empty,
-  val mode: String = ""
+  val mode: String = "",
+  val prefix: String = "",
+  val routeId: String = "",
+  val responseHeaders: Array[(String, String)] = Array.empty
 ) extends StaticAnnotation
 
 /** Associates a durable stream slot with one HTTP endpoint on the method. */
