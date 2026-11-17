@@ -26,6 +26,7 @@ use test_r::{sequential_suite, tag_suite, test_dep};
 pub mod active_agents;
 pub mod agent;
 pub mod agent_sdk_go;
+pub mod agent_sdk_moonbit;
 pub mod agent_sdk_ts;
 pub mod api;
 mod blob_mutation_storage;
@@ -33,7 +34,9 @@ pub mod blobstore;
 pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
+pub mod custom_durability_scala;
 pub mod durability;
+pub mod durability_effect;
 pub mod effect_permissions;
 mod entity_fence_waits;
 mod execution_observations;
@@ -78,6 +81,7 @@ pub mod scheduled_ephemeral;
 pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
+pub mod socket_replay;
 pub mod suspension_races;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;
@@ -138,6 +142,7 @@ tag_suite!(scope_cards, group2);
 
 tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
+tag_suite!(socket_replay, group3);
 tag_suite!(filesystem_inspection, group3);
 tag_suite!(revert, group3);
 tag_suite!(filesystem_snapshots, group3);
@@ -146,6 +151,7 @@ tag_suite!(websocket, group4);
 tag_suite!(agent, group4);
 tag_suite!(agent_sdk_ts, group4);
 tag_suite!(agent_sdk_go, group4);
+tag_suite!(agent_sdk_moonbit, group4);
 tag_suite!(durability, group4);
 tag_suite!(effect_permissions, group4);
 tag_suite!(permission_cards_scala, group4);
@@ -408,6 +414,12 @@ test_component!(
     "golem-it:permissions-effect"
 );
 test_component!(
+    custom_durability_effect,
+    "custom_durability_effect",
+    "golem_it_custom_durability_effect",
+    "golem-it:custom-durability-effect"
+);
+test_component!(
     snapshot_sqlite_effect,
     "snapshot_sqlite_effect",
     "golem_it_snapshot_sqlite_effect",
@@ -490,4 +502,10 @@ test_component!(
     "agent_sdk_go",
     "golem_it_agent_sdk_go",
     "golem-it:agent-sdk-go"
+);
+test_component!(
+    agent_sdk_moonbit,
+    "agent_sdk_moonbit",
+    "golem_it_agent_sdk_moonbit",
+    "golem-it:agent-sdk-moonbit"
 );

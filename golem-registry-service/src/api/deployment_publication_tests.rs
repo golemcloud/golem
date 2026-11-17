@@ -20,7 +20,6 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::config::{DbConfig, DbSqliteConfig};
-use golem_common::model::Empty;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::component_metadata::{ComponentMetadata, KnownExports};
@@ -34,6 +33,7 @@ use golem_common::model::tool_release::{
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+use golem_schema::Empty;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::model::auth::AuthCtx;

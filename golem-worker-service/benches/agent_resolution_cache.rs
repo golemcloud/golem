@@ -35,7 +35,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use golem_common::base_model::Empty;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{
@@ -50,6 +49,7 @@ use golem_common::schema::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, MetadataEnvelope,
     NamedField, NamedFieldType, OutputSchema, SchemaGraph, SchemaType, SchemaTypeDef, TypeId,
 };
+use golem_schema::Empty;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_service::service::agent_resolution_cache::AgentResolutionCache;

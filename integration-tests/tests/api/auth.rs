@@ -39,6 +39,49 @@ async fn can_get_information_about_own_token(
 
 #[test]
 #[tracing::instrument]
+async fn standalone_services_answer_missing_credentials_with_json_401(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let registry = deps.registry_service();
+    let worker = deps.worker_service();
+    let urls = [
+        format!(
+            "http://{}:{}/v1/me/token",
+            registry.http_host(),
+            registry.http_port()
+        ),
+        format!(
+            "http://{}:{}/v1/components/{}/workers/agent",
+            worker.http_host(),
+            worker.http_port(),
+            uuid::Uuid::new_v4()
+        ),
+    ];
+
+    let client = reqwest::Client::builder().no_proxy().build()?;
+    for url in urls {
+        let response = client.get(&url).send().await?;
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{url}"
+        );
+        let body = response.text().await?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).ok(),
+            Some(serde_json::json!({
+                "code": "AUTH_UNAUTHORIZED",
+                "error": "Could not authenticate user using token",
+            })),
+            "{url}: {body}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn deleting_account_revokes_tokens(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = deps.registry_service().client(&user.token).await;
