@@ -130,30 +130,20 @@ func Reserve(token *golem_core_types.QuotaToken, amount uint64) witTypes.Result[
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 24, 8))
 	wasm_import_reserve((token).Handle(), int64(amount), returnArea)
-	var result witTypes.Result[*Reservation, FailedReservation]
+	var result0 witTypes.Result[*Reservation, FailedReservation]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[*Reservation, FailedReservation](ReservationFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))))
+		result0 = witTypes.Ok[*Reservation, FailedReservation](ReservationFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))))
 	case 1:
-		var option witTypes.Option[uint64]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
-		case 0:
+		result := wasm_lift_1_t909(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			option = witTypes.None[uint64]()
-		case 1:
-
-			option = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16))))
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[*Reservation, FailedReservation](FailedReservation{EstimatedWaitNanos: option})
+		result0 = witTypes.Err[*Reservation, FailedReservation](result)
 	default:
 		panic("unreachable")
 	}
-	result0 := result
-	return result0
+	result1 := result0
+	return result1
 
 }
 
@@ -174,4 +164,21 @@ func Merge(token *golem_core_types.QuotaToken, other *golem_core_types.QuotaToke
 
 	wasm_import_merge((token).Handle(), (other).TakeHandle())
 
+}
+
+//go:noinline
+func wasm_lift_1_t909(src unsafe.Pointer) FailedReservation {
+	var option witTypes.Option[uint64]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[uint64]()
+	case 1:
+
+		option = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))))
+	default:
+		panic("unreachable")
+	}
+
+	return FailedReservation{EstimatedWaitNanos: option}
 }

@@ -2586,6 +2586,8 @@ record. A record with a name on an executor without filesystem snapshots gives `
 
 ### Bootstrap blocks
 
+Snapshot-assisted recovery refreshes the replay target only while the primary cursor is not live. Once Live is published, new accounting hints belong to live history; extending that cursor would reopen a completed wallet prefix and force a restart. A successful snapshot-only load can therefore record `MemorySizeReconciled` without changing the replay target. Recovery from an older snapshot can reach the same allocation through its replay suffix without emitting that hint; compare guest calls and recovered state separately from these accounting entries.
+
 The core initializer of a component runs during `instantiate`, before `prepare_instance` loads
 any snapshot, and its durable calls (clock reads, random seeds, the environment) shape the state
 that the snapshot then restores into. The entries of those calls are the *bootstrap block* of the

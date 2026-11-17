@@ -27,14 +27,28 @@ Concretely:
 If a tool ever genuinely needs a dependency, reconsider whether it belongs here or in the
 main workspace.
 
+## Go bindings generator
+
+`go-bindgen/` is an independent Cargo workspace, excluded from this std-only workspace.
+It pins the Go backend and core from `golemcloud/wit-bindgen` at one immutable revision.
+The driver enables package-private memory conversion helpers without upgrading
+`componentize-go`, the Go compiler or the Go bindings runtime.
+
+Run `cargo make generate-sdk-go-bindings` to regenerate the SDK bindings, apply the
+existing fixups, format the output and compile it for WebAssembly. The driver replaces
+only the generated output directory; hand-written `internal/exports` stays separate.
+Run its checks separately with `--manifest-path dev-tools/go-bindgen/Cargo.toml`:
+`cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
+The Go CI job runs these checks because `dev-tools-tests` does not cover this workspace.
+
 ## Tools
 
-- **`go-bindgen-fixup`** — post-processes the generated Go SDK bindings (`sdks/go/internal/wit`)
+- **`go-bindgen-fixup`** — post-processes the generated Go SDK bindings (`sdks/go/golem/internal/wit`)
   to work around a `wit-bindgen` `crates/go` codegen bug: variant case tag constants are named
   `<Variant><Case>`, which collides with the record type generated from a WIT record named
   `<variant>-<case>` (golem's `queued-card-event`), producing Go that does not compile. Renames
   the colliding *constant* to `<Name>Tag`. Collision detection is generic, not hardcoded. Invoked
-  by `sdks/go/scripts/generate-bindings.sh`; **delete once fixed upstream**.
+  by `cargo make generate-sdk-go-bindings`; **delete once fixed upstream**.
 - **`dir-mirror`** — idempotent directory mirror: makes a destination directory a
   byte-identical copy of a source directory, rewriting only changed files (preserving
   mtimes) and pruning stale ones. Used by the `wit` task to sync the per-crate
