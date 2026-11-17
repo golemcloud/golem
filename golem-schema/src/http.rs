@@ -16,6 +16,43 @@ pub mod wit;
 #[cfg(test)]
 mod tests;
 
+/// Headers owned by the gateway rather than declared response-header metadata.
+/// Header syntax and duplicate declarations must be validated separately.
+pub fn is_managed_response_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("access-control-")
+        || matches!(
+            name.as_str(),
+            "age"
+                | "accept-ranges"
+                | "cache-control"
+                | "connection"
+                | "content-encoding"
+                | "content-length"
+                | "content-range"
+                | "content-type"
+                | "etag"
+                | "expires"
+                | "golem-environment-id"
+                | "golem-invocation-id"
+                | "golem-token"
+                | "keep-alive"
+                | "last-modified"
+                | "pragma"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "proxy-connection"
+                | "set-cookie"
+                | "te"
+                | "trailer"
+                | "transfer-encoding"
+                | "upgrade"
+                | "vary"
+                | "www-authenticate"
+                | "x-content-type-options"
+        )
+}
+
 #[derive(
     Debug,
     Clone,

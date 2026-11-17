@@ -26,8 +26,8 @@
 //! - `ETag` only when the cache policy supports revalidation
 //! - `If-None-Match` short-circuits to `304 Not Modified` when the ETag
 //!   matches the current `(fingerprint, oplog-index)`
-//! - `Vary` includes `Authorization` (or the configured session header) for
-//!   principal-aware methods
+//! - Anonymous responses vary on credential headers independently of principal usage
+//! - Authenticated responses are private and require revalidation
 
 use super::assert_json_content_type;
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
@@ -243,7 +243,7 @@ async fn h3_etag_invalidates_after_write(
 }
 
 // ---------------------------------------------------------------------------
-// H4 — principal-unaware uses `public`, principal-aware uses `private` + Vary
+// Anonymous reads are public and vary on credentials, regardless of principal usage.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -265,20 +265,20 @@ async fn h4_principal_unaware_uses_public_cache_directive(
         "principal-unaware UntilWrite read must emit `public, no-cache`"
     );
 
-    // No Vary on principal-carrying request header is required for a
-    // principal-unaware method.
     let vary = header_str(response.headers().get(VARY)).unwrap_or("");
-    assert!(
-        !header_has_token(vary, "Authorization"),
-        "principal-unaware method must NOT add `Authorization` to Vary, got: {vary:?}"
-    );
+    for credential in ["Authorization", "Cookie", "Golem-Token"] {
+        assert!(
+            header_has_token(vary, credential),
+            "missing {credential}: {vary}"
+        );
+    }
 
     Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn h4_principal_aware_uses_private_cache_directive_and_vary(
+async fn h4_anonymous_principal_aware_read_is_public_and_varies_on_credentials(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
@@ -295,16 +295,18 @@ async fn h4_principal_aware_uses_private_cache_directive_and_vary(
     let cache_control =
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     assert_eq!(
-        cache_control, "private, no-cache",
-        "principal-aware UntilWrite read must emit `private, no-cache`"
+        cache_control, "public, no-cache",
+        "anonymous UntilWrite read must emit `public, no-cache`"
     );
 
     let vary = header_str(response.headers().get(VARY))
         .expect("expected Vary header for principal-aware read");
-    assert!(
-        header_has_token(vary, "Authorization"),
-        "principal-aware method must add `Authorization` to Vary, got: {vary}"
-    );
+    for credential in ["Authorization", "Cookie", "Golem-Token"] {
+        assert!(
+            header_has_token(vary, credential),
+            "missing {credential}: {vary}"
+        );
+    }
 
     Ok(())
 }
