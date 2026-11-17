@@ -148,20 +148,21 @@ export const signedOutPage = (options: { readonly error: string | undefined }) =
   })
 
 /**
- * The plan of the account: one of the plans that a subscription switches between, another plan
- * that an administrator gave the account, or `unknown` when the registry call failed.
+ * The plan of the account: one of the plans that a subscription switches between, the default plan
+ * of the registry (`BillingConfig.defaultPlanId`), another plan that an administrator gave the
+ * account, or `unknown` when the registry call failed.
  */
-export type PlanState = "free" | "paid" | "suspended" | "other" | "unknown"
+export type PlanState = "free" | "paid" | "suspended" | "default" | "other" | "unknown"
 
 /**
  * Whether the page offers a checkout of the paid product, and `POST /billing/checkout` accepts
- * one: only on the free plan. On the paid plan a checkout starts a second subscription. On the
- * suspended plan the account stays suspended until it pays the open order. A subscription does
- * not change another plan (see `changePlan` of `Settlement`). A `past_due` subscription has an
- * open payment, and a second subscription does not pay it.
+ * one: only on the free plan and on the default plan. On the paid plan a checkout starts a second
+ * subscription. On the suspended plan the account stays suspended until it pays the open order. A
+ * subscription does not change another plan (see `changePlan` of `Settlement`). A `past_due`
+ * subscription has an open payment, and a second subscription does not pay it.
  */
 export const canCheckOut = (plan: PlanState, subscription: Subscription | undefined): boolean =>
-  plan === "free" && subscription?.status !== "past_due"
+  (plan === "free" || plan === "default") && subscription?.status !== "past_due"
 
 /**
  * Whether the page offers a settlement, and `POST /billing/settle` accepts one: only on the
@@ -287,6 +288,13 @@ const planHero = (options: SignedInPageOptions) => {
         <p class="alert" role="alert">The last payment for Paid failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Paid again.</p>
         <div class="actions">
           ${portalForm("Manage billing")}
+        </div>`
+    case "default":
+      return html`<span class="eyebrow">Your plan</span>
+        <h1>Default</h1>
+        <p class="lead">Golem gave this account its default plan. Paid has larger monthly allowances. You pay through Polar. When the subscription ends, your plan changes to Free, not back to Default.</p>
+        <div class="actions">
+          ${checkoutForm}
         </div>`
     case "other":
       return html`<span class="eyebrow">Your plan</span>

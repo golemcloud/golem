@@ -147,6 +147,7 @@ export const routes = HttpRouter.use((router) =>
       if (account.planId === config.plans.paid) return "paid"
       if (account.planId === config.plans.suspended) return "suspended"
       if (account.planId === config.plans.free) return "free"
+      if (account.planId === config.defaultPlanId) return "default"
       return "other"
     }
 
@@ -221,7 +222,8 @@ export const routes = HttpRouter.use((router) =>
         const params = new URL(request.url, config.baseUrl).searchParams
         // Polar redirects here with the checkout ID after a payment; the webhook that changes the
         // plan can arrive a few seconds later.
-        const checkoutPending = params.has("checkout_id") && (plan === "free" || plan === "suspended")
+        const checkoutPending =
+          params.has("checkout_id") && (plan === "free" || plan === "default" || plan === "suspended")
         const debt =
           plan === "suspended"
             ? yield* settlementOf(user.golemAccountId).pipe(

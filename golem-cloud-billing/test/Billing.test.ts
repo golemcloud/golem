@@ -21,6 +21,7 @@ import {
   polarWebToken,
   queryPool,
   registryBillingToken,
+  registryDefaultPlanId,
   request,
   signInWithGitHub,
   suspendedPlanId,
@@ -229,6 +230,20 @@ describe("Polar billing", () => {
 
       expectRefused(await postCheckout(jar))
       expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
+    })
+
+    it("offers Paid to an account on the default plan of the registry, and starts its checkout", async () => {
+      const { jar, accountId } = await signedIn()
+      upstreams.planOf(accountId).planId = registryDefaultPlanId
+
+      const body = await page(jar)
+      expect(body).toContain("<h1>Default</h1>")
+      expect(body).toContain("When the subscription ends, your plan changes to Free, not back to Default.")
+      expect(body).toContain(`action="/billing/checkout"`)
+      const response = await postCheckout(jar)
+      expect(response.status).toBe(303)
+      expect(response.headers.get("location")).toBe("https://sandbox.polar.sh/checkout/polar_c_test")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
     })
 
     it("refuses a checkout on the free plan while the subscription is past due", async () => {
@@ -801,6 +816,31 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(internalPlanId)
       expect(upstreams.planChanges()).toEqual([])
       expect(upstreams.deletionHolds.has(accountId)).toBe(true)
+    })
+
+    it("moves an account on the default plan to Paid with its subscription, and to Free after the end", async () => {
+      const accountId = randomUUID()
+      upstreams.planOf(accountId).planId = registryDefaultPlanId
+
+      await deliver("subscription.active", subscription(accountId))
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, { status: "canceled", modified_at: "2026-11-04T11:00:00Z" })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+    })
+
+    it("leaves an account on the default plan while its subscription does not make it paid", async () => {
+      const accountId = randomUUID()
+      upstreams.planOf(accountId).planId = registryDefaultPlanId
+
+      const response = await deliver("subscription.created", subscription(accountId, { status: "trialing" }))
+
+      expect(response.status).toBe(200)
+      expect(upstreams.planOf(accountId).planId).toBe(registryDefaultPlanId)
+      expect(upstreams.planChanges()).toEqual([])
     })
 
     it("answers 500 when the registry refuses the billing account, so Polar delivers again", async () => {

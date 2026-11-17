@@ -307,9 +307,10 @@ export const holdReasonText = (reasons: ReadonlyArray<HoldReason>, billingUrl: s
 export interface SettlementShape {
   /**
    * Sets the deletion hold of the account and moves the account to the plan of its subscriptions
-   * at `now`. An account on a plan that the app does not manage keeps it, and gets the deletion
-   * hold all the same. A deleted account keeps its plan and its deletion hold. The caller holds
-   * the account lock of `Subscriptions`.
+   * at `now`. An account on the default plan (`BillingConfig.defaultPlanId`) moves only to the paid
+   * plan. An account on a plan that the app does not manage keeps it, and gets the deletion hold
+   * all the same. A deleted account keeps its plan and its deletion hold. The caller holds the
+   * account lock of `Subscriptions`.
    */
   readonly reconcile: (
     accountId: string,
@@ -366,7 +367,13 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
         if (account.planId === target) {
           return
         }
-        if (!managed.has(account.planId)) {
+        if (account.planId === config.defaultPlanId) {
+          // The account keeps the default plan until a subscription makes it paid. A trial, or a
+          // subscription that ends before it is active, does not move it to the free plan.
+          if (plan !== "paid") {
+            return
+          }
+        } else if (!managed.has(account.planId)) {
           yield* Effect.logWarning("The account has a plan that subscriptions do not change").pipe(
             Effect.annotateLogs({ golemAccountId: account.id, planId: account.planId })
           )

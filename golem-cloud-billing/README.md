@@ -112,6 +112,14 @@ the billing account, the webhooks and the sweep call `GET /v1/me/token`,
 A subscription of the Polar product `POLAR_PRODUCT_ID` and its orders move the Golem account
 between three plans. The Polar customer has the Golem account ID as its external ID.
 
+The registry gives a new account its default plan (`initial_plans.default`). With
+`GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID`, the page offers Paid to an account on that plan too, and a
+subscription moves the account from it only to the paid plan. A trial, or a subscription that is
+never active, leaves the account on the default plan. After a subscription the account follows
+the table below, so its plan is free after the end and never goes back to the default plan.
+Without the variable, the app treats the default plan like an internal plan that an
+administrator gave the account.
+
 | Plan | Variable | When |
 | --- | --- | --- |
 | suspended | `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | paid overage is not paid: the account owes an unpaid order (see [Unpaid orders](#unpaid-orders)), its subscription is not in the past-due grace, and a payment of the subscription failed or the order is older than one hour |
@@ -137,9 +145,9 @@ plan.
   the name of the user, and the IP address of the browser for the local currency. After the
   payment Polar redirects to `/?checkout_id=...`, and the page shows that the plan is activating
   until the webhook changes it. The page offers the checkout, and the route accepts it, only for
-  an account on the free plan whose latest subscription is not `past_due` (`canCheckOut` in
-  `src/Page.ts`). The route redirects any other request to `/`, also when the registry or the
-  database fails.
+  an account on the free plan or on the default plan whose latest subscription is not `past_due`
+  (`canCheckOut` in `src/Page.ts`). The route redirects any other request to `/`, also when the
+  registry or the database fails.
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Settlement.** `POST /billing/settle` creates a checkout session of the settlement product for
@@ -156,10 +164,10 @@ plan.
   order in `polar_orders`. A paid order of the settlement product records a settlement instead. A state never replaces a state with a later `modified_at`, so a late
   delivery cannot undo a newer one. Then it sets the [deletion hold](#deletion-hold) and the plan
   from the table above. A failed payment (`subscription.past_due`) also logs `payment_failed`. An
-  account on any other plan, for example an internal plan that an administrator gave it, keeps it,
-  and gets the deletion hold all the same. An event of an account that the registry deleted is
-  stored and answers 200, without a change of the plan or the hold, so that deleted accounts do not
-  make Polar disable the endpoint.
+  account on the default plan moves only to the paid plan. An account on any other plan, for
+  example an internal plan that an administrator gave it, keeps it, and gets the deletion hold all
+  the same. An event of an account that the registry deleted is stored and answers 200, without a
+  change of the plan or the hold, so that deleted accounts do not make Polar disable the endpoint.
 - **Metered prices.** An order item names its price. The subscription lists the prices of its
   product, so `polar_subscriptions` keeps the IDs of the metered prices, and the handler counts
   the items of these prices as overage.
@@ -459,6 +467,7 @@ until the cleanup has deleted the user of the deleted account (see
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | | GitHub OAuth app with the callback URL `<BETTER_AUTH_URL>/api/auth/callback/github`. |
 | `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view`, `set-plan` and `hold-deletion` on every account through a permission share (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
+| `GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID` | | Optional. The default plan of the registry (`initial_plans.default`), if the page offers Paid to an account on it (see [Subscriptions](#subscriptions)). It must differ from the three plans above. |
 | `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH` | | The overage prices that the paid plan shows next to the paid-overage switch, in USD, as decimal numbers such as `0.045`. Polar bills with the metered prices of the product, so these values must match the product. A change needs a restart, not a new image. |
 | `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE` | `7 days` | How long an account keeps the paid plan after a payment of its subscription fails, as a duration such as `7 days` or `30 minutes` (see [Subscriptions](#subscriptions)). `0 seconds` turns the past-due grace off. Polar revokes the subscription after its last retry, 21 days after the failed payment, so a longer value has no effect. A test can use a short value, so that the past-due grace ends within the test. |
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |

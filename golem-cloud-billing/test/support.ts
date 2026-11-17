@@ -29,6 +29,8 @@ export const overagePrices = {
 }
 /** A plan that an administrator gave the account; subscriptions do not change it. */
 export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
+/** The plan that the registry gives a new account; a subscription moves the account to Paid. */
+export const registryDefaultPlanId = "8d2f6b1e-4a7c-4e93-9b05-6c1d3e8f2a47"
 export const polarApiUrl = "https://sandbox-api.polar.test"
 export const polarWebToken = "polar_oat_web_token_for_the_tests"
 export const polarProductId = "115e800a-2b62-42e0-97bf-9e8a5d6022b3"
@@ -64,6 +66,7 @@ export const testConfig = (): BillingConfigShape => {
     publicApiUrl: new URL("https://release.dev-api.golem.cloud"),
     registryBillingToken: Redacted.make(registryBillingToken),
     plans: { free: freePlanId, paid: paidPlanId, suspended: suspendedPlanId },
+    defaultPlanId: registryDefaultPlanId,
     overagePrices,
     pastDueGraceMs: 7 * 24 * 60 * 60 * 1000,
     polar: {
