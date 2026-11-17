@@ -54,5 +54,6 @@ pub fn oplog_chunk(
         current_component_revision: request
             .current_component_revision
             .unwrap_or(crate::model::component::ComponentRevision::INITIAL),
+        last_oplog_index: None,
     }
 }

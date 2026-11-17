@@ -120,6 +120,7 @@ fn benchmark_account() -> (ResourceUsageAccount, Arc<AtomicResourceEntry>) {
         0,
         AgentMode::Durable,
         false,
+        false,
         entry.clone(),
         Arc::new(Mutex::new(MemoryGrant::inert(0))),
         false,

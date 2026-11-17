@@ -44,7 +44,7 @@ use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryProperties;
 use golem_common::model::card::PermissionTarget;
-use golem_common::model::oplog::{DeniablePair, DurableFunctionType, HostPayloadPair};
+use golem_common::model::oplog::{DeniablePair, DurableFunctionType};
 use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{HasData, Linker};
 
@@ -118,42 +118,7 @@ pub(crate) fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
     observe_function_call(expect_ctx::<Ctx, U>(u), interface, function);
 }
 
-/// Drives the live / replay flow for a durable p3 accessor call whose response never carries a
-/// guest-visible error value (or whose errors must never be retried by the host). Incomplete replay
-/// re-executes reads and idempotent writes, while the durable-call policy rejects incomplete
-/// non-re-executable writes.
-///
-/// Durable p3 host wrappers surface failures in two ways: traps, which escape via
-/// [`DurableCallSession::trap`] and are classified by the trap-recovery machinery; and error *values*
-/// recorded in the response payload and returned to the guest (`wasi:sockets` error codes,
-/// `wasi:http` error codes, ...). Error values bypass trap classification entirely — the guest
-/// unwraps them and the worker fails deterministically — so any wrapper whose response payload
-/// carries such an error value must use [`run_read_access_classified`] instead and classify it
-/// as retryable-via-host vs guest-visible.
-pub(crate) async fn run_read_access<T, D, Ctx, Pair, F>(
-    store: &wasmtime::component::Accessor<T, D>,
-    request: Pair::Req,
-    function_type: DurableFunctionType,
-    live: F,
-) -> wasmtime::Result<Pair::Resp>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair,
-    F: AsyncFnOnce() -> wasmtime::Result<Pair::Resp>,
-{
-    DurableCallSession::<Pair, Cancellable>::invoke_access(
-        store,
-        durable_worker_ctx::<Ctx, T>,
-        request,
-        function_type,
-        live,
-    )
-    .await
-}
-
-/// [`run_read_access`] for a call that the host can deny before it runs; see
+/// Drives a durable p3 accessor call that the host can deny before it runs; see
 /// [`DurableCallSession::invoke_deniable_access`].
 pub(crate) async fn run_deniable_access<T, D, Ctx, Pair, F>(
     store: &wasmtime::component::Accessor<T, D>,
