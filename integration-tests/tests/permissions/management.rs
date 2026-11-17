@@ -1087,9 +1087,11 @@ impl reqwest_middleware::Middleware for LastResponse {
 }
 
 /// One request of an adapter: the CLI's metadata read of the named agent,
-/// after which it goes on when the agent looks unknown, or any other request.
+/// after which it goes on when the agent looks unknown, a request after
+/// which the CLI goes on whatever it answers, or any other request.
 enum Step {
     Prepare(Outcome),
+    GoesOn(Outcome),
     Request(Outcome),
 }
 
@@ -1111,6 +1113,7 @@ impl Trace {
                 );
                 (outcome, goes_on)
             }
+            Step::GoesOn(outcome) => (outcome, true),
             Step::Request(outcome) => {
                 let goes_on = matches!(outcome, Outcome::Allowed(_));
                 (outcome, goes_on)
@@ -1412,7 +1415,8 @@ impl Seed {
     }
 
     /// Waits until the owner's lookup of the tool invocation under `key`
-    /// answers: with its result, or with its end by the cancellation.
+    /// returns its result. Any other answer is an error of the test: it does
+    /// not show that the invocation ended.
     async fn wait_until_the_command_ends(&self, key: &str) -> anyhow::Result<()> {
         let request = tool_request(self, true, NativeToolInvocationMode::Lookup, key)?;
         let lookup = async {
@@ -1422,7 +1426,8 @@ impl Seed {
                 .await
         };
         match tokio::time::timeout(Duration::from_secs(60), lookup).await {
-            Ok(_) => Ok(()),
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => anyhow::bail!("the owner's lookup of `{key}` failed: {error:?}"),
             Err(_) => anyhow::bail!("the stopped command did not end"),
         }
     }
@@ -2096,14 +2101,20 @@ async fn cancel(seed: &Seed, idempotency_key: &str) -> anyhow::Result<Outcome> {
     )
 }
 
-/// What the user, or the CLI, does to a running `ssh` command.
+/// What the user, or the CLI, does to an `ssh` command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stop {
     /// Nothing: the command runs `SCRIPT` to its result.
     None,
+    /// The user stops the command while it still waits behind the owner's
+    /// running command, and the CLI cancels the accepted invocation, which
+    /// withdraws it.
+    CancelQueued,
     /// The user stops a script that runs longer than the CLI's wait while it
-    /// runs, and the CLI cancels the accepted invocation while the session
-    /// is open.
+    /// runs. The CLI's cancel of the accepted invocation finds it running
+    /// and does nothing; the CLI goes on. That answer is the answer for an
+    /// unknown invocation, with or without the cancel grant, so
+    /// `CancelQueued` is the variant whose cancel shows the grant.
     Cancel,
     /// As `Cancel`, and the session ends without the result, so the CLI
     /// looks it up: the script finishes within the CLI's wait.
@@ -2127,13 +2138,20 @@ const RESULT_WAIT: Duration = Duration::from_secs(5);
 /// A lookup that is still waiting when the CLI gives up on it. A denial
 /// answers at once.
 const NO_RESULT: &str = "no result within the wait";
+/// What the service answers to a cancel of an invocation that already runs
+/// (`cancel_invocation_internal` of the executor). The CLI reads it as
+/// "still running" and goes on.
+const ALREADY_RUNNING: &str = "Invocation not found";
 
 /// One command of an `ssh` session (`session`) or script: the description,
 /// the read of the agent's state at a session's prompt, the start, and then
-/// what `stop` does on the accepted invocation. A stop comes only after the
-/// owner sees that the script runs, so that the invocation is not still
-/// queued. The request at the trace position that `Seed::missing_invocation`
-/// names addresses that missing invocation of the agent instead.
+/// what `stop` does on the accepted invocation. A queued command waits
+/// behind a command of the owner that the owner sees running; a running
+/// command is stopped only after the owner sees that its own script runs.
+/// The request at the trace position that `Seed::missing_invocation` names
+/// addresses that missing invocation of the agent instead. Before it
+/// returns, every command that it started has ended or was withdrawn, so
+/// that the next run on the agent starts on an idle agent.
 async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<Trace> {
     let mut trace = Trace::default();
     trace.push(Step::Request(
@@ -2144,18 +2162,41 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
     }
     if session {
         // The state read is best effort: a denial does not stop the command.
-        trace
-            .outcomes
-            .push(match metadata(&seed.at(trace.outcomes.len())).await? {
-                Step::Request(outcome) | Step::Prepare(outcome) => outcome,
-            });
+        trace.push(Step::GoesOn(
+            match metadata(&seed.at(trace.outcomes.len())).await? {
+                Step::Request(outcome) | Step::Prepare(outcome) | Step::GoesOn(outcome) => outcome,
+            },
+        ));
     }
+    let blocker = match stop {
+        Stop::CancelQueued => {
+            let key = uuid::Uuid::new_v4().to_string();
+            let marker = format!("/management-started-{key}");
+            let mut live = open_session(
+                &seed.owner,
+                tool_start(
+                    seed,
+                    hosted_target(seed),
+                    &key,
+                    &stopped_script(&marker, 15),
+                )?,
+            )
+            .await?;
+            match receive(&mut live, false).await? {
+                (Outcome::Allowed(_), Some(_)) => {}
+                other => anyhow::bail!("the owner could not start its command: {other:?}"),
+            }
+            seed.wait_until_the_script_runs(&marker).await?;
+            Some((live, key))
+        }
+        _ => None,
+    };
     let key = uuid::Uuid::new_v4().to_string();
     let marker = format!("/management-started-{key}");
     // A stopped command that finishes within the wait finishes well inside
     // it; one that has no result outlasts it.
     let script = match stop {
-        Stop::None => SCRIPT.to_string(),
+        Stop::None | Stop::CancelQueued => SCRIPT.to_string(),
         Stop::CancelAndLookUp => stopped_script(&marker, 2),
         Stop::Cancel | Stop::OutcomeUnknown => stopped_script(&marker, 15),
     };
@@ -2167,52 +2208,58 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
     .await?;
     let (started, accepted) = receive(&mut live, stop == Stop::None).await?;
     trace.push(Step::Request(started));
-    if trace.stopped || stop == Stop::None {
-        return Ok(trace);
-    }
-    let accepted = accepted
-        .expect("an accepted start has its key")
-        .idempotency_key;
-    seed.wait_until_the_script_runs(&marker).await?;
-    'stop: {
+    let accepted = accepted.map(|accepted| accepted.idempotency_key);
+    let mut withdrawn = false;
+    if let (false, Some(accepted), false) = (trace.stopped, &accepted, stop == Stop::None) {
+        if stop != Stop::CancelQueued {
+            seed.wait_until_the_script_runs(&marker).await?;
+        }
+        // The CLI goes on whatever the cancel answers.
         let cancelling = seed.at(trace.outcomes.len());
         let cancelled = cancel(
             &cancelling,
-            &cancelling.addressed(trace.outcomes.len(), &accepted),
+            &cancelling.addressed(trace.outcomes.len(), accepted),
         )
         .await?;
-        trace.push(Step::Request(cancelled));
-        if trace.stopped || stop == Stop::Cancel {
-            break 'stop;
-        }
-        let looking_up = seed.at(trace.outcomes.len());
-        let addressed = looking_up.addressed(trace.outcomes.len(), &accepted);
-        let looked_up = match tokio::time::timeout(
-            RESULT_WAIT,
-            invoke_tool(
-                &looking_up,
-                true,
-                NativeToolInvocationMode::Lookup,
-                &addressed,
-            ),
-        )
-        .await
-        {
-            Ok(outcome) => outcome?,
-            Err(_) => Outcome::Allowed(NO_RESULT.to_string()),
-        };
-        let found = matches!(&looked_up, Outcome::Allowed(result) if result != NO_RESULT);
-        // Without a result, also after a denied lookup, the CLI reports an
-        // unknown outcome with the agent's state.
-        trace.outcomes.push(looked_up);
-        if !found {
-            trace.push(metadata(&seed.at(trace.outcomes.len())).await?);
+        withdrawn =
+            matches!(&cancelled, Outcome::Allowed(answer) if answer.contains("canceled: true"));
+        trace.push(Step::GoesOn(cancelled));
+        if matches!(stop, Stop::CancelAndLookUp | Stop::OutcomeUnknown) {
+            let looking_up = seed.at(trace.outcomes.len());
+            let addressed = looking_up.addressed(trace.outcomes.len(), accepted);
+            let looked_up = match tokio::time::timeout(
+                RESULT_WAIT,
+                invoke_tool(
+                    &looking_up,
+                    true,
+                    NativeToolInvocationMode::Lookup,
+                    &addressed,
+                ),
+            )
+            .await
+            {
+                Ok(outcome) => outcome?,
+                Err(_) => Outcome::Allowed(NO_RESULT.to_string()),
+            };
+            let found = matches!(&looked_up, Outcome::Allowed(result) if result != NO_RESULT);
+            // Without a result, also after a denied lookup, the CLI reports
+            // an unknown outcome with the agent's state.
+            trace.push(Step::GoesOn(looked_up));
+            if !found {
+                trace.push(metadata(&seed.at(trace.outcomes.len())).await?);
+            }
         }
     }
     drop(live);
     // The next run on the same agent, such as the unknown-target
-    // comparison, starts only after this command has ended.
-    seed.wait_until_the_command_ends(&accepted).await?;
+    // comparison, starts only after these commands have ended.
+    if let Some((blocker, blocker_key)) = blocker {
+        drop(blocker);
+        seed.wait_until_the_command_ends(&blocker_key).await?;
+    }
+    if let (Some(accepted), false) = (&accepted, withdrawn) {
+        seed.wait_until_the_command_ends(accepted).await?;
+    }
     Ok(trace)
 }
 
@@ -2227,25 +2274,29 @@ struct Adapter {
     makes: &'static [usize],
     /// The effect of this variant, when it differs from the case's.
     effect: Option<Effect>,
+    /// The mode's request at this index answers `ALREADY_RUNNING` also with
+    /// all grants: the cancel of an `ssh` command that already runs.
+    already_running: Option<usize>,
     run: Run,
 }
 
 macro_rules! adapter {
-    ([$($segment:literal),+], $mode:literal, $variant:literal, [$($index:literal),+], $(effect: $effect:expr,)? |$seed:ident| $body:expr) => {
+    ([$($segment:literal),+], $mode:literal, $variant:literal, [$($index:literal),+], $(effect: $effect:expr,)? $(already_running: $running:literal,)? |$seed:ident| $body:expr) => {
         Adapter {
             path: &[$($segment),+],
             mode: $mode,
             variant: $variant,
             makes: &[$($index),+],
-            effect: adapter!(@effect $($effect)?),
+            effect: adapter!(@some $($effect)?),
+            already_running: adapter!(@some $($running)?),
             run: |$seed| Box::pin(async move { $body }),
         }
     };
-    (@effect) => {
+    (@some) => {
         None
     };
-    (@effect $effect:expr) => {
-        Some($effect)
+    (@some $value:expr) => {
+        Some($value)
     };
 }
 
@@ -2742,9 +2793,18 @@ const ADAPTERS: &[Adapter] = &[
     adapter!(
         ["ssh"],
         "session",
+        "stopped-while-queued",
+        [0, 1, 2, 4],
+        effect: STOPPED,
+        |seed| ssh_command(seed, true, Stop::CancelQueued).await
+    ),
+    adapter!(
+        ["ssh"],
+        "session",
         "stopped",
         [0, 1, 2, 4],
         effect: STOPPED,
+        already_running: 4,
         |seed| ssh_command(seed, true, Stop::Cancel).await
     ),
     adapter!(
@@ -2753,6 +2813,7 @@ const ADAPTERS: &[Adapter] = &[
         "stopped-without-result",
         [0, 1, 2, 4, 5],
         effect: STOPPED,
+        already_running: 4,
         |seed| ssh_command(seed, true, Stop::CancelAndLookUp).await
     ),
     adapter!(
@@ -2761,6 +2822,7 @@ const ADAPTERS: &[Adapter] = &[
         "outcome-unknown",
         [0, 1, 2, 4, 5, 6],
         effect: STOPPED,
+        already_running: 4,
         |seed| ssh_command(seed, true, Stop::OutcomeUnknown).await
     ),
     adapter!(["ssh"], "script", "runs", [0, 1], |seed| ssh_command(
@@ -2772,9 +2834,18 @@ const ADAPTERS: &[Adapter] = &[
     adapter!(
         ["ssh"],
         "script",
+        "stopped-while-queued",
+        [0, 1, 3],
+        effect: STOPPED,
+        |seed| ssh_command(seed, false, Stop::CancelQueued).await
+    ),
+    adapter!(
+        ["ssh"],
+        "script",
         "stopped",
         [0, 1, 3],
         effect: STOPPED,
+        already_running: 3,
         |seed| ssh_command(seed, false, Stop::Cancel).await
     ),
     adapter!(
@@ -2783,6 +2854,7 @@ const ADAPTERS: &[Adapter] = &[
         "stopped-without-result",
         [0, 1, 3, 4],
         effect: STOPPED,
+        already_running: 3,
         |seed| ssh_command(seed, false, Stop::CancelAndLookUp).await
     ),
     adapter!(
@@ -2791,6 +2863,7 @@ const ADAPTERS: &[Adapter] = &[
         "outcome-unknown",
         [0, 1, 3, 4, 5],
         effect: STOPPED,
+        already_running: 3,
         |seed| ssh_command(seed, false, Stop::OutcomeUnknown).await
     ),
     adapter!(
@@ -3277,17 +3350,23 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
             let before = seed.observe().await?;
             let trace = (adapter.run)(&seed).await?;
             let as_expected = trace.outcomes.len() == made.len()
-                && trace
-                    .outcomes
-                    .iter()
-                    .zip(&made)
-                    .all(|(outcome, request)| match outcome {
-                        Outcome::Allowed(_) => !request.finds_nothing,
-                        Outcome::Denied(Denial::Http(RawResponse { status: 404, .. })) => {
-                            request.finds_nothing
+                && trace.outcomes.iter().zip(&made).enumerate().all(
+                    |(position, (outcome, request))| {
+                        let already_running =
+                            adapter.already_running == Some(adapter.makes[position]);
+                        match outcome {
+                            Outcome::Denied(Denial::Http(response)) if already_running => {
+                                String::from_utf8_lossy(&response.body).contains(ALREADY_RUNNING)
+                            }
+                            _ if already_running => false,
+                            Outcome::Allowed(_) => !request.finds_nothing,
+                            Outcome::Denied(Denial::Http(RawResponse { status: 404, .. })) => {
+                                request.finds_nothing
+                            }
+                            Outcome::Denied(_) => false,
                         }
-                        Outcome::Denied(_) => false,
-                    });
+                    },
+                );
             assert!(
                 as_expected,
                 "`{}` mode `{}` variant `{}` was denied with its grants: {:?}",
