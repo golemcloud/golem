@@ -108,6 +108,7 @@ impl WorkerService {
         let registry_service = self.services.registry_service.clone();
         let component_service = self.services.component_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
+        let agent_types = self.services.agent_types.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
         let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
@@ -116,6 +117,7 @@ impl WorkerService {
                 registry_service,
                 component_service,
                 agent_resolution_cache,
+                agent_types,
                 route_resolver,
                 auth_service,
                 mcp_capability_lookup,
@@ -154,6 +156,7 @@ impl WorkerService {
         let registry_service = self.services.registry_service.clone();
         let component_service = self.services.component_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
+        let agent_types = self.services.agent_types.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
         let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
@@ -162,6 +165,7 @@ impl WorkerService {
                 registry_service,
                 component_service,
                 agent_resolution_cache,
+                agent_types,
                 route_resolver,
                 auth_service,
                 mcp_capability_lookup,

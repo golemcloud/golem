@@ -50,6 +50,8 @@ service RegistryService {
       returns (ResolveAgentTypeByNamesResponse);
   // Resolves the type ID in an agent ID's tag. It also resolves types that are no longer deployed.
   rpc ResolveTypeId (ResolveTypeIdRequest) returns (ResolveTypeIdResponse);
+  // Resolves an agent type of the environment's current deployment by name.
+  rpc GetDeployedAgentType (GetDeployedAgentTypeRequest) returns (GetDeployedAgentTypeResponse);
 
   // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
@@ -450,6 +452,23 @@ message ResolvedTypeId {
   // The component that implements the agent type in the current deployment. Absent when
   // the type is not deployed, and always absent for a tool.
   optional golem.registry.RegisteredAgentTypeImplementer implemented_by = 3;
+}
+
+message GetDeployedAgentTypeRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string agent_type_name = 2;
+}
+
+message GetDeployedAgentTypeResponse {
+  oneof result {
+    GetDeployedAgentTypeSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetDeployedAgentTypeSuccessResponse {
+  // Absent when the current deployment has no agent type of that name.
+  optional golem.registry.RegisteredAgentType agent_type = 1;
 }
 
 message GetActiveRoutesForDomainRequest {

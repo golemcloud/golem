@@ -6,6 +6,7 @@ import "golem/common/account_id.proto";
 import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
+import "golem/component/component_id.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/public_oplog.proto";
 import "golem/worker/update_mode.proto";
@@ -45,6 +46,14 @@ message AgentMetadata {
   optional OplogErrorKind last_error_kind = 22;
   // The name of the agent's type. Owners without an agent type have none.
   optional string agent_type_name = 23;
+  // The component of the agent's Create entry. Internal callers authorize against it; the
+  // public agent metadata has no component.
+  golem.component.ComponentId component_id = 24;
+  // The canonical key text of a keyed agent, `Type(parameters)`.
+  optional string canonical_key = 25;
+  // The canonical constructor parameter text of a component agent, without its type name.
+  // Agents without a key have it too.
+  optional string constructor_parameters = 26;
 }
 
 message UpdateRecord {

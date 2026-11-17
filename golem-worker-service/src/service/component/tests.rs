@@ -31,16 +31,18 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct TestRegistry {
     revisions: Vec<Component>,
     pub(crate) deployed: Mutex<Option<Component>>,
-    next_lookup: Mutex<Option<Arc<LookupGate>>>,
+    pub(crate) deployed_agent_type: Mutex<Option<RegisteredAgentType>>,
+    pub(crate) next_lookup: Mutex<Option<Arc<LookupGate>>>,
 }
 
-struct LookupGate {
-    started: Semaphore,
-    release: Semaphore,
+/// Holds the next deployed lookup after it read the registry state, until the test releases it.
+pub(crate) struct LookupGate {
+    pub(crate) started: Semaphore,
+    pub(crate) release: Semaphore,
 }
 
 impl LookupGate {
-    fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             started: Semaphore::new(0),
             release: Semaphore::new(0),
@@ -49,10 +51,19 @@ impl LookupGate {
 }
 
 impl TestRegistry {
+    async fn pass_lookup_gate(&self) {
+        let gate = self.next_lookup.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.started.add_permits(1);
+            gate.release.acquire().await.unwrap().forget();
+        }
+    }
+
     pub(crate) fn new(revisions: Vec<Component>, deployed: Option<Component>) -> Self {
         Self {
             revisions,
             deployed: Mutex::new(deployed),
+            deployed_agent_type: Mutex::new(None),
             next_lookup: Mutex::new(None),
         }
     }
@@ -101,12 +112,22 @@ impl RegistryService for TestRegistry {
             .unwrap()
             .clone()
             .ok_or_else(|| RegistryServiceError::NotFound("component".into()));
-        let gate = self.next_lookup.lock().unwrap().take();
-        if let Some(gate) = gate {
-            gate.started.add_permits(1);
-            gate.release.acquire().await.unwrap().forget();
-        }
+        self.pass_lookup_gate().await;
         result
+    }
+    async fn get_deployed_agent_type(
+        &self,
+        _: EnvironmentId,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
+        let result = self
+            .deployed_agent_type
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|registered| registered.agent_type.type_name == *agent_type_name);
+        self.pass_lookup_gate().await;
+        Ok(result)
     }
     async fn get_all_deployed_component_revisions(
         &self,

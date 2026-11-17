@@ -24,7 +24,7 @@ limits and operational recovery.
 The endpoint is:
 
 ```text
-GET /v1/agents/invoke-agent-session
+GET /v1/runtime/envs/{environment_id}/invoke-agent-session
 ```
 
 Use `ws:` for an HTTP server and `wss:` for HTTPS.
@@ -215,7 +215,8 @@ An invocation selector is:
 ```
 
 `application`, `environment`, `agentType`, `constructorParameters`, and
-`method` are required. The agent type and its constructor parameters select one
+`method` are required. `application` and `environment` must name the
+environment of the endpoint path. The agent type and its constructor parameters select one
 keyed agent. Constructor parameters MUST NOT contain streams.
 
 ### 4.2 Configuration entry

@@ -292,6 +292,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id: Some(metadata.agent_id.into()),
             owner_kind: metadata.owner_kind.into(),
             agent_type_name: metadata.agent_type_name.map(|name| name.0),
+            canonical_key: metadata.canonical_key,
+            constructor_parameters: metadata.constructor_parameters,
+            component_id: Some(metadata.component_id.into()),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             config: metadata

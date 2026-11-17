@@ -51,7 +51,7 @@ impl ResolvedTarget {
     pub fn to_proto(&self) -> Result<ProtoTarget, WorkerExecutorError> {
         use golem_api_grpc::proto::golem::worker::agent_target::Target;
         let id_target = || golem_api_grpc::proto::golem::worker::AgentTarget {
-            target: Some(Target::Id(self.owned_agent_id.agent_id.clone().into())),
+            target: Some(Target::Id(self.owned_agent_id.agent_id.into())),
         };
         let Some(owner) = &self.new_owner else {
             return Ok(ProtoTarget {
@@ -311,15 +311,10 @@ async fn check_constructor(
             ))
         })?;
     let agent_mode = agent_type.mode;
-    let canonical_parameters = constructor
-        .canonical_parameters()
-        .map_err(WorkerExecutorError::invalid_request)?;
-    let constructor = ParsedAgentKey::parse_parameters(
-        &constructor.agent_type,
-        &canonical_parameters,
-        &component.metadata,
-    )
-    .map_err(WorkerExecutorError::invalid_request)?;
+    let constructor: ParsedAgentKey = constructor
+        .canonical_key(&component.metadata)
+        .map_err(WorkerExecutorError::invalid_request)?
+        .into();
     let registered = agent_types
         .get(
             environment_id,

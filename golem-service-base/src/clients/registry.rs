@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     BatchUpdateResourceUsageRequest, CreateRuntimeCardRequest, DownloadComponentRequest,
     GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest,
     GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
-    GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
+    GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest, GetDeployedAgentTypeRequest,
     GetDeployedComponentMetadataRequest, GetMcpRuntimeCredentialRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
@@ -41,10 +41,10 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
-    get_current_environment_state_response, get_deployed_component_metadata_response,
-    get_mcp_runtime_credential_response, get_resource_definition_by_id_response,
-    get_resource_definition_by_name_response, get_resource_limits_response,
-    get_tool_deployment_state_response, mcp_runtime_credential,
+    get_current_environment_state_response, get_deployed_agent_type_response,
+    get_deployed_component_metadata_response, get_mcp_runtime_credential_response,
+    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
+    get_resource_limits_response, get_tool_deployment_state_response, mcp_runtime_credential,
     report_mcp_resource_unauthorized_response, resolve_agent_type_by_names_response,
     resolve_component_response, resolve_mcp_import_response, resolve_type_id_response,
     revoke_card_response, update_worker_connection_limit_response,
@@ -347,6 +347,18 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
         Err(RegistryServiceError::internal_client_error(
             "resolve_type_id is not supported by this registry service",
+        ))
+    }
+
+    /// Resolves an agent type of the environment's current deployment by name. `None` when
+    /// the current deployment has no agent type of that name.
+    async fn get_deployed_agent_type(
+        &self,
+        _environment_id: EnvironmentId,
+        _agent_type_name: &AgentTypeName,
+    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_deployed_agent_type is not supported by this registry service",
         ))
     }
 
@@ -1424,6 +1436,34 @@ impl RegistryService for GrpcRegistryService {
                 payload.resolved.map(ResolvedTypeId::try_from).transpose()
             }
             Some(resolve_type_id_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_deployed_agent_type(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
+        let agent_type_name = agent_type_name.0.clone();
+        let response = self
+            .client
+            .call("get_deployed_agent_type", move |client| {
+                let request = GetDeployedAgentTypeRequest {
+                    environment_id: Some(environment_id.into()),
+                    agent_type_name: agent_type_name.clone(),
+                };
+                Box::pin(client.get_deployed_agent_type(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_deployed_agent_type_response::Result::Success(payload)) => payload
+                .agent_type
+                .map(|agent_type| agent_type.try_into().map_err(RegistryServiceError::from))
+                .transpose(),
+            Some(get_deployed_agent_type_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

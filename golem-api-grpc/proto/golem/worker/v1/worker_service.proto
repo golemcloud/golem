@@ -189,6 +189,9 @@ message InvokeAgentRequest {
   // Only with an ID target: the type and constructor parameters of the agent to create
   // at that ID, such as an ephemeral instance or an agent without a key.
   optional golem.worker.AgentKey constructor = 16;
+  // The component that implements the agent type. Required when the request may create the
+  // agent: a key target, or an ID target with `constructor`.
+  optional golem.component.ComponentId component_id = 17;
 }
 
 enum InvocationFreshnessDisposition {

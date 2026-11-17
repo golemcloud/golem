@@ -28,7 +28,7 @@
 //! the full design.
 
 use golem_common::model::agent::{CachePolicy, ReadOnlyConfig};
-use golem_common::model::{AgentFingerprint, AgentId, OplogIndex};
+use golem_common::model::{AgentFingerprint, OplogIndex, OwnedAgentId};
 use http::header;
 
 /// `Cache-Control` visibility for a read-only method.
@@ -61,10 +61,9 @@ impl CacheVisibility {
 
 /// Build the value for the `ETag` response header for a read-only invocation.
 ///
-/// The format is `"<agent-id>/<fingerprint>:<oplog-index>"`, with surrounding
-/// quotes so the value is syntactically a strong validator. The agent name is
-/// URL-encoded via [`AgentId::agent_name_encoded`] so it can never contain
-/// commas, quotes, or other characters that would otherwise confuse HTTP
+/// The format is `"<environment-id>/<agent-id>/<fingerprint>:<oplog-index>"`, with
+/// surrounding quotes so the value is syntactically a strong validator. Every part is a
+/// UUID, so it never contains commas, quotes, or other characters that would confuse HTTP
 /// parsers or the `If-None-Match` splitter.
 ///
 /// Including the per-instance agent fingerprint guards against the (rare)
@@ -73,7 +72,7 @@ impl CacheVisibility {
 /// fingerprint, a previously-cached client-side ETag would incorrectly match
 /// the new instance.
 pub fn build_etag_value(
-    agent_id: &AgentId,
+    agent_id: &OwnedAgentId,
     fingerprint: AgentFingerprint,
     oplog_index: OplogIndex,
 ) -> String {
@@ -86,12 +85,10 @@ pub fn build_etag_value(
 
 /// Same format as [`build_etag_value`] but without the surrounding quotes,
 /// used for parsing/comparison.
-pub fn agent_id_etag_token(agent_id: &AgentId, fingerprint: AgentFingerprint) -> String {
+pub fn agent_id_etag_token(agent_id: &OwnedAgentId, fingerprint: AgentFingerprint) -> String {
     format!(
         "{}/{}/{}",
-        agent_id.component_id,
-        agent_id.agent_name_encoded(),
-        fingerprint,
+        agent_id.environment_id, agent_id.agent_id, fingerprint,
     )
 }
 
@@ -168,7 +165,7 @@ pub fn parse_if_none_match_entries(header_value: &str) -> Vec<(String, u64)> {
 /// current instance, even if the oplog index happens to coincide.
 pub fn if_none_match_hits(
     entries: &[(String, u64)],
-    agent_id: &AgentId,
+    agent_id: &OwnedAgentId,
     fingerprint: AgentFingerprint,
     current_oplog: OplogIndex,
 ) -> bool {
@@ -223,17 +220,18 @@ pub fn add_vary_header(headers: &mut http::HeaderMap, header_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::AgentId;
     use golem_common::model::agent::CachePolicyTtl;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
     use golem_schema::Empty;
     use test_r::test;
     use uuid::uuid;
 
-    fn agent_id_for_test() -> AgentId {
-        AgentId {
-            component_id: ComponentId(uuid!("00000000-0000-0000-0000-000000000001")),
-            agent_id: "demo".to_string(),
-        }
+    fn agent_id_for_test() -> OwnedAgentId {
+        OwnedAgentId::new(
+            EnvironmentId(uuid!("00000000-0000-0000-0000-000000000001")),
+            &AgentId::from_parts(7, 0xde40),
+        )
     }
 
     fn fingerprint_for_test() -> AgentFingerprint {
@@ -308,15 +306,17 @@ mod tests {
     }
 
     #[test]
-    fn etag_value_contains_component_agent_id_and_fingerprint() {
+    fn etag_value_contains_environment_agent_id_and_fingerprint() {
         let agent_id = agent_id_for_test();
         let fingerprint = fingerprint_for_test();
         let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(42));
-        assert!(etag.starts_with('"') && etag.ends_with('"'));
-        assert!(etag.contains("00000000-0000-0000-0000-000000000001"));
-        assert!(etag.contains(&fingerprint.to_string()));
-        assert!(etag.contains(":42\""));
-        assert!(etag.contains("/demo/"));
+        assert_eq!(
+            etag,
+            format!(
+                "\"00000000-0000-0000-0000-000000000001/{}/{fingerprint}:42\"",
+                agent_id.agent_id
+            )
+        );
     }
 
     #[test]
@@ -584,41 +584,5 @@ mod tests {
         let read_only = no_store_public();
         assert_eq!(build_cache_control_value(&read_only), "no-store");
         assert!(!supports_http_revalidation(&read_only));
-    }
-
-    #[test]
-    fn etag_token_is_url_encoded_to_survive_commas_and_quotes() {
-        // ParsedAgentKey rendering can include commas, parentheses and quotes;
-        // the etag token must encode them so the comma-delimited
-        // `If-None-Match` parser still round-trips.
-        let agent_id = AgentId {
-            component_id: ComponentId(uuid!("00000000-0000-0000-0000-000000000001")),
-            agent_id: "agent-7([12,13,14])".to_string(),
-        };
-        let fingerprint = fingerprint_for_test();
-
-        let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(7));
-
-        // No raw comma, no nested quote in the rendered token (the encoded
-        // agent name is the second '/'-separated component of the token,
-        // sitting between the component id and the fingerprint).
-        let token_part = etag.trim_matches('"');
-        let mut parts = token_part.splitn(3, '/');
-        let _component_id = parts.next().unwrap();
-        let encoded_name = parts.next().unwrap();
-        assert!(
-            !encoded_name.contains(','),
-            "expected encoded agent name to be comma-free, got {encoded_name}"
-        );
-        assert!(!encoded_name.contains('"'));
-
-        // Round-trip: If-None-Match → parsed entries → hit.
-        let entries = parse_if_none_match_entries(&etag);
-        assert!(if_none_match_hits(
-            &entries,
-            &agent_id,
-            fingerprint,
-            OplogIndex::from_u64(7)
-        ));
     }
 }

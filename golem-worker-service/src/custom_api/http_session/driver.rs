@@ -22,7 +22,8 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_response, stream_error, stream_terminal,
 };
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
-use golem_common::model::{AgentId, InvocationId, InvocationRequestKey};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentId, InvocationId, InvocationRequestKey, OwnedAgentId};
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,7 +50,7 @@ pub(super) async fn run_session(
     mut controls: mpsc::Receiver<Command>,
     events: SessionOutput,
     completed: Arc<AtomicBool>,
-    cleanup_identity: Arc<OnceLock<(AgentId, InvocationId)>>,
+    cleanup_identity: Arc<OnceLock<(OwnedAgentId, InvocationId)>>,
     cancelled: CancellationToken,
 ) {
     let mut input = InputProgress::default();
@@ -252,7 +253,9 @@ pub(super) async fn run_session(
                 .await;
                 return;
             }
-        } else if current.agent_id != start.agent_id || current.method_name != start.method_name {
+        } else if current.agent_id.as_ref() != start.target_agent_id()
+            || current.method_name != start.method_name
+        {
             send_error(
                 &events,
                 HttpSessionError::Protocol("acceptance changed target".into()),
@@ -262,9 +265,11 @@ pub(super) async fn run_session(
         } else {
             match accepted_identity(current.clone()) {
                 Ok(identity) => {
-                    let agent = current.agent_id.clone().unwrap().try_into().unwrap();
+                    let agent: AgentId = current.agent_id.unwrap().try_into().unwrap();
+                    let environment_id: EnvironmentId =
+                        current.environment_id.unwrap().try_into().unwrap();
                     let key = current.idempotency_key.unwrap().into();
-                    let _ = cleanup_identity.set((agent, key));
+                    let _ = cleanup_identity.set((OwnedAgentId::new(environment_id, &agent), key));
                     accepted = Some(identity);
                 }
                 Err(error) => {
@@ -632,9 +637,9 @@ pub(super) fn validate_prepared_start(start: &InvocationStart) -> Result<(), Htt
     InvocationSessionState::default()
         .validate_trusted_request(&request)
         .map_err(HttpSessionError::InvalidStart)?;
-    if start.agent_id.is_none() {
+    if start.target_agent_id().is_none() {
         return Err(HttpSessionError::InvalidStart(
-            "prepared start is missing its agent".into(),
+            "prepared start does not name its agent by ID".into(),
         ));
     }
     let prepared = start.request_key.clone().ok_or_else(|| {
@@ -647,7 +652,6 @@ pub(super) fn validate_prepared_start(start: &InvocationStart) -> Result<(), Htt
 fn accepted_identity(accepted: InvocationAccepted) -> Result<AcceptedIdentity, HttpSessionError> {
     let _: AgentId = accepted
         .agent_id
-        .clone()
         .ok_or_else(|| HttpSessionError::Protocol("acceptance has no agent".into()))?
         .try_into()
         .map_err(HttpSessionError::Protocol)?;
@@ -690,7 +694,7 @@ fn make_resume(
     cursors.sort_by_key(|cursor| uuid_pair(cursor.stream_id.as_ref().unwrap()));
     ResumeAttach {
         idempotency_key: identity.accepted.idempotency_key,
-        agent_id: identity.accepted.agent_id.clone(),
+        agent_id: identity.accepted.agent_id,
         environment_id: identity.accepted.environment_id,
         attachment_id: identity.accepted.attachment_id,
         attempt_id: Some(uuid::Uuid::new_v4().into()),

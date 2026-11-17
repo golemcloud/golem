@@ -1,33 +1,212 @@
 # Agent API
 API working on agent instances
-## undefined
+## List the agents of an agent type
 
 Path|Method|Protected
 ---|---|---
-`/v1/agents/invoke-agent`|POST|Yes
+`/v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents`|GET|Yes
+
+### Filters
+
+| Property    | Comparator             | Description                   | Example                            |
+|-------------|------------------------|-------------------------------|------------------------------------|
+| key         | StringFilterComparator | Canonical key of the agent    | `key == Counter("a")`              |
+| id          | StringFilterComparator | ID of the agent               | `id == 00000007-…`                 |
+| version     | FilterComparator       | Component revision            | `version >= 0`                     |
+| status      | FilterComparator       | Status of the agent           | `status = Running`                 |
+| env.\[key\] | StringFilterComparator | Environment variable          | `env.var1 = value`                 |
+| createdAt   | FilterComparator       | Creation time of the agent    | `createdAt > 2024-04-01T12:10:00Z` |
+
+### Comparators
+
+- StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+- FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+Returns the metadata of the agents, and a cursor for the next page when there are more.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+filter|array|No|Filter in the form `property op value`. When it is given more than once, every filter must match.
+cursor|string|No|Position where to start listing. To get the next page, pass the cursor of the previous response.
+count|integer|No|Count of listed values, default: 50
+precise|boolean|No|If true, calculate the most up-to-date status for each agent, default is false
+
+**Example Response JSON**
+
+```json copy
+{
+  "workers": [
+    {
+      "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
+      "ownerKind": "component-agent",
+      "agentTypeName": "string",
+      "canonicalKey": "string",
+      "constructorParameters": "string",
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "status": "Running",
+      "componentRevision": 0,
+      "retryCount": 0,
+      "pendingInvocationCount": 0,
+      "updates": [
+        {
+          "type": "PendingUpdate",
+          "timestamp": "2019-08-24T14:15:22Z",
+          "targetRevision": 0,
+          "pendingUpdateIndex": 0,
+          "mode": "automatic",
+          "snapshotAssistedDetails": {
+            "sourceComponentRevision": 0,
+            "sourceRevisionStartIndex": 0,
+            "snapshotIndex": 0,
+            "snapshotRevision": 0,
+            "filesystemSnapshot": "string"
+          }
+        }
+      ],
+      "createdAt": "2019-08-24T14:15:22Z",
+      "lastError": "string",
+      "lastErrorKind": "invocation",
+      "componentSize": 0,
+      "totalLinearMemorySize": 0,
+      "exportedResourceInstances": [
+        {
+          "key": 0,
+          "description": {
+            "createdAt": "2019-08-24T14:15:22Z",
+            "resourceOwner": "string",
+            "resourceName": "string"
+          }
+        }
+      ],
+      "activePlugins": [
+        "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+      ],
+      "skippedRegions": [
+        {
+          "start": 0,
+          "end": 0
+        }
+      ],
+      "deletedRegions": [
+        {
+          "start": 0,
+          "end": 0
+        }
+      ],
+      "lastOplogIndex": 0,
+      "fingerprint": "0cb6dabd-f8f1-4f78-8cce-283e96dd3637"
+    }
+  ],
+  "cursor": "string"
+}
+```
+
+## Create an agent
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents`|POST|Yes
+
+Creates an agent of the agent type from its constructor parameters. A keyed create makes
+the keyed agent of the parameters and fails with 409 when that key is current. A create
+without a key makes a new agent each time; with an `Idempotency-Key` from a caller with a
+caller scope, a retry returns the agent of the first attempt, and the same key with a
+changed request fails with 422.
 
 **Example Request JSON**
 ```json copy
 {
-  "appName": "string",
-  "envName": "string",
-  "agentTypeName": "string",
   "parameters": {
     "kind": "bool",
     "value": true
   },
-  "phantomId": "924e957e-cd56-4af8-a7d0-d200011bddaa",
   "config": [],
-  "methodName": "string",
-  "methodParameters": {
+  "env": {},
+  "keyed": false
+}
+```
+
+## Upsert an agent
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents/upsert`|POST|Yes
+
+Returns the keyed agent of the constructor parameters, and creates it when it is missing.
+
+**Example Request JSON**
+```json copy
+{
+  "parameters": {
     "kind": "bool",
     "value": true
-  },
-  "mode": "await",
-  "scheduleAt": "2019-08-24T14:15:22Z",
-  "idempotencyKey": "string",
-  "deploymentRevision": 0,
-  "ownerAccountEmail": "string"
+  }
 }
 ```
 
@@ -35,10 +214,245 @@ Path|Method|Protected
 
 ```json copy
 {
-  "agentId": {
-    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-    "agentId": "string"
+  "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
+  "agentFingerprint": "5c9c764e-7053-4376-bc55-59b87edea063"
+}
+```
+
+## Look up an agent by its key
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents/lookup`|POST|Yes
+
+Returns the keyed agent of the constructor parameters, or 404 when it does not exist.
+It never creates the agent.
+
+**Example Request JSON**
+```json copy
+{
+  "parameters": {
+    "kind": "bool",
+    "value": true
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
+  "agentFingerprint": "5c9c764e-7053-4376-bc55-59b87edea063"
+}
+```
+
+## Find the agents of an agent type
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents/find`|POST|Yes
+
+### Filter types
+| Type      | Comparator             | Description                  | Example                                                                             |
+|-----------|------------------------|------------------------------|-------------------------------------------------------------------------------------|
+| Key       | StringFilterComparator | Canonical key of the agent   | `{ "type": "Key", "comparator": "Equal", "value": "Counter(\"a\")" }`              |
+| Id        | StringFilterComparator | ID of the agent              | `{ "type": "Id", "comparator": "Equal", "value": "00000007-…" }`                   |
+| Version   | FilterComparator       | Component revision           | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                  |
+| Status    | FilterComparator       | Status of the agent          | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                  |
+| Env       | StringFilterComparator | Environment variable         | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`       |
+| CreatedAt | FilterComparator       | Creation time of the agent   | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`|
+| And       |                        | And filter combinator        | `{ "type": "And", "filters": [ ... ] }`                                            |
+| Or        |                        | Or filter combinator         | `{ "type": "Or", "filters": [ ... ] }`                                             |
+| Not       |                        | Negates the specified filter | `{ "type": "Not", "filter": { ... } }`                                             |
+
+### Comparators
+- StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+- FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+
+**Example Request JSON**
+```json copy
+{
+  "filter": {
+    "type": "Key",
+    "comparator": "Equal",
+    "value": "string"
   },
+  "cursor": "string",
+  "count": 0,
+  "precise": true
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "workers": [
+    {
+      "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
+      "ownerKind": "component-agent",
+      "agentTypeName": "string",
+      "canonicalKey": "string",
+      "constructorParameters": "string",
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "status": "Running",
+      "componentRevision": 0,
+      "retryCount": 0,
+      "pendingInvocationCount": 0,
+      "updates": [
+        {
+          "type": "PendingUpdate",
+          "timestamp": "2019-08-24T14:15:22Z",
+          "targetRevision": 0,
+          "pendingUpdateIndex": 0,
+          "mode": "automatic",
+          "snapshotAssistedDetails": {
+            "sourceComponentRevision": 0,
+            "sourceRevisionStartIndex": 0,
+            "snapshotIndex": 0,
+            "snapshotRevision": 0,
+            "filesystemSnapshot": "string"
+          }
+        }
+      ],
+      "createdAt": "2019-08-24T14:15:22Z",
+      "lastError": "string",
+      "lastErrorKind": "invocation",
+      "componentSize": 0,
+      "totalLinearMemorySize": 0,
+      "exportedResourceInstances": [
+        {
+          "key": 0,
+          "description": {
+            "createdAt": "2019-08-24T14:15:22Z",
+            "resourceOwner": "string",
+            "resourceName": "string"
+          }
+        }
+      ],
+      "activePlugins": [
+        "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+      ],
+      "skippedRegions": [
+        {
+          "start": 0,
+          "end": 0
+        }
+      ],
+      "deletedRegions": [
+        {
+          "start": 0,
+          "end": 0
+        }
+      ],
+      "lastOplogIndex": 0,
+      "fingerprint": "0cb6dabd-f8f1-4f78-8cce-283e96dd3637"
+    }
+  ],
+  "cursor": "string"
+}
+```
+
+## Invoke an agent method
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/invoke`|POST|Yes
+
+Names the agent by exactly one of `agentId` or `parameters`. With `parameters`, a durable
+agent is upserted, and an ephemeral invocation runs on an instance of its own. With
+`expectedFingerprint`, a missing agent or another incarnation fails with 404 before
+anything runs. The idempotency key comes from the `Idempotency-Key` header.
+
+**Example Request JSON**
+```json copy
+{
+  "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
+  "parameters": {
+    "kind": "bool",
+    "value": true
+  },
+  "method": "string",
+  "methodParameters": {
+    "kind": "bool",
+    "value": true
+  },
+  "mode": "await",
+  "scheduleAt": "2019-08-24T14:15:22Z",
+  "expectedFingerprint": "867b43a8-f6d6-4ded-bde8-5f270d7e9db6"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
   "idempotencyKey": "0c14c6a6-6f50-4d1e-b0c4-b46ff43ba6a1",
   "result": {
     "graph": {
@@ -100,7 +514,7 @@ Path|Method|Protected
 
 Path|Method|Protected
 ---|---|---
-`/v1/agents/invoke-tool`|POST|Yes
+`/v1/runtime/envs/{environment_id}/invoke-tool`|POST|Yes
 
 Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
 require an attached invocation session rather than this scalar endpoint.
@@ -108,12 +522,7 @@ require an attached invocation session rather than this scalar endpoint.
 **Example Request JSON**
 ```json copy
 {
-  "appName": "string",
-  "envName": "string",
-  "agentId": {
-    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-    "agentId": "string"
-  },
+  "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
   "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
   "toolName": "string",
   "commandPath": [
@@ -172,8 +581,7 @@ require an attached invocation session rather than this scalar endpoint.
     }
   },
   "mode": "await",
-  "scheduleAt": "2019-08-24T14:15:22Z",
-  "idempotencyKey": "string"
+  "scheduleAt": "2019-08-24T14:15:22Z"
 }
 ```
 
@@ -181,10 +589,7 @@ require an attached invocation session rather than this scalar endpoint.
 
 ```json copy
 {
-  "agentId": {
-    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-    "agentId": "string"
-  },
+  "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
   "idempotencyKey": "0c14c6a6-6f50-4d1e-b0c4-b46ff43ba6a1",
   "result": {
     "type": "Success",
@@ -252,17 +657,12 @@ require an attached invocation session rather than this scalar endpoint.
 
 Path|Method|Protected
 ---|---|---
-`/v1/agents/describe-tool`|POST|Yes
+`/v1/runtime/envs/{environment_id}/describe-tool`|POST|Yes
 
 **Example Request JSON**
 ```json copy
 {
-  "appName": "string",
-  "envName": "string",
-  "agentId": {
-    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-    "agentId": "string"
-  },
+  "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
   "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
   "toolName": "string"
 }
@@ -737,45 +1137,12 @@ Path|Method|Protected
 
 Path|Method|Protected
 ---|---|---
-`/v1/agents/invoke-agent-session`|GET|Yes
+`/v1/runtime/envs/{environment_id}/invoke-agent-session`|GET|Yes
 
 Upgrades to a WebSocket using the required `golem.agent-invocation.v1`
 subprotocol. Text frames carry public v1 JSON lifecycle messages, while
 binary frames carry the public v1 binary envelope. The bearer token is
 authenticated before the upgrade and authorizes both start and resume.
-
-## undefined
-
-Path|Method|Protected
----|---|---
-`/v1/agents/create-agent`|POST|Yes
-
-**Example Request JSON**
-```json copy
-{
-  "appName": "string",
-  "envName": "string",
-  "agentTypeName": "string",
-  "parameters": {
-    "kind": "bool",
-    "value": true
-  },
-  "phantomId": "924e957e-cd56-4af8-a7d0-d200011bddaa",
-  "config": []
-}
-```
-
-**Example Response JSON**
-
-```json copy
-{
-  "agentId": {
-    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-    "agentId": "string"
-  },
-  "componentRevision": 0
-}
-```
 ## Agent API Errors
 Status Code|Description|Body
 ---|---|---

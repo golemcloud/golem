@@ -93,10 +93,12 @@ impl AgentId {
         )
     }
 
-    /// The ID of a Durable Streams fork. It carries the root's type tag.
+    /// The ID of a Durable Streams fork of `root` on the route of `route_scope`. It carries
+    /// the root's type tag.
     pub fn durable_stream_fork(
         environment_id: EnvironmentId,
         root: AgentId,
+        route_scope: &str,
         fork_name: &str,
     ) -> Self {
         Self::from_parts(
@@ -104,6 +106,7 @@ impl AgentId {
             HashInput::new(DURABLE_STREAM_FORK_DOMAIN)
                 .environment(environment_id)
                 .fixed(root.as_uuid().as_bytes())
+                .variable(route_scope.as_bytes())
                 .variable(fork_name.as_bytes())
                 .h(),
         )

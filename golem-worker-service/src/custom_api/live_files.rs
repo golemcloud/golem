@@ -13,7 +13,8 @@ use super::{ResponseBody, RichRequest, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use bytes::Bytes;
 use futures::{StreamExt, stream::BoxStream};
-use golem_common::model::AgentId;
+use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::component::ComponentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use std::io;
@@ -25,7 +26,8 @@ pub(super) async fn serve(
     worker: &WorkerService,
     request: &RichRequest,
     selected: &ResolvedRouteEntry,
-    agent_id: &AgentId,
+    component_id: ComponentId,
+    constructor: &ParsedAgentKey,
     path: &str,
     directory_request: bool,
     deadline: Instant,
@@ -47,7 +49,8 @@ pub(super) async fn serve(
     };
     let read = match worker
         .read_mounted_file(
-            agent_id,
+            component_id,
+            constructor,
             path,
             selection,
             selected.route.environment_id,

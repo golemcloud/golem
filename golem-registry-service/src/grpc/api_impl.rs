@@ -49,12 +49,14 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAllDeployedComponentRevisionsSuccessResponse, GetComponentMetadataRequest,
     GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
-    GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
-    GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse,
-    GetResourceDefinitionByIdRequest, GetResourceDefinitionByIdResponse,
-    GetResourceDefinitionByIdSuccessResponse, GetResourceDefinitionByNameRequest,
-    GetResourceDefinitionByNameResponse, GetResourceDefinitionByNameSuccessResponse,
-    GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
+    GetCurrentEnvironmentStateSuccessResponse, GetDeployedAgentTypeRequest,
+    GetDeployedAgentTypeResponse, GetDeployedAgentTypeSuccessResponse,
+    GetDeployedComponentMetadataRequest, GetDeployedComponentMetadataResponse,
+    GetDeployedComponentMetadataSuccessResponse, GetResourceDefinitionByIdRequest,
+    GetResourceDefinitionByIdResponse, GetResourceDefinitionByIdSuccessResponse,
+    GetResourceDefinitionByNameRequest, GetResourceDefinitionByNameResponse,
+    GetResourceDefinitionByNameSuccessResponse, GetResourceLimitsRequest,
+    GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
     GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
     GetToolDeploymentStateResponse, GetToolDeploymentStateSuccessResponse,
     RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeByNamesRequest,
@@ -69,9 +71,10 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
-    get_current_environment_state_response, get_deployed_component_metadata_response,
-    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
-    get_resource_limits_response, get_tool_deployment_state_response, registry_service_error,
+    get_current_environment_state_response, get_deployed_agent_type_response,
+    get_deployed_component_metadata_response, get_resource_definition_by_id_response,
+    get_resource_definition_by_name_response, get_resource_limits_response,
+    get_tool_deployment_state_response, registry_service_error,
     resolve_agent_type_by_names_response, resolve_component_response, resolve_type_id_response,
     revoke_card_response, update_worker_connection_limit_response,
 };
@@ -880,6 +883,28 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn get_deployed_agent_type_internal(
+        &self,
+        request: GetDeployedAgentTypeRequest,
+    ) -> Result<GetDeployedAgentTypeSuccessResponse, GrpcApiError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+
+        let agent_type = match self
+            .deployment_service
+            .get_deployed_agent_type(environment_id, &AgentTypeName(request.agent_type_name))
+            .await
+        {
+            Ok(deployed) => Some(RegisteredAgentType::from(deployed).into()),
+            Err(DeploymentError::AgentTypeNotFound(_)) => None,
+            Err(error) => return Err(error.into()),
+        };
+
+        Ok(GetDeployedAgentTypeSuccessResponse { agent_type })
+    }
+
     async fn resolve_agent_type_by_names_internal(
         &self,
         request: ResolveAgentTypeByNamesRequest,
@@ -1478,6 +1503,32 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(ResolveTypeIdResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_deployed_agent_type(
+        &self,
+        request: Request<GetDeployedAgentTypeRequest>,
+    ) -> Result<Response<GetDeployedAgentTypeResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_deployed_agent_type",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            agent_type_name = &request.agent_type_name,
+        );
+
+        let response = match self
+            .get_deployed_agent_type_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_deployed_agent_type_response::Result::Success(result),
+            Err(error) => get_deployed_agent_type_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetDeployedAgentTypeResponse {
             result: Some(response),
         }))
     }

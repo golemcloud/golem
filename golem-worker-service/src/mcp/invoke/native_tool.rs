@@ -11,7 +11,8 @@ use golem_api_grpc::proto::golem::worker::{
     StreamTerminalAuthor, ToolByteStreamRole, input_stream_item, invocation_request,
     invocation_response, invocation_session_completion, invocation_session_result,
 };
-use golem_common::model::agent::{OwnerKind, Principal};
+use golem_common::model::AgentId;
+use golem_common::model::agent::Principal;
 use golem_common::model::card::{
     AgentResourcePattern, AgentVerb, ClassPermissionTarget, EffectiveSurface, GrantSurface,
     PermissionTarget,
@@ -74,7 +75,14 @@ fn invocation_auth(
             application: deployment.application_name.clone(),
             environment: deployment.environment_name.clone(),
             component: export.owner_component_name.clone(),
-            agent: AgentOwnerLeafPattern::Agent(OwnerKind::external_tool_instance_name(key)),
+            agent: AgentOwnerLeafPattern::agent(
+                AgentId::external_tool_owner(
+                    deployment.environment_id,
+                    export.owner_component_id,
+                    key,
+                ),
+                None,
+            ),
         },
         verb: Some(AgentVerb::Invoke),
         resource: AgentResourcePattern::Any,
@@ -127,6 +135,7 @@ pub async fn invoke(
     let session = worker_service
         .invoke_internal_tool_session_v1(
             PublicToolSessionStart {
+                environment_id: deployment.environment_id,
                 application: deployment.application_name.0.clone(),
                 environment: deployment.environment_name.0.clone(),
                 target: PublicNativeToolTarget::Component {
@@ -533,10 +542,8 @@ mod tests {
             },
             schema: SchemaGraph::empty(),
             output_schema: None,
-            agent_id: AgentId {
-                component_id: ComponentId(uuid::Uuid::from_u128(20)),
-                agent_id: "native-mcp-test".to_string(),
-            },
+            agent_id: AgentId::from_parts(0, 20),
+            component_id: ComponentId(uuid::Uuid::from_u128(20)),
             application: ApplicationName("application".to_string()),
             environment: EnvironmentName("environment".to_string()),
             target: SessionInvocationTarget::ExternalTool {
@@ -625,7 +632,7 @@ mod tests {
             high_bits: 0,
             low_bits: n,
         };
-        let agent = Some(session.agent_id.clone().into());
+        let agent = Some(session.agent_id.into());
         let environment = Some(golem_api_grpc::proto::golem::common::EnvironmentId {
             value: Some(uuid(3)),
         });
@@ -642,11 +649,11 @@ mod tests {
                 stream_id: Some(uuid(id)),
                 producer_generation: 0,
                 producer_environment_id: environment,
-                producer: agent.clone(),
+                producer: agent,
                 expected_producer_fingerprint: Some(uuid(4)),
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: environment,
-                    callee: agent.clone(),
+                    callee: agent,
                     callee_fingerprint: Some(uuid(4)),
                     idempotency_key: Some(uuid(6)),
                 }),
@@ -865,7 +872,7 @@ mod tests {
         };
         let (mut session, accepted) = byte_session_with_outputs(false, true, true);
         let result = InvocationSessionResult {
-            agent_id: accepted.agent_id.clone(),
+            agent_id: accepted.agent_id,
             component_revision: accepted.component_revision,
             idempotency_key: accepted.idempotency_key,
             result: Some(invocation_session_result::Result::ToolResult(
@@ -1247,6 +1254,6 @@ mod tests {
             InvocationRequestKey::try_from(starts[1].request_key.clone().unwrap()).unwrap();
         assert!(matches!(first, InvocationRequestKey::Unkeyed(_)));
         assert_ne!(first, second);
-        assert_ne!(starts[0].agent_id, starts[1].agent_id);
+        assert_ne!(starts[0].target, starts[1].target);
     }
 }

@@ -29,6 +29,54 @@ enum NameLookupError {
     Registry(RegistryServiceError),
 }
 
+/// Invalidation generations of cached values that a deployment makes stale.
+///
+/// A fetch records [`Self::current`] before its registry call. A fetched value is valid only
+/// while [`Self::is_current`] holds for it, so a fetch that is in flight during an invalidation
+/// of its environment is dropped and repeated instead of keeping the old value.
+#[derive(Default)]
+pub struct InvalidationGenerations {
+    generation: AtomicU64,
+    invalidated_at: Mutex<HashMap<EnvironmentId, u64>>,
+    all_invalidated_at: AtomicU64,
+}
+
+impl InvalidationGenerations {
+    /// The generation to record before a registry call.
+    pub fn current(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Invalidates the environment's values and returns the new generation. Cached values of
+    /// the environment with an older generation are stale.
+    pub fn invalidate(&self, environment_id: EnvironmentId) -> u64 {
+        let mut invalidated_at = self.invalidated_at.lock().unwrap();
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        invalidated_at.insert(environment_id, generation);
+        generation
+    }
+
+    /// Invalidates the values of every environment and returns the new generation.
+    pub fn invalidate_all(&self) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.all_invalidated_at
+            .fetch_max(generation, Ordering::SeqCst);
+        generation
+    }
+
+    /// Whether a value of the environment fetched at `generation` is still valid.
+    pub fn is_current(&self, environment_id: EnvironmentId, generation: u64) -> bool {
+        let environment = self
+            .invalidated_at
+            .lock()
+            .unwrap()
+            .get(&environment_id)
+            .copied()
+            .unwrap_or(0);
+        generation >= environment.max(self.all_invalidated_at.load(Ordering::SeqCst))
+    }
+}
+
 /// Resolves the type ID in an agent ID's tag through the registry.
 ///
 /// The kind and name of a type ID never change, so they are cached without invalidation. A
@@ -36,17 +84,14 @@ enum NameLookupError {
 /// deployment can assign it. The implementing component changes with each deployment, so it is
 /// cached until [`Self::invalidate_environment`] is called for its environment.
 ///
-/// Each cached implementer records the invalidation generation from before its registry call.
-/// A value whose registry call started before the latest invalidation of its environment is
-/// dropped and fetched again, so a lookup that is in flight during an invalidation never keeps
-/// the old implementer. Registry calls run in their own task, so a cancelled caller never
-/// leaves a pending entry behind.
+/// Each cached implementer records its [`InvalidationGenerations`] generation, so a lookup that
+/// is in flight during an invalidation never keeps the old implementer. Registry calls run in
+/// their own task, so a cancelled caller never leaves a pending entry behind.
 pub struct TypeIdResolutionCache {
     registry_service: Arc<dyn RegistryService>,
     names: Cache<Key, (), Arc<(TypeIdKind, String)>, NameLookupError>,
     implementers: Cache<Key, (), FetchedImplementer, RegistryServiceError>,
-    generation: Arc<AtomicU64>,
-    invalidated_at: Mutex<HashMap<EnvironmentId, u64>>,
+    generations: Arc<InvalidationGenerations>,
 }
 
 #[derive(Clone)]
@@ -71,8 +116,7 @@ impl TypeIdResolutionCache {
                 BackgroundEvictionMode::None,
                 "type_id_implementers",
             ),
-            generation: Arc::new(AtomicU64::new(0)),
-            invalidated_at: Mutex::new(HashMap::new()),
+            generations: Arc::default(),
         }
     }
 
@@ -113,11 +157,11 @@ impl TypeIdResolutionCache {
         let key = (environment_id, type_id);
         loop {
             let registry_service = self.registry_service.clone();
-            let generation = self.generation.clone();
+            let generations = self.generations.clone();
             let fetched = self
                 .implementers
                 .get_or_insert_simple_spawned(&key, move || async move {
-                    let generation = generation.load(Ordering::SeqCst);
+                    let generation = generations.current();
                     let implementer = registry_service
                         .resolve_type_id(environment_id, type_id)
                         .await?
@@ -128,7 +172,10 @@ impl TypeIdResolutionCache {
                     })
                 })
                 .await?;
-            if fetched.generation >= self.invalidated_at(environment_id) {
+            if self
+                .generations
+                .is_current(environment_id, fetched.generation)
+            {
                 return Ok(fetched.implementer);
             }
             self.implementers
@@ -140,12 +187,7 @@ impl TypeIdResolutionCache {
     /// Drops the cached implementers of the environment's types, for example after a
     /// `DeploymentChanged` event. The cached names stay.
     pub async fn invalidate_environment(&self, environment_id: EnvironmentId) {
-        let generation = {
-            let mut invalidated_at = self.invalidated_at.lock().unwrap();
-            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-            invalidated_at.insert(environment_id, generation);
-            generation
-        };
+        let generation = self.generations.invalidate(environment_id);
         for (key, _) in self.implementers.iter().await {
             if key.0 == environment_id {
                 self.implementers
@@ -155,13 +197,15 @@ impl TypeIdResolutionCache {
         }
     }
 
-    fn invalidated_at(&self, environment_id: EnvironmentId) -> u64 {
-        self.invalidated_at
-            .lock()
-            .unwrap()
-            .get(&environment_id)
-            .copied()
-            .unwrap_or(0)
+    /// Drops the cached implementers of every environment, for example after missed
+    /// invalidation events. The cached names stay.
+    pub async fn invalidate_all(&self) {
+        let generation = self.generations.invalidate_all();
+        for (key, _) in self.implementers.iter().await {
+            self.implementers
+                .remove_if_cached(&key, |cached| cached.generation < generation)
+                .await;
+        }
     }
 }
 

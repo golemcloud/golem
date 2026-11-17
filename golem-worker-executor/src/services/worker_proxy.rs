@@ -445,13 +445,13 @@ impl WorkerProxy for RemoteWorkerProxy {
                 Box::pin(client.prepare_worker(LaunchNewWorkerRequest {
                     component_id: Some(component_id.into()),
                     constructor: Some(constructor.clone()),
-                    unkeyed_id: unkeyed_id.clone(),
+                    unkeyed_id,
                     env: caller_env.clone(),
                     config: config.clone().into_iter().map(Into::into).collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                        parent: Some(caller_agent_id.clone().into()),
+                        parent: Some((*caller_agent_id).into()),
                         env: caller_env,
                         tracing: Some(caller_stack.clone().into()),
                     }),
@@ -505,13 +505,13 @@ impl WorkerProxy for RemoteWorkerProxy {
                 Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
                     component_id: Some(component_id.into()),
                     constructor: Some(constructor.clone()),
-                    unkeyed_id: unkeyed_id.clone(),
+                    unkeyed_id,
                     env: caller_env.clone(),
                     config: config.clone().into_iter().map(Into::into).collect(),
                     ignore_already_existing: !exclusive,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                        parent: Some(caller_agent_id.clone().into()),
+                        parent: Some((*caller_agent_id).into()),
                         env: caller_env,
                         tracing: Some(caller_stack.clone().into()),
                     }),
@@ -611,6 +611,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                 Box::pin(client.invoke_agent(InvokeAgentRequest {
                     target: Some(proto_target.target.clone()),
                     constructor: proto_target.constructor.clone(),
+                    component_id: proto_target.component_id,
                     method_name: Some(method_name.clone()),
                     method_parameters: Some(proto_method_parameters.clone()),
                     mode: proto_mode,
@@ -618,7 +619,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     idempotency_key: idempotency_key.clone().map(|k| k.into()),
                     request_key: Some(request_key.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                        parent: Some(caller_agent_id.clone().into()),
+                        parent: Some(caller_agent_id.into()),
                         env: caller_env.clone(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
@@ -729,11 +730,11 @@ impl WorkerProxy for RemoteWorkerProxy {
     ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
         let key = request.operation.key();
         let (target_agent_id, target_environment_id) = if request.operation.targets_consumer() {
-            (key.consumer.clone(), key.consumer_environment_id)
+            (key.consumer, key.consumer_environment_id)
         } else {
-            (key.producer.clone(), key.producer_environment_id)
+            (key.producer, key.producer_environment_id)
         };
-        let consumer_agent_id = key.consumer.clone();
+        let consumer_agent_id = key.consumer;
         let consumer_environment_id = key.consumer_environment_id;
         let expected_consumer_fingerprint = key.expected_consumer_fingerprint;
         let payload = golem_common::serialization::serialize(&request).map_err(|error| {
@@ -744,11 +745,11 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("control_durable_stream_attachment", move |client| {
                 Box::pin(client.control_durable_stream_attachment(
                     DurableStreamAttachmentControlRequest {
-                        producer_agent_id: Some(target_agent_id.clone().into()),
+                        producer_agent_id: Some(target_agent_id.into()),
                         producer_environment_id: Some(target_environment_id.into()),
                         payload: payload.clone(),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_agent_id: Some(consumer_agent_id.into()),
                         consumer_environment_id: Some(consumer_environment_id.into()),
                         expected_consumer_fingerprint: Some(expected_consumer_fingerprint.0.into()),
                     },
@@ -788,17 +789,17 @@ impl WorkerProxy for RemoteWorkerProxy {
             DurableStreamReadRequest::AttachedConsumer(request) => {
                 let key = &request.attachment;
                 (
-                    key.producer.clone(),
+                    key.producer,
                     key.producer_environment_id,
                     Some((
-                        key.consumer.clone(),
+                        key.consumer,
                         key.consumer_environment_id,
                         key.expected_consumer_fingerprint,
                     )),
                 )
             }
             DurableStreamReadRequest::AuthorizedExport(request) => (
-                request.handle.producer.clone(),
+                request.handle.producer,
                 request.handle.producer_environment_id,
                 None,
             ),
@@ -819,11 +820,11 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("read_durable_stream_segment", move |client| {
                 Box::pin(
                     client.read_durable_stream_segment(DurableStreamSegmentReadRequest {
-                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_agent_id: Some(producer_agent_id.into()),
                         producer_environment_id: Some(producer_environment_id.into()),
                         payload: payload.clone(),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        consumer_agent_id: consumer_agent_id.clone(),
+                        consumer_agent_id,
                         consumer_environment_id,
                         expected_consumer_fingerprint,
                     }),
@@ -872,7 +873,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("deliver_card_transfer", move |client| {
                 Box::pin(client.deliver_card_transfer(DeliverCardTransferRequest {
-                    target_agent_id: Some(target_agent_id.clone().into()),
+                    target_agent_id: Some((*target_agent_id).into()),
                     environment_id: Some(environment_id.into()),
                     transfer_id: Some(transfer_id.into()),
                     card: card.clone(),
@@ -971,7 +972,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("fork_worker", move |client| {
                 Box::pin(client.fork_worker(ForkWorkerRequest {
                     source_agent_id: Some(source_agent_id.agent_id().into()),
-                    target_agent_id: Some(target_agent_id.clone().into()),
+                    target_agent_id: Some((*target_agent_id).into()),
                     oplog_index_cutoff: u64::from(*oplog_index_cutoff),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: Some(principal.clone().into()),
@@ -1038,7 +1039,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("complete_promise", move |client| {
                 Box::pin(client.complete_promise(CompletePromiseRequest {
-                    agent_id: Some(promise_id.agent_id.clone().into()),
+                    agent_id: Some(promise_id.agent_id.into()),
                     complete_parameters: Some(CompleteParameters {
                         oplog_idx: promise_id.oplog_idx.into(),
                         fingerprint: Some(promise_id.fingerprint.0.into()),
@@ -1108,7 +1109,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     auth_ctx: Some(auth.clone().into()),
                     scheduled: Some(
                         golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                            owner_agent_id: Some(owner.clone().into()),
+                            owner_agent_id: Some((*owner).into()),
                             schedule_id: Some(receipt.id.into()),
                             target_environment_id: Some(target.environment_id.into()),
                         },
@@ -1145,11 +1146,12 @@ impl WorkerProxy for RemoteWorkerProxy {
                     target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
                         target: Some(
                             golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
-                                agent_id.clone().into(),
+                                (*agent_id).into(),
                             ),
                         ),
                     }),
                     constructor: None,
+                    component_id: None,
                     method_name: None,
                     method_parameters: None,
                     mode: proto_mode,
@@ -1206,7 +1208,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("process_oplog_entries", move |client| {
                 Box::pin(client.process_oplog_entries(ProcessOplogEntriesRequest {
-                    agent_id: Some(target_agent_id.clone().into()),
+                    agent_id: Some((*target_agent_id).into()),
                     environment_id: Some(environment_id.into()),
                     component_revision: component_revision.into(),
                     idempotency_key: Some(idempotency_key.into()),
@@ -1341,7 +1343,7 @@ mod tests {
         start: &golem_api_grpc::proto::golem::worker::InvocationStart,
     ) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
         match start.target.as_ref()?.target.as_ref()? {
-            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id) => Some(id.clone()),
+            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id) => Some(*id),
             golem_api_grpc::proto::golem::worker::agent_target::Target::Key(_) => None,
         }
     }
@@ -1592,7 +1594,7 @@ mod tests {
                     let accepted = InvocationResponse {
                         response: Some(invocation_response::Response::Accepted(
                             InvocationAccepted {
-                                agent_id: resume.agent_id.clone(),
+                                agent_id: resume.agent_id,
                                 idempotency_key: resume.idempotency_key,
                                 component_revision: Some(0),
                                 attachment_id: resume.attachment_id,
@@ -1670,7 +1672,7 @@ mod tests {
         let target = creating_target(OwnedAgentId::new(EnvironmentId::new(), &caller));
         let fingerprint = AgentFingerprint::new();
         let creation_error =
-            WorkerExecutorError::worker_creation_failed(caller.clone(), "constructor failed");
+            WorkerExecutorError::worker_creation_failed(caller, "constructor failed");
         service.create_responses.lock().unwrap().extend([
             Err(Status::unavailable("creation response lost")),
             Ok(LaunchNewWorkerResponse {
@@ -1877,7 +1879,7 @@ mod tests {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             stream_id: StreamId(uuid::Uuid::new_v4()),
             producer_environment_id: identity.environment_id,
-            producer: identity.agent_id.clone(),
+            producer: identity.agent_id,
             expected_producer_fingerprint: identity.fingerprint,
             producer_generation: OplogIndex::NONE,
             source_invocation: identity.invocation.clone(),
@@ -1971,10 +1973,7 @@ mod tests {
                     actual.payload,
                     golem_common::serialization::serialize(&request).unwrap()
                 );
-                assert_eq!(
-                    actual.producer_agent_id,
-                    Some(identity.agent_id.clone().into())
-                );
+                assert_eq!(actual.producer_agent_id, Some(identity.agent_id.into()));
                 assert_eq!(
                     actual.consumer_agent_id.is_some(),
                     matches!(request, DurableStreamReadRequest::AttachedConsumer(_))
@@ -2037,7 +2036,7 @@ mod tests {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 stream_id,
                 producer_environment_id: identity.environment_id,
-                producer: identity.agent_id.clone(),
+                producer: identity.agent_id,
                 expected_producer_fingerprint: identity.fingerprint,
                 producer_generation: OplogIndex::NONE,
                 source_invocation: identity.invocation.clone(),
@@ -2132,11 +2131,8 @@ mod tests {
         let recorded = std::mem::take(&mut *requests.lock().unwrap());
         assert_eq!(recorded.len(), 4);
         for actual in &recorded {
-            assert_eq!(
-                actual.producer_agent_id,
-                Some(identity.agent_id.clone().into())
-            );
-            assert_eq!(actual.consumer_agent_id, Some(key.consumer.clone().into()));
+            assert_eq!(actual.producer_agent_id, Some(identity.agent_id.into()));
+            assert_eq!(actual.consumer_agent_id, Some(key.consumer.into()));
             assert_eq!(actual.payload, recorded[0].payload);
         }
         assert!(responses.lock().unwrap().is_empty());
@@ -2240,7 +2236,7 @@ mod tests {
                 None,
                 InvocationFreshnessDisposition::KnownFresh,
                 None,
-                agent_id.clone(),
+                agent_id,
                 HashMap::new(),
                 InvocationContextStack::fresh(),
                 vec![],
@@ -2422,12 +2418,12 @@ mod tests {
                 format_version: 1,
                 stream_id: Some(uuid::Uuid::new_v4().into()),
                 producer_environment_id: Some(caller_environment.into()),
-                producer: Some(caller.clone().into()),
+                producer: Some(caller.into()),
                 expected_producer_fingerprint: Some(caller_fingerprint.0.into()),
                 producer_generation: 0,
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: Some(caller_environment.into()),
-                    callee: Some(caller.clone().into()),
+                    callee: Some(caller.into()),
                     callee_fingerprint: Some(caller_fingerprint.0.into()),
                     idempotency_key: Some(InvocationId(Uuid::new_v4()).into()),
                 }),
@@ -2441,7 +2437,7 @@ mod tests {
 
         let origin = StreamInvocationIdentity {
             callee_environment_id: Some(caller_environment.into()),
-            callee: Some(caller.clone().into()),
+            callee: Some(caller.into()),
             callee_fingerprint: Some(caller_fingerprint.0.into()),
             idempotency_key: Some(InvocationId(Uuid::from_u128(1)).into()),
         };
@@ -2455,7 +2451,7 @@ mod tests {
                 vec![input_mapping],
                 AgentFingerprint::new(),
                 uuid::Uuid::new_v4(),
-                origin.clone(),
+                origin,
                 accepted_sender,
                 AccountId::new(),
                 &caller,
@@ -2488,7 +2484,7 @@ mod tests {
         };
         assert_eq!(first_start, replayed_start);
         assert_eq!(first_start.origin_invocation, Some(origin));
-        assert_eq!(accepted.agent_id, start_agent_id(&first_start));
+        assert_eq!(accepted.agent_id, start_agent_id(first_start));
         assert_eq!(
             accepted.idempotency_key,
             Some(accepted_invocation_id().into())
@@ -2522,7 +2518,7 @@ mod tests {
             panic!("third request was not ResumeAttach");
         };
         assert_eq!(resume.idempotency_key, accepted.idempotency_key);
-        assert_eq!(resume.agent_id, start_agent_id(&first_start));
+        assert_eq!(resume.agent_id, start_agent_id(first_start));
         assert_eq!(resume.environment_id, first_start.environment_id);
         assert_eq!(
             resume.expected_callee_fingerprint,

@@ -310,6 +310,19 @@ impl ParsedAgentKey {
         crate::model::agent::structural_format::format_structural_typed(&self.parameters)
             .map_err(|err| err.to_string())
     }
+
+    /// The key of this constructor, read back from its canonical parameter text against the
+    /// constructor schema that `resolver` gives, so its parameters carry the implementing
+    /// component's graph instead of the caller's. Each service that derives a keyed agent ID
+    /// derives it from this key, so all of them reach the same ID.
+    pub fn canonical_key(
+        &self,
+        resolver: impl AgentTypeSchemaResolver,
+    ) -> Result<AgentKey, String> {
+        let (key, _) =
+            AgentKey::parse_parts(&self.agent_type.0, &self.canonical_parameters()?, resolver)?;
+        Ok(key)
+    }
 }
 
 impl From<AgentKey> for ParsedAgentKey {

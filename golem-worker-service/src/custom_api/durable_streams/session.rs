@@ -23,6 +23,7 @@ use super::super::{ResponseBody, RichRequest, RouteExecutionResult};
 use super::encoding::{metadata_response, offset_text};
 use super::expiry::{add_expiry_headers, policies_match};
 use super::{DurableStreamsHandler, body_response, response, route_method};
+use crate::service::worker::RoutedTarget;
 use golem_api_grpc::proto::golem::worker::{
     AgentInvocationMode, InvocationContext, InvocationStart,
 };
@@ -53,7 +54,7 @@ impl DurableStreamsHandler {
         request: &mut RichRequest,
         route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         session: &str,
         creation_intent: StreamSessionCreationIntent,
         expiry_policy: Option<StreamSessionExpiryPolicy>,
@@ -97,8 +98,10 @@ impl DurableStreamsHandler {
         })
         .map_err(|e| anyhow::anyhow!("invalid durable stream input: {e}"))?;
         let principal = principal_from_request(request)?;
-        let start = InvocationStart {
-            agent_id: Some(agent_id.clone().into()),
+        let mut start = InvocationStart {
+            target: None,
+            constructor: None,
+            component_id: None,
             method_name: Some(behaviour.method_name.clone()),
             external_tool: None,
             input: Some(input),
@@ -129,9 +132,10 @@ impl DurableStreamsHandler {
             scope_card: None,
             origin_invocation: None,
         };
+        target.apply(&mut start);
         self.worker_service
             .create_stream_session(
-                agent_id,
+                &target.agent_id,
                 CreateStreamSessionRequest {
                     public_session_id: session.to_owned(),
                     route_scope: super::route_scope(route),
@@ -151,7 +155,7 @@ impl DurableStreamsHandler {
         request: &mut RichRequest,
         route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         session: &str,
         expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
@@ -160,7 +164,7 @@ impl DurableStreamsHandler {
                 request,
                 route,
                 behaviour,
-                agent_id,
+                target,
                 session,
                 StreamSessionCreationIntent::ExplicitPut,
                 expiry_policy,
@@ -192,11 +196,12 @@ impl DurableStreamsHandler {
         request: &mut RichRequest,
         route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         session: &str,
         slot: Option<&str>,
         expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let agent_id = &target.agent_id;
         if let Some(slot) = slot {
             let Some(declared_slot) = declared_slot(behaviour, slot)? else {
                 return Ok(response(StatusCode::NOT_FOUND));
@@ -229,7 +234,7 @@ impl DurableStreamsHandler {
                             request,
                             route,
                             behaviour,
-                            agent_id,
+                            target,
                             session,
                             StreamSessionCreationIntent::ExplicitPut,
                             expiry_policy,
@@ -277,7 +282,7 @@ impl DurableStreamsHandler {
                 request,
                 route,
                 behaviour,
-                agent_id,
+                target,
                 session,
                 StreamSessionCreationIntent::ExplicitPut,
                 expiry_policy,
@@ -328,7 +333,7 @@ impl DurableStreamsHandler {
             .control_export_stream(
                 agent_id,
                 DurableStreamAttachmentControlRequest {
-                    producer_agent_id: Some(agent_id.clone().into()),
+                    producer_agent_id: Some((*agent_id).into()),
                     producer_environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
                     export_control: Some(ExportStreamControl {

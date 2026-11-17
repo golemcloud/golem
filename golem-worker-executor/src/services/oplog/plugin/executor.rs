@@ -83,7 +83,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             .await?;
                         let owned_agent_id = OwnedAgentId {
                             environment_id: plugin_component.environment_id,
-                            agent_id: agent_id.clone(),
+                            agent_id,
                         };
                         let running_plugin = RunningPlugin {
                             owned_agent_id: owned_agent_id.clone(),
@@ -195,12 +195,15 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 use std::collections::HashMap;
                 let latest_status = &worker_metadata.last_known_status;
                 golem_api_grpc::proto::golem::worker::AgentMetadata {
-                    agent_id: Some(worker_metadata.agent_id.clone().into()),
+                    agent_id: Some(worker_metadata.agent_id.into()),
                     owner_kind: worker_metadata.owner_kind.into(),
                     agent_type_name: worker_metadata
                         .agent_type_name
                         .as_ref()
                         .map(|name| name.0.clone()),
+                    canonical_key: worker_metadata.canonical_key.clone(),
+                    constructor_parameters: worker_metadata.constructor_parameters.clone(),
+                    component_id: Some(worker_metadata.component_id.into()),
                     environment_id: Some(worker_metadata.environment_id.into()),
                     env: HashMap::from_iter(worker_metadata.env.iter().cloned()),
                     config: worker_metadata
