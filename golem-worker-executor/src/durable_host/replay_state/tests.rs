@@ -3494,6 +3494,178 @@ fn invocation_finished_for(invocation_id: golem_common::model::InvocationId) -> 
     }
 }
 
+#[test]
+#[test_r::timeout("30s")]
+async fn invocation_local_terminal_survives_the_final_host_call_and_replay_target_changes() {
+    let anchor = OplogIndex::from_u64(2);
+    let error = AgentError::InternalError("method gave up".into());
+    let terminal = OplogIndex::from_u64(5);
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        OplogEntry::agent_invocation_failed(None, replayed_invocation_id(), error.clone(), anchor),
+        unpinned_invocation_started(),
+        invocation_finished(),
+    ])
+    .await;
+    assert_eq!(
+        rs.invocation_finish_before(OplogIndex::from_u64(6)),
+        Some(terminal)
+    );
+    assert!(rs.invocation_has_recorded_local_failure(anchor));
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    assert!(!rs.invocation_has_recorded_local_failure(anchor));
+    rs.set_replay_target(OplogIndex::from_u64(7)).await.unwrap();
+    assert!(rs.invocation_has_recorded_local_failure(anchor));
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .unwrap();
+    let call = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(call).await.unwrap();
+    assert!(
+        rs.last_replayed_index() < terminal,
+        "the host call must not consume the local terminal as a hint"
+    );
+    assert_eq!(
+        rs.get_oplog_entry_agent_method_failure(&replayed_invocation_id(), anchor, &error, None)
+            .await
+            .unwrap(),
+        Some(terminal)
+    );
+    assert_eq!(rs.last_replayed_index(), terminal);
+    assert!(
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+}
+
+#[test]
+async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_payload_or_parent() {
+    let anchor = OplogIndex::from_u64(2);
+    let error = AgentError::InternalError("method gave up".into());
+    for entry in [
+        invocation_finished(),
+        OplogEntry::agent_invocation_failed(
+            None,
+            golem_common::model::InvocationId(uuid::Uuid::from_u128(99)),
+            error.clone(),
+            anchor,
+        ),
+        OplogEntry::agent_invocation_failed(
+            Some(OplogIndex::INITIAL),
+            replayed_invocation_id(),
+            error.clone(),
+            anchor,
+        ),
+        OplogEntry::agent_invocation_failed(
+            None,
+            replayed_invocation_id(),
+            error.clone(),
+            anchor.next(),
+        ),
+        OplogEntry::agent_invocation_failed(
+            None,
+            replayed_invocation_id(),
+            AgentError::InternalError("other".into()),
+            anchor,
+        ),
+    ] {
+        let rs = replay_state_over(vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            entry,
+        ])
+        .await;
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            rs.get_oplog_entry_agent_method_failure(
+                &replayed_invocation_id(),
+                anchor,
+                &error,
+                None
+            )
+            .await,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+    }
+    for success in [false, true] {
+        let rs = replay_state_over(vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            OplogEntry::agent_invocation_failed(
+                None,
+                replayed_invocation_id(),
+                error.clone(),
+                anchor,
+            ),
+        ])
+        .await;
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .unwrap();
+        let result = if success {
+            rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
+                .await
+                .map(|_| ())
+        } else {
+            rs.get_oplog_entry_agent_invocation_started()
+                .await
+                .map(|_| ())
+        };
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+    }
+}
+
+#[test]
+async fn invocation_local_terminal_is_optional_only_at_the_natural_tail() {
+    let anchor = OplogIndex::from_u64(2);
+    let error = AgentError::InternalError("method gave up".into());
+    for later_history in [false, true] {
+        let mut entries = vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+        ];
+        if later_history {
+            entries.push(unpinned_invocation_started());
+        }
+        let rs = replay_state_over(entries).await;
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .unwrap();
+        let result = rs
+            .get_oplog_entry_agent_method_failure(&replayed_invocation_id(), anchor, &error, None)
+            .await;
+        if later_history {
+            assert!(matches!(
+                result,
+                Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+            ));
+        } else {
+            assert!(result.unwrap().is_none());
+        }
+    }
+}
+
 async fn read_invocation_finished(
     rs: &ReplayState,
 ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
@@ -5485,6 +5657,61 @@ async fn replay_consumer_observations_reserve_item_and_terminal_guest_boundaries
         a.acknowledge();
         assert_eq!(next.await.unwrap().0, OplogIndex::from_u64(5));
     }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn replay_outcome_consumption_has_its_own_boundary_after_eof() {
+    use golem_common::model::durable_stream::StreamSessionRecord;
+
+    let eof = consumer_observation(0, true, true);
+    let mut outcome = eof.clone();
+    let OplogEntry::StreamSession {
+        record: OplogPayload::Inline(record),
+        ..
+    } = &mut outcome
+    else {
+        unreachable!()
+    };
+    let StreamSessionRecord::ConsumerTerminal(terminal) = record.as_ref() else {
+        unreachable!()
+    };
+    **record = StreamSessionRecord::ConsumerOutcome(terminal.clone());
+    let replay = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        eof,
+        remove_retry_policy(),
+        outcome,
+        remove_retry_policy(),
+    ])
+    .await;
+
+    let eof = replay
+        .await_stream_observation(OplogIndex::from_u64(2))
+        .await
+        .unwrap();
+    eof.acknowledge();
+    assert_eq!(
+        replay.get_oplog_entry(None).await.unwrap().0,
+        OplogIndex::from_u64(3)
+    );
+    let mut next = Box::pin(replay.get_oplog_entry(None));
+    assert!(
+        futures::poll!(next.as_mut()).is_pending(),
+        "EOF does not acknowledge the outcome"
+    );
+    let outcome = replay
+        .await_stream_observation(OplogIndex::from_u64(4))
+        .await
+        .unwrap();
+    assert!(
+        futures::poll!(next.as_mut()).is_pending(),
+        "preparing the outcome is not consumption"
+    );
+    outcome.acknowledge();
+    assert_eq!(next.await.unwrap().0, OplogIndex::from_u64(5));
 }
 
 #[test]

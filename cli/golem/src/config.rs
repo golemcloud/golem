@@ -34,7 +34,6 @@ use golem_cli::config::{
 use golem_cli::fs;
 use golem_cli::model::app::ResolvedLocalServer;
 use golem_common::config::{DbConfig, DbPostgresConfig, DbSqliteConfig, env_config_provider};
-use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::MonthlyPlanAmounts;
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -47,6 +46,7 @@ use golem_registry_service::config::{
     BuiltinArtifactsConfig, BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig,
     PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
 };
+use golem_schema::Empty;
 use golem_service_base::config::{
     BlobStorageConfig, LocalFileSystemBlobStorageConfig, S3BlobStorageConfig,
 };

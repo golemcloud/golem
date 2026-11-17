@@ -361,6 +361,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             producer_disposal_tasks: Some(crate::worker::tasks::NativeReconstructionTasks::new(
                 &worker.tasks,
             )?),
+            schema_producers: stream_outcome::ProducerOutcomeScope::new(worker.tasks.clone()),
+            schema_output_tasks: Mutex::new(Some(
+                crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks)?,
+            )),
             primary_invocation_start_index: None,
             invocation_principal: None,
             invocation_id: None,
@@ -572,7 +576,7 @@ impl PrivateDurableWorkerState {
             open_tcp_input_streams: HashSet::new(),
             open_tcp_output_streams: HashSet::new(),
             p2_timer_deadlines: HashMap::new(),
-            tcp_taken_streams: HashMap::new(),
+            socket_entries: sockets::SocketEntries::default(),
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,

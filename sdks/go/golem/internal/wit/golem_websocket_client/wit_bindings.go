@@ -270,69 +270,20 @@ func WebsocketConnectionConnect(url string, headers witTypes.Option[[]witTypes.T
 		panic("unreachable")
 	}
 	wasm_import_static_websocket_connection_connect(uintptr(utf8), uint32(len(url)), option, option2, option3, option4, option5, returnArea)
-	var result12 witTypes.Result[*WebsocketConnection, Error]
+	var result7 witTypes.Result[*WebsocketConnection, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result12 = witTypes.Ok[*WebsocketConnection, Error](WebsocketConnectionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result7 = witTypes.Ok[*WebsocketConnection, Error](WebsocketConnectionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result6 := wasm_lift_1_t1227(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorSendFailure(value6)
-
-		case 2:
-			value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorReceiveFailure(value7)
-
-		case 3:
-			value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorProtocolError(value8)
-
-		case 4:
-			var option10 witTypes.Option[CloseInfo]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option10 = witTypes.None[CloseInfo]()
-			case 1:
-				value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
-
-				option10 = witTypes.Some[CloseInfo](CloseInfo{Code: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), Reason: value9})
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorClosed(option10)
-
-		case 5:
-			value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorOther(value11)
-
-		case 6:
-
-			variant = MakeErrorSessionLost()
-
-		default:
-			panic("unreachable")
-		}
-
-		result12 = witTypes.Err[*WebsocketConnection, Error](variant)
+		result7 = witTypes.Err[*WebsocketConnection, Error](result6)
 	default:
 		panic("unreachable")
 	}
-	result13 := result12
-	return result13
+	result8 := result7
+	return result8
 
 }
 
@@ -370,69 +321,20 @@ func (self *WebsocketConnection) Send(message Message) witTypes.Result[witTypes.
 		panic("unreachable")
 	}
 	wasm_import_method_websocket_connection_send((self).Handle(), variant, variant0, variant1, returnArea)
-	var result witTypes.Result[witTypes.Unit, Error]
+	var result2 witTypes.Result[witTypes.Unit, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
+		result2 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		var variant7 Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result := wasm_lift_1_t1227(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant7 = MakeErrorConnectionFailure(value)
-
-		case 1:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorSendFailure(value2)
-
-		case 2:
-			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorReceiveFailure(value3)
-
-		case 3:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorProtocolError(value4)
-
-		case 4:
-			var option witTypes.Option[CloseInfo]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option = witTypes.None[CloseInfo]()
-			case 1:
-				value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
-
-				option = witTypes.Some[CloseInfo](CloseInfo{Code: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), Reason: value5})
-			default:
-				panic("unreachable")
-			}
-
-			variant7 = MakeErrorClosed(option)
-
-		case 5:
-			value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorOther(value6)
-
-		case 6:
-
-			variant7 = MakeErrorSessionLost()
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, Error](variant7)
+		result2 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
 		panic("unreachable")
 	}
-	result8 := result
-	return result8
+	result3 := result2
+	return result3
 
 }
 
@@ -446,84 +348,21 @@ func (self *WebsocketConnection) Receive() witTypes.Result[Message, Error] {
 	returnArea := uintptr(witRuntime.Allocate(pinner, (6 * 4), 4))
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_websocket_connection_receive((self).Handle(), returnArea)))
-	var result witTypes.Result[Message, Error]
+	var result1 witTypes.Result[Message, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		var variant Message
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result := wasm_lift_1_t1229(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeMessageText(value)
-
-		case 1:
-			value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeMessageBinary(value0)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Ok[Message, Error](variant)
+		result1 = witTypes.Ok[Message, Error](result)
 	case 1:
-		var variant7 Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result0 := wasm_lift_1_t1227(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant7 = MakeErrorConnectionFailure(value1)
-
-		case 1:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorSendFailure(value2)
-
-		case 2:
-			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorReceiveFailure(value3)
-
-		case 3:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorProtocolError(value4)
-
-		case 4:
-			var option witTypes.Option[CloseInfo]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option = witTypes.None[CloseInfo]()
-			case 1:
-				value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
-
-				option = witTypes.Some[CloseInfo](CloseInfo{Code: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), Reason: value5})
-			default:
-				panic("unreachable")
-			}
-
-			variant7 = MakeErrorClosed(option)
-
-		case 5:
-			value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant7 = MakeErrorOther(value6)
-
-		case 6:
-
-			variant7 = MakeErrorSessionLost()
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[Message, Error](variant7)
+		result1 = witTypes.Err[Message, Error](result0)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result1
 
 }
 
@@ -537,7 +376,7 @@ func (self *WebsocketConnection) ReceiveWithTimeout(timeoutMs uint64) witTypes.R
 	returnArea := uintptr(witRuntime.Allocate(pinner, (6 * 4), 4))
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_websocket_connection_receive_with_timeout((self).Handle(), int64(timeoutMs), returnArea)))
-	var result witTypes.Result[witTypes.Option[Message], Error]
+	var result1 witTypes.Result[witTypes.Option[Message], Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		var option witTypes.Option[Message]
@@ -546,86 +385,23 @@ func (self *WebsocketConnection) ReceiveWithTimeout(timeoutMs uint64) witTypes.R
 
 			option = witTypes.None[Message]()
 		case 1:
-			var variant Message
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+			result := wasm_lift_1_t1229(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))
 
-				variant = MakeMessageText(value)
-
-			case 1:
-				value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				variant = MakeMessageBinary(value0)
-
-			default:
-				panic("unreachable")
-			}
-
-			option = witTypes.Some[Message](variant)
+			option = witTypes.Some[Message](result)
 		default:
 			panic("unreachable")
 		}
 
-		result = witTypes.Ok[witTypes.Option[Message], Error](option)
+		result1 = witTypes.Ok[witTypes.Option[Message], Error](option)
 	case 1:
-		var variant8 Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result0 := wasm_lift_1_t1227(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant8 = MakeErrorConnectionFailure(value1)
-
-		case 1:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant8 = MakeErrorSendFailure(value2)
-
-		case 2:
-			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant8 = MakeErrorReceiveFailure(value3)
-
-		case 3:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant8 = MakeErrorProtocolError(value4)
-
-		case 4:
-			var option6 witTypes.Option[CloseInfo]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option6 = witTypes.None[CloseInfo]()
-			case 1:
-				value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
-
-				option6 = witTypes.Some[CloseInfo](CloseInfo{Code: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), Reason: value5})
-			default:
-				panic("unreachable")
-			}
-
-			variant8 = MakeErrorClosed(option6)
-
-		case 5:
-			value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant8 = MakeErrorOther(value7)
-
-		case 6:
-
-			variant8 = MakeErrorSessionLost()
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Option[Message], Error](variant8)
+		result1 = witTypes.Err[witTypes.Option[Message], Error](result0)
 	default:
 		panic("unreachable")
 	}
 
-	return result
+	return result1
 
 }
 
@@ -673,68 +449,103 @@ func (self *WebsocketConnection) Close(code witTypes.Option[uint16], reason witT
 		panic("unreachable")
 	}
 	wasm_import_method_websocket_connection_close((self).Handle(), option, option0, option1, option2, option3, returnArea)
-	var result witTypes.Result[witTypes.Unit, Error]
+	var result4 witTypes.Result[witTypes.Unit, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
+		result4 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
+		result := wasm_lift_1_t1227(unsafe.Add(unsafe.Pointer(returnArea), 4))
+
+		result4 = witTypes.Err[witTypes.Unit, Error](result)
+	default:
+		panic("unreachable")
+	}
+	result5 := result4
+	return result5
+
+}
+
+//go:noinline
+func wasm_lift_1_t1227(src unsafe.Pointer) Error {
+	var variant Error
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorConnectionFailure(value0)
+
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorSendFailure(value1)
+
+	case 2:
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorReceiveFailure(value2)
+
+	case 3:
+		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorProtocolError(value3)
+
+	case 4:
+		var option witTypes.Option[CloseInfo]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
 		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = MakeErrorConnectionFailure(value)
-
+			option = witTypes.None[CloseInfo]()
 		case 1:
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+			result := wasm_lift_1_t1225(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 
-			variant = MakeErrorSendFailure(value4)
-
-		case 2:
-			value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorReceiveFailure(value5)
-
-		case 3:
-			value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorProtocolError(value6)
-
-		case 4:
-			var option8 witTypes.Option[CloseInfo]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
-			case 0:
-
-				option8 = witTypes.None[CloseInfo]()
-			case 1:
-				value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))
-
-				option8 = witTypes.Some[CloseInfo](CloseInfo{Code: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), Reason: value7})
-			default:
-				panic("unreachable")
-			}
-
-			variant = MakeErrorClosed(option8)
-
-		case 5:
-			value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorOther(value9)
-
-		case 6:
-
-			variant = MakeErrorSessionLost()
-
+			option = witTypes.Some[CloseInfo](result)
 		default:
 			panic("unreachable")
 		}
 
-		result = witTypes.Err[witTypes.Unit, Error](variant)
+		variant = MakeErrorClosed(option)
+
+	case 5:
+		value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorOther(value4)
+
+	case 6:
+
+		variant = MakeErrorSessionLost()
+
 	default:
 		panic("unreachable")
 	}
-	result10 := result
-	return result10
 
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t1229(src unsafe.Pointer) Message {
+	var variant Message
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeMessageText(value0)
+
+	case 1:
+		value1 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeMessageBinary(value1)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t1225(src unsafe.Pointer) CloseInfo {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+	return CloseInfo{Code: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), Reason: value0}
 }

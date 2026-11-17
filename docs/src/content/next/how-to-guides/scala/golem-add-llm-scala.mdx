@@ -27,7 +27,7 @@ Since Golem Scala agents compile to JavaScript via Scala.js, the global `fetch` 
 import scala.scalajs.js
 import scala.scalajs.js.Thenable.Implicits._
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
+import golem.concurrent.Implicits.global
 
 def chatCompletion(prompt: String, apiKey: String): Future[String] = {
   val payload = js.JSON.stringify(js.Dynamic.literal(
@@ -135,7 +135,7 @@ import golem.config.{AgentConfig, Config}
 import scala.scalajs.js
 import scala.scalajs.js.Thenable.Implicits._
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
+import golem.concurrent.Implicits.global
 
 @agentDefinition(mount = "/chats/{value}")
 trait ChatAgent extends BaseAgent with AgentConfig[MyAgentConfig] {

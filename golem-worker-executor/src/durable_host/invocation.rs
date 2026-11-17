@@ -15,6 +15,51 @@
 use super::*;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Settles a returned method error, including session work that must keep driving the Store.
+    pub(crate) async fn on_agent_method_failure(
+        store: &mut Store<Ctx>,
+        full_function_name: &str,
+        error: AgentError,
+        uses_streams: bool,
+    ) -> Result<(), crate::worker::MethodFailureSettlementError> {
+        use crate::worker::MethodFailureSettlementError;
+
+        store
+            .data_mut()
+            .record_agent_method_failure(full_function_name, error.clone())
+            .await
+            .map_err(MethodFailureSettlementError::Invocation)?;
+        if !store.data().durable_ctx().is_live() {
+            return Ok(());
+        }
+
+        let worker = store.data().durable_ctx().public_state.worker();
+        if uses_streams {
+            let key = store
+                .data()
+                .durable_ctx()
+                .state
+                .get_current_idempotency_key()
+                .expect("a settled method failure has an invocation key");
+            let session_worker = worker.clone();
+            store
+                .run_concurrent(async move |_accessor| {
+                    session_worker
+                        .fail_durable_streaming_session(&key, error.message().to_owned())
+                        .await
+                })
+                .await
+                .map_err(|error| {
+                    MethodFailureSettlementError::Recovery(WorkerExecutorError::runtime(
+                        error.to_string(),
+                    ))
+                })?
+                .map_err(MethodFailureSettlementError::Recovery)?;
+        }
+        worker.reset_infrastructure_recovery_backoff();
+        Ok(())
+    }
+
     fn cleanup_custom_durability_state(&mut self) {
         let resources: Vec<_> = self
             .state
@@ -913,6 +958,99 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         );
 
         InvocationFailureDecision::Retry(decision)
+    }
+
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.state.durability_is_suppressed() {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "recorded agent method failure",
+                "method failure while durability is suppressed",
+            ));
+        }
+        if !self.state.active_custom_invocations.is_empty()
+            || !self.state.custom_invocation_scopes.is_empty()
+        {
+            self.cleanup_custom_durability_state();
+            return Err(WorkerExecutorError::runtime(
+                "agent invocation returned while a custom durable invocation ownership scope was still open",
+            ));
+        }
+        let anchor = self.invocation_anchor().ok_or_else(|| {
+            WorkerExecutorError::runtime("method failure has no invocation start")
+        })?;
+        let key = self
+            .state
+            .get_current_idempotency_key()
+            .ok_or_else(|| WorkerExecutorError::runtime("method failure has no idempotency key"))?;
+        if !self.state.is_live() {
+            concurrent::drain_queued_dropped_call_events(self)
+                .await
+                .map_err(|error| error.source)?;
+            if let Some(finished_index) = self
+                .state
+                .replay_state
+                .get_oplog_entry_agent_method_failure(
+                    &key,
+                    anchor,
+                    &error,
+                    self.entity_parent_start_index(),
+                )
+                .await?
+            {
+                if self
+                    .public_state
+                    .worker()
+                    .agent_method_invalidates_read_only_cache(full_function_name)
+                {
+                    self.state.last_state_change = Some(finished_index);
+                }
+                return Ok(());
+            }
+            // No terminal exists at the natural tail: complete this interrupted invocation live.
+            self.switch_to_live().await?;
+        }
+
+        // Both a fresh invocation and an incomplete replay now follow the same live path.
+        tool::durability::finish_producer_disposals(self).await?;
+        if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
+            self.state
+                .replay_state
+                .release_retained_starts_at_live_invocation_end()
+                .await?;
+        }
+        let worker = self.public_state.worker();
+        let finished_index = worker
+            .add_to_oplog(OplogEntry::agent_invocation_failed(
+                self.entity_parent_start_index(),
+                key,
+                error.clone(),
+                anchor,
+            ))
+            .await?;
+        let commit_level = match worker.agent_mode() {
+            AgentMode::Durable => CommitLevel::Always,
+            AgentMode::Ephemeral => CommitLevel::Deferred,
+        };
+        worker
+            .commit_oplog_before_status_update(commit_level)
+            .await?;
+        // Mutations preceding a returned error are retained. Invalidate before publishing
+        // the failure so a following reader cannot reuse the pre-invocation state.
+        if worker.agent_method_invalidates_read_only_cache(full_function_name) {
+            worker.bump_read_only_cache_epoch();
+            self.state.last_state_change = Some(finished_index);
+        }
+        worker
+            .store_method_failure(&key, error, finished_index)
+            .await;
+        self.public_state
+            .event_service()
+            .emit_invocation_finished(full_function_name, &key, true);
+        Ok(())
     }
 
     fn enter_read_only_mode(&mut self, method_name: String) {

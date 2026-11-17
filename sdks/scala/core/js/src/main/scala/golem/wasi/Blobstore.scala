@@ -23,7 +23,7 @@ import scala.scalajs.js.annotation.{JSImport, JSName}
 import scala.scalajs.js.typedarray.Uint8Array
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 
 /**
  * Scala.js facade for WASI blobstore (`wasi:blobstore`).

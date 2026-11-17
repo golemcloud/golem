@@ -38,6 +38,7 @@ use crate::worker::filesystem_snapshots::{
     SnapshotSlot, UpdateSnapshot, UpdateSnapshotHost, confirm_by, periodic_snapshot,
     update_snapshot,
 };
+use crate::worker::instance::PrimaryStore;
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
     InvokeResult, LoweredInvocation, invocation_uses_streams, invoke_live_observed_and_traced,
@@ -92,7 +93,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
-use wasmtime::Store;
+
 use wasmtime::component::Instance;
 
 /// Span for one bounded phase of a worker's lifecycle.
@@ -1249,7 +1250,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     waiting_for_command: Arc<AtomicBool>,
     interrupts: Arc<Interrupts>,
     instance: &'a Instance,
-    store: &'a Mutex<Store<Ctx>>,
+    store: &'a Mutex<PrimaryStore<Ctx>>,
     filesystem: &'a ResidentFilesystem,
     filesystem_snapshot_slot: &'a SnapshotSlot,
     /// When the last `SaveSnapshot` ended. Every `SaveSnapshot` sets it, and only the `Periodic`
@@ -1334,7 +1335,7 @@ struct Invocation<'a, Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     instance: &'a Instance,
-    store: &'a mut Store<Ctx>,
+    store: &'a mut PrimaryStore<Ctx>,
     filesystem: &'a ResidentFilesystem,
     filesystem_snapshot_slot: &'a SnapshotSlot,
     uses_streams: bool,

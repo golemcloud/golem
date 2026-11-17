@@ -75,6 +75,208 @@ pub(super) fn monthly_interrupt_error(
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Observes the reserved initialization without admitting another invocation.
+    pub(crate) async fn await_initialization(self: Arc<Self>) -> Result<(), WorkerExecutorError> {
+        let key = self.retained_initialization_key().await?;
+        let mut subscription = self.events().subscribe();
+        loop {
+            if self.recorded_initialization_result(&key).await? {
+                return Ok(());
+            }
+            Self::start_if_needed(self.clone()).await?;
+            let notification = self.wait_for_invocation_result(&key, subscription).await;
+            // An event can report an operational failure cached by fail_pending_invocations.
+            // Only a recorded invocation terminal proves that the constructor failed.
+            if self.recorded_initialization_result(&key).await? {
+                return Ok(());
+            }
+            match notification {
+                Ok(LookupResult::Complete(Err(error))) => return Err(error),
+                Ok(LookupResult::Interrupted) => {
+                    return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+                }
+                Err(error) => {
+                    return Err(WorkerExecutorError::unknown(format!(
+                        "Failed waiting for initialization: {error}"
+                    )));
+                }
+                _ => subscription = self.events().subscribe(),
+            }
+        }
+    }
+
+    async fn retained_initialization_key(&self) -> Result<InvocationId, WorkerExecutorError> {
+        let key = self.initialization_idempotency_key();
+        if self.initial_worker_metadata.create_request.kind != CreateRequestKind::Fork {
+            return Ok(key);
+        }
+        // Forks retain invocation keys from their source. Find the initialization by its
+        // payload, not by interpreting a caller-controlled idempotency-key prefix.
+        let status = self.state_actor.status().await;
+        let mut first = OplogIndex::INITIAL;
+        while first <= status.oplog_idx {
+            let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(256);
+            let entries = self.oplog.read_exact(first, count).await?;
+            for (index, entry) in entries {
+                if status.deleted_regions.is_in_deleted_region(index) {
+                    continue;
+                }
+                if let OplogEntry::PendingAgentInvocation {
+                    invocation_id,
+                    payload,
+                    ..
+                }
+                | OplogEntry::AgentInvocationStarted {
+                    invocation_id,
+                    payload,
+                    ..
+                } = entry
+                {
+                    let invocation = self
+                        .oplog
+                        .download_payload_classified(payload)
+                        .await
+                        .map_err(|error| self.initialization_payload_error(error))?;
+                    if matches!(
+                        invocation,
+                        AgentInvocationPayload::AgentInitialization { .. }
+                    ) {
+                        return Ok(invocation_id);
+                    }
+                }
+            }
+            first = OplogIndex::from_u64(first.as_u64() + count);
+        }
+        Err(self.missing_initialization())
+    }
+
+    fn missing_initialization(&self) -> WorkerExecutorError {
+        WorkerExecutorError::invalid_request(format!(
+            "Agent {} has no retained initialization invocation",
+            self.agent_id()
+        ))
+    }
+
+    fn initialization_payload_error(
+        &self,
+        error: OplogPayloadDownloadError,
+    ) -> WorkerExecutorError {
+        match error {
+            OplogPayloadDownloadError::Backend(error) => {
+                WorkerExecutorError::recovery_required(format!(
+                    "Failed reading initialization payload for {}: {error:#}",
+                    self.agent_id()
+                ))
+            }
+            OplogPayloadDownloadError::Corrupt(error) => WorkerExecutorError::oplog_failed(
+                self.agent_id(),
+                format!("Corrupt initialization payload: {error:#}"),
+            ),
+        }
+    }
+
+    // Warm invocation-cache errors can be synthetic. Resolve through the durable result index
+    // before changing any failure into AgentCreationFailed.
+    async fn recorded_initialization_result(
+        &self,
+        key: &InvocationId,
+    ) -> Result<bool, WorkerExecutorError> {
+        let status = self.state_actor.status().await;
+        let index = if let Some(index) = status.invocation_results.get(key) {
+            Some(*index)
+        } else if !status.invocation_results.is_exact_complete()
+            && status.invocation_results.might_contain(key)
+        {
+            self.resolve_old_invocation_result_index(&status, key)
+                .await?
+                .map(|position| position.terminal)
+        } else {
+            None
+        };
+        if let Some(index) = index {
+            return match self.oplog.read(index).await? {
+                OplogEntry::AgentInvocationFinished {
+                    invocation_id,
+                    result,
+                    ..
+                } if &invocation_id == key => {
+                    let output = self
+                        .oplog
+                        .download_payload_classified(result)
+                        .await
+                        .map_err(|error| self.initialization_payload_error(error))?;
+                    if matches!(output, AgentInvocationResult::AgentInitialization) {
+                        Ok(true)
+                    } else {
+                        Err(WorkerExecutorError::oplog_failed(
+                            self.agent_id(),
+                            "Initialization key refers to a different invocation result",
+                        ))
+                    }
+                }
+                OplogEntry::Error {
+                    kind: OplogErrorKind::Invocation,
+                    invocation_id: Some(invocation_id),
+                    error,
+                    ..
+                } if &invocation_id == key => {
+                    if status.current_idempotency_key.as_ref() == Some(key)
+                        && status.status == AgentStatus::Interrupted
+                    {
+                        return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+                    }
+                    if status.current_idempotency_key.as_ref() == Some(key)
+                        && (status.status != AgentStatus::Failed
+                            || status.last_error_kind == Some(OplogErrorKind::Recovery))
+                        && status.status != AgentStatus::Exited
+                    {
+                        Ok(false)
+                    } else {
+                        let stderr = recover_stderr_logs(
+                            self,
+                            &self.owned_agent_id,
+                            self.agent_mode(),
+                            index,
+                        )
+                        .await;
+                        Err(WorkerExecutorError::worker_creation_failed(
+                            self.agent_id(),
+                            error.to_string(&stderr),
+                        ))
+                    }
+                }
+                OplogEntry::Exited { .. } => Err(WorkerExecutorError::worker_creation_failed(
+                    self.agent_id(),
+                    "Constructor exited before initialization completed",
+                )),
+                OplogEntry::CancelPendingInvocation { .. } => {
+                    Err(WorkerExecutorError::invalid_request(format!(
+                        "Initialization of agent {} was cancelled before execution",
+                        self.agent_id()
+                    )))
+                }
+                _ => Err(WorkerExecutorError::oplog_failed(
+                    self.agent_id(),
+                    "Initialization result index refers to a non-terminal entry",
+                )),
+            };
+        }
+        if status.current_idempotency_key.as_ref() == Some(key) {
+            if status.status == AgentStatus::Interrupted {
+                return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+            }
+            return Ok(false);
+        }
+        if status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(key))
+        {
+            return Ok(false);
+        }
+        Err(self.missing_initialization())
+    }
+
     pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
         // A recovery that failed because the shard moved is recorded by nobody: the agent retires
         // here and is recovered by the shard's new owner. The caller stops the worker right after
@@ -194,6 +396,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug!("Stored invocation success for {key}");
         self.publish_completion(key, Ok(output));
     }
+    pub(crate) async fn store_method_failure(
+        &self,
+        key: &InvocationId,
+        error: AgentError,
+        finished_index: OplogIndex,
+    ) {
+        let stderr = self.worker_event_service.get_last_invocation_errors();
+        let cached = InvocationResult::Cached {
+            result: Err(FailedInvocationResult::Method {
+                error: error.clone(),
+                stderr: stderr.clone(),
+            }),
+        };
+        let status = self.last_known_status.load_full();
+        let mut map = self.hydrated_invocation_results.write().await;
+        map.release_projected_completions(&status, self.last_known_status_detached());
+        map.insert_unprojected_completion(
+            *key,
+            cached,
+            status.invocation_results.revert_generation(),
+            finished_index,
+        );
+        drop(map);
+        self.external_invocation_origins.write().await.remove(key);
+        self.publish_completion(
+            key,
+            Err(WorkerExecutorError::InvocationFailed { error, stderr }),
+        );
+    }
     pub(in crate::worker) fn publish_completion(
         &self,
         key: &InvocationId,
@@ -227,7 +458,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             map.insert(
                 *key,
                 InvocationResult::Cached {
-                    result: Err(FailedInvocationResult {
+                    result: Err(FailedInvocationResult::Trap {
                         trap_type: trap_type.clone(),
                         stderr: stderr.clone(),
                     }),
@@ -268,7 +499,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             tokio::time::Instant::now() + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
 
         loop {
-            match self.lookup_invocation_result(key).await {
+            let lookup = match self.try_lookup_invocation_result(key).await {
+                Ok(lookup) => lookup,
+                Err(error) => break Ok(LookupResult::Complete(Err(error))),
+            };
+            match lookup {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
                 LookupResult::New | LookupResult::Pending => {
                     let waiting = subscription.wait_for(|event| match event {
@@ -323,12 +558,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 // that. `store_invocation_success` fills `invocation_results`
                                 // before it publishes, so the result is already readable
                                 // here, and a real result always beats a reroute.
-                                match self.lookup_invocation_result(key).await {
-                                    LookupResult::New | LookupResult::Pending => {
+                                match self.try_lookup_invocation_result(key).await {
+                                    Ok(LookupResult::New | LookupResult::Pending) => {
                                         debug!("Agent is no longer owned by this executor, ending the wait for its invocation result");
                                         break Ok(LookupResult::Complete(Err(error)));
                                     }
-                                    settled => break Ok(settled),
+                                    Ok(settled) => break Ok(settled),
+                                    // The shard has moved, so the reroute error is the answer.
+                                    Err(_) => break Ok(LookupResult::Complete(Err(error))),
                                 }
                             }
                             continue;
@@ -355,7 +592,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         key: &InvocationId,
     ) -> Result<Option<AgentInvocationPayload>, WorkerExecutorError> {
-        let status = self.state_actor.status().await;
+        let status = self.state_actor.try_status().await?;
         if let Some(pending) = status
             .pending_invocations
             .iter()
@@ -414,11 +651,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &InvocationId) -> LookupResult {
-        // Kept as an `Arc` rather than cloned out of. The ordered actor read ensures a preceding
-        // completion fold is published first. The record owns
-        // `invocation_results`, which gains an entry per invocation, so deep-copying it to read
-        // one key made each lookup cost more than the last.
         let status = self.state_actor.status().await;
+        self.lookup_invocation_result_in(status, key).await
+    }
+
+    /// [`Self::lookup_invocation_result`] for a caller that may hold a generation whose state
+    /// actor a deletion has stopped: that read fails instead of panicking.
+    pub(crate) async fn try_lookup_invocation_result(
+        &self,
+        key: &InvocationId,
+    ) -> Result<LookupResult, WorkerExecutorError> {
+        let status = self.state_actor.try_status().await?;
+        Ok(self.lookup_invocation_result_in(status, key).await)
+    }
+
+    /// The lookup in a status read from the state actor with `status` or `try_status`, which are
+    /// ordered after a preceding completion fold; `last_known_status` can lag behind it.
+    async fn lookup_invocation_result_in(
+        &self,
+        // Kept as an `Arc` rather than cloned out of. The record owns `invocation_results`,
+        // which gains an entry per invocation, so deep-copying it to read one key made each
+        // lookup cost more than the last.
+        status: Arc<AgentStatusRecord>,
+        key: &InvocationId,
+    ) -> LookupResult {
         let cached = self
             .hydrated_invocation_results
             .read()
@@ -664,8 +920,11 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
             result: Ok(values), ..
         } => LookupResult::Complete(Ok(values)),
         InvocationResult::Cached {
+            result: Err(FailedInvocationResult::Method { error, stderr }),
+        } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed { error, stderr })),
+        InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     // Retry marker error entries are persisted before the invocation has
                     // actually finished. While the same idempotency key is still current
                     // and there is no terminal invocation outcome, report it as pending
@@ -683,7 +942,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         }
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
                     ..
                 }),
@@ -691,7 +950,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         } => LookupResult::Interrupted,
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Interrupt(_),
                     ..
                 }),
@@ -699,7 +958,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         } => LookupResult::Pending,
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type:
                         TrapType::Error {
                             error: AgentError::PermissionDenied(details),
@@ -711,7 +970,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         } => LookupResult::Complete(Err(WorkerExecutorError::permission_denied(details))),
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Error { error, .. },
                     stderr,
                 }),
@@ -719,7 +978,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed { error, stderr })),
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Exit,
                     ..
                 }),
@@ -900,12 +1159,17 @@ impl InvocationResult {
                         agent_fingerprint: Some(agent_fingerprint),
                     })
                 }
+                OplogEntry::AgentInvocationFailed { error, .. } => {
+                    let stderr =
+                        recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
+                    Err(FailedInvocationResult::Method { error, stderr })
+                }
                 OplogEntry::Error {
                     error, retry_from, ..
                 } => {
                     let stderr =
                         recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
-                    Err(FailedInvocationResult {
+                    Err(FailedInvocationResult::Trap {
                         trap_type: TrapType::Error {
                             error,
                             retry_from,
@@ -914,11 +1178,11 @@ impl InvocationResult {
                         stderr,
                     })
                 }
-                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult {
+                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())),
                     stderr: "".to_string(),
                 }),
-                OplogEntry::Exited { .. } => Err(FailedInvocationResult {
+                OplogEntry::Exited { .. } => Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Exit,
                     stderr: "".to_string(),
                 }),

@@ -102,8 +102,9 @@ this set, the binding drift check and the linters in the `build-golem-go` job
 (`.github/workflows/ci.yaml`).
 
 Generated binding code lands in `internal/wit/` and is wiped on every run. The
-hand-written export slots in `internal/exports/` survive because `--export-pkg-name`
-points the generated glue at them, and `dev-tools/go-bindgen-fixup` works around two
+standalone driver in `dev-tools/go-bindgen` enables private memory conversion helpers.
+The hand-written export slots in `internal/exports/` survive because the driver sets
+`export_pkg_name` to that package, and `dev-tools/go-bindgen-fixup` works around two
 wit-bindgen `crates/go` bugs (tag-constant collisions, and a missing `empty.s` for the
 exports package).
 

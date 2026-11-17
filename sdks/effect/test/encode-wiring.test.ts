@@ -76,7 +76,13 @@ const layers = (calls: Array<string>) => {
   } as unknown as RpcConnection
   return Layer.mergeAll(
     Layer.succeed(PermissionsClient, PermissionsClient.of(permissions as PermissionsClientShape)),
-    Layer.succeed(RpcClient, RpcClient.of({ connect: () => Effect.succeed(connection) })),
+    Layer.succeed(
+      RpcClient,
+      RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
+        connect: () => Effect.succeed(connection),
+      }),
+    ),
     Layer.succeed(
       AgentHostClient,
       AgentHostClient.of({

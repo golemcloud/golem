@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::extended_agent_type::ExtendedAgentType;
+use crate::agentic::identity::golem_env_var_not_readable;
 use crate::agentic::{EnrichedParameterSchema, Principal};
 use crate::{
     AgentId, ComponentId, Uuid,
@@ -234,15 +235,20 @@ where
     f(agent_instance.as_ref())
 }
 
+/// Returns the ID of the running agent, read from `GOLEM_AGENT_ID` and `GOLEM_COMPONENT_ID`.
+///
+/// The agent can read these variables only when its permission card allows
+/// `env(?agent) @ ?agent : read : GOLEM_AGENT_ID` and
+/// `env(?agent) @ ?agent : read : GOLEM_COMPONENT_ID`. It panics with the missing grant otherwise.
 pub fn get_agent_id() -> AgentId {
     let env_vars: HashMap<String, String> =
         HashMap::from_iter(wasip3::cli::environment::get_environment());
     let raw_agent_id = env_vars
         .get("GOLEM_AGENT_ID")
-        .expect("Missing GOLEM_AGENT_ID environment variable"); // This is always provided by the Golem runtime
+        .unwrap_or_else(|| panic!("{}", golem_env_var_not_readable("GOLEM_AGENT_ID")));
     let raw_component_id = env_vars
         .get("GOLEM_COMPONENT_ID")
-        .expect("Missing GOLEM_COMPONENT_ID environment variable");
+        .unwrap_or_else(|| panic!("{}", golem_env_var_not_readable("GOLEM_COMPONENT_ID")));
     AgentId {
         component_id: ComponentId {
             uuid: Uuid::parse_str(raw_component_id).expect("Invalid GOLEM_COMPONENT_ID"),

@@ -56,287 +56,9 @@ func wasm_stream_drop_readable_schema_value_tree(handle int32)
 func wasm_stream_drop_writable_schema_value_tree(handle int32)
 
 func wasm_stream_lift_schema_value_tree(src unsafe.Pointer) SchemaValueTree {
-	result19 := make([]SchemaValueNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(16+4*4))
-		var variant18 SchemaValueNode
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-		case 0:
+	result := wasm_lift_1_t80(unsafe.Add(unsafe.Pointer(src), 0))
 
-			variant18 = MakeSchemaValueNodeBoolValue((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
-
-		case 1:
-
-			variant18 = MakeSchemaValueNodeS8Value(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-		case 2:
-
-			variant18 = MakeSchemaValueNodeS16Value(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-		case 3:
-
-			variant18 = MakeSchemaValueNodeS32Value(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-		case 4:
-
-			variant18 = MakeSchemaValueNodeS64Value(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-		case 5:
-
-			variant18 = MakeSchemaValueNodeU8Value(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-		case 6:
-
-			variant18 = MakeSchemaValueNodeU16Value(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
-
-		case 7:
-
-			variant18 = MakeSchemaValueNodeU32Value(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-		case 8:
-
-			variant18 = MakeSchemaValueNodeU64Value(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-		case 9:
-
-			variant18 = MakeSchemaValueNodeF32Value(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-		case 10:
-
-			variant18 = MakeSchemaValueNodeF64Value(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
-
-		case 11:
-
-			variant18 = MakeSchemaValueNodeCharValue(rune(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-		case 12:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-			variant18 = MakeSchemaValueNodeStringValue(value)
-
-		case 13:
-			result := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
-
-				result = append(result, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
-			}
-
-			variant18 = MakeSchemaValueNodeRecordValue(result)
-
-		case 14:
-			var option witTypes.Option[int32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
-			case 0:
-
-				option = witTypes.None[int32]()
-			case 1:
-
-				option = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
-			default:
-				panic("unreachable")
-			}
-
-			variant18 = MakeSchemaValueNodeVariantValue(VariantValuePayload{Case: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Payload: option})
-
-		case 15:
-
-			variant18 = MakeSchemaValueNodeEnumValue(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
-
-		case 16:
-			result0 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
-
-				result0 = append(result0, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
-			}
-
-			variant18 = MakeSchemaValueNodeFlagsValue(result0)
-
-		case 17:
-			result1 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
-
-				result1 = append(result1, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
-			}
-
-			variant18 = MakeSchemaValueNodeTupleValue(result1)
-
-		case 18:
-			result2 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
-
-				result2 = append(result2, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
-			}
-
-			variant18 = MakeSchemaValueNodeListValue(result2)
-
-		case 19:
-			result3 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
-
-				result3 = append(result3, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
-			}
-
-			variant18 = MakeSchemaValueNodeFixedListValue(result3)
-
-		case 20:
-			result4 := make([]MapEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*8)
-
-				result4 = append(result4, MapEntry{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 4))})
-			}
-
-			variant18 = MakeSchemaValueNodeMapValue(result4)
-
-		case 21:
-			var option5 witTypes.Option[int32]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-			case 0:
-
-				option5 = witTypes.None[int32]()
-			case 1:
-
-				option5 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
-			default:
-				panic("unreachable")
-			}
-
-			variant18 = MakeSchemaValueNodeOptionValue(option5)
-
-		case 22:
-			var variant ResultValuePayload
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-			case 0:
-				var option6 witTypes.Option[int32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
-				case 0:
-
-					option6 = witTypes.None[int32]()
-				case 1:
-
-					option6 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
-				default:
-					panic("unreachable")
-				}
-
-				variant = MakeResultValuePayloadOkValue(option6)
-
-			case 1:
-				var option7 witTypes.Option[int32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
-				case 0:
-
-					option7 = witTypes.None[int32]()
-				case 1:
-
-					option7 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
-				default:
-					panic("unreachable")
-				}
-
-				variant = MakeResultValuePayloadErrValue(option7)
-
-			default:
-				panic("unreachable")
-			}
-
-			variant18 = MakeSchemaValueNodeResultValue(variant)
-
-		case 23:
-			value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			var option10 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-			case 0:
-
-				option10 = witTypes.None[string]()
-			case 1:
-				value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
-
-				option10 = witTypes.Some[string](value9)
-			default:
-				panic("unreachable")
-			}
-
-			variant18 = MakeSchemaValueNodeTextValue(TextValuePayload{Text: value8, Language: option10})
-
-		case 24:
-			value11 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-			var option13 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-			case 0:
-
-				option13 = witTypes.None[string]()
-			case 1:
-				value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
-
-				option13 = witTypes.Some[string](value12)
-			default:
-				panic("unreachable")
-			}
-
-			variant18 = MakeSchemaValueNodeBinaryValue(BinaryValuePayload{Bytes: value11, MimeType: option13})
-
-		case 25:
-			value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-			variant18 = MakeSchemaValueNodePathValue(value14)
-
-		case 26:
-			value15 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-			variant18 = MakeSchemaValueNodeUrlValue(value15)
-
-		case 27:
-
-			variant18 = MakeSchemaValueNodeUuidValue(Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
-
-		case 28:
-
-			variant18 = MakeSchemaValueNodeDatetimeValue(Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
-
-		case 29:
-
-			variant18 = MakeSchemaValueNodeDurationValue(DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
-
-		case 30:
-			value16 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
-
-			variant18 = MakeSchemaValueNodeQuantityValueNode(QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value16})
-
-		case 31:
-			value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-			variant18 = MakeSchemaValueNodeUnionValue(UnionValuePayload{Tag: value17, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
-
-		case 32:
-
-			variant18 = MakeSchemaValueNodeSecretValue(SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
-
-		case 33:
-
-			variant18 = MakeSchemaValueNodeQuotaTokenHandle(QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
-
-		case 34:
-
-			variant18 = MakeSchemaValueNodePermissionCardHandle(PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
-
-		case 35:
-
-			variant18 = MakeSchemaValueNodeStreamValue(SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
-
-		default:
-			panic("unreachable")
-		}
-
-		result19 = append(result19, variant18)
-	}
-
-	return SchemaValueTree{ValueNodes: result19, Root: *(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))}
+	return result
 }
 
 func wasm_stream_lower_schema_value_tree(
@@ -344,417 +66,8 @@ func wasm_stream_lower_schema_value_tree(
 	value SchemaValueTree,
 	dst unsafe.Pointer,
 ) func() {
-	lifters := make([]func(), 0, 4)
-	slice51 := (value).ValueNodes
-	length53 := uint32(len(slice51))
-	result52 := witRuntime.Allocate(pinner, uintptr(length53*(16+4*4)), 8)
-	for index, element := range slice51 {
-		base := unsafe.Add(result52, index*(16+4*4))
-
-		switch element.Tag() {
-		case SchemaValueNodeBoolValue:
-			payload := element.BoolValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-			var result20 int32
-			if payload {
-				result20 = 1
-			} else {
-				result20 = 0
-			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result20)
-
-		case SchemaValueNodeS8Value:
-			payload := element.S8Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case SchemaValueNodeS16Value:
-			payload := element.S16Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case SchemaValueNodeS32Value:
-			payload := element.S32Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case SchemaValueNodeS64Value:
-			payload := element.S64Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case SchemaValueNodeU8Value:
-			payload := element.U8Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(payload))
-
-		case SchemaValueNodeU16Value:
-			payload := element.U16Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
-			*(*int16)(unsafe.Add(unsafe.Pointer(base), 8)) = int16(int32(payload))
-
-		case SchemaValueNodeU32Value:
-			payload := element.U32Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case SchemaValueNodeU64Value:
-			payload := element.U64Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64(payload)
-
-		case SchemaValueNodeF32Value:
-			payload := element.F32Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-			*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case SchemaValueNodeF64Value:
-			payload := element.F64Value()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
-			*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
-
-		case SchemaValueNodeCharValue:
-			payload := element.CharValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case SchemaValueNodeStringValue:
-			payload := element.StringValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-			utf8 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8)))
-
-		case SchemaValueNodeRecordValue:
-			payload := element.RecordValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-			slice := payload
-			length := uint32(len(slice))
-			result21 := witRuntime.Allocate(pinner, uintptr(length*4), 4)
-			for index, element := range slice {
-				base := unsafe.Add(result21, index*4)
-				*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result21)))
-
-		case SchemaValueNodeVariantValue:
-			payload := element.VariantValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32((payload).Case)
-
-			switch (payload).Payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).Payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = payload
-
-			default:
-				panic("unreachable")
-			}
-
-		case SchemaValueNodeEnumValue:
-			payload := element.EnumValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32(payload)
-
-		case SchemaValueNodeFlagsValue:
-			payload := element.FlagsValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-			slice23 := payload
-			length25 := uint32(len(slice23))
-			result24 := witRuntime.Allocate(pinner, uintptr(length25*1), 1)
-			for index, element := range slice23 {
-				base := unsafe.Add(result24, index*1)
-				var result22 int32
-				if element {
-					result22 = 1
-				} else {
-					result22 = 0
-				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result22)
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length25)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result24)))
-
-		case SchemaValueNodeTupleValue:
-			payload := element.TupleValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-			slice26 := payload
-			length28 := uint32(len(slice26))
-			result27 := witRuntime.Allocate(pinner, uintptr(length28*4), 4)
-			for index, element := range slice26 {
-				base := unsafe.Add(result27, index*4)
-				*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length28)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result27)))
-
-		case SchemaValueNodeListValue:
-			payload := element.ListValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-			slice29 := payload
-			length31 := uint32(len(slice29))
-			result30 := witRuntime.Allocate(pinner, uintptr(length31*4), 4)
-			for index, element := range slice29 {
-				base := unsafe.Add(result30, index*4)
-				*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length31)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result30)))
-
-		case SchemaValueNodeFixedListValue:
-			payload := element.FixedListValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-			slice32 := payload
-			length34 := uint32(len(slice32))
-			result33 := witRuntime.Allocate(pinner, uintptr(length34*4), 4)
-			for index, element := range slice32 {
-				base := unsafe.Add(result33, index*4)
-				*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length34)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result33)))
-
-		case SchemaValueNodeMapValue:
-			payload := element.MapValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-			slice35 := payload
-			length37 := uint32(len(slice35))
-			result36 := witRuntime.Allocate(pinner, uintptr(length37*8), 4)
-			for index, element := range slice35 {
-				base := unsafe.Add(result36, index*8)
-				*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = (element).Key
-				*(*int32)(unsafe.Add(unsafe.Pointer(base), 4)) = (element).Value
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length37)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result36)))
-
-		case SchemaValueNodeOptionValue:
-			payload := element.OptionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(21))
-
-			switch payload.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := payload.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-				*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = payload
-
-			default:
-				panic("unreachable")
-			}
-
-		case SchemaValueNodeResultValue:
-			payload := element.ResultValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(22))
-
-			switch payload.Tag() {
-			case ResultValuePayloadOkValue:
-				payload := payload.OkValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
-
-				switch payload.Tag() {
-				case witTypes.OptionNone:
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(0))
-
-				case witTypes.OptionSome:
-					payload := payload.Some()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(1))
-					*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = payload
-
-				default:
-					panic("unreachable")
-				}
-
-			case ResultValuePayloadErrValue:
-				payload := payload.ErrValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-
-				switch payload.Tag() {
-				case witTypes.OptionNone:
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(0))
-
-				case witTypes.OptionSome:
-					payload := payload.Some()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 12)) = int8(int32(1))
-					*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = payload
-
-				default:
-					panic("unreachable")
-				}
-
-			default:
-				panic("unreachable")
-			}
-
-		case SchemaValueNodeTextValue:
-			payload := element.TextValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-			utf838 := unsafe.Pointer(unsafe.StringData((payload).Text))
-			pinner.Pin(utf838)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Text)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf838)))
-
-			switch (payload).Language.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).Language.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-				utf839 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf839)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf839)))
-
-			default:
-				panic("unreachable")
-			}
-
-		case SchemaValueNodeBinaryValue:
-			payload := element.BinaryValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(24))
-			data := unsafe.Pointer(unsafe.SliceData((payload).Bytes))
-			pinner.Pin(data)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Bytes)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data)))
-
-			switch (payload).MimeType.Tag() {
-			case witTypes.OptionNone:
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(0))
-
-			case witTypes.OptionSome:
-				payload := (payload).MimeType.Some()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-				utf840 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf840)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf840)))
-
-			default:
-				panic("unreachable")
-			}
-
-		case SchemaValueNodePathValue:
-			payload := element.PathValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-			utf841 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf841)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf841)))
-
-		case SchemaValueNodeUrlValue:
-			payload := element.UrlValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
-			utf842 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf842)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf842)))
-
-		case SchemaValueNodeUuidValue:
-			payload := element.UuidValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
-
-		case SchemaValueNodeDatetimeValue:
-			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
-
-		case SchemaValueNodeDurationValue:
-			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
-
-		case SchemaValueNodeQuantityValueNode:
-			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
-			utf843 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-			pinner.Pin(utf843)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uint32(len((payload).Unit)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4))) = uint32(uintptr(uintptr(utf843)))
-
-		case SchemaValueNodeUnionValue:
-			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-			utf844 := unsafe.Pointer(unsafe.StringData((payload).Tag))
-			pinner.Pin(utf844)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf844)))
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = (payload).Body
-
-		case SchemaValueNodeSecretValue:
-			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
-			resource := payload
-			handle := resource.TakeHandle()
-			lifters = append(lifters, func() {
-				resource.SetHandle(handle)
-			})
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = handle
-
-		case SchemaValueNodeQuotaTokenHandle:
-			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
-			resource45 := payload
-			handle46 := resource45.TakeHandle()
-			lifters = append(lifters, func() {
-				resource45.SetHandle(handle46)
-			})
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = handle46
-
-		case SchemaValueNodePermissionCardHandle:
-			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
-			resource47 := payload
-			handle48 := resource47.TakeHandle()
-			lifters = append(lifters, func() {
-				resource47.SetHandle(handle48)
-			})
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = handle48
-
-		case SchemaValueNodeStreamValue:
-			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
-			resource49 := payload
-			handle50 := resource49.TakeHandle()
-			lifters = append(lifters, func() {
-				resource49.SetHandle(handle50)
-			})
-			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = handle50
-
-		default:
-			panic("unreachable")
-		}
-
-	}
-
-	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(length53)
-	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(result52)))
-	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = (value).Root
+	lifters := make([]func(), 0, 1)
+	lifters = append(lifters, wasm_restore_lower_1_t80(pinner, value, unsafe.Add(unsafe.Pointer(dst), 0)))
 
 	return func() {
 		for _, lifter := range lifters {
@@ -784,6 +97,195 @@ func MakeStreamSchemaValueTree() (*witTypes.StreamWriter[SchemaValueTree], *witT
 
 func LiftStreamSchemaValueTree(handle int32) *witTypes.StreamReader[SchemaValueTree] {
 	return witTypes.MakeStreamReader[SchemaValueTree](&wasm_stream_vtable_schema_value_tree, handle)
+}
+
+//go:wasmimport golem:core/types@2.0.0 [future-new-1][static]schema-value-stream.wrap
+func wasm_future_new_option_result_unit_stream_error() uint64
+
+//go:wasmimport golem:core/types@2.0.0 [async-lower][future-read-1][static]schema-value-stream.wrap
+func wasm_future_read_option_result_unit_stream_error(handle int32, item unsafe.Pointer) uint32
+
+//go:wasmimport golem:core/types@2.0.0 [async-lower][future-write-1][static]schema-value-stream.wrap
+func wasm_future_write_option_result_unit_stream_error(handle int32, item unsafe.Pointer) uint32
+
+//go:wasmimport golem:core/types@2.0.0 [future-drop-readable-1][static]schema-value-stream.wrap
+func wasm_future_drop_readable_option_result_unit_stream_error(handle int32)
+
+//go:wasmimport golem:core/types@2.0.0 [future-drop-writable-1][static]schema-value-stream.wrap
+func wasm_future_drop_writable_option_result_unit_stream_error(handle int32)
+
+func wasm_future_lift_option_result_unit_stream_error(src unsafe.Pointer) witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]] {
+	var option witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[witTypes.Result[witTypes.Unit, StreamError]]()
+	case 1:
+		var result0 witTypes.Result[witTypes.Unit, StreamError]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+		case 0:
+
+			result0 = witTypes.Ok[witTypes.Unit, StreamError](witTypes.Unit{})
+		case 1:
+			result := wasm_lift_1_t82(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+
+			result0 = witTypes.Err[witTypes.Unit, StreamError](result)
+		default:
+			panic("unreachable")
+		}
+
+		option = witTypes.Some[witTypes.Result[witTypes.Unit, StreamError]](result0)
+	default:
+		panic("unreachable")
+	}
+
+	return option
+}
+
+func wasm_future_lower_option_result_unit_stream_error(
+	pinner *runtime.Pinner,
+	value witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]],
+	dst unsafe.Pointer,
+) func() {
+	lifters := make([]func(), 0, 1)
+
+	switch value.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := value.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+
+		switch payload.Tag() {
+		case witTypes.ResultOk:
+
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(0))
+
+		case witTypes.ResultErr:
+			payload := payload.Err()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(1))
+			lifters = append(lifters, wasm_restore_lower_1_t82(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (2*4))))
+
+		default:
+			panic("unreachable")
+		}
+
+	default:
+		panic("unreachable")
+	}
+
+	return func() {
+		for _, lifter := range lifters {
+			lifter()
+		}
+	}
+}
+
+var wasm_future_vtable_option_result_unit_stream_error = witTypes.FutureVtable[witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]]{
+	Size:         (11 * 4),
+	Align:        4,
+	Read:         wasm_future_read_option_result_unit_stream_error,
+	Write:        wasm_future_write_option_result_unit_stream_error,
+	CancelRead:   nil,
+	CancelWrite:  nil,
+	DropReadable: wasm_future_drop_readable_option_result_unit_stream_error,
+	DropWritable: wasm_future_drop_writable_option_result_unit_stream_error,
+	Lift:         wasm_future_lift_option_result_unit_stream_error,
+	Lower:        wasm_future_lower_option_result_unit_stream_error,
+}
+
+func MakeFutureOptionResultUnitStreamError() (*witTypes.FutureWriter[witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]], *witTypes.FutureReader[witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]]) {
+	pair := wasm_future_new_option_result_unit_stream_error()
+	return witTypes.MakeFutureWriter[witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]](&wasm_future_vtable_option_result_unit_stream_error, int32(pair>>32)),
+		witTypes.MakeFutureReader[witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]](&wasm_future_vtable_option_result_unit_stream_error, int32(pair&0xFFFFFFFF))
+}
+
+func LiftFutureOptionResultUnitStreamError(handle int32) *witTypes.FutureReader[witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]] {
+	return witTypes.MakeFutureReader[witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]](&wasm_future_vtable_option_result_unit_stream_error, handle)
+}
+
+//go:wasmimport golem:core/types@2.0.0 [future-new-1][static]schema-value-stream.unwrap
+func wasm_future_new_result_unit_stream_error() uint64
+
+//go:wasmimport golem:core/types@2.0.0 [async-lower][future-read-1][static]schema-value-stream.unwrap
+func wasm_future_read_result_unit_stream_error(handle int32, item unsafe.Pointer) uint32
+
+//go:wasmimport golem:core/types@2.0.0 [async-lower][future-write-1][static]schema-value-stream.unwrap
+func wasm_future_write_result_unit_stream_error(handle int32, item unsafe.Pointer) uint32
+
+//go:wasmimport golem:core/types@2.0.0 [future-drop-readable-1][static]schema-value-stream.unwrap
+func wasm_future_drop_readable_result_unit_stream_error(handle int32)
+
+//go:wasmimport golem:core/types@2.0.0 [future-drop-writable-1][static]schema-value-stream.unwrap
+func wasm_future_drop_writable_result_unit_stream_error(handle int32)
+
+func wasm_future_lift_result_unit_stream_error(src unsafe.Pointer) witTypes.Result[witTypes.Unit, StreamError] {
+	var result0 witTypes.Result[witTypes.Unit, StreamError]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		result0 = witTypes.Ok[witTypes.Unit, StreamError](witTypes.Unit{})
+	case 1:
+		result := wasm_lift_1_t82(unsafe.Add(unsafe.Pointer(src), 4))
+
+		result0 = witTypes.Err[witTypes.Unit, StreamError](result)
+	default:
+		panic("unreachable")
+	}
+
+	return result0
+}
+
+func wasm_future_lower_result_unit_stream_error(
+	pinner *runtime.Pinner,
+	value witTypes.Result[witTypes.Unit, StreamError],
+	dst unsafe.Pointer,
+) func() {
+	lifters := make([]func(), 0, 1)
+
+	switch value.Tag() {
+	case witTypes.ResultOk:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.ResultErr:
+		payload := value.Err()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		lifters = append(lifters, wasm_restore_lower_1_t82(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4)))
+
+	default:
+		panic("unreachable")
+	}
+
+	return func() {
+		for _, lifter := range lifters {
+			lifter()
+		}
+	}
+}
+
+var wasm_future_vtable_result_unit_stream_error = witTypes.FutureVtable[witTypes.Result[witTypes.Unit, StreamError]]{
+	Size:         (10 * 4),
+	Align:        4,
+	Read:         wasm_future_read_result_unit_stream_error,
+	Write:        wasm_future_write_result_unit_stream_error,
+	CancelRead:   nil,
+	CancelWrite:  nil,
+	DropReadable: wasm_future_drop_readable_result_unit_stream_error,
+	DropWritable: wasm_future_drop_writable_result_unit_stream_error,
+	Lift:         wasm_future_lift_result_unit_stream_error,
+	Lower:        wasm_future_lower_result_unit_stream_error,
+}
+
+func MakeFutureResultUnitStreamError() (*witTypes.FutureWriter[witTypes.Result[witTypes.Unit, StreamError]], *witTypes.FutureReader[witTypes.Result[witTypes.Unit, StreamError]]) {
+	pair := wasm_future_new_result_unit_stream_error()
+	return witTypes.MakeFutureWriter[witTypes.Result[witTypes.Unit, StreamError]](&wasm_future_vtable_result_unit_stream_error, int32(pair>>32)),
+		witTypes.MakeFutureReader[witTypes.Result[witTypes.Unit, StreamError]](&wasm_future_vtable_result_unit_stream_error, int32(pair&0xFFFFFFFF))
+}
+
+func LiftFutureResultUnitStreamError(handle int32) *witTypes.FutureReader[witTypes.Result[witTypes.Unit, StreamError]] {
+	return witTypes.MakeFutureReader[witTypes.Result[witTypes.Unit, StreamError]](&wasm_future_vtable_result_unit_stream_error, handle)
 }
 
 // ============================================================
@@ -2644,20 +2146,21 @@ func ParseUuid(uuid string) witTypes.Result[Uuid, string] {
 	utf8 := unsafe.Pointer(unsafe.StringData(uuid))
 	pinner.Pin(utf8)
 	wasm_import_parse_uuid(uintptr(utf8), uint32(len(uuid)), returnArea)
-	var result witTypes.Result[Uuid, string]
+	var result0 witTypes.Result[Uuid, string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
+		result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		result = witTypes.Ok[Uuid, string](Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16)))})
+		result0 = witTypes.Ok[Uuid, string](result)
 	case 1:
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
 
-		result = witTypes.Err[Uuid, string](value)
+		result0 = witTypes.Err[Uuid, string](value)
 	default:
 		panic("unreachable")
 	}
-	result0 := result
-	return result0
+	result1 := result0
+	return result1
 
 }
 
@@ -2677,15 +2180,15 @@ func UuidToString(uuid Uuid) string {
 }
 
 //go:wasmimport golem:core/types@2.0.0 [async-lower][static]schema-value-stream.wrap
-func wasm_import_static_schema_value_stream_wrap(arg0 int32, arg1 uintptr) int32
+func wasm_import_static_schema_value_stream_wrap(arg0 int32, arg1 int32, arg2 uintptr) int32
 
-func SchemaValueStreamWrap(reader *witTypes.StreamReader[SchemaValueTree]) *SchemaValueStream {
+func SchemaValueStreamWrap(reader *witTypes.StreamReader[SchemaValueTree], outcome *witTypes.FutureReader[witTypes.Option[witTypes.Result[witTypes.Unit, StreamError]]]) *SchemaValueStream {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 4, 4))
 
-	witAsync.SubtaskWait(uint32(wasm_import_static_schema_value_stream_wrap((reader).TakeHandle(), returnArea)))
+	witAsync.SubtaskWait(uint32(wasm_import_static_schema_value_stream_wrap((reader).TakeHandle(), (outcome).TakeHandle(), returnArea)))
 
 	return SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))))
 
@@ -2694,14 +2197,3123 @@ func SchemaValueStreamWrap(reader *witTypes.StreamReader[SchemaValueTree]) *Sche
 //go:wasmimport golem:core/types@2.0.0 [async-lower][static]schema-value-stream.unwrap
 func wasm_import_static_schema_value_stream_unwrap(arg0 int32, arg1 uintptr) int32
 
-func SchemaValueStreamUnwrap(value *SchemaValueStream) *witTypes.StreamReader[SchemaValueTree] {
+func SchemaValueStreamUnwrap(value *SchemaValueStream) (*witTypes.StreamReader[SchemaValueTree], *witTypes.FutureReader[witTypes.Result[witTypes.Unit, StreamError]]) {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, 4, 4))
+	returnArea := uintptr(witRuntime.Allocate(pinner, 8, 4))
 
 	witAsync.SubtaskWait(uint32(wasm_import_static_schema_value_stream_unwrap((value).TakeHandle(), returnArea)))
 
-	return LiftStreamSchemaValueTree(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))
+	tuple := witTypes.Tuple2[*witTypes.StreamReader[SchemaValueTree], *witTypes.FutureReader[witTypes.Result[witTypes.Unit, StreamError]]]{F0: LiftStreamSchemaValueTree(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 0))), F1: LiftFutureResultUnitStreamError(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))}
+	return tuple.F0, tuple.F1
+
+}
+
+//go:noinline
+func wasm_lift_1_t4(src unsafe.Pointer) Uuid {
+
+	return Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))}
+}
+
+//go:noinline
+func wasm_lift_1_t80(src unsafe.Pointer) SchemaValueTree {
+	result0 := make([]SchemaValueNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(16+4*4))
+		result := wasm_lift_1_t78(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result0 = append(result0, result)
+	}
+
+	return SchemaValueTree{ValueNodes: result0, Root: *(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))}
+}
+
+//go:noinline
+func wasm_restore_lower_1_t80(pinner *runtime.Pinner, value SchemaValueTree, dst unsafe.Pointer) func() {
+	lifters := make([]func(), 0, 1)
+	slice := (value).ValueNodes
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*(16+4*4))
+		lifters = append(lifters, wasm_restore_lower_1_t78(pinner, element, unsafe.Add(unsafe.Pointer(base), 0)))
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(result)))
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = (value).Root
+
+	return func() {
+		for _, lifter := range lifters {
+			lifter()
+		}
+	}
+}
+
+//go:noinline
+func wasm_lift_1_t82(src unsafe.Pointer) StreamError {
+	var variant StreamError
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		result := wasm_lift_1_t81(unsafe.Add(unsafe.Pointer(src), 4))
+
+		variant = MakeStreamErrorFailed(result)
+
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeStreamErrorTrapped(value0)
+
+	case 2:
+
+		variant = MakeStreamErrorCancelled()
+
+	case 3:
+
+		variant = MakeStreamErrorAbandoned()
+
+	case 4:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeStreamErrorInterrupted(value1)
+
+	case 5:
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeStreamErrorResourceExhausted(value2)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_restore_lower_1_t82(pinner *runtime.Pinner, value StreamError, dst unsafe.Pointer) func() {
+	lifters := make([]func(), 0, 1)
+
+	switch value.Tag() {
+	case StreamErrorFailed:
+		payload := value.Failed()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+		lifters = append(lifters, wasm_restore_lower_1_t81(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4)))
+
+	case StreamErrorTrapped:
+		payload := value.Trapped()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	case StreamErrorCancelled:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+
+	case StreamErrorAbandoned:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+
+	case StreamErrorInterrupted:
+		payload := value.Interrupted()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+		utf80 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf80)))
+
+	case StreamErrorResourceExhausted:
+		payload := value.ResourceExhausted()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
+		utf81 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf81)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf81)))
+
+	default:
+		panic("unreachable")
+	}
+
+	return func() {
+		for _, lifter := range lifters {
+			lifter()
+		}
+	}
+}
+
+//go:noinline
+func wasm_lift_1_t78(src unsafe.Pointer) SchemaValueNode {
+	var variant SchemaValueNode
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeSchemaValueNodeBoolValue((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) != 0))
+
+	case 1:
+
+		variant = MakeSchemaValueNodeS8Value(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 2:
+
+		variant = MakeSchemaValueNodeS16Value(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 3:
+
+		variant = MakeSchemaValueNodeS32Value(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 4:
+
+		variant = MakeSchemaValueNodeS64Value(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 5:
+
+		variant = MakeSchemaValueNodeU8Value(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 6:
+
+		variant = MakeSchemaValueNodeU16Value(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))))
+
+	case 7:
+
+		variant = MakeSchemaValueNodeU32Value(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	case 8:
+
+		variant = MakeSchemaValueNodeU64Value(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	case 9:
+
+		variant = MakeSchemaValueNodeF32Value(*(*float32)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 10:
+
+		variant = MakeSchemaValueNodeF64Value(*(*float64)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 11:
+
+		variant = MakeSchemaValueNodeCharValue(rune(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	case 12:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeSchemaValueNodeStringValue(value0)
+
+	case 13:
+		result := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*4)
+
+			result = append(result, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+		}
+
+		variant = MakeSchemaValueNodeRecordValue(result)
+
+	case 14:
+		result1 := wasm_lift_1_t63(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeVariantValue(result1)
+
+	case 15:
+
+		variant = MakeSchemaValueNodeEnumValue(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	case 16:
+		result2 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*1)
+
+			result2 = append(result2, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
+		}
+
+		variant = MakeSchemaValueNodeFlagsValue(result2)
+
+	case 17:
+		result3 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*4)
+
+			result3 = append(result3, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+		}
+
+		variant = MakeSchemaValueNodeTupleValue(result3)
+
+	case 18:
+		result4 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*4)
+
+			result4 = append(result4, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+		}
+
+		variant = MakeSchemaValueNodeListValue(result4)
+
+	case 19:
+		result5 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*4)
+
+			result5 = append(result5, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+		}
+
+		variant = MakeSchemaValueNodeFixedListValue(result5)
+
+	case 20:
+		result7 := make([]MapEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*8)
+			result6 := wasm_lift_1_t64(unsafe.Add(unsafe.Pointer(base), 0))
+
+			result7 = append(result7, result6)
+		}
+
+		variant = MakeSchemaValueNodeMapValue(result7)
+
+	case 21:
+		var option witTypes.Option[int32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option = witTypes.None[int32]()
+		case 1:
+
+			option = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), 12)))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaValueNodeOptionValue(option)
+
+	case 22:
+		result8 := wasm_lift_1_t65(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeResultValue(result8)
+
+	case 23:
+		result9 := wasm_lift_1_t66(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeTextValue(result9)
+
+	case 24:
+		result10 := wasm_lift_1_t68(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeBinaryValue(result10)
+
+	case 25:
+		value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeSchemaValueNodePathValue(value11)
+
+	case 26:
+		value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = MakeSchemaValueNodeUrlValue(value12)
+
+	case 27:
+		result13 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeUuidValue(result13)
+
+	case 28:
+		result14 := wasm_lift_1_t5(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeDatetimeValue(result14)
+
+	case 29:
+		result15 := wasm_lift_1_t69(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeDurationValue(result15)
+
+	case 30:
+		result16 := wasm_lift_1_t42(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeQuantityValueNode(result16)
+
+	case 31:
+		result17 := wasm_lift_1_t70(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaValueNodeUnionValue(result17)
+
+	case 32:
+
+		variant = MakeSchemaValueNodeSecretValue(SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+
+	case 33:
+
+		variant = MakeSchemaValueNodeQuotaTokenHandle(QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+
+	case 34:
+
+		variant = MakeSchemaValueNodePermissionCardHandle(PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+
+	case 35:
+
+		variant = MakeSchemaValueNodeStreamValue(SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_restore_lower_1_t78(pinner *runtime.Pinner, value SchemaValueNode, dst unsafe.Pointer) func() {
+	lifters := make([]func(), 0, 4)
+
+	switch value.Tag() {
+	case SchemaValueNodeBoolValue:
+		payload := value.BoolValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+		var result int32
+		if payload {
+			result = 1
+		} else {
+			result = 0
+		}
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(result)
+
+	case SchemaValueNodeS8Value:
+		payload := value.S8Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(payload))
+
+	case SchemaValueNodeS16Value:
+		payload := value.S16Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+		*(*int16)(unsafe.Add(unsafe.Pointer(dst), 8)) = int16(int32(payload))
+
+	case SchemaValueNodeS32Value:
+		payload := value.S32Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case SchemaValueNodeS64Value:
+		payload := value.S64Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case SchemaValueNodeU8Value:
+		payload := value.U8Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(payload))
+
+	case SchemaValueNodeU16Value:
+		payload := value.U16Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(6))
+		*(*int16)(unsafe.Add(unsafe.Pointer(dst), 8)) = int16(int32(payload))
+
+	case SchemaValueNodeU32Value:
+		payload := value.U32Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = int32(payload)
+
+	case SchemaValueNodeU64Value:
+		payload := value.U64Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64(payload)
+
+	case SchemaValueNodeF32Value:
+		payload := value.F32Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
+		*(*float32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case SchemaValueNodeF64Value:
+		payload := value.F64Value()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(10))
+		*(*float64)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case SchemaValueNodeCharValue:
+		payload := value.CharValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(11))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = int32(payload)
+
+	case SchemaValueNodeStringValue:
+		payload := value.StringValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(12))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf8)))
+
+	case SchemaValueNodeRecordValue:
+		payload := value.RecordValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(13))
+		slice := payload
+		length := uint32(len(slice))
+		result0 := witRuntime.Allocate(pinner, uintptr(length*4), 4)
+		for index, element := range slice {
+			base := unsafe.Add(result0, index*4)
+			*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result0)))
+
+	case SchemaValueNodeVariantValue:
+		payload := value.VariantValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(14))
+		wasm_lower_1_t63(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodeEnumValue:
+		payload := value.EnumValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(15))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = int32(payload)
+
+	case SchemaValueNodeFlagsValue:
+		payload := value.FlagsValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(16))
+		slice2 := payload
+		length4 := uint32(len(slice2))
+		result3 := witRuntime.Allocate(pinner, uintptr(length4*1), 1)
+		for index, element := range slice2 {
+			base := unsafe.Add(result3, index*1)
+			var result1 int32
+			if element {
+				result1 = 1
+			} else {
+				result1 = 0
+			}
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result1)
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length4)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result3)))
+
+	case SchemaValueNodeTupleValue:
+		payload := value.TupleValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(17))
+		slice5 := payload
+		length7 := uint32(len(slice5))
+		result6 := witRuntime.Allocate(pinner, uintptr(length7*4), 4)
+		for index, element := range slice5 {
+			base := unsafe.Add(result6, index*4)
+			*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length7)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result6)))
+
+	case SchemaValueNodeListValue:
+		payload := value.ListValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(18))
+		slice8 := payload
+		length10 := uint32(len(slice8))
+		result9 := witRuntime.Allocate(pinner, uintptr(length10*4), 4)
+		for index, element := range slice8 {
+			base := unsafe.Add(result9, index*4)
+			*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length10)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result9)))
+
+	case SchemaValueNodeFixedListValue:
+		payload := value.FixedListValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(19))
+		slice11 := payload
+		length13 := uint32(len(slice11))
+		result12 := witRuntime.Allocate(pinner, uintptr(length13*4), 4)
+		for index, element := range slice11 {
+			base := unsafe.Add(result12, index*4)
+			*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length13)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result12)))
+
+	case SchemaValueNodeMapValue:
+		payload := value.MapValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(20))
+		slice14 := payload
+		length16 := uint32(len(slice14))
+		result15 := witRuntime.Allocate(pinner, uintptr(length16*8), 4)
+		for index, element := range slice14 {
+			base := unsafe.Add(result15, index*8)
+			wasm_lower_1_t64(nil, element, unsafe.Add(unsafe.Pointer(base), 0))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length16)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result15)))
+
+	case SchemaValueNodeOptionValue:
+		payload := value.OptionValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(21))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 12)) = payload
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaValueNodeResultValue:
+		payload := value.ResultValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(22))
+		wasm_lower_1_t65(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodeTextValue:
+		payload := value.TextValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(23))
+		wasm_lower_1_t66(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodeBinaryValue:
+		payload := value.BinaryValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(24))
+		wasm_lower_1_t68(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodePathValue:
+		payload := value.PathValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(25))
+		utf817 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf817)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf817)))
+
+	case SchemaValueNodeUrlValue:
+		payload := value.UrlValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(26))
+		utf818 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf818)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf818)))
+
+	case SchemaValueNodeUuidValue:
+		payload := value.UuidValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(27))
+		wasm_lower_1_t4(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodeDatetimeValue:
+		payload := value.DatetimeValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
+		wasm_lower_1_t5(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodeDurationValue:
+		payload := value.DurationValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
+		wasm_lower_1_t69(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodeQuantityValueNode:
+		payload := value.QuantityValueNode()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
+		wasm_lower_1_t42(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodeUnionValue:
+		payload := value.UnionValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+		wasm_lower_1_t70(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaValueNodeSecretValue:
+		payload := value.SecretValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
+		resource := payload
+		handle := resource.TakeHandle()
+		lifters = append(lifters, func() {
+			resource.SetHandle(handle)
+		})
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle
+
+	case SchemaValueNodeQuotaTokenHandle:
+		payload := value.QuotaTokenHandle()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
+		resource19 := payload
+		handle20 := resource19.TakeHandle()
+		lifters = append(lifters, func() {
+			resource19.SetHandle(handle20)
+		})
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle20
+
+	case SchemaValueNodePermissionCardHandle:
+		payload := value.PermissionCardHandle()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
+		resource21 := payload
+		handle22 := resource21.TakeHandle()
+		lifters = append(lifters, func() {
+			resource21.SetHandle(handle22)
+		})
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle22
+
+	case SchemaValueNodeStreamValue:
+		payload := value.StreamValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
+		resource23 := payload
+		handle24 := resource23.TakeHandle()
+		lifters = append(lifters, func() {
+			resource23.SetHandle(handle24)
+		})
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle24
+
+	default:
+		panic("unreachable")
+	}
+
+	return func() {
+		for _, lifter := range lifters {
+			lifter()
+		}
+	}
+}
+
+//go:noinline
+func wasm_lift_1_t81(src unsafe.Pointer) TypedSchemaValue {
+	result := wasm_lift_1_t61(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t80(unsafe.Add(unsafe.Pointer(src), (5 * 4)))
+
+	return TypedSchemaValue{Graph: result, Value: result0}
+}
+
+//go:noinline
+func wasm_restore_lower_1_t81(pinner *runtime.Pinner, value TypedSchemaValue, dst unsafe.Pointer) func() {
+	lifters := make([]func(), 0, 1)
+	wasm_lower_1_t61(pinner, (value).Graph, unsafe.Add(unsafe.Pointer(dst), 0))
+	lifters = append(lifters, wasm_restore_lower_1_t80(pinner, (value).Value, unsafe.Add(unsafe.Pointer(dst), (5*4))))
+
+	return func() {
+		for _, lifter := range lifters {
+			lifter()
+		}
+	}
+}
+
+//go:noinline
+func wasm_lift_1_t63(src unsafe.Pointer) VariantValuePayload {
+	var option witTypes.Option[int32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+	case 0:
+
+		option = witTypes.None[int32]()
+	case 1:
+
+		option = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+	default:
+		panic("unreachable")
+	}
+
+	return VariantValuePayload{Case: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 0))), Payload: option}
+}
+
+//go:noinline
+func wasm_lift_1_t64(src unsafe.Pointer) MapEntry {
+
+	return MapEntry{Key: *(*int32)(unsafe.Add(unsafe.Pointer(src), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(src), 4))}
+}
+
+//go:noinline
+func wasm_lift_1_t65(src unsafe.Pointer) ResultValuePayload {
+	var variant ResultValuePayload
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		var option witTypes.Option[int32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+		case 0:
+
+			option = witTypes.None[int32]()
+		case 1:
+
+			option = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeResultValuePayloadOkValue(option)
+
+	case 1:
+		var option0 witTypes.Option[int32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+		case 0:
+
+			option0 = witTypes.None[int32]()
+		case 1:
+
+			option0 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeResultValuePayloadErrValue(option0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t66(src unsafe.Pointer) TextValuePayload {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
+
+		option = witTypes.Some[string](value1)
+	default:
+		panic("unreachable")
+	}
+
+	return TextValuePayload{Text: value0, Language: option}
+}
+
+//go:noinline
+func wasm_lift_1_t68(src unsafe.Pointer) BinaryValuePayload {
+	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
+
+		option = witTypes.Some[string](value1)
+	default:
+		panic("unreachable")
+	}
+
+	return BinaryValuePayload{Bytes: value0, MimeType: option}
+}
+
+//go:noinline
+func wasm_lift_1_t5(src unsafe.Pointer) Datetime {
+
+	return Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(src), 0)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))}
+}
+
+//go:noinline
+func wasm_lift_1_t69(src unsafe.Pointer) DurationValuePayload {
+
+	return DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(src), 0))}
+}
+
+//go:noinline
+func wasm_lift_1_t42(src unsafe.Pointer) QuantityValue {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 2*4))))
+
+	return QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(src), 0)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(src), 8)), Unit: value0}
+}
+
+//go:noinline
+func wasm_lift_1_t70(src unsafe.Pointer) UnionValuePayload {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+
+	return UnionValuePayload{Tag: value0, Body: *(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))}
+}
+
+//go:noinline
+func wasm_lower_1_t63(pinner *runtime.Pinner, value VariantValuePayload, dst unsafe.Pointer) {
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = int32((value).Case)
+
+	switch (value).Payload.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Payload.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t64(pinner *runtime.Pinner, value MapEntry, dst unsafe.Pointer) {
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Key
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 4)) = (value).Value
+
+}
+
+//go:noinline
+func wasm_lower_1_t65(pinner *runtime.Pinner, value ResultValuePayload, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case ResultValuePayloadOkValue:
+		payload := value.OkValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+		default:
+			panic("unreachable")
+		}
+
+	case ResultValuePayloadErrValue:
+		payload := value.ErrValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+		default:
+			panic("unreachable")
+		}
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t66(pinner *runtime.Pinner, value TextValuePayload, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Text))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Text)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+
+	switch (value).Language.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Language.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(1))
+		utf80 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uintptr(uintptr(utf80)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t68(pinner *runtime.Pinner, value BinaryValuePayload, dst unsafe.Pointer) {
+	data := unsafe.Pointer(unsafe.SliceData((value).Bytes))
+	pinner.Pin(data)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Bytes)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(data)))
+
+	switch (value).MimeType.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).MimeType.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t4(pinner *runtime.Pinner, value Uuid, dst unsafe.Pointer) {
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).HighBits)
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).LowBits)
+
+}
+
+//go:noinline
+func wasm_lower_1_t5(pinner *runtime.Pinner, value Datetime, dst unsafe.Pointer) {
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Seconds
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = int32((value).Nanoseconds)
+
+}
+
+//go:noinline
+func wasm_lower_1_t69(pinner *runtime.Pinner, value DurationValuePayload, dst unsafe.Pointer) {
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Nanoseconds
+
+}
+
+//go:noinline
+func wasm_lower_1_t42(pinner *runtime.Pinner, value QuantityValue, dst unsafe.Pointer) {
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Mantissa
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Scale
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Unit))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 2*4))) = uint32(uint32(len((value).Unit)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uintptr(uintptr(utf8)))
+
+}
+
+//go:noinline
+func wasm_lower_1_t70(pinner *runtime.Pinner, value UnionValuePayload, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Tag))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Tag)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = (value).Body
+
+}
+
+//go:noinline
+func wasm_lift_1_t61(src unsafe.Pointer) SchemaGraph {
+	result0 := make([]SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(56+22*4))
+		result := wasm_lift_1_t58(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result0 = append(result0, result)
+	}
+
+	result2 := make([]SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(6*4))
+		result1 := wasm_lift_1_t20(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result2 = append(result2, result1)
+	}
+
+	return SchemaGraph{TypeNodes: result0, Defs: result2, Root: *(*int32)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))}
+}
+
+//go:noinline
+func wasm_lower_1_t61(pinner *runtime.Pinner, value SchemaGraph, dst unsafe.Pointer) {
+	slice := (value).TypeNodes
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*(56+22*4)), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*(56+22*4))
+		wasm_lower_1_t58(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(result)))
+	slice0 := (value).Defs
+	length2 := uint32(len(slice0))
+	result1 := witRuntime.Allocate(pinner, uintptr(length2*(6*4)), 4)
+	for index, element := range slice0 {
+		base := unsafe.Add(result1, index*(6*4))
+		wasm_lower_1_t20(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(length2)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uintptr(uintptr(result1)))
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = (value).Root
+
+}
+
+//go:noinline
+func wasm_lift_1_t58(src unsafe.Pointer) SchemaTypeNode {
+	result := wasm_lift_1_t57(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t24(unsafe.Add(unsafe.Pointer(src), (56 + 8*4)))
+
+	return SchemaTypeNode{Body: result, Metadata: result0}
+}
+
+//go:noinline
+func wasm_lift_1_t20(src unsafe.Pointer) SchemaTypeDef {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
+
+		option = witTypes.Some[string](value1)
+	default:
+		panic("unreachable")
+	}
+
+	return SchemaTypeDef{Id: value0, Name: option, Body: *(*int32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))}
+}
+
+//go:noinline
+func wasm_lower_1_t58(pinner *runtime.Pinner, value SchemaTypeNode, dst unsafe.Pointer) {
+	wasm_lower_1_t57(pinner, (value).Body, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t24(pinner, (value).Metadata, unsafe.Add(unsafe.Pointer(dst), (56+8*4)))
+
+}
+
+//go:noinline
+func wasm_lower_1_t20(pinner *runtime.Pinner, value SchemaTypeDef, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Id))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Id)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+
+	switch (value).Name.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Name.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(1))
+		utf80 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uintptr(uintptr(utf80)))
+
+	default:
+		panic("unreachable")
+	}
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (5 * 4))) = (value).Body
+
+}
+
+//go:noinline
+func wasm_lift_1_t57(src unsafe.Pointer) SchemaTypeBody {
+	var variant SchemaTypeBody
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 1:
+
+		variant = MakeSchemaTypeBodyBoolType()
+
+	case 2:
+		var option witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option = witTypes.None[NumericRestrictions]()
+		case 1:
+			result := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option = witTypes.Some[NumericRestrictions](result)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyS8Type(option)
+
+	case 3:
+		var option1 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option1 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result0 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option1 = witTypes.Some[NumericRestrictions](result0)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyS16Type(option1)
+
+	case 4:
+		var option3 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option3 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result2 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option3 = witTypes.Some[NumericRestrictions](result2)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyS32Type(option3)
+
+	case 5:
+		var option5 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option5 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result4 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option5 = witTypes.Some[NumericRestrictions](result4)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyS64Type(option5)
+
+	case 6:
+		var option7 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option7 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result6 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option7 = witTypes.Some[NumericRestrictions](result6)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyU8Type(option7)
+
+	case 7:
+		var option9 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option9 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result8 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option9 = witTypes.Some[NumericRestrictions](result8)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyU16Type(option9)
+
+	case 8:
+		var option11 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option11 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result10 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option11 = witTypes.Some[NumericRestrictions](result10)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyU32Type(option11)
+
+	case 9:
+		var option13 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option13 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result12 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option13 = witTypes.Some[NumericRestrictions](result12)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyU64Type(option13)
+
+	case 10:
+		var option15 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option15 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result14 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option15 = witTypes.Some[NumericRestrictions](result14)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyF32Type(option15)
+
+	case 11:
+		var option17 witTypes.Option[NumericRestrictions]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option17 = witTypes.None[NumericRestrictions]()
+		case 1:
+			result16 := wasm_lift_1_t33(unsafe.Add(unsafe.Pointer(src), 16))
+
+			option17 = witTypes.Some[NumericRestrictions](result16)
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyF64Type(option17)
+
+	case 12:
+
+		variant = MakeSchemaTypeBodyCharType()
+
+	case 13:
+
+		variant = MakeSchemaTypeBodyStringType()
+
+	case 14:
+		result19 := make([]NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*(17*4))
+			result18 := wasm_lift_1_t25(unsafe.Add(unsafe.Pointer(base), 0))
+
+			result19 = append(result19, result18)
+		}
+
+		variant = MakeSchemaTypeBodyRecordType(result19)
+
+	case 15:
+		result21 := make([]VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*(8+16*4))
+			result20 := wasm_lift_1_t27(unsafe.Add(unsafe.Pointer(base), 0))
+
+			result21 = append(result21, result20)
+		}
+
+		variant = MakeSchemaTypeBodyVariantType(result21)
+
+	case 16:
+		result23 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*(2*4))
+			value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+			result23 = append(result23, value22)
+		}
+
+		variant = MakeSchemaTypeBodyEnumType(result23)
+
+	case 17:
+		result25 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*(2*4))
+			value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+			result25 = append(result25, value24)
+		}
+
+		variant = MakeSchemaTypeBodyFlagsType(result25)
+
+	case 18:
+		result26 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*4)
+
+			result26 = append(result26, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+		}
+
+		variant = MakeSchemaTypeBodyTupleType(result26)
+
+	case 19:
+
+		variant = MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 20:
+		result27 := wasm_lift_1_t28(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyFixedListType(result27)
+
+	case 21:
+		result28 := wasm_lift_1_t29(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyMapType(result28)
+
+	case 22:
+
+		variant = MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 23:
+		result29 := wasm_lift_1_t30(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyResultType(result29)
+
+	case 24:
+		result30 := wasm_lift_1_t36(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyTextType(result30)
+
+	case 25:
+		result31 := wasm_lift_1_t37(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyBinaryType(result31)
+
+	case 26:
+		result32 := wasm_lift_1_t40(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyPathType(result32)
+
+	case 27:
+		result33 := wasm_lift_1_t41(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyUrlType(result33)
+
+	case 28:
+
+		variant = MakeSchemaTypeBodyUuidType()
+
+	case 29:
+
+		variant = MakeSchemaTypeBodyDatetimeType()
+
+	case 30:
+
+		variant = MakeSchemaTypeBodyDurationType()
+
+	case 31:
+		result34 := wasm_lift_1_t44(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyQuantityType(result34)
+
+	case 32:
+		result35 := wasm_lift_1_t49(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyUnionType(result35)
+
+	case 33:
+		result36 := wasm_lift_1_t50(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodySecretType(result36)
+
+	case 34:
+		result37 := wasm_lift_1_t51(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyQuotaTokenType(result37)
+
+	case 35:
+		result38 := wasm_lift_1_t52(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeSchemaTypeBodyPermissionCardType(result38)
+
+	case 36:
+		var option39 witTypes.Option[int32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option39 = witTypes.None[int32]()
+		case 1:
+
+			option39 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), 12)))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyFutureType(option39)
+
+	case 37:
+		var option40 witTypes.Option[int32]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+		case 0:
+
+			option40 = witTypes.None[int32]()
+		case 1:
+
+			option40 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), 12)))
+		default:
+			panic("unreachable")
+		}
+
+		variant = MakeSchemaTypeBodyStreamType(option40)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t24(src unsafe.Pointer) MetadataEnvelope {
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		option = witTypes.Some[string](value0)
+	default:
+		panic("unreachable")
+	}
+	result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))), index*(2*4))
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+		result = append(result, value1)
+	}
+
+	result3 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))), index*(2*4))
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+		result3 = append(result3, value2)
+	}
+
+	var option5 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (7 * 4)))) {
+	case 0:
+
+		option5 = witTypes.None[string]()
+	case 1:
+		value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (9 * 4))))
+
+		option5 = witTypes.Some[string](value4)
+	default:
+		panic("unreachable")
+	}
+	var option7 witTypes.Option[Role]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (10 * 4)))) {
+	case 0:
+
+		option7 = witTypes.None[Role]()
+	case 1:
+		result6 := wasm_lift_1_t21(unsafe.Add(unsafe.Pointer(src), (11 * 4)))
+
+		option7 = witTypes.Some[Role](result6)
+	default:
+		panic("unreachable")
+	}
+
+	return MetadataEnvelope{Doc: option, Aliases: result, Examples: result3, Deprecated: option5, Role: option7}
+}
+
+//go:noinline
+func wasm_lower_1_t57(pinner *runtime.Pinner, value SchemaTypeBody, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case SchemaTypeBodyRefType:
+		payload := value.RefType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case SchemaTypeBodyBoolType:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+
+	case SchemaTypeBodyS8Type:
+		payload := value.S8Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyS16Type:
+		payload := value.S16Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyS32Type:
+		payload := value.S32Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyS64Type:
+		payload := value.S64Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyU8Type:
+		payload := value.U8Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(6))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyU16Type:
+		payload := value.U16Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyU32Type:
+		payload := value.U32Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyU64Type:
+		payload := value.U64Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyF32Type:
+		payload := value.F32Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(10))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyF64Type:
+		payload := value.F64Type()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(11))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			wasm_lower_1_t33(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 16))
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyCharType:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(12))
+
+	case SchemaTypeBodyStringType:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(13))
+
+	case SchemaTypeBodyRecordType:
+		payload := value.RecordType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(14))
+		slice := payload
+		length := uint32(len(slice))
+		result := witRuntime.Allocate(pinner, uintptr(length*(17*4)), 4)
+		for index, element := range slice {
+			base := unsafe.Add(result, index*(17*4))
+			wasm_lower_1_t25(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result)))
+
+	case SchemaTypeBodyVariantType:
+		payload := value.VariantType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(15))
+		slice0 := payload
+		length2 := uint32(len(slice0))
+		result1 := witRuntime.Allocate(pinner, uintptr(length2*(8+16*4)), 4)
+		for index, element := range slice0 {
+			base := unsafe.Add(result1, index*(8+16*4))
+			wasm_lower_1_t27(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length2)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result1)))
+
+	case SchemaTypeBodyEnumType:
+		payload := value.EnumType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(16))
+		slice3 := payload
+		length5 := uint32(len(slice3))
+		result4 := witRuntime.Allocate(pinner, uintptr(length5*(2*4)), 4)
+		for index, element := range slice3 {
+			base := unsafe.Add(result4, index*(2*4))
+			utf8 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length5)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result4)))
+
+	case SchemaTypeBodyFlagsType:
+		payload := value.FlagsType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(17))
+		slice7 := payload
+		length9 := uint32(len(slice7))
+		result8 := witRuntime.Allocate(pinner, uintptr(length9*(2*4)), 4)
+		for index, element := range slice7 {
+			base := unsafe.Add(result8, index*(2*4))
+			utf86 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf86)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf86)))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length9)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result8)))
+
+	case SchemaTypeBodyTupleType:
+		payload := value.TupleType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(18))
+		slice10 := payload
+		length12 := uint32(len(slice10))
+		result11 := witRuntime.Allocate(pinner, uintptr(length12*4), 4)
+		for index, element := range slice10 {
+			base := unsafe.Add(result11, index*4)
+			*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length12)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result11)))
+
+	case SchemaTypeBodyListType:
+		payload := value.ListType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(19))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case SchemaTypeBodyFixedListType:
+		payload := value.FixedListType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(20))
+		wasm_lower_1_t28(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyMapType:
+		payload := value.MapType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(21))
+		wasm_lower_1_t29(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyOptionType:
+		payload := value.OptionType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(22))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case SchemaTypeBodyResultType:
+		payload := value.ResultType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(23))
+		wasm_lower_1_t30(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyTextType:
+		payload := value.TextType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(24))
+		wasm_lower_1_t36(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyBinaryType:
+		payload := value.BinaryType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(25))
+		wasm_lower_1_t37(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyPathType:
+		payload := value.PathType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(26))
+		wasm_lower_1_t40(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyUrlType:
+		payload := value.UrlType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(27))
+		wasm_lower_1_t41(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyUuidType:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
+
+	case SchemaTypeBodyDatetimeType:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
+
+	case SchemaTypeBodyDurationType:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
+
+	case SchemaTypeBodyQuantityType:
+		payload := value.QuantityType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+		wasm_lower_1_t44(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyUnionType:
+		payload := value.UnionType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
+		wasm_lower_1_t49(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodySecretType:
+		payload := value.SecretType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
+		wasm_lower_1_t50(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyQuotaTokenType:
+		payload := value.QuotaTokenType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
+		wasm_lower_1_t51(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyPermissionCardType:
+		payload := value.PermissionCardType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
+		wasm_lower_1_t52(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case SchemaTypeBodyFutureType:
+		payload := value.FutureType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 12)) = payload
+
+		default:
+			panic("unreachable")
+		}
+
+	case SchemaTypeBodyStreamType:
+		payload := value.StreamType()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(37))
+
+		switch payload.Tag() {
+		case witTypes.OptionNone:
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+		case witTypes.OptionSome:
+			payload := payload.Some()
+			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+			*(*int32)(unsafe.Add(unsafe.Pointer(dst), 12)) = payload
+
+		default:
+			panic("unreachable")
+		}
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t24(pinner *runtime.Pinner, value MetadataEnvelope, dst unsafe.Pointer) {
+
+	switch (value).Doc.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Doc.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+	slice := (value).Aliases
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*(2*4))
+		utf80 := unsafe.Pointer(unsafe.StringData(element))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf80)))
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uintptr(uintptr(result)))
+	slice2 := (value).Examples
+	length4 := uint32(len(slice2))
+	result3 := witRuntime.Allocate(pinner, uintptr(length4*(2*4)), 4)
+	for index, element := range slice2 {
+		base := unsafe.Add(result3, index*(2*4))
+		utf81 := unsafe.Pointer(unsafe.StringData(element))
+		pinner.Pin(utf81)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf81)))
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (6 * 4))) = uint32(length4)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (5 * 4))) = uint32(uintptr(uintptr(result3)))
+
+	switch (value).Deprecated.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (7 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Deprecated.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (7 * 4))) = int8(int32(1))
+		utf85 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf85)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (9 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 * 4))) = uint32(uintptr(uintptr(utf85)))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).Role.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (10 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Role.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (10 * 4))) = int8(int32(1))
+		wasm_lower_1_t21(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (11*4)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lift_1_t33(src unsafe.Pointer) NumericRestrictions {
+	var option witTypes.Option[NumericBound]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[NumericBound]()
+	case 1:
+		result := wasm_lift_1_t31(unsafe.Add(unsafe.Pointer(src), 8))
+
+		option = witTypes.Some[NumericBound](result)
+	default:
+		panic("unreachable")
+	}
+	var option1 witTypes.Option[NumericBound]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 24))) {
+	case 0:
+
+		option1 = witTypes.None[NumericBound]()
+	case 1:
+		result0 := wasm_lift_1_t31(unsafe.Add(unsafe.Pointer(src), 32))
+
+		option1 = witTypes.Some[NumericBound](result0)
+	default:
+		panic("unreachable")
+	}
+	var option3 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 48))) {
+	case 0:
+
+		option3 = witTypes.None[string]()
+	case 1:
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (48 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (48 + 2*4))))
+
+		option3 = witTypes.Some[string](value2)
+	default:
+		panic("unreachable")
+	}
+
+	return NumericRestrictions{Min: option, Max: option1, Unit: option3}
+}
+
+//go:noinline
+func wasm_lift_1_t25(src unsafe.Pointer) NamedFieldType {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	result := wasm_lift_1_t24(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
+
+	return NamedFieldType{Name: value0, Body: *(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))), Metadata: result}
+}
+
+//go:noinline
+func wasm_lift_1_t27(src unsafe.Pointer) VariantCaseType {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	var option witTypes.Option[int32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
+	case 0:
+
+		option = witTypes.None[int32]()
+	case 1:
+
+		option = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), (4 + 2*4))))
+	default:
+		panic("unreachable")
+	}
+	result := wasm_lift_1_t24(unsafe.Add(unsafe.Pointer(src), (8 + 2*4)))
+
+	return VariantCaseType{Name: value0, Payload: option, Metadata: result}
+}
+
+//go:noinline
+func wasm_lift_1_t28(src unsafe.Pointer) FixedListSpec {
+
+	return FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(src), 0)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 4)))}
+}
+
+//go:noinline
+func wasm_lift_1_t29(src unsafe.Pointer) MapSpec {
+
+	return MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(src), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(src), 4))}
+}
+
+//go:noinline
+func wasm_lift_1_t30(src unsafe.Pointer) ResultSpec {
+	var option witTypes.Option[int32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[int32]()
+	case 1:
+
+		option = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	default:
+		panic("unreachable")
+	}
+	var option0 witTypes.Option[int32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
+	case 0:
+
+		option0 = witTypes.None[int32]()
+	case 1:
+
+		option0 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(src), 12)))
+	default:
+		panic("unreachable")
+	}
+
+	return ResultSpec{Ok: option, Err: option0}
+}
+
+//go:noinline
+func wasm_lift_1_t36(src unsafe.Pointer) TextRestrictions {
+	var option witTypes.Option[[]string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[[]string]()
+	case 1:
+		result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(2*4))
+			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+			result = append(result, value0)
+		}
+
+		option = witTypes.Some[[]string](result)
+	default:
+		panic("unreachable")
+	}
+	var option1 witTypes.Option[uint32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))) {
+	case 0:
+
+		option1 = witTypes.None[uint32]()
+	case 1:
+
+		option1 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (4 + 3*4)))))
+	default:
+		panic("unreachable")
+	}
+	var option2 witTypes.Option[uint32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 3*4)))) {
+	case 0:
+
+		option2 = witTypes.None[uint32]()
+	case 1:
+
+		option2 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (12 + 3*4)))))
+	default:
+		panic("unreachable")
+	}
+	var option4 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))) {
+	case 0:
+
+		option4 = witTypes.None[string]()
+	case 1:
+		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4))))
+
+		option4 = witTypes.Some[string](value3)
+	default:
+		panic("unreachable")
+	}
+
+	return TextRestrictions{Languages: option, MinLength: option1, MaxLength: option2, Regex: option4}
+}
+
+//go:noinline
+func wasm_lift_1_t37(src unsafe.Pointer) BinaryRestrictions {
+	var option witTypes.Option[[]string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[[]string]()
+	case 1:
+		result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(2*4))
+			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+			result = append(result, value0)
+		}
+
+		option = witTypes.Some[[]string](result)
+	default:
+		panic("unreachable")
+	}
+	var option1 witTypes.Option[uint32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))) {
+	case 0:
+
+		option1 = witTypes.None[uint32]()
+	case 1:
+
+		option1 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (4 + 3*4)))))
+	default:
+		panic("unreachable")
+	}
+	var option2 witTypes.Option[uint32]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 3*4)))) {
+	case 0:
+
+		option2 = witTypes.None[uint32]()
+	case 1:
+
+		option2 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), (12 + 3*4)))))
+	default:
+		panic("unreachable")
+	}
+
+	return BinaryRestrictions{MimeTypes: option, MinBytes: option1, MaxBytes: option2}
+}
+
+//go:noinline
+func wasm_lift_1_t40(src unsafe.Pointer) PathSpec {
+	var option witTypes.Option[[]string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+	case 0:
+
+		option = witTypes.None[[]string]()
+	case 1:
+		result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(2*4))
+			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+			result = append(result, value0)
+		}
+
+		option = witTypes.Some[[]string](result)
+	default:
+		panic("unreachable")
+	}
+	var option3 witTypes.Option[[]string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))) {
+	case 0:
+
+		option3 = witTypes.None[[]string]()
+	case 1:
+		result2 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))), index*(2*4))
+			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+			result2 = append(result2, value1)
+		}
+
+		option3 = witTypes.Some[[]string](result2)
+	default:
+		panic("unreachable")
+	}
+
+	return PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 1)))), AllowedMimeTypes: option, AllowedExtensions: option3}
+}
+
+//go:noinline
+func wasm_lift_1_t41(src unsafe.Pointer) UrlRestrictions {
+	var option witTypes.Option[[]string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[[]string]()
+	case 1:
+		result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(2*4))
+			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+			result = append(result, value0)
+		}
+
+		option = witTypes.Some[[]string](result)
+	default:
+		panic("unreachable")
+	}
+	var option3 witTypes.Option[[]string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))) {
+	case 0:
+
+		option3 = witTypes.None[[]string]()
+	case 1:
+		result2 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))), index*(2*4))
+			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+			result2 = append(result2, value1)
+		}
+
+		option3 = witTypes.Some[[]string](result2)
+	default:
+		panic("unreachable")
+	}
+
+	return UrlRestrictions{AllowedSchemes: option, AllowedHosts: option3}
+}
+
+//go:noinline
+func wasm_lift_1_t44(src unsafe.Pointer) QuantitySpec {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(2*4))
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+		result = append(result, value1)
+	}
+
+	var option witTypes.Option[QuantityValue]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))) {
+	case 0:
+
+		option = witTypes.None[QuantityValue]()
+	case 1:
+		result2 := wasm_lift_1_t42(unsafe.Add(unsafe.Pointer(src), (8 + 4*4)))
+
+		option = witTypes.Some[QuantityValue](result2)
+	default:
+		panic("unreachable")
+	}
+	var option4 witTypes.Option[QuantityValue]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 6*4)))) {
+	case 0:
+
+		option4 = witTypes.None[QuantityValue]()
+	case 1:
+		result3 := wasm_lift_1_t42(unsafe.Add(unsafe.Pointer(src), (32 + 6*4)))
+
+		option4 = witTypes.Some[QuantityValue](result3)
+	default:
+		panic("unreachable")
+	}
+
+	return QuantitySpec{BaseUnit: value0, AllowedSuffixes: result, Min: option, Max: option4}
+}
+
+//go:noinline
+func wasm_lift_1_t49(src unsafe.Pointer) UnionSpec {
+	result0 := make([]UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(23*4))
+		result := wasm_lift_1_t47(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result0 = append(result0, result)
+	}
+
+	return UnionSpec{Branches: result0}
+}
+
+//go:noinline
+func wasm_lift_1_t50(src unsafe.Pointer) SecretSpec {
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+
+		option = witTypes.Some[string](value0)
+	default:
+		panic("unreachable")
+	}
+
+	return SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(src), 0)), Category: option}
+}
+
+//go:noinline
+func wasm_lift_1_t51(src unsafe.Pointer) QuotaTokenSpec {
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		option = witTypes.Some[string](value0)
+	default:
+		panic("unreachable")
+	}
+
+	return QuotaTokenSpec{ResourceName: option}
+}
+
+//go:noinline
+func wasm_lift_1_t52(src unsafe.Pointer) PermissionCardSpec {
+
+	return PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) != 0)}
+}
+
+//go:noinline
+func wasm_lift_1_t21(src unsafe.Pointer) Role {
+	var variant Role
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeRoleMultimodal()
+
+	case 1:
+
+		variant = MakeRoleUnstructuredText()
+
+	case 2:
+
+		variant = MakeRoleUnstructuredBinary()
+
+	case 3:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeRoleOther(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lower_1_t33(pinner *runtime.Pinner, value NumericRestrictions, dst unsafe.Pointer) {
+
+	switch (value).Min.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Min.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		wasm_lower_1_t31(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).Max.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 24)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Max.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 24)) = int8(int32(1))
+		wasm_lower_1_t31(nil, payload, unsafe.Add(unsafe.Pointer(dst), 32))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).Unit.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 48)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Unit.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 48)) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (48 + 2*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (48 + 1*4))) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t25(pinner *runtime.Pinner, value NamedFieldType, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = (value).Body
+	wasm_lower_1_t24(pinner, (value).Metadata, unsafe.Add(unsafe.Pointer(dst), (3*4)))
+
+}
+
+//go:noinline
+func wasm_lower_1_t27(pinner *runtime.Pinner, value VariantCaseType, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+
+	switch (value).Payload.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Payload.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), (4 + 2*4))) = payload
+
+	default:
+		panic("unreachable")
+	}
+	wasm_lower_1_t24(pinner, (value).Metadata, unsafe.Add(unsafe.Pointer(dst), (8+2*4)))
+
+}
+
+//go:noinline
+func wasm_lower_1_t28(pinner *runtime.Pinner, value FixedListSpec, dst unsafe.Pointer) {
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Element
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 4)) = int32((value).Length)
+
+}
+
+//go:noinline
+func wasm_lower_1_t29(pinner *runtime.Pinner, value MapSpec, dst unsafe.Pointer) {
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Key
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 4)) = (value).Value
+
+}
+
+//go:noinline
+func wasm_lower_1_t30(pinner *runtime.Pinner, value ResultSpec, dst unsafe.Pointer) {
+
+	switch (value).Ok.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Ok.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 4)) = payload
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).Err.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Err.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 12)) = payload
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t36(pinner *runtime.Pinner, value TextRestrictions, dst unsafe.Pointer) {
+
+	switch (value).Languages.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Languages.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		slice := payload
+		length := uint32(len(slice))
+		result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
+		for index, element := range slice {
+			base := unsafe.Add(result, index*(2*4))
+			utf8 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(length)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(result)))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).MinLength.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).MinLength.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), (4 + 3*4))) = int32(payload)
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).MaxLength.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (8 + 3*4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).MaxLength.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (8 + 3*4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), (12 + 3*4))) = int32(payload)
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).Regex.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Regex.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 3*4))) = int8(int32(1))
+		utf80 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 5*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (16 + 4*4))) = uint32(uintptr(uintptr(utf80)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t37(pinner *runtime.Pinner, value BinaryRestrictions, dst unsafe.Pointer) {
+
+	switch (value).MimeTypes.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).MimeTypes.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		slice := payload
+		length := uint32(len(slice))
+		result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
+		for index, element := range slice {
+			base := unsafe.Add(result, index*(2*4))
+			utf8 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(length)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(result)))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).MinBytes.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).MinBytes.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), (4 + 3*4))) = int32(payload)
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).MaxBytes.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (8 + 3*4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).MaxBytes.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (8 + 3*4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), (12 + 3*4))) = int32(payload)
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t40(pinner *runtime.Pinner, value PathSpec, dst unsafe.Pointer) {
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Direction))
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 1)) = int8(int32((value).Kind))
+
+	switch (value).AllowedMimeTypes.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).AllowedMimeTypes.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(1))
+		slice := payload
+		length := uint32(len(slice))
+		result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
+		for index, element := range slice {
+			base := unsafe.Add(result, index*(2*4))
+			utf8 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(length)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uintptr(uintptr(result)))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).AllowedExtensions.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).AllowedExtensions.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = int8(int32(1))
+		slice1 := payload
+		length3 := uint32(len(slice1))
+		result2 := witRuntime.Allocate(pinner, uintptr(length3*(2*4)), 4)
+		for index, element := range slice1 {
+			base := unsafe.Add(result2, index*(2*4))
+			utf80 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf80)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf80)))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (6 * 4))) = uint32(length3)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (5 * 4))) = uint32(uintptr(uintptr(result2)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t41(pinner *runtime.Pinner, value UrlRestrictions, dst unsafe.Pointer) {
+
+	switch (value).AllowedSchemes.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).AllowedSchemes.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		slice := payload
+		length := uint32(len(slice))
+		result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
+		for index, element := range slice {
+			base := unsafe.Add(result, index*(2*4))
+			utf8 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8)))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(length)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(result)))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).AllowedHosts.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).AllowedHosts.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = int8(int32(1))
+		slice1 := payload
+		length3 := uint32(len(slice1))
+		result2 := witRuntime.Allocate(pinner, uintptr(length3*(2*4)), 4)
+		for index, element := range slice1 {
+			base := unsafe.Add(result2, index*(2*4))
+			utf80 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf80)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf80)))
+
+		}
+
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (5 * 4))) = uint32(length3)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uintptr(uintptr(result2)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t44(pinner *runtime.Pinner, value QuantitySpec, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).BaseUnit))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).BaseUnit)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+	slice := (value).AllowedSuffixes
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*(2*4))
+		utf80 := unsafe.Pointer(unsafe.StringData(element))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf80)))
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uintptr(uintptr(result)))
+
+	switch (value).Min.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Min.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = int8(int32(1))
+		wasm_lower_1_t42(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (8+4*4)))
+
+	default:
+		panic("unreachable")
+	}
+
+	switch (value).Max.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (24 + 6*4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Max.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (24 + 6*4))) = int8(int32(1))
+		wasm_lower_1_t42(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (32+6*4)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t49(pinner *runtime.Pinner, value UnionSpec, dst unsafe.Pointer) {
+	slice := (value).Branches
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*(23*4)), 4)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*(23*4))
+		wasm_lower_1_t47(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(result)))
+
+}
+
+//go:noinline
+func wasm_lower_1_t50(pinner *runtime.Pinner, value SecretSpec, dst unsafe.Pointer) {
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Inner
+
+	switch (value).Category.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Category.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t51(pinner *runtime.Pinner, value QuotaTokenSpec, dst unsafe.Pointer) {
+
+	switch (value).ResourceName.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).ResourceName.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t52(pinner *runtime.Pinner, value PermissionCardSpec, dst unsafe.Pointer) {
+	var result int32
+	if (value).Polymorphic {
+		result = 1
+	} else {
+		result = 0
+	}
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(result)
+
+}
+
+//go:noinline
+func wasm_lower_1_t21(pinner *runtime.Pinner, value Role, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case RoleMultimodal:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+
+	case RoleUnstructuredText:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+
+	case RoleUnstructuredBinary:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+
+	case RoleOther:
+		payload := value.Other()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lift_1_t31(src unsafe.Pointer) NumericBound {
+	var variant NumericBound
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))
+
+	case 1:
+
+		variant = MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	case 2:
+
+		variant = MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))))
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t47(src unsafe.Pointer) UnionBranch {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	result := wasm_lift_1_t46(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
+	result1 := wasm_lift_1_t24(unsafe.Add(unsafe.Pointer(src), (9 * 4)))
+
+	return UnionBranch{Tag: value0, Body: *(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))), Discriminator: result, Metadata: result1}
+}
+
+//go:noinline
+func wasm_lower_1_t31(pinner *runtime.Pinner, value NumericBound, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case NumericBoundSigned:
+		payload := value.Signed()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = payload
+
+	case NumericBoundUnsigned:
+		payload := value.Unsigned()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64(payload)
+
+	case NumericBoundFloatBits:
+		payload := value.FloatBits()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64(payload)
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t47(pinner *runtime.Pinner, value UnionBranch, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Tag))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Tag)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = (value).Body
+	wasm_lower_1_t46(pinner, (value).Discriminator, unsafe.Add(unsafe.Pointer(dst), (3*4)))
+	wasm_lower_1_t24(pinner, (value).Metadata, unsafe.Add(unsafe.Pointer(dst), (9*4)))
+
+}
+
+//go:noinline
+func wasm_lift_1_t46(src unsafe.Pointer) DiscriminatorRule {
+	var variant DiscriminatorRule
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeDiscriminatorRulePrefix(value0)
+
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeDiscriminatorRuleSuffix(value1)
+
+	case 2:
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeDiscriminatorRuleContains(value2)
+
+	case 3:
+		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeDiscriminatorRuleRegex(value3)
+
+	case 4:
+		result := wasm_lift_1_t45(unsafe.Add(unsafe.Pointer(src), 4))
+
+		variant = MakeDiscriminatorRuleFieldEquals(result)
+
+	case 5:
+		value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeDiscriminatorRuleFieldAbsent(value4)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lower_1_t46(pinner *runtime.Pinner, value DiscriminatorRule, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case DiscriminatorRulePrefix:
+		payload := value.Prefix()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+	case DiscriminatorRuleSuffix:
+		payload := value.Suffix()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		utf80 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf80)))
+
+	case DiscriminatorRuleContains:
+		payload := value.Contains()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+		utf81 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf81)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf81)))
+
+	case DiscriminatorRuleRegex:
+		payload := value.Regex()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		utf82 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf82)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf82)))
+
+	case DiscriminatorRuleFieldEquals:
+		payload := value.FieldEquals()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+		wasm_lower_1_t45(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+
+	case DiscriminatorRuleFieldAbsent:
+		payload := value.FieldAbsent()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
+		utf83 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf83)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf83)))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lift_1_t45(src unsafe.Pointer) FieldDiscriminator {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
+	case 0:
+
+		option = witTypes.None[string]()
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
+
+		option = witTypes.Some[string](value1)
+	default:
+		panic("unreachable")
+	}
+
+	return FieldDiscriminator{FieldName: value0, Literal: option}
+}
+
+//go:noinline
+func wasm_lower_1_t45(pinner *runtime.Pinner, value FieldDiscriminator, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).FieldName))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).FieldName)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+
+	switch (value).Literal.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Literal.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32(1))
+		utf80 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf80)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uintptr(uintptr(utf80)))
+
+	default:
+		panic("unreachable")
+	}
 
 }

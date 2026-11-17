@@ -1557,12 +1557,18 @@ Path|Method|Protected
             "http_endpoint": [
               {
                 "httpMethod": {
-                  "type": "Any"
+                  "type": "Method",
+                  "value": {
+                    "type": "Patch"
+                  }
                 },
                 "pathSuffix": [
                   {
-                    "type": "Literal",
-                    "value": "string"
+                    "type": "Segment",
+                    "value": {
+                      "type": "Literal",
+                      "value": "string"
+                    }
                   }
                 ],
                 "headerVars": [
@@ -1762,12 +1768,18 @@ Path|Method|Protected
                 "http_endpoint": [
                   {
                     "httpMethod": {
-                      "type": "Any"
+                      "type": "Method",
+                      "value": {
+                        "type": "Patch"
+                      }
                     },
                     "pathSuffix": [
                       {
-                        "type": "Literal",
-                        "value": "string"
+                        "type": "Segment",
+                        "value": {
+                          "type": "Literal",
+                          "value": "string"
+                        }
                       }
                     ],
                     "headerVars": [
@@ -1823,8 +1835,11 @@ Path|Method|Protected
         "http_mount": {
           "pathPrefix": [
             {
-              "type": "Literal",
-              "value": "string"
+              "type": "Segment",
+              "value": {
+                "type": "Literal",
+                "value": "string"
+              }
             }
           ],
           "authDetails": {
@@ -1843,8 +1858,11 @@ Path|Method|Protected
           },
           "webhookSuffix": [
             {
-              "type": "Literal",
-              "value": "string"
+              "type": "Segment",
+              "value": {
+                "type": "Literal",
+                "value": "string"
+              }
             }
           ],
           "staticBindings": [
@@ -2081,12 +2099,18 @@ Path|Method|Protected
         "http_endpoint": [
           {
             "httpMethod": {
-              "type": "Any"
+              "type": "Method",
+              "value": {
+                "type": "Patch"
+              }
             },
             "pathSuffix": [
               {
-                "type": "Literal",
-                "value": "string"
+                "type": "Segment",
+                "value": {
+                  "type": "Literal",
+                  "value": "string"
+                }
               }
             ],
             "headerVars": [
@@ -2288,12 +2312,18 @@ Path|Method|Protected
             "http_endpoint": [
               {
                 "httpMethod": {
-                  "type": "Any"
+                  "type": "Method",
+                  "value": {
+                    "type": "Patch"
+                  }
                 },
                 "pathSuffix": [
                   {
-                    "type": "Literal",
-                    "value": "string"
+                    "type": "Segment",
+                    "value": {
+                      "type": "Literal",
+                      "value": "string"
+                    }
                   }
                 ],
                 "headerVars": [
@@ -2349,8 +2379,11 @@ Path|Method|Protected
     "http_mount": {
       "pathPrefix": [
         {
-          "type": "Literal",
-          "value": "string"
+          "type": "Segment",
+          "value": {
+            "type": "Literal",
+            "value": "string"
+          }
         }
       ],
       "authDetails": {
@@ -2369,8 +2402,11 @@ Path|Method|Protected
       },
       "webhookSuffix": [
         {
-          "type": "Literal",
-          "value": "string"
+          "type": "Segment",
+          "value": {
+            "type": "Literal",
+            "value": "string"
+          }
         }
       ],
       "staticBindings": [

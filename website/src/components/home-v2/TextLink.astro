@@ -1,0 +1,19 @@
+---
+interface Props {
+  href: string;
+  label: string;
+}
+const { href, label } = Astro.props;
+const match = label.match(/^(.*?)([→↓↗])$/);
+---
+
+<a class="g2-text-link" href={href}>
+  <span>{match ? match[1] : label}</span>
+  {
+    match && (
+      <span class="link-arrow" aria-hidden="true">
+        {match[2]}
+      </span>
+    )
+  }
+</a>

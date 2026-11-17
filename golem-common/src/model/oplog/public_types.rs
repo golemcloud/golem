@@ -13,9 +13,9 @@
 // limitations under the License.
 
 pub use crate::base_model::oplog::OplogCursor;
-use crate::model::Empty;
 use crate::model::invocation_context::AttributeValue;
 use crate::model::oplog::DurableFunctionType;
+use golem_schema::Empty;
 
 pub use crate::base_model::oplog::public_types::*;
 

@@ -718,6 +718,16 @@ impl InvocationHooks for Context {
             .await
     }
 
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx
+            .record_agent_method_failure(full_function_name, error)
+            .await
+    }
+
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
@@ -935,6 +945,10 @@ impl HostWasmRpc for Context {
         self.durable_ctx
             .create(agent_type_name, constructor, phantom_id, config)
             .await
+    }
+
+    async fn bind_self(&mut self) -> anyhow::Result<Result<(String, Resource<WasmRpc>), RpcError>> {
+        self.durable_ctx.bind_self().await
     }
 
     async fn invoke_and_await(

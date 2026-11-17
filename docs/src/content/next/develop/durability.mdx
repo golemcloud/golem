@@ -36,27 +36,38 @@ The examples below record a catalog revision read. The `readRevision` (or `read_
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
-import { durable, FunctionType } from "@golemcloud/golem-ts-sdk"
+import { durable, durableAsync, FunctionType } from "@golemcloud/golem-ts-sdk"
 import { z } from "zod"
 
+const readRevisionSpec = {
+  iface: "catalog-library",
+  function: "read-revision",
+  functionType: FunctionType.readRemote,
+  requestSchema: z.string(),
+  success: z.string(),
+}
+
 function catalogRevision(readRevision: (catalog: string) => string): string {
-  return durable({
-    iface: "catalog-library",
-    function: "read-revision",
-    functionType: FunctionType.readRemote,
-    requestSchema: z.string(),
-    success: z.string(),
-  }, "public", () => readRevision("public"))
+  return durable(readRevisionSpec, "public", () => readRevision("public"))
+}
+
+function catalogRevisionAsync(
+  readRevision: (catalog: string) => Promise<string>
+): Promise<string> {
+  return durableAsync(readRevisionSpec, "public", () => readRevision("public"))
 }
 ```
 
-An adapter exception leaves the operation unfinished instead of recording an error result.
+`durable` takes a synchronous body. A body that returns a promise makes `durable` throw a `TypeError`; use `durableAsync` for a body that awaits. An adapter exception or rejection leaves the operation unfinished instead of recording an error result. With an `error` schema, both functions take a body that returns a `Result` and record either variant.
 
-Use `durable` sequentially; do not overlap it with other promises or callbacks. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+`durableAsync` runs its body in the operation's own execution scope. Host calls that the body starts belong to the operation, also after an `await` and in timers, `queueMicrotask` callbacks and promise reactions that the body registers. Operations that the body starts are its children. Concurrent operations, for example inside `Promise.all`, and other work that runs while a body waits keep their own scopes. An operation finishes only after the operations that started inside it have settled, also when the body did not await them.
 
-Sequential and properly nested custom operations are supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+Limits:
 
-Do not leave detached promises or callbacks running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. `Promise.all` does not join surviving siblings on rejection, and joining at the end does not make concurrent custom scopes supported.
+- A parent stops waiting for children when they have all settled. An operation that starts after that, for example from a getter that reads the result, begins in the nearest enclosing operation that still waits, or in the invocation.
+- Work that the body detaches and that runs after the operation finished does not belong to that operation. It runs in the nearest enclosing open operation, or in the invocation, and the runtime writes one report to stderr. Await or join the work that the body starts before the body returns.
+- `FinalizationRegistry` callbacks and dynamic `import()` jobs run outside every custom operation.
+- Each `await` inside an operation switches the scope in and out with two host calls, so a CPU-bound loop with many awaits runs slower inside an operation than outside it.
 </Tabs.Tab>
 <Tabs.Tab>
 ```typescript
@@ -76,11 +87,9 @@ const catalogRevision = (
   }, "public", Effect.suspend(() => readRevision("public")))
 ```
 
-Use `Durability.wrap` and `wrapInfallible` sequentially; do not overlap them with other fibers or concurrent effects. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+`Durability.wrap` and `wrapInfallible` operations can run in concurrent fibers and can nest. Each fiber carries the execution scope of its operation, so Golem records the calls of a body under that operation and not under a sibling. A parent operation finishes only after its child operations close. Work that continues after its operation closes runs in the nearest open enclosing operation, or else in the agent invocation; do not let work continue after the agent method returns.
 
-Sequential and properly nested custom operations are supported. A body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
-
-Do not leave detached fibers running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Joining at the end does not make concurrent custom scopes supported.
+Timers in a body (`setTimeout`, `setImmediate`, `Effect.sleep`) sleep in the operation that started them. Fibers yield through Promise jobs, so wait for I/O with an effect such as `Deferred.await`, not with an `Effect.yieldNow` polling loop.
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
@@ -118,11 +127,28 @@ def catalogRevision(readRevision: String => String): String =
 
 An adapter exception leaves the operation unfinished instead of recording an error result.
 
-Use `DurabilityApi.durable` and `durableAsync` sequentially; do not overlap them with other futures or callbacks. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+Use `durableAsync` for an asynchronous body. Concurrent `durableAsync` operations within one invocation are supported: each body, every `Future` callback it registers through a `golem.concurrent.GolemExecutionContext`, and every host call made from those callbacks belong to that operation, in any completion order. Ordinary host calls made outside the operation stay outside it. The body receives the scoped execution context as a context parameter, and it takes precedence over an imported one. Use `import golem.concurrent.Implicits.global` in agent code, and `GolemExecutionContext.wrap` for an execution context of your own.
 
-Sequential and properly nested custom operations are supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+```scala
+import golem.concurrent.Implicits.global
+import golem.host.DurabilityApi
+import golem.host.DurabilityApi.DurableFunctionType
+import scala.concurrent.Future
 
-Do not leave detached futures or callbacks running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Fail-fast combinators do not necessarily wait for surviving work, and joining at the end does not make concurrent custom scopes supported.
+def bothRevisions(read: String => Future[String]): Future[List[String]] = {
+  def revision(name: String) =
+    DurabilityApi.durableAsync("catalog-library", "read-revision", DurableFunctionType.ReadRemote, name)(read(name))
+  Future.sequence(List(revision("public"), revision("internal")))
+}
+```
+
+Operations started in a body are nested. A parent finishes, or is dropped on failure, only after its nested operations have finished, so a nested operation that never completes keeps its parent open. A continuation that is already ready to run when the body and its nested operations finish, for example a `flatMap` on a nested operation that just completed, still runs before the parent finishes, and an operation it starts is nested too. An operation started after that point, for example by a callback that waited for a later host call, belongs to the nearest enclosing operation that has not started to finish, or to the root. `durable` is for synchronous bodies only; starting a `durableAsync` operation inside it fails.
+
+The remaining limits:
+
+- Callbacks run by other execution contexts, including `ExecutionContext.parasitic`, are not attributed to the operation that registered them.
+- Work still running after its operation closed continues in the nearest open enclosing operation, or at the root. Host calls from work that escapes an outermost operation are not supported, because replay skips the completed body.
+- Only Scala `Future` callbacks are covered. ZIO and Cats Effect fibers are not attributed to the operation that started them.
 </Tabs.Tab>
 <Tabs.Tab>
 Import `golemcloud/golem_sdk/api` as `@api` in the package configuration.
@@ -138,11 +164,9 @@ fn catalog_revision(
 }
 ```
 
-Use `@api.durable` and `durable_async` sequentially; do not overlap them with other tasks. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+For an async adapter, use `@api.durable_async`. Its execution scope follows the task that runs the body, so concurrent tasks of the same invocation, their ordinary host calls, and other custom operations are not attributed to it while it waits. Nested operations keep their parent.
 
-Sequential and properly nested custom operations are supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
-
-Do not leave detached tasks running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Joining at the end does not make concurrent custom scopes supported.
+A task spawned inside a body, including a stream or future producer, runs in the body's scope. Join every such task before the body returns, for example with a task group opened inside the body. A task that is still running when the body returns is cancelled, and the combinator raises `@api.DurabilityError::TaskOutlivedScope`; `@api.durable` runs a synchronous body, so any task it spawns gives this error. On success, `durable_async` waits for the stream and future producers its body started. When the body fails or is cancelled, the combinator cancels the tasks and producers of the scope and propagates the error at once. A producer that does not end at cancellation, such as a future producer that waits for a value the body never supplied, keeps the scope open until it ends; an agent invocation that returns while a scope is still open fails.
 </Tabs.Tab>
 <Tabs.Tab>
 ```go

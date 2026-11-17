@@ -27,7 +27,7 @@ use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::custom_api::RequestBodySchema;
 use golem_service_base::headers::TraceContextHeaders;
 use http::HeaderMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 use uuid::Uuid;
 
@@ -383,8 +383,8 @@ fn validate_text_content_type(content_type: &str) -> Result<(), RequestHandlerEr
 
 fn extract_request_attributes(
     request: &poem::Request,
-) -> HashMap<String, invocation_context::AttributeValue> {
-    let mut result = HashMap::new();
+) -> BTreeMap<String, invocation_context::AttributeValue> {
+    let mut result = BTreeMap::new();
 
     result.insert(
         "request.method".to_string(),

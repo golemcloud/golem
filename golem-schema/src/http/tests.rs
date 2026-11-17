@@ -19,7 +19,7 @@ use test_r::test;
 #[test]
 fn shared_request_path_corpus() {
     let corpus: Value = serde_json::from_str(include_str!(
-        "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        "../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
     ))
     .unwrap();
     for case in corpus["cases"]
@@ -61,7 +61,7 @@ fn request_literals_do_not_acquire_mapping_syntax() {
 #[test]
 fn shared_mapping_corpus() {
     let corpus: Value = serde_json::from_str(include_str!(
-        "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        "../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
     ))
     .unwrap();
     for case in corpus["cases"]

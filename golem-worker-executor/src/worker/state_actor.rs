@@ -234,7 +234,7 @@ enum StatusJob {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-        done: oneshot::Sender<Result<bool, OplogError>>,
+        done: oneshot::Sender<Result<bool, WorkerExecutorError>>,
     },
     /// Folds the entries that the oplog committed by itself, on its commit threshold, into the
     /// published status. Commits nothing. The oplog queues it through its auto-commit listener.
@@ -532,6 +532,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 ) {
                                     return Ok(false);
                                 }
+                                // Acquiring the worker does not reserve admission: its constructor
+                                // may have failed since acquisition. Check health in this serialized
+                                // append job, after deduplication and before accepting new work.
+                                Worker::<Ctx>::ensure_not_failed(
+                                    &state.deps,
+                                    &state.owned_agent_id,
+                                    state.agent_mode,
+                                    &status,
+                                )
+                                .await?;
                                 drop(status);
                                 // Returned rather than reported as a moved version: the caller
                                 // retries on `false`, and a fenced oplog refuses every retry.
@@ -539,7 +549,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     if let OplogError::Fenced(fence) = &error {
                                         state.retire_fenced_agent(fence.clone());
                                     }
-                                    return Err(error);
+                                    return Err(error.into());
                                 }
                                 // The entry is only buffered until this commit, which is where a
                                 // takeover is found. The key has not reached the status, so nothing
@@ -858,7 +868,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-    ) -> Result<bool, OplogError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),

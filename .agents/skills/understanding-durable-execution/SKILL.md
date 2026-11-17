@@ -86,9 +86,18 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
-something from the right column to survive a restart is wrong. Sockets and other OS resources are
-recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect or explicitly handle loss. Replayed websocket handles use their connect-time
+something from the right column to survive a restart is wrong. Native resources are not preserved.
+P3 TCP bind records the selected local address; connect records both endpoints. The per-Store
+`SocketEntries` table in `durable_host/sockets/mod.rs` reconstructs these addresses and the stream-taken
+flags without binding or connecting natively during replay. A replayed successful connect is `Lost`:
+recorded acquisitions still replay, but a new live send or receive acquisition returns `connection-broken`,
+even if that direction was already taken. Address getters use the entry; guest-set option getters use
+cached effective values. A successful setter invalidates its option cache; the next async getter reads
+and caches the native effective value, including OS rounding and buffer limits. Unset option getters
+still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
+socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
+than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
+reconnects as described below. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
 one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
@@ -143,6 +152,8 @@ a host call must not wait for a guard whose holder waits for that guest to stop.
 completion activates only the incarnation that created the promise, through
 `enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
 missing or re-created agent is left alone.
+
+Keyed invocation admission checks fatal agent health inside the status actor's append job, after result-generation validation and before appending the pending entry. Acquiring a worker earlier does not authorize work after its constructor fails. A failed or exited agent refuses new immediate and scheduled methods without writing to its oplog. Generation changes return the caller to same-key result lookup first; recorded outcomes keep precedence. If failed health comes from recovery and a startup attempt is pending, ingress waits for that exact attempt's `WorkerLoaded` result without holding the lifecycle guard, then retries result lookup and admission. It does not wait for queued methods to finish or bypass the serialized health check. Keyless manual updates use their separate admission path so failed agents can still be repaired.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
@@ -1329,6 +1340,18 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
+Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, principal, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
+
+After admission, executor create and REST create await `Worker::await_initialization`, not
+`WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
+`InvocationId`. A recorded success returns the original fingerprint without starting a Store. A terminal constructor
+Invocation Error or Exited becomes `AgentCreationFailed` with the agent ID and cause. Pending
+initialization uses ordinary startup, never another constructor reservation. An interrupted retry
+remains interrupted. Startup, storage and routing errors keep their operational classification;
+synthetic warm-cache failures cannot establish a recorded constructor failure. A later method
+failure cannot replace constructor success. Forks resolve the retained source initialization key.
+Preparation remains suspended and neither starts nor waits for initialization.
+
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
@@ -1336,14 +1359,16 @@ principal and its invocation context. Callers pass a `CreateIntent`. An explicit
 (`CreateIntent::Create`) records its key. An invocation that creates its target
 (`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
 the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
-no key. The recorded `wasm-rpc` activation call sends the key derived from its own `Start`, so a
-repaired activation sends the same key. Later re-activations send no key and check the recorded
-fingerprint. A fork target records `Fork`, no key and the forker's principal. A self fork also
-records the forking agent's current invocation context; a fork through the worker service records a
-fresh context. When a reload finds only `Create`, `prepare_worker_data` enqueues
-`AgentInitialization` with the recorded principal and context, not with the loading request's. The
-resident `unpublished_create` flag only records that an attempt committed `Create` and the worker is
-not published yet; it carries no principal or context. Tests:
+no key. An invocation session passes the owner key of its `request_key`, from which clients derive
+an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends the key derived
+from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
+target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
+target records `Fork`, no key and the forker's principal. A self fork also records the forking
+agent's current invocation context; a fork through the worker service records a fresh context.
+When a reload finds only `Create`, `prepare_worker_data` enqueues `AgentInitialization` with the
+recorded principal and context, not with the loading request's. The resident `unpublished_create`
+flag only records that an attempt committed `Create` and the worker is not published yet; it
+carries no principal or context. Tests:
 `restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
 `grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in
@@ -1352,6 +1377,28 @@ not published yet; it carries no principal or context. Tests:
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.
+`ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
+`AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
+whether the worker was resident or loaded cold. A caller that joined another caller's load loads
+again with its own fingerprint when that load answered not found. Invocation admission uses the
+guard for every mode when `InvocationStart.expected_callee_fingerprint` is set, before any
+schedule or `PendingAgentInvocation`, and validates a schedule against the pinned worker; such a
+request cannot be `KnownFresh`. A generation under deletion stays cached until the deletion ends,
+so with a fingerprint set `Worker::get_exact_existing_suspended_for_response` and a refused
+task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` once the deletion
+has completed `DurableStateRemoved`, because nothing committed to the generation can run after
+that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
+still fail and leave an invocation an earlier attempt with the same key committed. A failed
+deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
+worker's status before the bind, with or without a fingerprint, without panicking on a stopped
+status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
+deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
+as reads do, until a retried delete claims it. Failures after the bind keep
+their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
+while it runs. External-tool sessions bind the same way after each acquisition. A call on an
+existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
+owner (`fresh_owner`) has no incarnation a caller can name, so a fingerprint with it is an invalid
+request in every mode.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete
@@ -1785,7 +1832,28 @@ the body. This reproduces outward completion order, not the skipped body's polls
 entries. A completed sibling therefore cannot return early and change a later root call's ordinal
 while another sibling remains incomplete. Sync combinators retain the direct begin/finish path.
 
-**Non-Rust SDK limitation:** TypeScript, Effect, Scala, and MoonBit custom combinators support
+**TypeScript scope integration:** `durableAsync` follows the Rust order: async begin, then
+`enterLive` from wasm-rquickjs's `wasm-rquickjs:custom-invocation-context` in the parent's scope,
+then the body, `finish-async` and the drop under the child token, then `close`. The runtime's
+promise hook, timer and callback wrappers and import-bridge wrappers capture the scope at
+registration or initiation, install it around each job, poll, sleep and drop, restore the previous
+scope afterwards, and restore the root before control returns to the host. A parent finishes only
+after the operations that started inside it have settled; an operation that begins after that wait
+ended begins in the nearest enclosing scope that still waits, or at the root. A closed token
+resolves to its nearest open ancestor, or to the root, and never installs its stale snapshot.
+`durable` is sync-only.
+
+**Effect scope integration:** each fiber carries its custom scope token in `CurrentCustomScope`
+(`sdks/effect/src/internal/customScope.ts`). A composed `Tracer.context` hook swaps the
+`wasm-rquickjs:custom-invocation-context` token for each run segment, and the runtime carries it
+across the Promise jobs, timers and import calls that the segment creates. Concurrent fibers are
+supported. A parent finishes or drops only after its registered children close; escaped work runs
+in the nearest open ancestor or the invocation root. Agent, tool and middleware entries install a
+scheduler that yields through Promise jobs. The default `setImmediate` yield is a root
+`monotonic-clock::wait-for` call, which replay of a completed operation does not repeat, so its
+unclaimed `Start` stopped recovery (`tests/durability_effect.rs`).
+
+**Non-Rust SDK limitation:** MoonBit custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1794,7 +1862,15 @@ invocation failure. Misuse is not reliably detected. Await nested operations; do
 Stop and join outstanding work before the body exits, including on failure or cancellation. A
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
-durability outside custom operations, to the Rust poll/drop scope integration, or to Go.
+durability outside custom operations, to the Rust poll/drop scope integration, to TypeScript's or
+Scala's `durableAsync`, to Effect's fiber-local scopes, or to Go. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
+`wasm-rquickjs:custom-invocation-context` module, and its `GolemExecutionContext` captures the
+scope when a `Future` callback is registered (`ExecutionContext.prepare`), not when its source
+completes. A Scala parent finishes only after its nested operations close and no task that
+`GolemExecutionContext` submitted in its scope waits to run; it is then sealed (`DurableScope`),
+and an operation started in a sealed scope begins and enters in the nearest admitting ancestor,
+so host and SDK agree on its parent. Callbacks run by
+other execution contexts, and work escaping an outermost operation, are not attributed to it.
 
 **Go custom operations** (`sdks/go/golem/durability.Run`, `internal/cdctx`) use async admission
 like Rust. The golemcloud/go runtime calls a switch hook whenever the goroutine about to run has
@@ -1805,7 +1881,8 @@ callbacks of its timers, inherit the scope, and `Run` waits for them before `fin
 the switching goroutine's context and domain, whoever created the iterator. Because a completed
 body is skipped on replay, runtime state shared by every goroutine would carry the body's effects
 out of it. The runtime therefore makes no host call for itself on wasip1 (the
-scheduler, GC and scavenger read the latest clock reading the program made), and each operation
+scheduler, GC and scavenger read the latest clock reading the program made; a receive or select
+on a timer channel that is in no heap reads the clock itself), and each operation
 runs in its own runtime domain: its own clock (advanced only by reads in the domain and by the
 domain's recorded `wait-until`), timers heap, and random state seeded from its parent's stream on
 both the live and the replay path. go-pkg arms one clock wait per domain, in the domain's host
@@ -2275,7 +2352,35 @@ invocation loop appends `AgentInvocationStarted`, runs the guest, and
 result and waits for the commit receipt before waiters are notified. Durable agents use
 `CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
-reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+reads queued on the same state actor wait behind it. Actual traps and constructor errors go through
+`on_invocation_failure`; decoded outer method errors take the separate path below.
+
+### Invocation-local method errors
+
+A valid outer guest `agent-error` from an agent method becomes `InvokeResult::MethodFailed`, not
+a trap. `on_agent_method_failure` (`durable_host/invocation.rs`) finishes required cleanup and
+appends `AgentInvocationFailed { invocation_id, error, start_index, entity_parent_start_index }`.
+It uses the same durable `Always` / ephemeral `Deferred` completion barrier before publishing
+the existing `InvocationFailed` response for that key. A failed cleanup or commit retains its
+infrastructure failure path and does not publish the method outcome.
+
+Mutations before the error remain. Mutating methods invalidate the read-only cache before
+publication. The status fold indexes a completed failure and clears its running key without
+setting fatal `last_error_kind`. The durable serial loop keeps the same Store and runs queued
+work; it neither retries the method nor fails other keys. Ephemeral owners still archive after
+their one accepted method. A persisted local outcome is observable after archival, but a lost
+incomplete ephemeral method is never replayed to manufacture a result.
+
+`AgentInvocationFailed` is a positional terminal, not an error hint. Re-execution reconstructs partial state and validates the invocation ID, error payload, invocation anchor and entity parent before consuming the terminal. A success
+or actual trap instead of that terminal is divergence. Completed replay neither appends nor
+publishes another terminal; cold same-key lookup reads the stored failure without guest execution.
+Only an incomplete durable invocation at the natural history tail may settle live.
+
+Declared schema error values stay ordinary results. Constructors, Rust panics, actual Wasm
+traps and malformed ABI errors keep their fatal paths. Go normalizes only handler-stage panics;
+Scala marks handler throws and failed Futures before encoding; Effect catches escaped handler
+failures/defects before codecs and HTTP cleanup, leaving interruption distinct. SDK machinery
+failures are not permission to reuse a damaged instance.
 
 The live loop hydrates an ordinary invocation from its committed Pending entry into an
 executor-local `HydratedInvocation`. Started reuses that exact payload reference, including its
@@ -2319,12 +2424,23 @@ offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download 
 
 ## Durable RPC exactly-once
 
-`RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
-Deferred durable activation records or replays its own decision (`Recorded`). Non-deferred
-targets return `LiveOnly(PermissionTarget)`; their asynchronous permission check runs only in
-`ResolvedCall::Live`, after resolution, preserving operator authorization and decision telemetry.
-Denials use `persist_*_denial_from_begun` to record on the already-begun call, not begin another
-one. Recorded calls, including incomplete repairs, retain admission without re-authorizing.
+Concrete durable client creation calls `Rpc::create_and_initialize` and waits for the child's
+recorded constructor outcome. Explicit creation requires `Invoke` on `Any` for the concrete child;
+later method calls still require their concrete method permission. The connection's `WriteRemote`
+Start commits before dispatch and supplies the derived creation key. Its `HostResponseGolemRpcCreate.result`
+records success with the actual fingerprint, or a terminal constructor failure or permission
+refusal. Infrastructure errors and interruption leave the call incomplete. Repair reuses its
+Start and key. Completed replay returns the recorded success or failure without contacting the
+child; a reconstructed successful handle retains that fingerprint for existing-only reactivation.
+`wasm-rpc.bind-self()` binds the current durable incarnation without creating, starting or waiting for it. It takes no type argument: the host derives self from the owner context and records a separate local binding call. Its Start records the ID, environment and fingerprint. Completed replay and incomplete repair reconstruct that same binding without target contact, even when a fork changes the current owner.
+
+Typed clients in every SDK validate the type parsed from the returned recorded ID before constructing the client. They reuse the returned connection rather than creating another target. Rust and MoonBit expose fallible `bind_self()`, TypeScript and Effect expose `bindSelf()`, Go exposes `BindSelf()`, and Scala generates `bindSelf()`. Use these for constructor self-scheduling. Do not replace the returned recorded ID with a separate current-environment read. Later scheduling still checks the exact method authority. Phantom-less ephemeral clients remain
+logical per-invocation proxies. Fixed ephemeral handles remain observation/control identities,
+and `create_demand` remains non-running preparation.
+
+Method permission checks run inside `ResolvedCall::Live`, after resolution. Denials use
+`persist_*_denial_from_begun` on that already-begun call. Recorded calls, including incomplete
+repairs, retain admission without re-authorizing.
 
 1. The caller opens a durable call; its own `Start` index is the call identity. Live
    computes the request when it appends the `Start` (`start_live_at_index`), so the request
@@ -2347,6 +2463,25 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
    identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the request key's
    `owner_key(operation)` — deterministic, never random.
+7. A durable call is pinned to the incarnation its activation recorded. The recorded activation
+   (`golem::rpc::wasm-rpc.activate`, live or repaired) is the only step that may create the
+   target. Re-activating a replayed `ReplayPending` target (`activate_rpc_target` with the
+   recorded fingerprint) builds a `ReplayedDemand` and sends no create request. Every scalar
+   `invoke` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
+   targets carry none. Pinned local dispatch (`services/rpc/direct.rs`) resolves the callee only
+   through `get_existing_with_fingerprint` and never creates it, and the local streaming path uses
+   the exact-existing lookup too. An unpinned ephemeral call may still create its phantom, keyed by
+   the owner key of its `request_key`. Pinned local dispatch holds no task-scope bind, so a deletion
+   can still finish between the lookup and the enqueue; a refusal before admission is therefore
+   answered with `Worker::deleted_incarnation_as_not_found`, which applies the same
+   `pinned_deletion_refusal` rule as admission. Remote dispatch sends the fingerprint in
+   `InvokeAgentRequest.expected_callee_fingerprint`; the worker service checks the incarnation
+   before it validates the method, and the target executor applies the same existing-only check.
+   Both pin the incarnation before they validate the method against its revision. A deleted
+   or re-created child therefore fails the call with `RpcError::NotFound`, which is permanent
+   and recorded in the call's `End`; a call that meets a deletion still running gets the
+   refusal an unpinned caller gets. The method never runs on another incarnation, and an
+   executor restart does not create the deleted child again.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
@@ -3229,7 +3364,7 @@ handle goes through `ensure_websocket_connection_live_access` in
 `durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
-still sees its own gate in the entry applies the policy. With the default
+still sees its own gate in the entry applies the policy. With an explicit
 `reconnect-automatically`, it proceeds to take one pool permit, run the handshake, and
 publish `Live` in a single store window re-verified against the current entry. A queued peer
 therefore re-reads the entry instead of independently reconnecting: a `Live` entry published by
@@ -3257,8 +3392,9 @@ interruption. Tests:
 `websocket_closed_connection_stays_terminal_after_replay`.
 
 The third optional WIT `connect` parameter is `option<reconstruction-policy>`. Absence selects
-`reconnect-automatically`; `report-connection-loss` publishes terminal `SessionLost` at the first
-live access to a reconstructed successful handle, without a pool permit or handshake. Recorded
+`report-connection-loss`, which publishes terminal `SessionLost` at the first live access to a
+reconstructed successful handle, without a pool permit or handshake. Only an explicit
+`reconnect-automatically` opens a replacement connection. Recorded
 send, receive, timeout, error, and close outcomes replay unchanged under either policy. Suspension,
 restart, and crash all use this reconstruction path; the option does not change ordinary live
 disconnect retry behavior. Live `close` on the lost handle reports loss without reconnecting;

@@ -9,8 +9,9 @@ import * as fs from 'node:fs';
 import path from 'path';
 
 // All `golem:*` and `wasi:*` specifiers are host-provided WIT imports (resolved by
-// the wasm runtime), plus generated guest worlds, `node:sqlite` and `node:fs`. Externalize them
-// all so the SDK host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
+// the wasm runtime), plus generated guest worlds, `node:sqlite`, `node:fs` and the
+// `wasm-rquickjs:*` runtime modules. Externalize them all so the SDK host surfaces
+// (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
   id === 'user' ||
   id === 'agent-guest' ||
@@ -18,7 +19,8 @@ const external = (id) =>
   id === 'node:sqlite' ||
   id === 'node:fs' ||
   id.startsWith('golem:') ||
-  id.startsWith('wasi:');
+  id.startsWith('wasi:') ||
+  id.startsWith('wasm-rquickjs:');
 
 function onwarn(warning, warn) {
   if (warning.code === 'CIRCULAR_DEPENDENCY') return;

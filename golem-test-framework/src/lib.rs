@@ -24,6 +24,7 @@ pub mod config;
 pub mod dsl;
 
 pub mod model;
+pub use golem_model_mock as model_mock;
 pub mod oidc;
 
 pub type Result<T> = anyhow::Result<T>;

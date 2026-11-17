@@ -342,7 +342,7 @@ mod tests {
             dependencies: Vec::new(),
             mode: crate::model::agent::AgentMode::Durable,
             http_mount: None,
-            snapshotting: crate::model::agent::Snapshotting::Disabled(crate::model::Empty {}),
+            snapshotting: crate::model::agent::Snapshotting::Disabled(golem_schema::Empty {}),
             config: Vec::new(),
         }
     }

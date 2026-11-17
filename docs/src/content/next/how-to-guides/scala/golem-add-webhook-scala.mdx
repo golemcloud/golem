@@ -38,7 +38,7 @@ All functions are on the `golem.HostApi` object:
 import golem.HostApi
 import golem.HostApi.WebhookRequestPayload
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 ```
 
 ## Webhook URL Structure
@@ -99,7 +99,7 @@ val payload: Future[WebhookRequestPayload] = webhook.await()
 
 ```scala
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 
 val webhook = HostApi.createWebhook()
 val url = webhook.url
@@ -137,7 +137,7 @@ import golem.runtime.annotations.{agentDefinition, agentImplementation, endpoint
 import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 
 case class WebhookEvent(eventType: String, data: String) derives Schema
 
