@@ -655,6 +655,42 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::SocketsTcpFinishConnect => {
             pair::<host_functions::SocketsTcpFinishConnect>(Bare::Neither)
         }
+        HostFunctionName::SocketsTcpInputStreamRead => {
+            pair::<host_functions::SocketsTcpInputStreamRead>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpInputStreamBlockingRead => {
+            pair::<host_functions::SocketsTcpInputStreamBlockingRead>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpInputStreamSkip => {
+            pair::<host_functions::SocketsTcpInputStreamSkip>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpInputStreamBlockingSkip => {
+            pair::<host_functions::SocketsTcpInputStreamBlockingSkip>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamCheckWrite => {
+            pair::<host_functions::SocketsTcpOutputStreamCheckWrite>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamWriteReady => {
+            pair::<host_functions::SocketsTcpOutputStreamWriteReady>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamWrite => {
+            pair::<host_functions::SocketsTcpOutputStreamWrite>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamBlockingWriteAndFlush => {
+            pair::<host_functions::SocketsTcpOutputStreamBlockingWriteAndFlush>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamWriteZeroes => {
+            pair::<host_functions::SocketsTcpOutputStreamWriteZeroes>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamBlockingWriteZeroesAndFlush => {
+            pair::<host_functions::SocketsTcpOutputStreamBlockingWriteZeroesAndFlush>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamFlush => {
+            pair::<host_functions::SocketsTcpOutputStreamFlush>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamBlockingFlush => {
+            pair::<host_functions::SocketsTcpOutputStreamBlockingFlush>(Bare::Neither)
+        }
         HostFunctionName::GolemPermissionsSelfWallet => {
             pair::<host_functions::GolemPermissionsSelfWallet>(Bare::Neither)
         }

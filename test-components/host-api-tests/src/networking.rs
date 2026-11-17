@@ -38,46 +38,19 @@ async fn tcp_collect(port: u16) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&collected).to_string())
 }
 
-fn tcp_input_poll(port: u16, blocking: bool) -> Result<bool, String> {
-    use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
-
-    let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4)
-        .map_err(|error| format!("{error:?}"))?;
-    socket
-        .start_connect(
-            &instance_network(),
-            IpSocketAddress::Ipv4(Ipv4SocketAddress {
-                address: (127, 0, 0, 1),
-                port,
-            }),
-        )
-        .map_err(|error| format!("{error:?}"))?;
-    socket.subscribe().block();
-    if blocking {
-        assert!(socket.subscribe().ready(), "connect poll completed");
-    }
-    let (input, _output) = socket
-        .finish_connect()
-        .map_err(|error| format!("{error:?}"))?;
-    let pollable = input.subscribe();
-    if blocking {
-        pollable.block();
-        Ok(true)
-    } else {
-        Ok(pollable.ready())
-    }
+fn tcp_input_ready(port: u16) -> Result<bool, String> {
+    let connection = tcp_input_connection(port)?;
+    Ok(connection.input.subscribe().ready())
 }
 
-fn tcp_input_connection(
-    port: u16,
-) -> Result<
-    (
-        wasi::sockets::tcp::TcpSocket,
-        wasi::io::streams::InputStream,
-        wasi::io::streams::OutputStream,
-    ),
-    String,
-> {
+/// A P2 TCP connection. The streams come before their socket so that they are dropped first.
+struct Connection {
+    input: wasi::io::streams::InputStream,
+    output: wasi::io::streams::OutputStream,
+    _socket: wasi::sockets::tcp::TcpSocket,
+}
+
+fn tcp_input_connection(port: u16) -> Result<Connection, String> {
     use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
     let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4)
         .map_err(|error| format!("{error:?}"))?;
@@ -94,85 +67,168 @@ fn tcp_input_connection(
     let (input, output) = socket
         .finish_connect()
         .map_err(|error| format!("{error:?}"))?;
-    Ok((socket, input, output))
-}
-
-fn tcp_inputs_poll(first_port: u16, second_port: u16, duplicate: bool) -> Result<Vec<u32>, String> {
-    let (_first_socket, first_input, _first_output) = tcp_input_connection(first_port)?;
-    let (_second_socket, second_input, _second_output) = tcp_input_connection(second_port)?;
-    let first = first_input.subscribe();
-    let second = second_input.subscribe();
-    Ok(if duplicate {
-        wasi::io::poll::poll(&[&second, &first, &second])
-    } else {
-        wasi::io::poll::poll(&[&first, &second])
+    Ok(Connection {
+        input,
+        output,
+        _socket: socket,
     })
 }
 
-fn tcp_blocking_read(port: u16) -> Result<Vec<u8>, String> {
-    let (_socket, input, _output) = tcp_input_connection(port)?;
-    input.blocking_read(1).map_err(|error| format!("{error:?}"))
+/// Why one attempt of a [`reconnecting`] operation failed.
+enum Failure {
+    Stream(wasi::io::streams::StreamError),
+    Other(String),
 }
 
-fn tcp_blocking_skip(port: u16) -> Result<u64, String> {
-    let (_socket, input, _output) = tcp_input_connection(port)?;
-    input.blocking_skip(1).map_err(|error| format!("{error:?}"))
+impl From<wasi::io::streams::StreamError> for Failure {
+    fn from(error: wasi::io::streams::StreamError) -> Self {
+        Self::Stream(error)
+    }
 }
 
-fn tcp_blocking_splice(port: u16) -> Result<u64, String> {
-    let (_socket, input, output) = tcp_input_connection(port)?;
-    output
-        .blocking_splice(&input, 1)
-        .map_err(|error| format!("{error:?}"))
+impl From<String> for Failure {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
 }
 
-fn tcp_cross_socket_blocking_splice(input_port: u16, output_port: u16) -> Result<u64, String> {
-    let (_input_socket, input, _input_output) = tcp_input_connection(input_port)?;
-    let (_output_socket, _output_input, output) = tcp_input_connection(output_port)?;
-    output
-        .blocking_splice(&input, 1)
-        .map_err(|error| format!("{error:?}"))
+/// The most lost connections a [`reconnecting`] operation accepts before it gives up.
+const MAX_LOSSES: u32 = 3;
+
+/// Runs `operation` on new connections to `ports`. When the operation fails because a connection
+/// was lost (`connection-reset`, also after a reconstruction), connects again and runs the
+/// operation again, as a client does after a network error. Returns the number of lost
+/// connections and the result.
+fn reconnecting<T>(
+    ports: &[u16],
+    operation: impl Fn(&[Connection]) -> Result<T, Failure>,
+) -> Result<(u32, T), String> {
+    use wasi::io::streams::StreamError;
+
+    let mut losses = 0;
+    loop {
+        let connections = ports
+            .iter()
+            .map(|port| tcp_input_connection(*port))
+            .collect::<Result<Vec<_>, _>>()?;
+        match operation(&connections) {
+            Ok(value) => return Ok((losses, value)),
+            Err(Failure::Stream(StreamError::LastOperationFailed(error)))
+                if error
+                    .to_debug_string()
+                    .to_lowercase()
+                    .contains("connection reset")
+                    && losses < MAX_LOSSES =>
+            {
+                losses += 1;
+            }
+            Err(Failure::Stream(error)) => return Err(format!("{error:?}")),
+            Err(Failure::Other(error)) => return Err(error),
+        }
+    }
 }
 
-fn tcp_file_blocking_splice(port: u16) -> Result<(u64, Vec<u8>), String> {
+/// Blocks until the input of a connection is ready, then reads one byte from it.
+fn tcp_input_block(port: u16) -> Result<(u32, Vec<u8>), String> {
+    reconnecting(&[port], |connections| {
+        let input = &connections[0].input;
+        input.subscribe().block();
+        Ok(input.blocking_read(1)?)
+    })
+}
+
+/// Polls the inputs of two connections, then reads one byte from each ready input.
+fn tcp_inputs_poll(
+    first_port: u16,
+    second_port: u16,
+    duplicate: bool,
+) -> Result<(u32, Vec<u32>), String> {
+    reconnecting(&[first_port, second_port], |connections| {
+        let first = connections[0].input.subscribe();
+        let second = connections[1].input.subscribe();
+        let (ready, inputs) = if duplicate {
+            (wasi::io::poll::poll(&[&second, &first, &second]), [1, 0, 1])
+        } else {
+            (wasi::io::poll::poll(&[&first, &second]), [0, 1, 1])
+        };
+        let mut read = Vec::new();
+        for index in &ready {
+            let input = inputs[*index as usize];
+            if !read.contains(&input) {
+                read.push(input);
+                connections[input].input.read(1)?;
+            }
+        }
+        Ok(ready)
+    })
+}
+
+fn tcp_blocking_read(port: u16) -> Result<(u32, Vec<u8>), String> {
+    reconnecting(&[port], |connections| {
+        Ok(connections[0].input.blocking_read(1)?)
+    })
+}
+
+fn tcp_blocking_skip(port: u16) -> Result<(u32, u64), String> {
+    reconnecting(&[port], |connections| {
+        Ok(connections[0].input.blocking_skip(1)?)
+    })
+}
+
+fn tcp_blocking_splice(port: u16) -> Result<(u32, u64), String> {
+    reconnecting(&[port], |connections| {
+        let connection = &connections[0];
+        Ok(connection.output.blocking_splice(&connection.input, 1)?)
+    })
+}
+
+fn tcp_cross_socket_blocking_splice(
+    input_port: u16,
+    output_port: u16,
+) -> Result<(u32, u64), String> {
+    reconnecting(&[input_port, output_port], |connections| {
+        Ok(connections[1]
+            .output
+            .blocking_splice(&connections[0].input, 1)?)
+    })
+}
+
+fn tcp_file_blocking_splice(port: u16) -> Result<(u32, (u64, Vec<u8>)), String> {
     use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
-    let (_socket, input, _output) = tcp_input_connection(port)?;
-    let (root, _) = wasi::filesystem::preopens::get_directories()
-        .into_iter()
-        .next()
-        .ok_or("no preopened directory")?;
-    let file = root
-        .open_at(
-            PathFlags::empty(),
-            "tcp-splice-output",
-            OpenFlags::CREATE | OpenFlags::TRUNCATE,
-            DescriptorFlags::READ | DescriptorFlags::WRITE,
-        )
-        .map_err(|error| format!("open splice destination: {error:?}"))?;
-    let output = file
-        .write_via_stream(0)
-        .map_err(|error| format!("open output stream: {error:?}"))?;
-    let written = output
-        .blocking_splice(&input, 1)
-        .map_err(|error| format!("splice: {error:?}"))?;
-    output
-        .blocking_flush()
-        .map_err(|error| format!("flush: {error:?}"))?;
-    drop(output);
-    let size = file
-        .stat()
-        .map_err(|error| format!("stat: {error:?}"))?
-        .size;
-    if size != written {
-        return Err(format!(
-            "file size {size} does not match spliced bytes {written}"
-        ));
-    }
-    let (contents, _) = file
-        .read(written, 0)
-        .map_err(|error| format!("read: {error:?}"))?;
-    Ok((written, contents))
+    reconnecting(&[port], |connections| {
+        let (root, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .ok_or("no preopened directory".to_string())?;
+        let file = root
+            .open_at(
+                PathFlags::empty(),
+                "tcp-splice-output",
+                OpenFlags::CREATE | OpenFlags::TRUNCATE,
+                DescriptorFlags::READ | DescriptorFlags::WRITE,
+            )
+            .map_err(|error| format!("open splice destination: {error:?}"))?;
+        let output = file
+            .write_via_stream(0)
+            .map_err(|error| format!("open output stream: {error:?}"))?;
+        let written = output.blocking_splice(&connections[0].input, 1)?;
+        output
+            .blocking_flush()
+            .map_err(|error| format!("flush: {error:?}"))?;
+        drop(output);
+        let size = file
+            .stat()
+            .map_err(|error| format!("stat: {error:?}"))?
+            .size;
+        if size != written {
+            return Err(format!("file size {size} does not match spliced bytes {written}").into());
+        }
+        let (contents, _) = file
+            .read(written, 0)
+            .map_err(|error| format!("read: {error:?}"))?;
+        Ok((written, contents))
+    })
 }
 
 async fn udp_receive(port: u16, ready_port: u16) -> Result<Vec<u8>, String> {
@@ -206,19 +262,23 @@ async fn udp_receive(port: u16, ready_port: u16) -> Result<Vec<u8>, String> {
 #[agent_definition(ephemeral)]
 pub trait EphemeralNetworking {
     fn new(name: String) -> Self;
-    fn tcp_inputs_poll_p2(&self, first_port: u16, second_port: u16) -> Result<Vec<u32>, String>;
+    fn tcp_inputs_poll_p2(
+        &self,
+        first_port: u16,
+        second_port: u16,
+    ) -> Result<(u32, Vec<u32>), String>;
     async fn tcp_collect_p3(&self, port: u16) -> Result<String, String>;
     fn tcp_input_ready_p2(&self, port: u16) -> Result<bool, String>;
-    fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String>;
-    fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String>;
-    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String>;
-    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String>;
-    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u64, Vec<u8>), String>;
+    fn tcp_input_block_p2(&self, port: u16) -> Result<(u32, Vec<u8>), String>;
+    fn tcp_blocking_read_p2(&self, port: u16) -> Result<(u32, Vec<u8>), String>;
+    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<(u32, u64), String>;
+    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<(u32, u64), String>;
+    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u32, (u64, Vec<u8>)), String>;
     fn tcp_cross_socket_blocking_splice_p2(
         &self,
         input_port: u16,
         output_port: u16,
-    ) -> Result<u64, String>;
+    ) -> Result<(u32, u64), String>;
     async fn udp_receive_wait_p3(&self, port: u16, ready_port: u16) -> Result<Vec<u8>, String>;
 }
 
@@ -230,7 +290,11 @@ impl EphemeralNetworking for EphemeralNetworkingImpl {
         Self
     }
 
-    fn tcp_inputs_poll_p2(&self, first_port: u16, second_port: u16) -> Result<Vec<u32>, String> {
+    fn tcp_inputs_poll_p2(
+        &self,
+        first_port: u16,
+        second_port: u16,
+    ) -> Result<(u32, Vec<u32>), String> {
         tcp_inputs_poll(first_port, second_port, false)
     }
 
@@ -239,26 +303,26 @@ impl EphemeralNetworking for EphemeralNetworkingImpl {
     }
 
     fn tcp_input_ready_p2(&self, port: u16) -> Result<bool, String> {
-        tcp_input_poll(port, false)
+        tcp_input_ready(port)
     }
 
-    fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String> {
-        tcp_input_poll(port, true)
+    fn tcp_input_block_p2(&self, port: u16) -> Result<(u32, Vec<u8>), String> {
+        tcp_input_block(port)
     }
 
-    fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String> {
+    fn tcp_blocking_read_p2(&self, port: u16) -> Result<(u32, Vec<u8>), String> {
         tcp_blocking_read(port)
     }
 
-    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String> {
+    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<(u32, u64), String> {
         tcp_blocking_skip(port)
     }
 
-    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String> {
+    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<(u32, u64), String> {
         tcp_blocking_splice(port)
     }
 
-    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u64, Vec<u8>), String> {
+    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u32, (u64, Vec<u8>)), String> {
         tcp_file_blocking_splice(port)
     }
 
@@ -266,7 +330,7 @@ impl EphemeralNetworking for EphemeralNetworkingImpl {
         &self,
         input_port: u16,
         output_port: u16,
-    ) -> Result<u64, String> {
+    ) -> Result<(u32, u64), String> {
         tcp_cross_socket_blocking_splice(input_port, output_port)
     }
 
@@ -278,24 +342,28 @@ impl EphemeralNetworking for EphemeralNetworkingImpl {
 #[agent_definition]
 pub trait Networking {
     fn new(name: String) -> Self;
-    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String>;
-    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u64, Vec<u8>), String>;
+    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<(u32, u64), String>;
+    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u32, (u64, Vec<u8>)), String>;
     fn tcp_cross_socket_blocking_splice_p2(
         &self,
         input_port: u16,
         output_port: u16,
-    ) -> Result<u64, String>;
-    fn tcp_inputs_poll_p2(&self, first_port: u16, second_port: u16) -> Result<Vec<u32>, String>;
+    ) -> Result<(u32, u64), String>;
+    fn tcp_inputs_poll_p2(
+        &self,
+        first_port: u16,
+        second_port: u16,
+    ) -> Result<(u32, Vec<u32>), String>;
     fn tcp_inputs_duplicate_poll_p2(
         &self,
         first_port: u16,
         second_port: u16,
-    ) -> Result<Vec<u32>, String>;
+    ) -> Result<(u32, Vec<u32>), String>;
     fn get(&self) -> Vec<String>;
     fn tcp_input_ready_p2(&self, port: u16) -> Result<bool, String>;
-    fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String>;
-    fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String>;
-    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String>;
+    fn tcp_input_block_p2(&self, port: u16) -> Result<(u32, Vec<u8>), String>;
+    fn tcp_blocking_read_p2(&self, port: u16) -> Result<(u32, Vec<u8>), String>;
+    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<(u32, u64), String>;
     async fn udp_receive_wait_p3(&self, port: u16, ready_port: u16) -> Result<Vec<u8>, String>;
     fn probe_p2(
         &self,
@@ -329,7 +397,11 @@ impl Networking for NetworkingImpl {
         Self { _name: name }
     }
 
-    fn tcp_inputs_poll_p2(&self, first_port: u16, second_port: u16) -> Result<Vec<u32>, String> {
+    fn tcp_inputs_poll_p2(
+        &self,
+        first_port: u16,
+        second_port: u16,
+    ) -> Result<(u32, Vec<u32>), String> {
         tcp_inputs_poll(first_port, second_port, false)
     }
 
@@ -337,7 +409,7 @@ impl Networking for NetworkingImpl {
         &self,
         first_port: u16,
         second_port: u16,
-    ) -> Result<Vec<u32>, String> {
+    ) -> Result<(u32, Vec<u32>), String> {
         tcp_inputs_poll(first_port, second_port, true)
     }
 
@@ -362,26 +434,26 @@ impl Networking for NetworkingImpl {
     }
 
     fn tcp_input_ready_p2(&self, port: u16) -> Result<bool, String> {
-        tcp_input_poll(port, false)
+        tcp_input_ready(port)
     }
 
-    fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String> {
-        tcp_input_poll(port, true)
+    fn tcp_input_block_p2(&self, port: u16) -> Result<(u32, Vec<u8>), String> {
+        tcp_input_block(port)
     }
 
-    fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String> {
+    fn tcp_blocking_read_p2(&self, port: u16) -> Result<(u32, Vec<u8>), String> {
         tcp_blocking_read(port)
     }
 
-    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String> {
+    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<(u32, u64), String> {
         tcp_blocking_skip(port)
     }
 
-    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String> {
+    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<(u32, u64), String> {
         tcp_blocking_splice(port)
     }
 
-    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u64, Vec<u8>), String> {
+    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u32, (u64, Vec<u8>)), String> {
         tcp_file_blocking_splice(port)
     }
 
@@ -389,7 +461,7 @@ impl Networking for NetworkingImpl {
         &self,
         input_port: u16,
         output_port: u16,
-    ) -> Result<u64, String> {
+    ) -> Result<(u32, u64), String> {
         tcp_cross_socket_blocking_splice(input_port, output_port)
     }
 

@@ -31,12 +31,13 @@ use wasmtime_wasi::p3::bindings::sockets::{
 use super::{
     SerializableIpAddress, SerializableIpAddresses, SerializableP3IpNameLookupError,
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableSocketError,
-    SerializableSocketErrorCode,
+    SerializableSocketErrorCode, SerializableTcpStreamError, SerializableTcpStreamFailure,
 };
 use crate::schema::conversion::{FromSchemaError, SchemaBuilder, value_kind};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
+use wasmtime_wasi::StreamError;
 
 impl SerializableSocketError {
     pub fn from_result(result: Result<SocketErrorCode, String>) -> Self {
@@ -63,6 +64,67 @@ impl From<SerializableSocketError> for SocketError {
                 SocketError::trap(wasmtime::Error::msg(error))
             }
         }
+    }
+}
+
+impl SerializableTcpStreamError {
+    /// The recorded form of a P2 TCP stream error. A trap is never recorded, so it is returned.
+    pub fn from_stream_error(error: StreamError) -> Result<Self, wasmtime::Error> {
+        match error {
+            StreamError::Closed => Ok(Self::Closed),
+            StreamError::LastOperationFailed(error) => {
+                let io = error.downcast_ref::<std::io::Error>();
+                let os_error = io.and_then(std::io::Error::raw_os_error);
+                Ok(Self::LastOperationFailed(SerializableTcpStreamFailure {
+                    os_error,
+                    code: io
+                        .filter(|_| os_error.is_none())
+                        .map(|io| SerializableSocketErrorCode(SocketErrorCode::from(io))),
+                    message: error.to_string(),
+                }))
+            }
+            StreamError::Trap(error) => Err(error),
+        }
+    }
+}
+
+impl From<SerializableTcpStreamError> for StreamError {
+    fn from(value: SerializableTcpStreamError) -> Self {
+        match value {
+            SerializableTcpStreamError::Closed => StreamError::Closed,
+            SerializableTcpStreamError::LastOperationFailed(failure) => {
+                let error = match (failure.os_error, failure.code) {
+                    (Some(errno), _) => {
+                        wasmtime::Error::from(std::io::Error::from_raw_os_error(errno))
+                    }
+                    (None, Some(SerializableSocketErrorCode(code))) => wasmtime::Error::from(
+                        std::io::Error::new(io_error_kind(code), failure.message),
+                    ),
+                    (None, None) => wasmtime::Error::msg(failure.message),
+                };
+                StreamError::LastOperationFailed(error)
+            }
+        }
+    }
+}
+
+/// The I/O error kind that the socket error code of an I/O error without an errno came from.
+fn io_error_kind(code: SocketErrorCode) -> std::io::ErrorKind {
+    use std::io::ErrorKind;
+    match code {
+        SocketErrorCode::AddressInUse => ErrorKind::AddrInUse,
+        SocketErrorCode::AddressNotBindable => ErrorKind::AddrNotAvailable,
+        SocketErrorCode::ConnectionAborted => ErrorKind::ConnectionAborted,
+        SocketErrorCode::ConnectionRefused => ErrorKind::ConnectionRefused,
+        SocketErrorCode::ConnectionReset => ErrorKind::ConnectionReset,
+        SocketErrorCode::InvalidArgument => ErrorKind::InvalidInput,
+        SocketErrorCode::InvalidState => ErrorKind::NotConnected,
+        SocketErrorCode::OutOfMemory => ErrorKind::OutOfMemory,
+        SocketErrorCode::AccessDenied => ErrorKind::PermissionDenied,
+        SocketErrorCode::Timeout => ErrorKind::TimedOut,
+        SocketErrorCode::NotSupported => ErrorKind::Unsupported,
+        SocketErrorCode::WouldBlock => ErrorKind::WouldBlock,
+        _ => ErrorKind::Other,
     }
 }
 

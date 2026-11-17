@@ -242,6 +242,9 @@ pub trait SocketSession {
     fn p2_tcp_connect_counting(&self, slot: String, port: u16) -> Result<u32, String>;
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String>;
     fn p2_tcp_send(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
+    /// Sends `data` with `blocking-write-and-flush`, at most 4096 bytes per call, and keeps the
+    /// result in the send log.
+    fn p2_tcp_send_blocking(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String>;
     /// Connects a P2 TCP socket and drops it, in a read-only method.
     #[read_only]
@@ -258,6 +261,8 @@ pub trait SocketSession {
 
     /// The bytes and datagrams the agent received so far, per slot, in the order they arrived.
     fn received(&self) -> Vec<(String, Vec<u8>)>;
+    /// The results of the `p2_tcp_send_blocking` calls so far, in order.
+    fn sends(&self) -> Vec<Result<(), String>>;
     /// Drops the socket in `slot` and its streams.
     fn close(&self, slot: String) -> bool;
 }
@@ -265,6 +270,7 @@ pub trait SocketSession {
 pub struct SocketSessionImpl {
     slots: RefCell<HashMap<String, Slot>>,
     received: RefCell<Vec<(String, Vec<u8>)>>,
+    sends: RefCell<Vec<Result<(), String>>>,
 }
 
 impl SocketSessionImpl {
@@ -326,6 +332,7 @@ impl SocketSession for SocketSessionImpl {
         Self {
             slots: RefCell::new(HashMap::new()),
             received: RefCell::new(Vec::new()),
+            sends: RefCell::new(Vec::new()),
         }
     }
 
@@ -723,6 +730,17 @@ impl SocketSession for SocketSessionImpl {
         })
     }
 
+    fn p2_tcp_send_blocking(&self, slot: String, data: Vec<u8>) -> Result<(), String> {
+        let result = self.with_slot(&slot, |value| match value {
+            Slot::P2Tcp { output, .. } => data
+                .chunks(4096)
+                .try_for_each(|chunk| output.blocking_write_and_flush(chunk).map_err(stream_error)),
+            _ => Err(format!("slot {slot} holds no P2 TCP socket")),
+        });
+        self.sends.borrow_mut().push(result.clone());
+        result
+    }
+
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String> {
         let data = self.with_slot(&slot, |value| match value {
             Slot::P2Tcp { input, .. } => p2_read(input, len as usize),
@@ -809,6 +827,10 @@ impl SocketSession for SocketSessionImpl {
 
     fn received(&self) -> Vec<(String, Vec<u8>)> {
         self.received.borrow().clone()
+    }
+
+    fn sends(&self) -> Vec<Result<(), String>> {
+        self.sends.borrow().clone()
     }
 
     fn close(&self, slot: String) -> bool {
