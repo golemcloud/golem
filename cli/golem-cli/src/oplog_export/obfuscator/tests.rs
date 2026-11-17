@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::canonical::{encode, encode_str};
-use super::value::{Region, Walker};
+use super::value::{Region, Walker, text};
 use super::*;
 use crate::oplog_export::model::{
     CaseNode, HostPayloadDirection, HostTypeMismatchRef, ListNode, OmittedReason, ReportEntry,
@@ -32,9 +32,9 @@ use golem_common::model::oplog::types::{
 };
 use golem_common::model::oplog::{
     AgentError, HostPayloadPair, HostRequest, HostRequestGolemApiGetAgents,
-    HostRequestGolemRpcInvoke, HostRequestRandomBytes, HostResponse, HostResponseEntityInvocation,
-    HostResponseFileSystemStat, HostResponseGolemAgentGetConfigValue, HostResponseGolemRpcCreate,
-    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
+    HostRequestGolemRpcInvoke, HostRequestGolemToolInvoke, HostRequestRandomBytes, HostResponse,
+    HostResponseEntityInvocation, HostResponseFileSystemStat, HostResponseGolemAgentGetConfigValue,
+    HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
     HostResponseGolemRpcPrepareInvocation, HostResponseKVGet, HostResponseMonotonicClockTimestamp,
     HostResponseP3FileSystemStat, HostResponseP3HttpClientSendResult, OmittedOplogEntry,
     PublicDurableFunctionType, PublicOplogEntry, PublicOplogEntryAttribution,
@@ -2725,9 +2725,15 @@ fn component_ids_are_tokens() {
     }
 }
 
+/// The fingerprint text in `output`, as a `text` node.
+fn has_clear_fingerprint(output: &str, fingerprint: Uuid) -> bool {
+    output.contains(&format!(r#"{{"kind":"text","value":"{fingerprint}"}}"#))
+}
+
 #[test]
-fn fingerprints_are_tokens() {
+fn fingerprints_in_clear_on_trusted_paths() {
     let fingerprint = Uuid::from_u128(0xF1F1);
+    let environment = Uuid::from_u128(0xE0E0);
     let prepare = end(
         4,
         response(HostResponse::GolemRpcPrepareInvocation(
@@ -2736,30 +2742,243 @@ fn fingerprints_are_tokens() {
             },
         )),
     );
+    let create = end(
+        4,
+        response(HostResponse::GolemRpcCreate(HostResponseGolemRpcCreate {
+            result: Ok(AgentFingerprint(fingerprint)),
+            target_environment_id: EnvironmentId(environment),
+        })),
+    );
+    let bind_self = start(
+        3,
+        fqfn::<host_functions::GolemRpcWasmRpcBindSelf>(),
+        request(HostRequest::GolemRpcBindSelf(
+            golem_common::model::oplog::HostRequestGolemRpcBindSelf {
+                remote_agent_id: agent_id("callee(\"MARKERID\")"),
+                target_environment_id: EnvironmentId(environment),
+                fingerprint: AgentFingerprint(fingerprint),
+            },
+        )),
+    );
+    for (entry, function) in [
+        (
+            &prepare,
+            fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>(),
+        ),
+        (&create, fqfn::<host_functions::GolemRpcWasmRpcNew>()),
+        (
+            &bind_self,
+            fqfn::<host_functions::GolemRpcWasmRpcBindSelf>(),
+        ),
+    ] {
+        let start_function = (entry.entry.entry_type() == "End").then_some(function);
+        let out = rendered(KeepFlags::default(), entry, start_function);
+        let output = json(&out.entry);
+        assert!(!out.provenance_unknown, "{output}");
+        assert!(has_clear_fingerprint(&output, fingerprint), "{output}");
+        assert!(!output.contains(&environment.to_string()), "{output}");
+        assert!(
+            !output.contains(&environment.simple().to_string()),
+            "{output}"
+        );
+        assert_no_marker(&output, "MARKER");
+    }
+    assert!(
+        json(
+            &rendered(
+                KeepFlags::default(),
+                &prepare,
+                Some(fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>())
+            )
+            .entry
+        )
+        .contains("\"ok\"")
+    );
+
+    // Without the function of the `Start`, the response is customer data.
+    for entry in [&prepare, &create] {
+        let out = rendered(KeepFlags::default(), entry, None);
+        let output = json(&out.entry);
+        assert!(out.provenance_unknown);
+        assert!(!output.contains(&fingerprint.to_string()), "{output}");
+        assert!(
+            !output.contains(&fingerprint.simple().to_string()),
+            "{output}"
+        );
+    }
+
+    // A fingerprint in a customer value stays a token.
+    let customer = with_entry(
+        4,
+        PublicOplogEntry::StreamItems(
+            golem_common::model::oplog::public_oplog_entry::StreamItemsParams {
+                timestamp: Timestamp::from(0),
+                record: AgentFingerprint(fingerprint)
+                    .into_typed_schema_value()
+                    .unwrap(),
+            },
+        ),
+    );
+    for keep in all_keep() {
+        let output = json(&rendered(keep, &customer, None).entry);
+        assert!(!output.contains(&fingerprint.to_string()), "{output}");
+        assert!(
+            !output.contains(&fingerprint.simple().to_string()),
+            "{output}"
+        );
+    }
+}
+
+#[test]
+fn created_promise_fingerprint_in_clear() {
+    use golem_common::model::PromiseId;
+    let fingerprint = Uuid::from_u128(0xF1F3);
+    let promise = PromiseId {
+        agent_id: agent_id("holder(\"MARKERID\")"),
+        fingerprint: AgentFingerprint(fingerprint),
+        oplog_idx: OplogIndex::from_u64(3),
+    };
+    let created = end(
+        4,
+        response(HostResponse::GolemApiPromiseId(
+            golem_common::model::oplog::HostResponseGolemApiPromiseId {
+                promise_id: promise.clone(),
+            },
+        )),
+    );
     let out = rendered(
         KeepFlags::default(),
-        &prepare,
-        Some(fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>()),
+        &created,
+        Some(fqfn::<host_functions::GolemApiCreatePromise>()),
     );
-    let text = json(&out.entry);
-    assert!(text.contains("\"ok\""));
-    assert!(!text.contains(&fingerprint.to_string()));
-    let create = end(
+    let output = json(&out.entry);
+    assert!(has_clear_fingerprint(&output, fingerprint), "{output}");
+    assert_no_marker(&output, "MARKER");
+
+    // Without the function of the `Start`, the response is customer data.
+    let output = json(&rendered(KeepFlags::default(), &created, None).entry);
+    assert!(!output.contains(&fingerprint.to_string()), "{output}");
+
+    // A promise ID in a request is chosen by the guest and stays customer data.
+    for function in [
+        fqfn::<host_functions::GolemApiCompletePromise>(),
+        fqfn::<host_functions::GolemAgentCreateWebhook>(),
+    ] {
+        let entry = start(
+            3,
+            function,
+            request(HostRequest::GolemApiPromiseId(
+                golem_common::model::oplog::HostRequestGolemApiPromiseId {
+                    promise_id: promise.clone(),
+                },
+            )),
+        );
+        let output = json(&rendered(KeepFlags::default(), &entry, None).entry);
+        assert!(
+            !output.contains(&fingerprint.to_string()),
+            "{function}: {output}"
+        );
+        assert!(
+            !output.contains(&fingerprint.simple().to_string()),
+            "{function}: {output}"
+        );
+    }
+}
+
+#[test]
+fn fingerprint_in_customer_value_of_trusted_payload_stays_token() {
+    let fingerprint = Uuid::from_u128(0xF1F4);
+    let typed = || {
+        AgentFingerprint(fingerprint)
+            .into_typed_schema_value()
+            .unwrap()
+    };
+    let tool_input = request(HostRequest::GolemToolInvoke(HostRequestGolemToolInvoke {
+        tool_name: "tool".into(),
+        command_path: vec![],
+        args: vec![],
+        input: typed(),
+        has_stdin: false,
+    }));
+    assert!(format!("{tool_input:?}").contains(&fingerprint.to_string()));
+    let invoke = start(
+        5,
+        fqfn::<host_functions::GolemToolRpcInvokeAndAwait>(),
+        tool_input,
+    );
+    let custom_error = end(
+        4,
+        response(HostResponse::GolemRpcPrepareInvocation(
+            HostResponseGolemRpcPrepareInvocation {
+                result: Err(SerializableRpcError::RemoteAgentError {
+                    error: Box::new(golem_common::model::agent::AgentError::CustomError(typed())),
+                }),
+            },
+        )),
+    );
+    // A fingerprint-bearing payload of another type than the function writes.
+    let mismatch = end(
         4,
         response(HostResponse::GolemRpcCreate(HostResponseGolemRpcCreate {
             result: Ok(AgentFingerprint(fingerprint)),
             target_environment_id: EnvironmentId::new(),
         })),
     );
-    let text = json(
-        &rendered(
-            KeepFlags::default(),
-            &create,
-            Some(fqfn::<host_functions::GolemRpcWasmRpcNew>()),
-        )
-        .entry,
+    for (entry, function) in [
+        (&invoke, None),
+        (
+            &custom_error,
+            Some(fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>()),
+        ),
+        (
+            &mismatch,
+            Some(fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>()),
+        ),
+    ] {
+        for keep in all_keep() {
+            let out = rendered(keep, entry, function);
+            let output = json(&out.entry);
+            assert!(!output.contains(&fingerprint.to_string()), "{output}");
+            assert!(
+                !output.contains(&fingerprint.simple().to_string()),
+                "{output}"
+            );
+        }
+    }
+    assert!(
+        rendered(KeepFlags::default(), &invoke, None)
+            .host_type_mismatches
+            .is_empty()
     );
-    assert!(!text.contains(&fingerprint.to_string()));
+    let out = rendered(
+        KeepFlags::default(),
+        &mismatch,
+        Some(fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>()),
+    );
+    assert_eq!(out.host_type_mismatches.len(), 1);
+}
+
+#[test]
+fn fingerprint_error_stays_error_subtree() {
+    let prepare = end(
+        4,
+        response(HostResponse::GolemRpcPrepareInvocation(
+            HostResponseGolemRpcPrepareInvocation {
+                result: Err(SerializableRpcError::NotFound {
+                    details: "MARKER".into(),
+                }),
+            },
+        )),
+    );
+    let out = rendered(
+        KeepFlags::default(),
+        &prepare,
+        Some(fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>()),
+    );
+    let output = json(&out.entry);
+    assert_no_marker(&output, "MARKER");
+    assert!(output.contains("\"err\""), "{output}");
+    assert!(output.contains("\"NotFound\""), "{output}");
 }
 
 #[test]
@@ -3542,7 +3761,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 value: marker_value(),
             }],
             original_phantom_id: Some(secret_uuid(8)),
-            instance_id: secret_uuid(9),
+            instance_id: Uuid::from_u128(0xF1F2),
         }),
         PublicOplogEntry::Start(StartParams {
             timestamp: ts(),
@@ -3985,10 +4204,10 @@ fn every_entry_kind_has_no_marker() {
         assert!(!text.contains("counter("), "{text}");
     }
     let create = rendered(KeepFlags::default(), &entries[0], None);
-    assert!(matches!(
-        field(&create.entry, "instanceId"),
-        ReportNode::Str(_)
-    ));
+    assert_eq!(
+        json(field(&create.entry, "instanceId")),
+        json(&text(Uuid::from_u128(0xF1F2).to_string()))
+    );
 }
 
 #[test]
