@@ -15,7 +15,8 @@
 use crate::base_model::card::owner::OwnerPattern;
 use crate::base_model::card::recipient::RecipientPattern;
 use crate::base_model::card::{
-    Card, CardId, PermissionPattern, PermissionTarget, ToolResourcePattern,
+    Card, CardId, NetworkClass, PermissionClass, PermissionPattern, PermissionTarget,
+    ToolResourcePattern,
 };
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +92,11 @@ fn matches_any(
                         _ => false,
                     }
                 }
+            }
+            (PermissionTarget::Network(grant), PermissionTarget::Network(request)) if denial => {
+                grant.owner.subsumes(&request.owner)
+                    && NetworkClass::verb_subsumes(grant.verb, request.verb)
+                    && grant.resource.denies(&request.resource)
             }
             _ => grant.subsumes(request),
         };
