@@ -86,6 +86,11 @@ export interface OverageSettlement {
 /**
  * The status of a Polar checkout. `confirmed`: the person sent the payment, and Polar processes
  * it. `succeeded`: Polar has the payment and creates the subscription.
+ *
+ * Polar moves a checkout from `open` to `confirmed` when the person pays, back to `open` when the
+ * payment fails, and from `confirmed` to `succeeded`. A job of Polar moves each `open` checkout
+ * after its expiry to `expired`. No status follows `succeeded`, `expired` or `failed` (which Polar
+ * no longer sets), so these are final.
  */
 export type CheckoutStatus = "open" | "expired" | "confirmed" | "succeeded" | "failed"
 
@@ -98,7 +103,9 @@ export interface Checkout {
   readonly accountId: string
   /**
    * The status of the checkout at the last read from Polar. The app records `open` when it creates
-   * the checkout, and reads it again only after `expiresAt` (`Settlement.sweep`).
+   * the checkout. While the status is `open` or `confirmed`, the checkout route reads the checkout
+   * again at each click of the account, and the sweep reads it after `expiresAt`
+   * (`Settlement.sweep`).
    */
   readonly status: CheckoutStatus
   /** When Polar stops taking the payment of an open checkout. */
@@ -215,14 +222,6 @@ export interface SubscriptionsShape {
    * subscription webhook links it (`linkCheckout`), or when Polar reports it `expired` or `failed`.
    */
   readonly unfinishedCheckouts: (accountId: string) => Effect.Effect<ReadonlyArray<Checkout>, SubscriptionsError>
-  /**
-   * The unfinished checkout of the account that is `open` and expires last, if it expires after
-   * `expiresAfter`.
-   */
-  readonly reusableCheckout: (
-    accountId: string,
-    expiresAfter: Date
-  ) => Effect.Effect<Checkout | undefined, SubscriptionsError>
   /** Links the checkout of the account to the subscription that it started, which finishes it. */
   readonly linkCheckout: (
     checkoutId: string,
@@ -234,8 +233,16 @@ export interface SubscriptionsShape {
    * that the app did not read from Polar after `readAfter`, of every account.
    */
   readonly checkoutsToRead: (now: Date, readAfter: Date) => Effect.Effect<ReadonlyArray<Checkout>, SubscriptionsError>
-  /** Records the status of the checkout that the app read from Polar now. */
-  readonly recordCheckoutStatus: (checkoutId: string, status: CheckoutStatus) => Effect.Effect<void, SubscriptionsError>
+  /**
+   * Records the status of the checkout that the app read from Polar at `readAt`. A final status
+   * (`CheckoutStatus`) stays: Polar answers a read from a replica that can lag, so a later read
+   * can report an older status.
+   */
+  readonly recordCheckoutStatus: (
+    checkoutId: string,
+    status: CheckoutStatus,
+    readAt: Date
+  ) => Effect.Effect<void, SubscriptionsError>
   /** Whether a webhook with this `webhook-id` was handled before. */
   readonly isDelivered: (webhookId: string) => Effect.Effect<boolean, SubscriptionsError>
   readonly markDelivered: (webhookId: string, eventType: string) => Effect.Effect<void, SubscriptionsError>
@@ -669,15 +676,6 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
         [accountId]
       ).pipe(Effect.map((result) => result.rows.map(fromCheckoutRow)))
 
-    const reusableCheckout = (accountId: string, expiresAfter: Date) =>
-      query<CheckoutRow>(
-        `SELECT ${checkoutColumns} FROM polar_checkouts c
-          WHERE c.account_id = $1 AND ${unfinished("c")} AND c.status = 'open' AND c.expires_at > $2
-          ORDER BY c.expires_at DESC
-          LIMIT 1`,
-        [accountId, expiresAfter]
-      ).pipe(Effect.map((result) => (result.rows[0] === undefined ? undefined : fromCheckoutRow(result.rows[0]))))
-
     const linkCheckout = (checkoutId: string, accountId: string, subscriptionId: string) =>
       query(
         `UPDATE polar_checkouts SET subscription_id = $3
@@ -694,11 +692,12 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
         [now, readAfter]
       ).pipe(Effect.map((result) => result.rows.map(fromCheckoutRow)))
 
-    const recordCheckoutStatus = (checkoutId: string, status: CheckoutStatus) =>
-      query("UPDATE polar_checkouts SET status = $2, read_at = clock_timestamp() WHERE checkout_id = $1", [
-        checkoutId,
-        status
-      ]).pipe(Effect.asVoid)
+    const recordCheckoutStatus = (checkoutId: string, status: CheckoutStatus, readAt: Date) =>
+      query(
+        `UPDATE polar_checkouts SET status = $2, read_at = $3
+          WHERE checkout_id = $1 AND status NOT IN ('succeeded', 'expired', 'failed')`,
+        [checkoutId, status, readAt]
+      ).pipe(Effect.asVoid)
 
     const isDelivered = (webhookId: string) =>
       query("SELECT 1 FROM polar_webhook_deliveries WHERE webhook_id = $1", [webhookId]).pipe(
@@ -757,7 +756,6 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
       latest,
       recordCheckout,
       unfinishedCheckouts,
-      reusableCheckout,
       linkCheckout,
       checkoutsToRead,
       recordCheckoutStatus,

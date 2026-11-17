@@ -151,10 +151,12 @@ plan.
   in `polar_checkouts` and places the [deletion hold](#deletion-hold) of the checkout before it
   redirects: the URL of the checkout holds the client secret that pays it, so the person can pay
   only a checkout that holds the account. When the database or the registry fails, the route
-  shows the error page and never sends the URL. A second click goes back to the open checkout
-  while it takes payments for more than an hour (`CHECKOUT_REUSE_MS`), so the hold does not grow
-  with each click. When the person paid that checkout in another tab, the route redirects to
-  `/?checkout_id=...` and starts no new checkout.
+  shows the error page and never sends the URL. First the route reads from Polar each unfinished
+  checkout of the account that is `open` or `confirmed`. While Polar has the payment of a checkout
+  (`confirmed` or `succeeded`), each click redirects to `/?checkout_id=...` and starts no new
+  checkout, also when the person paid in another tab. Else a click goes back to an open checkout
+  that takes payments for more than an hour (`CHECKOUT_REUSE_MS`), so the hold does not grow with
+  each click.
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Settlement.** `POST /billing/settle` creates a checkout session of the settlement product for
@@ -197,9 +199,9 @@ plan.
   period end, a `pending` order that is older than one hour, a `past_due` subscription whose
   past-due grace ends, usage events that the usage push recorded, sent or held in the last 24
   hours for an account without a subscription that continues, and usage settlements of the last 24
-  hours. Before that, it reads from Polar each checkout that expired 5 minutes
-  (`CHECKOUT_READ_DELAY_MS`) before and that no subscription links, and records its status (see
-  [Deletion hold](#deletion-hold)).
+  hours. Before that, it reads from Polar each unfinished checkout that is `open` or `confirmed`, 5
+  minutes after its expiry (`CHECKOUT_READ_DELAY_MS`) and then every 5 minutes
+  (`CHECKOUT_READ_INTERVAL_MS`), and records its status (see [Deletion hold](#deletion-hold)).
 - **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
   account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
   delivers the webhook again. A 404 of the registry for an account that is not deleted also
@@ -333,14 +335,18 @@ these is true, and removes it when none is:
 
 A checkout is unfinished from its creation until a subscription webhook links it
 (`checkout_id`), or until Polar reports it `expired` or `failed`. Polar takes the payment of a
-checkout for 24 hours, and has no API that closes a checkout earlier or makes it shorter. The app
-does not read a checkout before its expiry: until then the row says `open`, and a payment brings
+checkout for 24 hours, and has no API that closes a checkout earlier or makes it shorter. A
+failed payment makes a `confirmed` checkout `open` again. A job of Polar moves the `open`
+checkouts after their expiry to `expired`, every 15 minutes. Before the expiry, only the checkout
+route reads a checkout, at a click of the account; else the row says `open`, and a payment brings
 the subscription webhook. The sweep reads each unfinished checkout from Polar 5 minutes after its
-expiry, which covers a clock of Polar that runs behind. Polar refuses the payment of an expired
-checkout, also before its job marks the checkout `expired`, so the sweep records an `open`
-checkout as `expired`, and the hold comes off. A checkout that Polar reports `confirmed` or
-`succeeded` keeps the account held until its subscription comes, with no time limit; the sweep
-reads a `confirmed` one again every 5 minutes. The checkouts of the settlement product hold
+expiry, and then every 5 minutes until Polar reports a final status: `succeeded`, `expired` or
+`failed`. Only `expired` or `failed` removes the hold. Polar answers the read from a replica that
+can lag, so an `open` checkout after its expiry can be one that the person paid just before it.
+No status follows a final status, so a replica that lags never reports one too early, and the app
+keeps a final status that it recorded. A checkout that Polar reports `confirmed` or `succeeded`
+keeps the account held until its subscription comes, with no time limit. The checkouts of the
+settlement product hold
 nothing: the account owes paid overage while the page offers them, and a payment of a settlement
 for orders that the account no longer owes logs a warning for an operator.
 
@@ -403,9 +409,10 @@ with `Golem Cloud billing:` and has one sentence for each reason that tells the 
 cancel the subscription and wait for the end of the period, wait for the invoice, or pay it. Only
 a billable subscription has an invoice to come, so the text of `unsettledUsage` promises none: it
 says to try again in an hour, and then to contact Golem Cloud at `sales@golem.cloud`. The text of
-`openCheckout` names the time after which the delete works: 10 minutes after the expiry of the
-open checkout that expires last. The text of `paidCheckout` says to try again in an hour, and then
-to contact Golem Cloud. The rest of the paid period is not refunded.
+`openCheckout` names the time after which the delete works: 30 minutes after the expiry of the
+open checkout that expires last. After that time, while Polar has not expired the checkout, it says
+to try again in an hour, and then to contact Golem Cloud. The text of `paidCheckout` says the
+same. The rest of the paid period is not refunded.
 
 ## Billable overage
 

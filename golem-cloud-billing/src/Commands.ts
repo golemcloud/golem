@@ -59,6 +59,13 @@ export const migrate = Effect.gen(function* () {
 )
 
 /**
+ * The services of `Cleanup.cleanupDeletedAccounts`, without the database and the Polar settings.
+ */
+export const cleanupServices = Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
+  Layer.provide(FetchHttpClient.layer)
+)
+
+/**
  * `cleanup-deleted-accounts` deletes the Polar customer and the Better Auth user of each account
  * that the registry deleted, once (see `Cleanup.ts`). Like `push-usage`, it reads only the
  * database and Polar settings. Its Polar token needs only `customers:write`.
@@ -69,16 +76,13 @@ export const cleanupDeletedAccounts = Effect.gen(function* () {
     Effect.annotateLogs({
       deletedCustomers: summary.deletedCustomers,
       unsettled: summary.unsettled,
+      canceledSubscriptions: summary.canceledSubscriptions,
       deletedUsers: summary.deletedUsers
     })
   )
 }).pipe(
   Effect.provide(
-    Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
-      Layer.provideMerge(Database.layerFromEnv),
-      Layer.provide(Polar.configLayer),
-      Layer.provide(FetchHttpClient.layer)
-    )
+    cleanupServices.pipe(Layer.provideMerge(Database.layerFromEnv), Layer.provide(Polar.configLayer))
   ),
   Effect.tapCause((cause) =>
     Effect.logError("The cleanup of deleted accounts failed").pipe(Effect.annotateLogs({ error: messageOf(cause) }))

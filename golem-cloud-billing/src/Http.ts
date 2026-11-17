@@ -23,7 +23,7 @@ import {
   signedInPage,
   signedOutPage
 } from "./Page.ts"
-import { type CheckoutSession, Polar } from "./Polar.ts"
+import { Polar } from "./Polar.ts"
 import { type Account, type AccountLimits, Registry } from "./Registry.ts"
 import { make as makeSettlement, pastDueGraceEnd, planFor, type SettlementOffer, settlementFor } from "./Settlement.ts"
 import { type Subscription, Subscriptions } from "./Subscriptions.ts"
@@ -390,23 +390,41 @@ export const routes = HttpRouter.use((router) =>
             // registry never deletes an account while Polar can take a payment for it. A checkout
             // whose route fails before then can never be paid; its row holds the account until it
             // expires (`Subscriptions.holdCandidates`).
+            //
+            // First the route reads from Polar each unfinished checkout of the account whose status
+            // can change. While Polar has the payment of a checkout, each click goes to the payment
+            // notice and starts no new checkout. A failed payment makes the checkout `open` again.
             const accountId = user.golemAccountId
-            const { session, reasons } = yield* subscriptions.withAccountLock(
+            const started = yield* subscriptions.withAccountLock(
               accountId,
               Effect.gen(function* () {
                 const now = new Date()
-                const reusable = yield* subscriptions.reusableCheckout(
-                  accountId,
-                  new Date(now.getTime() + CHECKOUT_REUSE_MS)
+                const unfinished = yield* subscriptions.unfinishedCheckouts(accountId)
+                const read = yield* Effect.forEach(
+                  unfinished.filter((checkout) => checkout.status !== "succeeded"),
+                  (checkout) =>
+                    polar.getCheckout(checkout.checkoutId).pipe(
+                      Effect.tap((session) =>
+                        session.status === checkout.status
+                          ? Effect.void
+                          : subscriptions.recordCheckoutStatus(checkout.checkoutId, session.status, now)
+                      )
+                    )
                 )
-                let session: CheckoutSession | undefined
-                if (reusable !== undefined) {
-                  session = yield* polar.getCheckout(reusable.checkoutId)
-                  if (session.status !== "open") {
-                    yield* subscriptions.recordCheckoutStatus(reusable.checkoutId, session.status)
-                  }
+                const paid =
+                  unfinished.find((checkout) => checkout.status === "succeeded")?.checkoutId ??
+                  read.find((session) => session.status === "confirmed" || session.status === "succeeded")?.id
+                if (paid !== undefined) {
+                  return { paid, reasons: yield* settlement.reconcile(accountId, now) }
                 }
-                if (session === undefined || session.status === "expired" || session.status === "failed") {
+                // `read` keeps the order of `unfinished`, by expiry.
+                let session = read
+                  .filter(
+                    (candidate) =>
+                      candidate.status === "open" && candidate.expiresAt.getTime() > now.getTime() + CHECKOUT_REUSE_MS
+                  )
+                  .at(-1)
+                if (session === undefined) {
                   session = yield* polar.createCheckout({
                     productId: config.polar.productId,
                     externalCustomerId: accountId,
@@ -425,12 +443,13 @@ export const routes = HttpRouter.use((router) =>
                 return { session, reasons: yield* settlement.reconcile(accountId, now) }
               })
             )
-            if (session.status !== "open") {
-              // The person paid the checkout in another tab; the page waits for the subscription.
+            if (started.paid !== undefined) {
+              // The person paid a checkout, also in another tab; the page waits for the subscription.
               const notice = new URL(home)
-              notice.searchParams.set("checkout_id", session.id)
+              notice.searchParams.set("checkout_id", started.paid)
               return HttpServerResponse.redirect(notice.href, { status: 303 })
             }
+            const { session, reasons } = started
             if (reasons === "deleted" || !reasons.includes("openCheckout")) {
               yield* Effect.logWarning("Refused a checkout that no deletion hold covers").pipe(
                 Effect.annotateLogs({ golemAccountId: accountId, checkoutId: session.id, reasons: String(reasons) })

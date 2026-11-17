@@ -4,8 +4,10 @@ import { FetchHttpClient, HttpRouter } from "effect/http"
 import type pg from "pg"
 import * as App from "../src/App.ts"
 import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
-import { makePool } from "../src/Database.ts"
+import * as Commands from "../src/Commands.ts"
+import * as Database from "../src/Database.ts"
 import * as Http from "../src/Http.ts"
+import { PolarConfig } from "../src/Polar.ts"
 import type { CheckoutStatus } from "../src/Subscriptions.ts"
 
 export const baseUrl = "http://localhost:3000"
@@ -91,7 +93,7 @@ export const testConfig = (): BillingConfigShape => {
 }
 
 /** A pool with the settings of the app, for the queries of the tests. */
-export const queryPool = (config: BillingConfigShape) => makePool({ ...config.db, maxConnections: 2 })
+export const queryPool = (config: BillingConfigShape) => Database.makePool({ ...config.db, maxConnections: 2 })
 
 export const dropSchema = async (pool: pg.Pool, schema: string) => {
   await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
@@ -106,6 +108,17 @@ export const makeApp = (config: BillingConfigShape) =>
       Layer.provide(Layer.succeed(BillingConfig, config))
     ),
     { disableLogger: true }
+  )
+
+/**
+ * The services of `Cleanup.cleanupDeletedAccounts` as the cleanup CronJob has them, with the
+ * database of `config` and the Polar API at `apiUrl` with `accessToken`.
+ */
+export const cleanupLayer = (config: BillingConfigShape, apiUrl: string, accessToken: string) =>
+  Commands.cleanupServices.pipe(
+    Layer.provideMerge(Database.layer),
+    Layer.provide(Layer.succeed(BillingConfig, config)),
+    Layer.provide(Layer.succeed(PolarConfig, { apiUrl: new URL(apiUrl), accessToken: Redacted.make(accessToken) }))
   )
 
 /** The services of the app with `config` and its configuration, for calls outside a request. */

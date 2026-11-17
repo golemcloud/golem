@@ -1,16 +1,10 @@
 import { randomUUID } from "node:crypto"
-import { Effect, Layer, Logger, Redacted } from "effect"
-import { FetchHttpClient } from "effect/http"
+import { Effect, Logger } from "effect"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { BillingConfig } from "../src/BillingConfig.ts"
 import * as Cleanup from "../src/Cleanup.ts"
-import * as Database from "../src/Database.ts"
-import * as Polar from "../src/Polar.ts"
-import * as RegistryAccounts from "../src/RegistryAccounts.ts"
-import * as Subscriptions from "../src/Subscriptions.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
-import { queryPool } from "./support.ts"
+import { cleanupLayer, queryPool } from "./support.ts"
 
 const polarUrl = "https://polar.test"
 const polarToken = "polar-cleanup-token"
@@ -52,16 +46,7 @@ describe("cleanup of deleted accounts", () => {
     Effect.runPromise(
       Cleanup.cleanupDeletedAccounts.pipe(
         Effect.provide(Logger.layer([Logger.map(Logger.formatJson, (line) => void logs.push(JSON.parse(line)))])),
-        Effect.provide(
-          Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
-            Layer.provideMerge(Database.layer),
-            Layer.provide(FetchHttpClient.layer),
-            Layer.provide(Layer.succeed(BillingConfig, registry.configs.cleanup)),
-            Layer.provide(
-              Layer.succeed(Polar.PolarConfig, { apiUrl: new URL(polarUrl), accessToken: Redacted.make(polarToken) })
-            )
-          )
-        )
+        Effect.provide(cleanupLayer(registry.configs.cleanup, polarUrl, polarToken))
       )
     )
 

@@ -189,17 +189,24 @@ describe("holdFor", () => {
     expect(holdFor(subscriptions, [], false, checkouts)).toEqual(reasons)
   })
 
-  it("names when the delete works after the open checkout that expires last", () => {
+  it("names when the delete works: 30 minutes after the open checkout that expires last", () => {
     const later = checkout("open", new Date("2026-11-21T15:30:00Z"))
+    const text = (now: string) =>
+      holdReasonText(["openCheckout"], "https://billing.golem.cloud", [checkout("open"), later], new Date(now))
 
-    expect(holdReasonText(["openCheckout"], "https://billing.golem.cloud", [checkout("open"), later])).toBe(
-      "Golem Cloud billing: A checkout for Paid from the billing page is open. Delete the account after November 21, 2026 at 3:40 PM UTC."
+    expect(text("2026-11-21T15:59:00Z")).toBe(
+      "Golem Cloud billing: A checkout for Paid from the billing page is open. Delete the account after November 21, 2026 at 4:00 PM UTC."
+    )
+    // The hold stays until Polar reports the checkout `expired`, also after that time.
+    expect(text("2026-11-21T16:00:00Z")).toBe(
+      `Golem Cloud billing: A checkout for Paid from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
     )
   })
 
   it("writes the longest reasons that holdFor gives within the 1000 characters of a registry hold", () => {
     // holdFor gives `subscription` or `canceledSubscription`, and `unbilledUsage` or
-    // `unsettledUsage`; each first one is the longer text.
+    // `unsettledUsage`; each first one is the longer text. The text of `openCheckout` is longer
+    // after the time that it names.
     const longest: ReadonlyArray<HoldReason> = [
       "subscription",
       "unbilledUsage",
@@ -207,8 +214,14 @@ describe("holdFor", () => {
       "openCheckout",
       "paidCheckout"
     ]
-    const text = holdReasonText(longest, "https://billing.golem.cloud", [checkout("open"), checkout("succeeded")])
+    const text = holdReasonText(
+      longest,
+      "https://billing.golem.cloud",
+      [checkout("open"), checkout("succeeded")],
+      new Date("2026-11-22T12:00:00Z")
+    )
 
+    expect(text).toContain("Polar has not closed it yet.")
     expect(text.length).toBeLessThanOrEqual(1000)
     expect(text).toMatch(/^Golem Cloud billing: The account has a subscription to Paid\. Cancel it in Manage billing at https:\/\/billing\.golem\.cloud\. The subscription then runs to the end of the period\. Delete the account after the period ends\./)
   })
@@ -216,10 +229,10 @@ describe("holdFor", () => {
   it("promises an invoice only for the overage of a billable subscription, and names a contact for the rest", () => {
     const billingUrl = "https://billing.golem.cloud"
 
-    expect(holdReasonText(["subscription", "unbilledUsage"], billingUrl, [])).toContain(
+    expect(holdReasonText(["subscription", "unbilledUsage"], billingUrl, [], new Date())).toContain(
       "Polar bills it on the invoice at the end of the period."
     )
-    const unsettled = holdReasonText(["unsettledUsage"], billingUrl, [])
+    const unsettled = holdReasonText(["unsettledUsage"], billingUrl, [], new Date())
     expect(unsettled).toBe(
       `Golem Cloud billing: The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
     )
@@ -321,7 +334,6 @@ describe("sweeper", () => {
       latest: () => Effect.die("unused"),
       recordCheckout: () => Effect.die("unused"),
       unfinishedCheckouts: () => Effect.die("unused"),
-      reusableCheckout: () => Effect.die("unused"),
       linkCheckout: () => Effect.die("unused"),
       checkoutsToRead: () => Effect.succeed([]),
       recordCheckoutStatus: () => Effect.die("unused"),

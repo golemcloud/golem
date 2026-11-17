@@ -1,20 +1,17 @@
 import { createHmac, randomUUID } from "node:crypto"
-import { Effect, Layer, Redacted } from "effect"
-import { FetchHttpClient } from "effect/http"
+import { Effect } from "effect"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
+import type { BillingConfigShape } from "../src/BillingConfig.ts"
 import * as Cleanup from "../src/Cleanup.ts"
-import * as Database from "../src/Database.ts"
 import { webhookBodyLimit } from "../src/Http.ts"
-import * as Polar from "../src/Polar.ts"
-import * as RegistryAccounts from "../src/RegistryAccounts.ts"
 import * as Settlement from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
 import {
   baseUrl,
   billingAccountId,
+  cleanupLayer,
   CookieJar,
   FakeUpstreams,
   freePlanId,
@@ -1322,27 +1319,20 @@ describe("Polar billing", () => {
     const subscriptionHold = `Golem Cloud billing: The account has a subscription to Paid. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
     const paidCheckoutHold =
       "Golem Cloud billing: Polar has a payment for Paid, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
-    /** The hold of an open checkout that expires at `expiresAt`: the sweep reads it 5 minutes after, at a run of every minute. */
+    /**
+     * The hold of an open checkout that expires at `expiresAt`: the job of Polar expires it every 15
+     * minutes, and the sweep reads it every 5.
+     */
     const openCheckoutHold = (expiresAt: Date) =>
-      `Golem Cloud billing: A checkout for Paid from the billing page is open. Delete the account after ${longDateTime.format(new Date(expiresAt.getTime() + 10 * MINUTE))} UTC.`
+      `Golem Cloud billing: A checkout for Paid from the billing page is open. Delete the account after ${longDateTime.format(new Date(expiresAt.getTime() + 30 * MINUTE))} UTC.`
+    const lateCheckoutHold =
+      "Golem Cloud billing: A checkout for Paid from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
 
     /** One run of the cleanup CronJob, with the database role and the Polar token of the cleanup. */
     const cleanup = () =>
       Effect.runPromise(
         Cleanup.cleanupDeletedAccounts.pipe(
-          Effect.provide(
-            Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
-              Layer.provideMerge(Database.layer),
-              Layer.provide(FetchHttpClient.layer),
-              Layer.provide(Layer.succeed(BillingConfig, registry.configs.cleanup)),
-              Layer.provide(
-                Layer.succeed(Polar.PolarConfig, {
-                  apiUrl: new URL(polarApiUrl),
-                  accessToken: Redacted.make(polarCleanupToken)
-                })
-              )
-            )
-          )
+          Effect.provide(cleanupLayer(registry.configs.cleanup, polarApiUrl, polarCleanupToken))
         )
       )
 
@@ -1377,12 +1367,39 @@ describe("Polar billing", () => {
       expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toEqual([])
       expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiresAt))
 
-      // Polar refuses the payment of an expired checkout, also before its job marks it `expired`.
+      // The job of Polar has not expired the checkout yet.
       await sweep(at(expiresAt, Settlement.CHECKOUT_READ_DELAY_MS))
       expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toHaveLength(1)
-      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
-      await sweep(at(expiresAt, Settlement.CHECKOUT_READ_DELAY_MS + 60 * MINUTE))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiresAt))
+
+      upstreams.checkouts.get("polar_c_1")!.status = "expired"
+      const read = at(expiresAt, Settlement.CHECKOUT_READ_DELAY_MS)
+      await sweep(at(read, Settlement.CHECKOUT_READ_INTERVAL_MS - MINUTE))
       expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toHaveLength(1)
+      await sweep(at(read, Settlement.CHECKOUT_READ_INTERVAL_MS))
+      expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toHaveLength(2)
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+      await sweep(at(read, 60 * MINUTE))
+      expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toHaveLength(2)
+    })
+
+    it("keeps the hold of a checkout that Polar still reports open after its expiry, until the subscription of a late payment comes", async () => {
+      // The person paid just before the expiry. Polar answers the read from a replica that lags,
+      // so the sweep reads an `open` checkout.
+      const { jar, accountId } = await signedInToRegistryAccount()
+      await postCheckout(jar)
+      const expiresAt = expiryOf("polar_c_1")
+
+      await sweep(at(expiresAt, Settlement.CHECKOUT_READ_DELAY_MS))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiresAt))
+
+      // After the time that the hold names, the text names a contact.
+      await sweep(at(expiresAt, 30 * MINUTE))
+      expect(upstreams.polarRequests("/v1/checkouts/polar_c_1").length).toBeGreaterThan(1)
+      expect(upstreams.deletionHolds.get(accountId)).toBe(lateCheckoutHold)
+
+      await deliver("subscription.active", subscription(accountId, { checkout_id: "polar_c_1" }))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(subscriptionHold)
     })
 
     it("keeps the hold of a paid checkout after its expiry until the subscription webhook comes", async () => {
@@ -1442,10 +1459,17 @@ describe("Polar billing", () => {
       expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toHaveLength(1)
     })
 
+    /** Makes the checkout take payments for 30 minutes more. */
+    const expireSoon = async (checkoutId: string) => {
+      const expiresAt = new Date(Date.now() + 30 * MINUTE)
+      upstreams.checkouts.get(checkoutId)!.expiresAt = expiresAt
+      await pool.query("UPDATE polar_checkouts SET expires_at = $2 WHERE checkout_id = $1", [checkoutId, expiresAt])
+    }
+
     it("starts a new checkout when the open one takes payments for less than an hour more, and holds the account until the later expiry", async () => {
       const { jar, accountId } = await signedIn()
       await postCheckout(jar)
-      await pool.query("UPDATE polar_checkouts SET expires_at = now() + interval '30 minutes'")
+      await expireSoon("polar_c_1")
 
       const second = await postCheckout(jar)
 
@@ -1453,15 +1477,63 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiryOf("polar_c_2")))
     })
 
-    it("sends a second click to the payment notice when the person paid the open checkout", async () => {
-      const { jar, accountId } = await signedIn()
+    it.each(["confirmed", "succeeded"] as const)(
+      "sends each later click to the payment notice while Polar has the payment of a %s checkout",
+      async (status) => {
+        const { jar, accountId } = await signedIn()
+        await postCheckout(jar)
+        upstreams.checkouts.get("polar_c_1")!.status = status
+
+        const second = await postCheckout(jar)
+        const third = await postCheckout(jar)
+
+        expect(second.headers.get("location")).toBe(`${baseUrl}/?checkout_id=polar_c_1`)
+        expect(third.headers.get("location")).toBe(`${baseUrl}/?checkout_id=polar_c_1`)
+        expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+        expect(upstreams.deletionHolds.get(accountId)).toBe(paidCheckoutHold)
+      }
+    )
+
+    it("sends a click to the payment notice when the person paid the checkout in its last hour", async () => {
+      const { jar } = await signedIn()
       await postCheckout(jar)
-      upstreams.checkouts.get("polar_c_1")!.status = "succeeded"
+      await expireSoon("polar_c_1")
+      upstreams.checkouts.get("polar_c_1")!.status = "confirmed"
 
       const second = await postCheckout(jar)
 
       expect(second.headers.get("location")).toBe(`${baseUrl}/?checkout_id=polar_c_1`)
       expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+    })
+
+    it("sends a click back to the checkout when its payment failed and Polar opened it again", async () => {
+      const { jar, accountId } = await signedIn()
+      await postCheckout(jar)
+      upstreams.checkouts.get("polar_c_1")!.status = "confirmed"
+      expect((await postCheckout(jar)).headers.get("location")).toBe(`${baseUrl}/?checkout_id=polar_c_1`)
+      upstreams.checkouts.get("polar_c_1")!.status = "open"
+
+      const third = await postCheckout(jar)
+
+      expect(third.headers.get("location")).toBe(upstreams.checkoutUrl("polar_c_1"))
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+      expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiryOf("polar_c_1")))
+    })
+
+    it("keeps a final status of a checkout when a later read from Polar reports an older one", async () => {
+      const { jar, accountId } = await signedIn()
+      await postCheckout(jar)
+      upstreams.checkouts.get("polar_c_1")!.status = "succeeded"
+      await postCheckout(jar)
+
+      await services.runPromise(
+        Effect.flatMap(Subscriptions.Subscriptions, (subscriptions) =>
+          subscriptions.recordCheckoutStatus("polar_c_1", "confirmed", new Date())
+        )
+      )
+
+      const { rows } = await pool.query("SELECT status FROM polar_checkouts WHERE checkout_id = 'polar_c_1'")
+      expect(rows).toEqual([{ status: "succeeded" }])
       expect(upstreams.deletionHolds.get(accountId)).toBe(paidCheckoutHold)
     })
 

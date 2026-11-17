@@ -6,7 +6,6 @@ import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts
 import {
   billableStatuses,
   type Checkout,
-  type CheckoutStatus,
   type Subscription,
   Subscriptions,
   type SubscriptionsError,
@@ -109,21 +108,24 @@ export const SETTLEMENT_MAX_ORDERS = 13
  */
 export const HOLD_RECHECK_MS = 60 * 60 * 1000
 
-/**
- * How long after the expiry of a checkout the sweep reads the checkout from Polar. Polar refuses
- * the payment of an expired checkout, so an `open` checkout that the sweep reads is dead. The delay
- * covers a clock of Polar that runs behind the clock of the app.
- */
+/** How long after the expiry of a checkout the sweep first reads the checkout from Polar. */
 export const CHECKOUT_READ_DELAY_MS = 5 * 60 * 1000
 
-/** How long the sweep waits before it reads a checkout again that is `confirmed`, or that it could not read. */
+/**
+ * How long the sweep waits before it reads a checkout again that Polar reports `open` or
+ * `confirmed`, or that it could not read.
+ */
 export const CHECKOUT_READ_INTERVAL_MS = 5 * 60 * 1000
 
+/** How often the job of Polar moves the `open` checkouts after their expiry to `expired`. */
+export const POLAR_CHECKOUT_EXPIRY_JOB_MS = 15 * 60 * 1000
+
 /**
- * The time after the expiry of a checkout that the hold text names. The sweep reads the checkout
- * `CHECKOUT_READ_DELAY_MS` after the expiry, at a run of every minute, and then removes the hold.
+ * The time after the expiry of a checkout that the hold text names. The job of Polar expires the
+ * checkout, the sweep reads it at its next read and removes the hold. The rest covers the run of
+ * the sweep every minute, and a clock of Polar that runs behind the clock of the app.
  */
-const CHECKOUT_HOLD_MARGIN_MS = CHECKOUT_READ_DELAY_MS + 5 * 60 * 1000
+const CHECKOUT_HOLD_MARGIN_MS = POLAR_CHECKOUT_EXPIRY_JOB_MS + CHECKOUT_READ_INTERVAL_MS + 10 * 60 * 1000
 
 /**
  * How long the sweep still checks a subscription after its end or after its past-due grace, or an
@@ -332,16 +334,19 @@ export const CONTACT_EMAIL = "sales@golem.cloud"
  * settlement.
  * Only a billable subscription has an invoice to come, so the text of `unsettledUsage` promises
  * none. The text of `openCheckout` names when the hold of the open checkout that expires last
- * ends; `checkouts` are the checkouts that gave the reasons.
+ * ends; `checkouts` are the checkouts that gave the reasons. The hold ends only when Polar reports
+ * the checkout `expired`, so after that time at `now` the text names a contact instead.
  */
 export const holdReasonText = (
   reasons: ReadonlyArray<HoldReason>,
   billingUrl: string,
-  checkouts: ReadonlyArray<Checkout>
+  checkouts: ReadonlyArray<Checkout>,
+  now: Date
 ): string => {
-  const openUntil = Math.max(
-    ...checkouts.filter((checkout) => checkout.status === "open").map((checkout) => checkout.expiresAt.getTime())
-  )
+  const openUntil =
+    Math.max(
+      ...checkouts.filter((checkout) => checkout.status === "open").map((checkout) => checkout.expiresAt.getTime())
+    ) + CHECKOUT_HOLD_MARGIN_MS
   const sentences: Record<HoldReason, () => string> = {
     subscription: () =>
       `The account has a subscription to Paid. Cancel it in Manage billing at ${billingUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`,
@@ -353,7 +358,9 @@ export const holdReasonText = (
       `The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`,
     unpaidOverage: () => `An invoice for paid overage is not paid. Pay it on the billing page at ${billingUrl}.`,
     openCheckout: () =>
-      `A checkout for Paid from the billing page is open. Delete the account after ${utcDateTime.format(openUntil + CHECKOUT_HOLD_MARGIN_MS)} UTC.`,
+      openUntil > now.getTime()
+        ? `A checkout for Paid from the billing page is open. Delete the account after ${utcDateTime.format(openUntil)} UTC.`
+        : `A checkout for Paid from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`,
     paidCheckout: () =>
       `Polar has a payment for Paid, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
   }
@@ -383,12 +390,6 @@ export interface SettlementShape {
    */
   readonly sweep: (now: Date) => Effect.Effect<void>
 }
-
-/**
- * The status to record for a checkout that the sweep read from Polar after its expiry. Polar
- * refuses the payment of an expired checkout, also before its job marks the checkout `expired`.
- */
-const statusAfterExpiry = (status: CheckoutStatus): CheckoutStatus => (status === "open" ? "expired" : status)
 
 export const make: Effect.Effect<
   SettlementShape,
@@ -479,7 +480,7 @@ export const make: Effect.Effect<
         // The hold goes on before the plan changes and comes off after it, so the account is never
         // on the paid plan without a hold.
         if (reasons.length > 0) {
-          const reason = holdReasonText(reasons, billingUrl, checkouts)
+          const reason = holdReasonText(reasons, billingUrl, checkouts, now)
           yield* registry.placeDeletionHold(config.registryBillingToken, accountId, holderId, reason)
           yield* subscriptions.recordHold(accountId, reason)
         }
@@ -510,11 +511,14 @@ export const make: Effect.Effect<
         )
       )
 
-    // A failed read keeps the status, and records the time of the read, so the next read waits
-    // `CHECKOUT_READ_INTERVAL_MS`. The hold of the checkout stays.
-    const readCheckout = (checkout: Checkout) =>
+    // Only a final status from Polar removes the hold of the checkout. Polar answers the read from a
+    // replica that can lag, so an `open` checkout after its expiry can be one that the person paid
+    // just before it; the sweep reads it again until the job of Polar expires it. A failed read
+    // keeps the status, and records the time of the read, so the next read waits
+    // `CHECKOUT_READ_INTERVAL_MS`.
+    const readCheckout = (checkout: Checkout, now: Date) =>
       polar.getCheckout(checkout.checkoutId).pipe(
-        Effect.map((session) => statusAfterExpiry(session.status)),
+        Effect.map((session) => session.status),
         Effect.tap((status) =>
           Effect.logInfo("Read a checkout after its expiry").pipe(
             Effect.annotateLogs({ golemAccountId: checkout.accountId, checkoutId: checkout.checkoutId, status })
@@ -530,7 +534,7 @@ export const make: Effect.Effect<
             Effect.as(checkout.status)
           )
         ),
-        Effect.flatMap((status) => subscriptions.recordCheckoutStatus(checkout.checkoutId, status)),
+        Effect.flatMap((status) => subscriptions.recordCheckoutStatus(checkout.checkoutId, status, now)),
         Effect.catch((error) =>
           Effect.logError("Cannot record the status of the checkout").pipe(
             Effect.annotateLogs({ checkoutId: checkout.checkoutId, error: error.message })
@@ -545,7 +549,7 @@ export const make: Effect.Effect<
           at(-CHECKOUT_READ_DELAY_MS),
           at(-CHECKOUT_READ_INTERVAL_MS)
         )
-        yield* Effect.forEach(expired, readCheckout, { discard: true })
+        yield* Effect.forEach(expired, (checkout) => readCheckout(checkout, now), { discard: true })
         const ending = yield* subscriptions.ending(
           config.polar.productId,
           at(-SWEEP_WINDOW_MS),
