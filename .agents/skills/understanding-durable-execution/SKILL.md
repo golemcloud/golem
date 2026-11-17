@@ -3776,21 +3776,24 @@ after `CardDerived` reuses the recorded child instead of creating it again. Test
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
 event up to the next recorded entry, and the next authority boundary applies them. A decision that
-records nothing therefore sees on replay the card events that live execution applied only to a
-later call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card`
-each make their authorization decision in a `ReadLocal` call
-(`permissions/mod.rs::record_card_decision`): `golem::permissions::inspect::inspect-card-decision`,
-`golem::permissions::derive::{derive-decision, derive-from-wallet-decision,
-derive-scope-decision}` and `golem::permissions::wallet::install-card-decision`. The request holds
-the card ids of the handles. The `End` (`PermissionCardDecision`) records the outcome, allowed or
-the typed permission error, and on success the serialized data the operation continues with: the
-wallet copy of the `derive` parent, the selected `derive-from-wallet` parent, each `derive-scope`
-parent (a valid scope card, the wallet copy of a persistent parent, or the refusal of an unusable
-parent), and the `install-card` target with its holder identity. Replay returns the recorded
-decision; the rest of the operation is deterministic from it and from the recorded `card-liveness`
-answers. Each decision keeps its place relative to the handle's liveness call: `inspect-card`,
-`derive` and `derive-scope` decide first, `install-card` resolves its handle first. A repaired
-incomplete decision decides at its own `Start`. Tests:
+records nothing therefore sees on replay the card events that live execution applied only to a later
+call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card` each make
+their authorization decision in a `ReadLocal` call (`permissions/mod.rs::record_card_decision`):
+`golem::permissions::inspect::inspect-card-decision`, `golem::permissions::derive::{derive-decision,
+derive-from-wallet-decision, derive-scope-decision}` and
+`golem::permissions::wallet::install-card-decision`. The request holds the ID of the agent or entity
+invocation that the deciding host call is attributed to (`None` for work no invocation is attributed
+to) and the card ids of the handles. It records the attribution itself, not the fallback to the
+loop's invocation, whose key after a snapshot is random; replay and repair trap when the recorded
+invocation differs from the attributed one. The `End` (`PermissionCardDecision`) records the
+outcome, allowed or the typed permission error, and on success the serialized data the operation
+continues with: the wallet copy of the `derive` parent, the selected `derive-from-wallet` parent,
+each `derive-scope` parent (a valid scope card, the wallet copy of a persistent parent, or the
+refusal of an unusable parent), and the `install-card` target with its holder identity. Replay
+returns the recorded decision; the rest of the operation is deterministic from it and from the
+recorded `card-liveness` answers. Each decision keeps its place relative to the handle's liveness
+call: `inspect-card`, `derive` and `derive-scope` decide first, `install-card` resolves its handle
+first. A repaired incomplete decision decides at its own `Start`. Tests:
 `tests/scope_cards.rs::card_decisions_survive_reconstruction` and its cases.
 
 ## Wrong model → right model
