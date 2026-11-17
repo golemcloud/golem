@@ -25,12 +25,13 @@
 // `TS2578: Unused '@ts-expect-error' directive`.
 
 import { z } from 'zod';
+import * as vb from 'valibot';
 import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import type { MethodSpec } from '../src/method';
 import * as http from '../src/http';
 import type { HttpEndpointSpec } from '../src/http';
-import { s } from '../src/schema/markers';
+import { s, KeyValue } from '../src/schema/markers';
 import type { BindableKeys } from '../src/httpTypes';
 
 // ---------------------------------------------------------------------------
@@ -568,7 +569,7 @@ void method({
 });
 
 // ---------------------------------------------------------------------------
-// method: bodyless verbs (get/head) cannot have unbound input params
+// method: GET/HEAD/DELETE implicitly bind scalar and collection query inputs
 // ---------------------------------------------------------------------------
 
 // Positive — get with no params.
@@ -595,43 +596,133 @@ void method({
 // Positive — head with the param bound from a path variable.
 void method({ input: { id: z.string() }, returns: z.string(), http: http.head('/items/{id}') });
 
-// Negative — get with an unbound param.
+// Positive — implicit scalars, lists and maps, including optional collections.
 void method({
-  input: { payload: z.string() },
+  input: { q: z.string().nullish(), tags: s.option(s.option(z.array(z.string()))) },
   returns: z.string(),
-  // @ts-expect-error bodyless GET cannot have unbound 'payload'
+  http: [http.get('/outer-options'), http.post('/outer-options?q={q}&tags={tags}')],
+});
+void method({
+  input: { events: s.stream(z.string()), limit: z.number() },
+  returns: z.string(),
+  http: http.get('/stream'),
+});
+void method({
+  input: { events: s.stream(z.string()) },
+  returns: z.string(),
+  // @ts-expect-error stream resource slots cannot bind explicitly from query
+  http: http.get('/stream?events={events}'),
+});
+void method({
+  input: { tags: z.array(z.string().readonly()), query: z.string().pipe(z.string()) },
+  returns: z.string(),
+  http: http.get('/wrapped'),
+});
+void method({
+  input: { tags: s.option(z.array(z.string())), labels: KeyValue(z.number()) },
+  returns: z.string(),
+  http: http.get('/markers'),
+});
+void method({
+  input: { values: s.option(z.tuple([z.string(), z.number()])) },
+  returns: z.string(),
+  // @ts-expect-error an SDK option preserves its tuple wire shape
+  http: http.get('/tuple'),
+});
+void method({
+  input: { values: vb.tuple([vb.string(), vb.number()]) },
+  returns: z.string(),
+  // @ts-expect-error Valibot tuples are not lists
+  http: http.get('/tuple'),
+});
+void method({
+  input: { value: vb.union([vb.string(), vb.number()]) },
+  returns: z.string(),
+  // @ts-expect-error Valibot variants are not scalars
+  http: http.post('/union?value={value}'),
+});
+void method({ input: { payload: z.string() }, returns: z.string(), http: http.get('/op') });
+void method({
+  input: { tags: z.array(z.string()).optional() },
+  returns: z.string(),
+  http: http.head('/op'),
+});
+void method({
+  input: { labels: z.map(z.string(), z.number()) },
+  returns: z.string(),
+  http: http.del('/op'),
+});
+void method({
+  input: { labels: z.record(z.enum(['env', 'region']), z.string()) },
+  returns: z.string(),
+  http: http.get('/op'),
+});
+void method({
+  input: { values: z.tuple([z.string(), z.number()]) },
+  returns: z.string(),
+  // @ts-expect-error tuples do not use the repeated scalar list encoding
+  http: http.get('/op'),
+});
+void method({
+  input: { value: z.union([z.string(), z.number()]) },
+  returns: z.string(),
+  // @ts-expect-error a union is not a scalar wire type
+  http: http.get('/op'),
+});
+void method({
+  input: { id: z.string(), page: z.number() },
+  returns: z.string(),
+  http: http.get('/items/{id}'),
+});
+void method({
+  input: { labels: z.record(z.string(), z.string()) },
+  returns: z.string(),
+  http: [http.post('/op'), http.get('/op')],
+});
+
+// Negative — get with an implicitly bound record.
+void method({
+  input: { payload: z.object({ name: z.string() }) },
+  returns: z.string(),
+  // @ts-expect-error records require a body method
   http: http.get('/op'),
 });
 
-// Negative — head with an unbound param.
+// Negative — head with an implicitly bound nested list.
 void method({
-  input: { payload: z.string() },
+  input: { payload: z.array(z.array(z.string())) },
   returns: z.string(),
-  // @ts-expect-error bodyless HEAD cannot have unbound 'payload'
+  // @ts-expect-error query lists have scalar elements
   http: http.head('/op'),
 });
 
-// Negative — get binds SOME but not all params.
+// Negative — explicit path binding does not make another record query-bindable.
 void method({
-  input: { id: z.string(), name: z.string() },
+  input: { id: z.string(), name: z.object({ first: z.string() }) },
   returns: z.string(),
-  // @ts-expect-error bodyless GET binds 'id' but leaves 'name' unbound
+  // @ts-expect-error records require a body method
   http: http.get('/items/{id}'),
 });
 
-// Negative — array with a bodyful (fine) + a bodyless-unbound (error) endpoint.
+// Negative — a record can use POST, but not GET, in an endpoint array.
 void method({
-  input: { payload: z.string() },
+  input: { payload: z.object({ name: z.string() }) },
   returns: z.string(),
-  // @ts-expect-error bodyless GET in the array cannot have unbound 'payload'
+  // @ts-expect-error the GET endpoint cannot bind a record from query
   http: [http.post('/op'), http.get('/op')],
+});
+
+void method({
+  input: { payload: z.object({ name: z.string() }) },
+  returns: z.string(),
+  // @ts-expect-error DELETE also binds remaining inputs from query
+  http: http.del('/op'),
 });
 
 // Positive — bodyful verbs are never subject to the bodyless check; the unbound
 // 'payload' reaches the handler via the JSON request body.
 void method({ input: { payload: z.string() }, returns: z.string(), http: http.post('/op') });
 void method({ input: { payload: z.string() }, returns: z.string(), http: http.put('/op') });
-void method({ input: { payload: z.string() }, returns: z.string(), http: http.del('/op') });
 void method({ input: { payload: z.string() }, returns: z.string(), http: http.patch('/op') });
 void method({ input: { payload: z.string() }, returns: z.string(), http: http.options('/op') });
 void method({ input: { payload: z.string() }, returns: z.string(), http: http.trace('/op') });

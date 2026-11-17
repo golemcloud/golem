@@ -386,6 +386,9 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         )
     };
     for (query, authorized, expected) in [
+        ("v=3".into(), false, StatusCode::UNAUTHORIZED),
+        ("v=3".into(), true, StatusCode::BAD_REQUEST),
+        (format!("instance={p}&v=3"), true, StatusCode::BAD_REQUEST),
         ("instance=invalid".into(), false, StatusCode::UNAUTHORIZED),
         ("instance=invalid".into(), true, StatusCode::BAD_REQUEST),
         ("instance=".into(), true, StatusCode::BAD_REQUEST),
@@ -1198,7 +1201,7 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 } else {
                     format!(
                         "{target}?{}",
-                        root.map(|id| format!("instance={}&count=17", id.to_uppercase()))
+                        root.map(|id| format!("instance={}", id.to_uppercase()))
                             .unwrap_or_default()
                     )
                 };

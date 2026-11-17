@@ -4,6 +4,7 @@ import { defineAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import { PrincipalSchema } from "../src/Principal.js"
 import { AgentStream } from "../src/WitTypes.js"
+import * as Wit from "../src/WitTypes.js"
 import { guest } from "../src/internal/guest.js"
 import {
   agentType,
@@ -518,6 +519,56 @@ describe("Http defineAgent integration", () => {
     await __resetAgents()
   })
 
+  it("validates erased query schemas against their compiled wire shapes", async () => {
+    const cases = [
+      [Schema.Array(Schema.String), true],
+      [Schema.UndefinedOr(Schema.Array(Schema.Number)), true],
+      [Schema.Union([Schema.Null, Schema.String]), true],
+      [Schema.Union([Schema.Undefined, Schema.Array(Schema.Number)]), true],
+      [Wit.Map(Schema.String, Schema.Number), true],
+      [Schema.NullOr(Wit.Map(Schema.String, Schema.Boolean)), true],
+      [Schema.Tuple([Schema.String, Schema.Number]), false],
+      [Schema.Union([Schema.String, Schema.Number]), false],
+      [Schema.Array(Schema.Array(Schema.String)), false],
+      [Wit.Text(), false],
+      [Schema.Array(Wit.Text()), false],
+    ] as const
+    for (const [index, [schema, accepted]] of cases.entries()) {
+      for (const explicit of [false, true]) {
+        await __resetAgents()
+        const name = `QueryShapeCase${index}${explicit ? "Explicit" : "Implicit"}`
+        const register = () =>
+          defineAgent({
+            name,
+            id: {},
+            http: mount("/query-shapes"),
+            methods: {
+              read: method({
+                input: { value: schema as Schema.Top },
+                success: Schema.String,
+                http: [explicit ? post("/read?q={value}") : del("/read")],
+              }),
+            },
+          }).implement({
+            init: () => Effect.void,
+            methods: () => Effect.succeed({ read: () => Effect.succeed("ok") }),
+          })
+        if (accepted) {
+          register()
+          const types = await guest.discoverAgentTypes()
+          expect(
+            types.find((t) => t.typeName === name)!.methods[0]!.httpEndpoint[0]!.queryVars,
+          ).toHaveLength(explicit ? 1 : 0)
+        } else {
+          await expectRouteError(
+            register,
+            explicit ? /not bindable from a query/ : /cannot bind implicit query/,
+          )
+        }
+      }
+    }
+  })
+
   it("publishes declared modes without resolving streaming defaults", async () => {
     defineAgent({
       name: "DeclaredRouteModes",
@@ -597,6 +648,8 @@ describe("Http defineAgent integration", () => {
                 nonStringBindableParams: new Set(),
                 stringBindableParams: new Set(),
                 queryOrHeaderBindableParams: new Set(),
+                queryBindableParams: new Set(),
+                streamParams: new Set(),
               },
             ],
           }),
@@ -870,7 +923,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a GET endpoint with an unbound (body) parameter", async () => {
+  it("rejects an implicit record query input on GET", async () => {
     await expectRouteError(
       () =>
         defineAgent({
@@ -879,21 +932,17 @@ describe("Http defineAgent integration", () => {
           http: mount("/x"),
           methods: {
             op: method({
-              input: { payload: Schema.String },
+              input: { payload: Schema.Struct({ value: Schema.String }) },
               success: Schema.String,
-              // @ts-expect-error — bodyless `Http.get(...)` cannot have
-              // an unbound `payload` param. We silence the static error
-              // here to keep covering the runtime validator (defence in
-              // depth) — see `test/http-types.test-d.ts` for the
-              // type-level test.
+              // @ts-expect-error records need a body method
               http: [get("/op")],
             }),
           },
         }).implement({
           init: () => Effect.void,
-          methods: () => Effect.succeed({ op: ({ payload }) => Effect.succeed(payload) }),
+          methods: () => Effect.succeed({ op: ({ payload }) => Effect.succeed(payload.value) }),
         }),
-      /may not have unbound parameters/,
+      /cannot bind implicit query input 'payload'/,
     )
   })
 

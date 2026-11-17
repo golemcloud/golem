@@ -1981,6 +1981,11 @@ async fn session_put_binds_body_query_header_and_path(
     for request in [
         agent
             .client
+            .put(agent.base_url.join(&format!("{base}?count=3&v=3"))?)
+            .header("x-label", "header-value")
+            .json(&serde_json::json!({"message": "body-value"})),
+        agent
+            .client
             .put(session_url.clone())
             .json(&serde_json::json!({"message": "body-value"})),
         agent
@@ -2030,6 +2035,29 @@ async fn session_put_binds_body_query_header_and_path(
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
+    for (method, path) in [
+        (reqwest::Method::PUT, format!("{base}?count=3&v=3")),
+        (reqwest::Method::HEAD, format!("{base}?v=3")),
+        (reqwest::Method::DELETE, format!("{base}?v=3")),
+        (
+            reqwest::Method::GET,
+            format!("{base}/streams/$result?offset=now&v=3"),
+        ),
+        (
+            reqwest::Method::DELETE,
+            format!("{base}/streams/$result?v=3"),
+        ),
+    ] {
+        let response = agent
+            .client
+            .request(method, agent.base_url.join(&path)?)
+            .header("x-label", "header-value")
+            .json(&serde_json::json!({"message": "body-value"}))
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
+
     assert_eq!(create(agent, &stream).await?.status(), StatusCode::OK);
     wait_for_closed(agent, &stream).await?;
     let response = agent
@@ -2045,6 +2073,20 @@ async fn session_put_binds_body_query_header_and_path(
             "route-value|header-value|1|body-value",
             "route-value|header-value|2|body-value"
         ])
+    );
+    let read_without_arguments = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join(&format!("{base}/streams/$result?offset=now"))?,
+        )
+        .send()
+        .await?;
+    assert_eq!(read_without_arguments.status(), StatusCode::OK);
+    assert_eq!(
+        read_without_arguments.json::<Value>().await?,
+        serde_json::json!([])
     );
     Ok(())
 }

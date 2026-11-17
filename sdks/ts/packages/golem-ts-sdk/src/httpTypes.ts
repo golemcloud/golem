@@ -23,8 +23,9 @@
 // `import type` is used throughout to avoid a runtime import cycle with
 // `http.ts` (which imports the value-free validators back from here).
 
-import type { EndpointKind, HttpEndpointSpec, HttpMountSpec } from './http';
-import type { MarkerKindOf } from './schema/markers';
+import type { HttpEndpointSpec, HttpMountSpec } from './http';
+import type { MarkerKindOf, MarkerSchema } from './schema/markers';
+import type { StandardSchemaV1 } from './schema/standardSchema';
 
 declare const InvalidBrand: unique symbol;
 
@@ -332,8 +333,8 @@ type NonBindableKind =
   | 'multimodal'
   | 'unstructured-text'
   | 'unstructured-binary'
+  | 'rich'
   | 'result'
-  | 'typed-array'
   | 'principal'
   | 'stream';
 
@@ -537,78 +538,126 @@ export type HeaderValuesArray<H extends Readonly<Record<string, string>>> = [Val
   : ReadonlyArray<ValuesOf<H>>;
 
 // ---------------------------------------------------------------------------
-// Bodyless verbs (GET / HEAD) cannot have unbound method parameters
+// GET / HEAD / DELETE bind remaining inputs from the query string
 // ---------------------------------------------------------------------------
-
-// "bodyless" is currently the only bodyless tag; the `K extends "bodyless"`
-// distribution preserves the message wording for any future tag.
-type BodylessLabel<K extends string> = K extends 'bodyless' ? 'GET/HEAD' : K;
 
 /**
  * Keys of `Params` that are auto-injected `s.principal()` parameters. These carry
  * no wire value (the host injects the caller principal), so they are NOT supplied
- * by an HTTP/RPC caller and are exempt from the bodyless "every param must be
- * bound" rule.
+ * by an HTTP/RPC caller or implicitly bound from the query string.
  */
 type AutoInjectedKeys<C> = {
   [K in keyof C & string]: [MarkerKindOf<C[K]>] extends ['principal'] ? K : never;
 }[keyof C & string];
 
-/**
- * Per-element validator for the `http` array of a `MethodSpec`. Endpoints whose
- * `Kind` extends `"bodyless"` and whose bound-var union does NOT cover every key
- * of `Params` are replaced with an {@link Invalid} carrier naming the missing
- * parameter; every other endpoint passes through unchanged.
- */
-export type ValidateBodylessEndpoints<
-  Endpoints extends ReadonlyArray<HttpEndpointSpec<string, EndpointKind, EndpointBound, unknown>>,
-  Params,
-> = {
-  readonly [I in keyof Endpoints]: Endpoints[I] extends HttpEndpointSpec<
-    infer Bound,
-    infer Kind,
-    EndpointBound,
-    unknown
-  >
-    ? Kind extends 'bodyless'
-      ? [Exclude<keyof Params & string, Bound | AutoInjectedKeys<Params>>] extends [never]
-        ? Endpoints[I]
-        : Invalid<`${BodylessLabel<Kind>} endpoint cannot have unbound param '${Exclude<
-            keyof Params & string,
-            Bound | AutoInjectedKeys<Params>
-          > &
-            string}' (only path / query / header bindings are allowed because there is no request body)`>
-      : Endpoints[I]
-    : Endpoints[I];
-};
+// Inspect schema constructors, never their inferred value types. The latter
+// cannot distinguish an object-backed map from a record, or a tuple from a list.
+// Standard Schema alone, Effect's standardSchemaV1 conversion, and ArkType's
+// public type erase constructor details: these defer to graph validation.
+type IsQuerySchema<C, Collections extends boolean = true> =
+  IsAny<C> extends true
+    ? true
+    : C extends MarkerSchema<any, infer Kind, infer Inner>
+      ? Kind extends 'scalar'
+        ? true
+        : Kind extends 'typed-array'
+          ? Collections
+          : Kind extends 'option'
+            ? Collections extends true
+              ? IsQuerySchema<Inner>
+              : false
+            : Kind extends 'map'
+              ? Collections extends true
+                ? Inner extends { key: infer K; value: infer V }
+                  ? IsQuerySchema<K, false> extends true
+                    ? IsQuerySchema<V, false>
+                    : false
+                  : true
+                : false
+              : false
+      : C extends { _zod: { def: infer D } }
+        ? IsZodQuerySchema<D, Collections>
+        : C extends { type: infer Kind; kind: 'schema' }
+          ? IsValibotQuerySchema<C, Kind, Collections>
+          : true;
 
-/**
- * Spec-side intersection variant of {@link ValidateBodylessEndpoints}: folds the
- * per-element results into a single union of intersection partners (each valid
- * endpoint contributes `unknown`, each bodyless-but-uncovered endpoint an
- * {@link Invalid} carrier), so tsc surfaces the failure at the spec call site.
- */
-export type RequireValidBodylessEndpoints<
-  Endpoints extends ReadonlyArray<HttpEndpointSpec<string, EndpointKind, EndpointBound, unknown>>,
-  Params,
-> = {
-  readonly [I in keyof Endpoints]: Endpoints[I] extends HttpEndpointSpec<
-    infer Bound,
-    infer Kind,
-    EndpointBound,
-    unknown
-  >
-    ? Kind extends 'bodyless'
-      ? [Exclude<keyof Params & string, Bound | AutoInjectedKeys<Params>>] extends [never]
-        ? unknown
-        : Invalid<`${BodylessLabel<Kind>} endpoint cannot have unbound param '${Exclude<
-            keyof Params & string,
-            Bound | AutoInjectedKeys<Params>
-          > &
-            string}' (only path / query / header bindings are allowed because there is no request body)`>
-      : unknown
-    : unknown;
-}[number];
+type IsZodQuerySchema<D, Collections extends boolean> = D extends {
+  type: 'default' | 'readonly' | 'catch' | 'nonoptional';
+  innerType: infer I;
+}
+  ? IsQuerySchema<I, Collections>
+  : D extends { type: 'pipe'; in: infer I }
+    ? IsQuerySchema<I, Collections>
+    : D extends { type: 'optional' | 'nullable'; innerType: infer I }
+      ? Collections extends true
+        ? IsQuerySchema<I>
+        : false
+      : D extends { type: 'array'; element: infer E }
+        ? Collections extends true
+          ? IsQuerySchema<E, false>
+          : false
+        : D extends { type: 'map' | 'record'; keyType: infer K; valueType: infer V }
+          ? Collections extends true
+            ? IsQuerySchema<K, false> extends true
+              ? IsQuerySchema<V, false>
+              : false
+            : false
+          : D extends { type: 'string' | 'number' | 'boolean' | 'bigint' | 'enum' }
+            ? true
+            : D extends { type: 'literal'; values: ReadonlyArray<infer V> }
+              ? [V] extends [string | number | boolean | bigint]
+                ? true
+                : false
+              : D extends { type: 'lazy' }
+                ? true
+                : false;
+
+type IsValibotQuerySchema<C, Kind, Collections extends boolean> = C extends {
+  type: 'optional' | 'nullable' | 'nullish' | 'undefinedable';
+  wrapped: infer I;
+}
+  ? Collections extends true
+    ? IsQuerySchema<I>
+    : false
+  : C extends { type: 'array'; item: infer E }
+    ? Collections extends true
+      ? IsQuerySchema<E, false>
+      : false
+    : C extends { type: 'map' | 'record'; key: infer K; value: infer V }
+      ? Collections extends true
+        ? IsQuerySchema<K, false> extends true
+          ? IsQuerySchema<V, false>
+          : false
+        : false
+      : Kind extends 'string' | 'number' | 'boolean' | 'bigint' | 'enum' | 'picklist'
+        ? true
+        : C extends { type: 'literal'; literal: infer V }
+          ? [V] extends [string | number | boolean | bigint]
+            ? true
+            : false
+          : Kind extends 'lazy'
+            ? true
+            : string extends Kind
+              ? true
+              : false;
+
+type UnsupportedImplicitQueryKeys<C> = {
+  [K in keyof C & string]: C[K] extends StandardSchemaV1
+    ? IsQuerySchema<C[K]> extends true
+      ? never
+      : K
+    : never;
+}[keyof C & string];
+
+type StreamResourceKeys<C> = {
+  [K in keyof C & string]: [MarkerKindOf<C[K]>] extends ['stream'] ? K : never;
+}[keyof C & string];
+
+type InvalidQueryBindings<B, P> = B extends EndpointBound
+  ? string extends B['query'][number]
+    ? never
+    : Extract<B['query'][number], UnsupportedImplicitQueryKeys<P>>
+  : never;
 
 // ---------------------------------------------------------------------------
 // Combined per-endpoint validation used by the `method({...})` factory
@@ -632,21 +681,28 @@ type ValidateEndpointStructure<E, B, HN> = B extends EndpointBound
 
 /**
  * Positional validator for the `http` array of a `method({...})` call: for each
- * endpoint, enforce (in order) the bodyless-unbound-param check, then the
+ * endpoint, enforce (in order) implicit query type eligibility, then the
  * cross-source duplicate-binding check, then the case-fold header check. A
  * failing element is replaced with an {@link Invalid} carrier at that position.
  */
 export type ValidateEndpointsTuple<Eps extends ReadonlyArray<HttpEndpointSpec<string>>, Params> = {
   readonly [K in keyof Eps]: Eps[K] extends HttpEndpointSpec<infer V, infer Kind, infer B, infer HN>
-    ? Kind extends 'bodyless'
-      ? [Exclude<keyof Params & string, V | AutoInjectedKeys<Params>>] extends [never]
-        ? ValidateEndpointStructure<Eps[K], B, HN>
-        : Invalid<`GET/HEAD endpoint cannot have unbound param '${Exclude<
-            keyof Params & string,
-            V | AutoInjectedKeys<Params>
-          > &
-            string}' (only path / query / header bindings are allowed because there is no request body)`>
-      : ValidateEndpointStructure<Eps[K], B, HN>
+    ? [InvalidQueryBindings<B, Params>] extends [never]
+      ? Kind extends 'bodyless'
+        ? [
+            Exclude<
+              UnsupportedImplicitQueryKeys<Params>,
+              V | AutoInjectedKeys<Params> | StreamResourceKeys<Params>
+            >,
+          ] extends [never]
+          ? ValidateEndpointStructure<Eps[K], B, HN>
+          : Invalid<`GET/HEAD/DELETE endpoint cannot bind implicit query input '${Exclude<
+              UnsupportedImplicitQueryKeys<Params>,
+              V | AutoInjectedKeys<Params> | StreamResourceKeys<Params>
+            > &
+              string}' (use a body method for records and rich payloads)`>
+        : ValidateEndpointStructure<Eps[K], B, HN>
+      : Invalid<`Endpoint cannot bind query input '${InvalidQueryBindings<B, Params> & string}' (use a body method for records and rich payloads)`>
     : Eps[K];
 };
 

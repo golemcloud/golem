@@ -442,7 +442,9 @@ impl From<RegistryServiceError> for ApiEndpointError {
 impl From<RequestHandlerError> for ApiEndpointError {
     fn from(value: RequestHandlerError) -> Self {
         match value {
-            RequestHandlerError::ValueParsingFailed { .. } => {
+            RequestHandlerError::ValueParsingFailed { .. }
+            | RequestHandlerError::InvalidParameter { .. }
+            | RequestHandlerError::UnknownQueryParameter { .. } => {
                 Self::bad_request(api::error_code::REQUEST_VALUE_PARSING_FAILED, value)
             }
             RequestHandlerError::MissingValue { .. } => {

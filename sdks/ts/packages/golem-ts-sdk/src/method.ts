@@ -96,8 +96,8 @@ export interface MethodSpec<
  *
  * **Compile-time guarantees on `http`** (literal `http.get('/…')` etc. call
  * shapes only): every path / query / header `{var}` must be a method input
- * parameter name ({@link BindableKeys}); a bodyless `get` / `head` endpoint may
- * not leave any input parameter unbound (there is no request body to carry it);
+ * parameter name ({@link BindableKeys}); `get` / `head` / `del` endpoints bind
+ * remaining scalar and collection inputs from the query string;
  * a parameter may be bound from at most one of path / query / header; and header
  * names must be unique case-insensitively. Non-literal / segment-array forms
  * widen and defer to the runtime checks in `runtime.ts`.

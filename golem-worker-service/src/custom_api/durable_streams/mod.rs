@@ -12,7 +12,7 @@ mod load;
 mod read;
 mod session;
 
-use super::call_agent::{CallAgentHandler, resolve_phantom_id};
+use super::call_agent::{CallAgentHandler, resolve_phantom_id, validate_query_parameters};
 use super::error::RequestHandlerError;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RouteExecutionResult};
@@ -139,6 +139,13 @@ impl DurableStreamsHandler {
         if !method_allowed && !inspect_tombstone {
             return Ok(method_not_allowed(&allow));
         }
+        let controls: &[&str] =
+            if suffix.slot.is_some() && request.underlying.method() == Method::GET {
+                &["offset", "cursor", "live"]
+            } else {
+                &[]
+            };
+        validate_query_parameters(request, behaviour, controls)?;
         let expiry_policy = if matches!(request.underlying.method(), &Method::PUT | &Method::POST) {
             match expiry::parse_expiry_policy(request) {
                 Ok(policy) => policy,
@@ -629,6 +636,81 @@ mod tests {
         DurableStreamRepresentation, DurableStreamSlot, DurableStreamSlotDirection,
     };
     use test_r::test;
+
+    #[test]
+    async fn query_keys_are_checked_before_session_and_resource_side_effects() {
+        use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+        use golem_service_base::custom_api::{
+            AgentRouteMode, MethodParameter, PathSegmentType, QueryOrHeaderType, RouteBehaviour,
+        };
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = DurableStreamsHandler::new(
+            harness.worker_service.clone(),
+            Arc::new(CallAgentHandler::new(harness.worker_service.clone())),
+            &DurableStreamsConfig::default(),
+        );
+        for (method, path) in [
+            ("PUT", "/run"),
+            ("PUT", "/run/invocations/session"),
+            ("GET", "/run/invocations/session"),
+            ("DELETE", "/run/invocations/session"),
+            ("GET", "/run/invocations/session/streams/events"),
+            ("HEAD", "/run/invocations/session/streams/events"),
+            ("POST", "/run/invocations/session/streams/events"),
+            ("PUT", "/run/invocations/session/streams/events"),
+            ("DELETE", "/run/invocations/session/streams/events"),
+        ] {
+            let pattern = path
+                .replace("/session", "/{session}")
+                .replace("/events", "/{slot}");
+            let mut route = test_route(1, &pattern, Some(method), "typed");
+            let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                unreachable!()
+            };
+            call.route_mode = AgentRouteMode::DurableStreams;
+            call.durable_streams = Some(DurableStreamRoutePolicy {
+                family_id: 1,
+                slots: vec![DurableStreamSlot {
+                    canonical_name: "events".into(),
+                    public_name: "events".into(),
+                    direction: DurableStreamSlotDirection::Input,
+                    content_type: "application/json".into(),
+                    representation: DurableStreamRepresentation::Json,
+                }],
+                allow_external_writes: true,
+                allow_stream_delete: true,
+                allow_invocation_delete: true,
+                load: None,
+            });
+            call.method_parameters = vec![MethodParameter::Query {
+                query_parameter_name: "required".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+            }];
+            let resolver = test_resolver(vec![route]);
+            let request = poem::Request::builder()
+                .method(method.parse().unwrap())
+                .uri(format!("{path}?unknown=x").parse().unwrap())
+                .header("host", "example.com")
+                .body(poem::Body::from_bytes_stream(futures::stream::poll_fn(
+                    |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+                        panic!("must not read body")
+                    },
+                )));
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(call) = &route.route.behavior else {
+                unreachable!()
+            };
+            let error = handler
+                .handle(&mut RichRequest::new(request), &route, call)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "unknown"),
+                "{method} {path}: {error}"
+            );
+        }
+        assert!(harness.metadata_reads.lock().unwrap().is_empty());
+    }
 
     #[test]
     async fn session_and_fork_addressing_uses_family_scope_not_endpoint_identity() {
