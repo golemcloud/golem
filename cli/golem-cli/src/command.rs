@@ -1788,14 +1788,16 @@ pub mod worker {
             scan_cursor: Option<ScanCursor>,
             /// The maximum number of returned agents; returns all values if not specified.
             /// When multiple components are selected, the limit is applied separately.
-            /// With `--page`, the limit is the size of the page.
+            /// With `--page`, the limit is the size of the page; see `--page` for Redis.
             #[arg(long, short)]
             max_count: Option<u64>,
             /// Read one page of agents: at most `--max-count` agents (default: the HTTP batch
-            /// size, 50), from the selected components in the order of their names. The output
-            /// has the `cursor` of the next page when there can be more agents; pass it back as
-            /// `--scan-cursor`. A page ends early when the server's scan budget ends a component's
-            /// scan, so a page with a cursor can have fewer agents, or none.
+            /// size, 50), from the selected components in the order of their names. On a server
+            /// whose indexed storage is Redis, `--max-count` is a target: Redis `SCAN` treats its
+            /// count as a hint, so a page can have more agents. The output has the `cursor` of the
+            /// next page when there can be more agents; pass it back as `--scan-cursor`. A page
+            /// ends early when the server's scan budget ends a component's scan, so a page with a
+            /// cursor can have fewer agents, or none.
             ///
             /// Mutually exclusive with `--refresh`.
             #[arg(long, conflicts_with = "refresh")]

@@ -3548,9 +3548,11 @@ pub(super) fn parse_method_argument_schema_value(
     parsed
 }
 
-/// One page of at most `count` items across the components named in `component_names`, in their
-/// order, under one budget. `scan(position, scan_cursor, limit)` lists at most `limit` items of
-/// the component at `position` from `scan_cursor`, and gives the scan cursor of its next items.
+/// One page of `count` items across the components named in `component_names`, in their order,
+/// under one budget. `scan(position, scan_cursor, limit)` lists the items of the component at
+/// `position` from `scan_cursor`, and gives the scan cursor of its next items. It asks for `limit`
+/// items, but a scan of a Redis indexed storage can list more, and the page keeps all of them, so
+/// `count` is a target there and a limit elsewhere.
 /// The page ends at the first scan that gives a scan cursor, or when `count` items are listed.
 /// The cursor of the next page is `<component name>/<scan cursor>`, with an empty scan cursor
 /// when the next page starts at the beginning of that component.
