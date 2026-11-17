@@ -50,6 +50,7 @@ jobs:
 
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
+          node-version: '24'
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
