@@ -717,59 +717,67 @@ mod tests {
     }
 
     #[test]
-    fn resource_limits_proto_non_zero_limit_is_preserved() {
-        let proto = ResourceLimits {
-            monthly_policy: Some(monthly_resource_policy()),
-            max_memory_per_worker: 2,
-            max_table_elements_per_worker: 3,
-            max_disk_space_per_worker: 4,
-            per_invocation_http_call_limit: 0,
-            per_invocation_rpc_call_limit: 0,
-            available_http_calls: 0,
-            available_rpc_calls: 0,
-            available_blob_storage_bytes: 9,
-            max_concurrent_agents_per_executor: 7,
-            oplog_writes_per_second: 500,
-            monthly_policy_status:
-                golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available.into(),
-            usage_update_applied: true,
-            monthly_usage_mode_revision: 6,
-            monthly_policy_revision: 7,
-        };
+    fn resource_limits_proto_concurrency_and_rate_limits_are_preserved() {
+        for (max_concurrent_agents_per_executor, oplog_writes_per_second) in
+            [(7, 500), (0, 500), (7, 0)]
+        {
+            let proto = ResourceLimits {
+                monthly_policy: Some(monthly_resource_policy()),
+                max_memory_per_worker: 2,
+                max_table_elements_per_worker: 3,
+                max_disk_space_per_worker: 4,
+                per_invocation_http_call_limit: 0,
+                per_invocation_rpc_call_limit: 0,
+                available_http_calls: 0,
+                available_rpc_calls: 0,
+                available_blob_storage_bytes: 9,
+                max_concurrent_agents_per_executor,
+                oplog_writes_per_second,
+                monthly_policy_status:
+                    golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available
+                        .into(),
+                usage_update_applied: true,
+                monthly_usage_mode_revision: 6,
+                monthly_policy_revision: 7,
+            };
 
-        let converted: super::ResourceLimits = proto.try_into().unwrap();
+            let converted: super::ResourceLimits = proto.try_into().unwrap();
 
-        assert_eq!(converted.max_concurrent_agents_per_executor, 7);
-        assert_eq!(converted.oplog_writes_per_second, 500);
-        assert_eq!(converted.available_blob_storage_bytes, 9);
-        assert_eq!(converted.monthly_usage_mode_revision, 6);
-        assert_eq!(converted.monthly_policy_revision, 7);
-        assert_eq!(converted.monthly_policy.period.year, 2026);
-        assert_eq!(converted.monthly_policy.period.month, 9);
-        assert_eq!(
-            converted.monthly_policy.mode,
-            golem_common::model::account_usage::MonthlyUsageMode::AllowOverage
-        );
-        assert_eq!(converted.monthly_policy.available_fuel, 1);
-        assert_eq!(converted.monthly_policy.available_memory_gb_seconds, 2);
-        assert_eq!(
-            converted
-                .monthly_policy
-                .available_memory_byte_nanoseconds_remainder,
-            3
-        );
-        assert_eq!(
-            converted
-                .monthly_policy
-                .available_durable_storage_byte_seconds,
-            4
-        );
-        assert_eq!(
-            converted
-                .monthly_policy
-                .available_ephemeral_storage_byte_nanoseconds_remainder,
-            7
-        );
+            assert_eq!(
+                converted.max_concurrent_agents_per_executor,
+                max_concurrent_agents_per_executor
+            );
+            assert_eq!(converted.oplog_writes_per_second, oplog_writes_per_second);
+            assert_eq!(converted.available_blob_storage_bytes, 9);
+            assert_eq!(converted.monthly_usage_mode_revision, 6);
+            assert_eq!(converted.monthly_policy_revision, 7);
+            assert_eq!(converted.monthly_policy.period.year, 2026);
+            assert_eq!(converted.monthly_policy.period.month, 9);
+            assert_eq!(
+                converted.monthly_policy.mode,
+                golem_common::model::account_usage::MonthlyUsageMode::AllowOverage
+            );
+            assert_eq!(converted.monthly_policy.available_fuel, 1);
+            assert_eq!(converted.monthly_policy.available_memory_gb_seconds, 2);
+            assert_eq!(
+                converted
+                    .monthly_policy
+                    .available_memory_byte_nanoseconds_remainder,
+                3
+            );
+            assert_eq!(
+                converted
+                    .monthly_policy
+                    .available_durable_storage_byte_seconds,
+                4
+            );
+            assert_eq!(
+                converted
+                    .monthly_policy
+                    .available_ephemeral_storage_byte_nanoseconds_remainder,
+                7
+            );
+        }
     }
 
     #[test]
