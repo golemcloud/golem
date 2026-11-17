@@ -656,12 +656,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// [`Self::lookup_invocation_result`] for a caller that may hold a generation whose state
-    /// actor a deletion has stopped: that read fails instead of panicking.
+    /// actor a deletion has stopped: that read fails instead of panicking, with the routing miss
+    /// when the shard was lost. Callers may hold the instance lock, so unlike
+    /// [`Self::try_get_last_known_status`] it does not ask whether a deletion retired the
+    /// generation; a caller that wants the deletion's refusal maps the error itself.
     pub(crate) async fn try_lookup_invocation_result(
         &self,
         key: &InvocationId,
     ) -> Result<LookupResult, WorkerExecutorError> {
-        let status = self.state_actor.try_status().await?;
+        let status = match self.state_actor.try_status().await {
+            Err(_) if self.retired_for_lost_shard() => Err(self.retirement_error()),
+            status => status,
+        }?;
         Ok(self.lookup_invocation_result_in(status, key).await)
     }
 

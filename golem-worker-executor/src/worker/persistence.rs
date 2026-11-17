@@ -126,16 +126,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The status of a generation that a caller pinned by its fingerprint. A deletion, even one
     /// that later fails, can stop the state actor of a generation that is still cached, so such
     /// a generation is refused as a deleting one instead of read, and answered as not found once
+    /// its deletion has removed the durable state. A generation retired for a lost shard is
+    /// answered with the routing miss, as [`Self::try_get_last_known_status`] answers it, unless
     /// its deletion has removed the durable state.
     pub(crate) async fn get_pinned_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
-        let status = match self.state_actor.try_status().await {
-            Err(_) if self.deletion_owns_retirement().await => Err(
-                WorkerExecutorError::invalid_request("Worker is being deleted"),
-            ),
-            status => status,
-        };
+        let status = self.try_get_last_known_status().await;
         self.deleted_incarnation_as_not_found(
             Some(self.initial_worker_metadata.fingerprint),
             status,
