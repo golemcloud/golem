@@ -203,11 +203,12 @@ plan.
   minutes after its expiry (`CHECKOUT_READ_DELAY_MS`) and then every 5 minutes
   (`CHECKOUT_READ_INTERVAL_MS`), and records its status (see [Deletion hold](#deletion-hold)).
 - **Order and retries.** An advisory lock per account serializes the webhooks, the checkout route,
-  the sweep and the cleanup of one account, also across replicas. When the registry or the database
-  fails, the handler answers 500 and Polar delivers the webhook again. A 404 of the registry for an
-  account that is not deleted also answers 500: the permission share of the billing account is
-  missing. A 409 of the registry (the account changed between the read and the write) makes the
-  handler read the account again.
+  the sweep and the cleanup of one account, also across replicas. In one process, the callers of
+  one account wait in a queue, and hold no database connection while they wait. When the registry
+  or the database fails, the handler answers 500 and Polar delivers the webhook again. A 404 of the
+  registry for an account that is not deleted also answers 500: the permission share of the billing
+  account is missing. A 409 of the registry (the account changed between the read and the write)
+  makes the handler read the account again.
 
 The plan of a customer is not up to its owner: the registry refuses `set-plan` on the own account.
 The app changes plans and deletion holds with the token of a separate billing account

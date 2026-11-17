@@ -1480,6 +1480,29 @@ describe("Polar billing", () => {
       expect(upstreams.polarCustomers.has(accountId)).toBe(false)
     })
 
+    it("serves five clicks of one account at once with a pool of five connections", async () => {
+      const { jar } = await signedIn()
+      const creating = Promise.withResolvers<void>()
+      const created = Promise.withResolvers<void>()
+      upstreams.onCheckoutCreate = async () => {
+        creating.resolve()
+        await created.promise
+      }
+
+      const first = postCheckout(jar)
+      await creating.promise
+      const others = Array.from({ length: 4 }, () => postCheckout(jar))
+      // The other clicks wait for the lock of the account while the first click holds it.
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      created.resolve()
+
+      const responses = await Promise.all([first, ...others])
+      expect(responses.map((response) => response.headers.get("location"))).toEqual(
+        Array.from({ length: 5 }, () => upstreams.checkoutUrl("polar_c_1"))
+      )
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+    })
+
     it("sends a second click back to the open checkout", async () => {
       const { jar } = await signedIn()
       await postCheckout(jar)

@@ -231,6 +231,8 @@ export class FakeUpstreams {
   onCheckoutRead: ((checkoutId: string) => Promise<CheckoutStatus | undefined>) | undefined
   /** Runs at `DELETE /v1/customers/external/{id}` after Polar deleted the customer, before it answers. */
   onCustomerDelete: ((externalId: string) => Promise<void>) | undefined
+  /** Runs at `POST /v1/checkouts/` before Polar creates the checkout. */
+  onCheckoutCreate: (() => Promise<void>) | undefined
 
   /** The Golem account of the access token of `identity`, created on first use. */
   accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
@@ -286,6 +288,7 @@ export class FakeUpstreams {
         if (bearer !== polarWebToken) {
           return Response.json({ error: "invalid token" }, { status: 401 })
         }
+        await this.onCheckoutCreate?.()
         if (this.checkoutCreateStatus !== 201) {
           return Response.json({ detail: "unavailable" }, { status: this.checkoutCreateStatus })
         }

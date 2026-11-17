@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer, RcMap, type Scope, Semaphore } from "effect"
 import type pg from "pg"
 import { Database, requireTables, type SchemaError } from "./Database.ts"
 
@@ -249,7 +249,9 @@ export interface SubscriptionsShape {
   readonly markDelivered: (webhookId: string, eventType: string) => Effect.Effect<void, SubscriptionsError>
   /**
    * Runs `effect` while holding an advisory lock for the account, so that two webhooks of one
-   * account, also on two replicas, change its plan one after the other.
+   * account, also on two replicas, change its plan one after the other. The callers of one
+   * account in this process wait in a queue of the process, and hold no connection of the pool
+   * while they wait.
    */
   readonly withAccountLock: <A, E, R>(
     accountId: string,
@@ -474,10 +476,14 @@ const fromCheckoutRow = (row: CheckoutRow): Checkout => ({
 })
 
 /** Checks that the tables exist, and returns the queries. */
-const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
+const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scope> =
   Effect.gen(function* () {
     yield* requireTables(tableNames)
     const { pool } = yield* Database
+    // A queue for each account with a caller of `withAccountLock`. A caller that waited for the
+    // advisory lock on a connection would hold that connection, and enough callers of one account
+    // would hold every connection of the pool, also the ones that the holder of the lock needs.
+    const accountQueues = yield* RcMap.make({ lookup: (_accountId: string) => Semaphore.make(1) })
 
     const query = <R extends object>(text: string, values: ReadonlyArray<unknown> = []) =>
       Effect.tryPromise({ try: () => pool.query<R & pg.QueryResultRow>(text, [...values]), catch: failure })
@@ -712,7 +718,7 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
         [webhookId, eventType]
       ).pipe(Effect.asVoid)
 
-    const withAccountLock = <A, E, R>(accountId: string, effect: Effect.Effect<A, E, R>) =>
+    const advisoryLock = <A, E, R>(accountId: string, effect: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
         Effect.tryPromise({
           try: async () => {
@@ -738,6 +744,13 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
               client.release(error instanceof Error ? error : true)
             }
           })
+      )
+
+    const withAccountLock = <A, E, R>(accountId: string, effect: Effect.Effect<A, E, R>) =>
+      Effect.scoped(
+        Effect.flatMap(RcMap.get(accountQueues, accountId), (queue) =>
+          Semaphore.withPermits(queue, 1)(advisoryLock(accountId, effect))
+        )
       )
 
     return {
