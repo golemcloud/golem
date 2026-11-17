@@ -184,10 +184,7 @@ fn recorded_error(error: SocketError) -> wasmtime::Result<SerializableSocketErro
 }
 
 fn recorded_code(error: &SerializableSocketError) -> Option<ErrorCode> {
-    match SocketError::from(error.clone()).downcast() {
-        Ok(code) => Some(code),
-        Err(_) => None,
-    }
+    SocketError::from(error.clone()).downcast().ok()
 }
 
 /// The entry of a P2 TCP socket. A socket from native `accept` has no entry until its first use.
@@ -440,8 +437,8 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
                     None => {
                         // Stand-ins take the reps that the native streams had, in the same order.
                         let socket = Resource::<TcpSocket>::new_borrow(rep);
-                        let input: InputStream = Box::new(LostTcpInputStream::default());
-                        let output: OutputStream = Box::new(LostTcpOutputStream::default());
+                        let input: InputStream = Box::<LostTcpInputStream>::default();
+                        let output: OutputStream = Box::<LostTcpOutputStream>::default();
                         let input = self
                             .table()
                             .push_child(input, &socket)
