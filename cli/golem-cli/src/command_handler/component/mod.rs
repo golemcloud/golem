@@ -2459,6 +2459,11 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             wasm_hash: component_binary_hash.into(),
+            agent_types: properties
+                .agent_types
+                .iter()
+                .map(|agent_type| (agent_type.type_name.0.clone(), agent_type.clone().into()))
+                .collect(),
             component_config: diff::ComponentConfig {
                 schema: properties.config_schema.clone(),
                 initial_permissions: {
@@ -2876,7 +2881,7 @@ fn validate_tool_binding_references<'a>(
                 ToolValidationCode::ReservedMiddleware,
                 path,
                 source.map(std::path::Path::to_path_buf),
-                "Tool middleware bindings are reserved for GOL-39",
+                "Tool name `middleware` is reserved for tool middleware declarations and cannot be bound as a tool",
             ));
             continue;
         }

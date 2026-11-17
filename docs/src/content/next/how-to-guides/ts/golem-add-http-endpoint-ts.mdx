@@ -99,9 +99,6 @@ http: http.post('/events', {
         contentType: 'application/vnd.example.events',
       },
     ],
-    allowExternalWrites: true,
-    allowStreamDelete: false,
-    allowInvocationDelete: false,
     load: {
       maxConcurrentReadersPerStream: 8,
       maxAppendRequestsPerSecondPerStream: 25,
@@ -113,8 +110,7 @@ http: http.post('/events', {
 - `source` and `slot` select canonical top-level stream slots. `$result` is the only implicit result selector.
 - `name` changes the public URL and OpenAPI name; the canonical name is no longer accepted in the public URL.
 - JSON-shaped slots may explicitly set `contentType: 'application/json'` only. A direct byte stream (`stream<u8>`) may use a concrete non-text, non-JSON MIME type (also excluding `+json`) without parameters or wildcards. Do not use `text/plain` for `stream<string>`. SSE still uses `text/event-stream` and base64 data.
-- The three `allow*` options default to `true`. Setting one to `false` removes that protocol operation and produces `405` with an exact `Allow` header.
-- The live-reader limit is 1 through 16 and applies to long-poll and SSE. The append limit must be positive and cannot be set when external writes are disabled. A route-local limit rejection is `429` with `Retry-After: 1`.
+- Reader and append limits must be positive and no greater than the installation maximums. Omitted values use the registry installation defaults.
 - Limits are maintained per route and worker-service node, not as a cluster-wide quota.
 
 ## Phantom Agents

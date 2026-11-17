@@ -319,6 +319,7 @@ impl DurableStreamStore {
                         ),
                         packed_u8_batch_end: Some(*batch_end),
                         terminal_author: None,
+                        terminal_origin: None,
                         nested_handles: (**nested_handles).clone(),
                         nested_references: (**nested_references).clone(),
                         payload: CommittedProducerStreamEventPayload::PackedU8(u8::MAX),
@@ -343,6 +344,7 @@ impl DurableStreamStore {
                             offset: batch.offset_at(index)?,
                             packed_u8_batch_end: Some(*batch_end),
                             terminal_author: None,
+                            terminal_origin: None,
                             nested_handles: (**nested_handles).clone(),
                             nested_references: (**nested_references).clone(),
                             payload: CommittedProducerStreamEventPayload::PackedU8(

@@ -35,7 +35,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.5.0"
+  WASM_RQUICKJS_VERSION: "0.5.3"
   MOONBIT_INSTALL_VERSION: "0.10.18+6c83a7f62"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -951,8 +951,8 @@ jobs:
           retention-days: 35
 
   # Each run creates one sticky disk per producer, and the Blacksmith installation allows 500.
-  # Keep the disks of a run that has a failed consumer, so its failed jobs can be rerun; inactive
-  # disks expire after seven days.
+  # Keep failed-run disks for consumer reruns. The cleanup-sticky-disks workflow can evict
+  # old PR publications under capacity pressure; Blacksmith also expires inactive disks after seven days.
   delete-sticky-disks:
     if: ${{ always() && !contains(needs.*.result, 'failure') }}
     runs-on: blacksmith-8vcpu-ubuntu-2204
@@ -1143,6 +1143,23 @@ jobs:
         run: cargo test -p golem-schema --no-default-features --features guest --test feature_matrix -- --nocapture --report-time
       - name: Test feature-gated validation with default features
         run: cargo test -p golem-schema --test feature_matrix -- --nocapture --report-time
+
+  # The compile-fail tests use trybuild, which runs cargo, so they cannot run in the unit tests.
+  # The expected compiler output is the output of a toolchain without rust-src, as setup-rust
+  # installs it.
+  golem-schema-derive:
+    runs-on: blacksmith
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-cargo-make: 'false'
+      - name: Test the compile errors of the derive macros
+        run: cargo test -p golem-schema-derive --test compile_fail -- --nocapture --report-time
 
   golem-client:
     runs-on: blacksmith
@@ -1804,12 +1821,14 @@ jobs:
 
       - name: Collect built WASMs
         env:
-          EXPECTED_ARTIFACT: ${{ matrix.chunk.expected-artifact }}
+          EXPECTED_ARTIFACTS: ${{ matrix.chunk.expected-artifacts }}
         run: |
           mkdir -p tmp/test-components-wasm
-          if [[ -n "$EXPECTED_ARTIFACT" ]]; then
-            test -s "test-components/$EXPECTED_ARTIFACT"
-            cp "test-components/$EXPECTED_ARTIFACT" tmp/test-components-wasm/
+          if [[ -n "$EXPECTED_ARTIFACTS" ]]; then
+            for artifact in $EXPECTED_ARTIFACTS; do
+              test -s "test-components/$artifact"
+              cp "test-components/$artifact" tmp/test-components-wasm/
+            done
           else
             cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
           fi
@@ -1962,6 +1981,7 @@ jobs:
       - config-checks
       - middleware-unit-tests
       - golem-schema-guest
+      - golem-schema-derive
       - worker-tests
       - managed-xfs-tests
       - apfs-tests

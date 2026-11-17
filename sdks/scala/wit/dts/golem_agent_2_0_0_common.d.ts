@@ -1,4 +1,5 @@
 declare module 'golem:agent/common@2.0.0' {
+  import * as golemCore200Http from 'golem:core/http@2.0.0';
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
   export type SchemaGraph = golemCore200Types.SchemaGraph;
@@ -8,6 +9,14 @@ declare module 'golem:agent/common@2.0.0' {
   export type AgentId = golemCore200Types.AgentId;
   export type AccountId = golemCore200Types.AccountId;
   export type ComponentId = golemCore200Types.ComponentId;
+  export type HttpRouteMode = golemCore200Http.HttpRouteMode;
+  export type DurableStreamRouteOptions = golemCore200Http.DurableStreamRouteOptions;
+  export type ConcreteHttpMethod = golemCore200Http.HttpMethod;
+  export type NeutralPathSegment = golemCore200Http.PathSegment;
+  export type HeaderVariable = golemCore200Http.HeaderVariable;
+  export type QueryVariable = golemCore200Http.QueryVariable;
+  export type FileMapping = golemCore200Http.FileMapping;
+  export type FileResponseHeader = golemCore200Http.FileResponseHeader;
   export type Duration = wasiClocks030Types.Duration;
   export type AgentMode = "durable" | "ephemeral";
   export type AgentTypeKind = "regular" | "http-router";
@@ -75,119 +84,26 @@ declare module 'golem:agent/common@2.0.0' {
     tag: 'query'
     val: PhantomIdBindingDetails
   };
-  export type FileResponseHeader = {
-    name: string;
-    value: string;
-  };
-  export type ExactFileMapping = {
-    publicPath: string[];
-    filePath: string;
-  };
-  export type SubtreeFileMapping = {
-    publicPrefix: string[];
-    filesystemRoot: string;
-  };
-  export type FileMapping =
-  {
-    tag: 'exact'
-    val: ExactFileMapping
-  } |
-  {
-    tag: 'subtree'
-    val: SubtreeFileMapping
-  };
   export type CorsOptions = {
     allowedPatterns: string[];
   };
-  export type DurableStreamSlotSource =
-  {
-    tag: 'input'
-    val: string
-  } |
-  {
-    tag: 'output'
-    val: string
-  };
-  export type DurableStreamSlotOptions = {
-    source: DurableStreamSlotSource;
-    name?: string;
-    contentType?: string;
-  };
-  export type DurableStreamRouteLoadOptions = {
-    maxConcurrentReadersPerStream?: number;
-    maxAppendRequestsPerSecondPerStream?: number;
-  };
-  export type DurableStreamRouteOptions = {
-    slots: DurableStreamSlotOptions[];
-    allowExternalWrites?: boolean;
-    allowStreamDelete?: boolean;
-    allowInvocationDelete?: boolean;
-    load?: DurableStreamRouteLoadOptions;
-  };
   export type HttpMethod =
   {
-    tag: 'get'
-  } |
-  {
-    tag: 'head'
-  } |
-  {
-    tag: 'post'
-  } |
-  {
-    tag: 'put'
-  } |
-  {
-    tag: 'delete'
-  } |
-  {
-    tag: 'connect'
-  } |
-  {
-    tag: 'options'
-  } |
-  {
-    tag: 'trace'
-  } |
-  {
-    tag: 'patch'
-  } |
-  {
-    tag: 'custom'
-    val: string
+    tag: 'method'
+    val: ConcreteHttpMethod
   } |
   {
     tag: 'any'
   };
   export type SystemVariable = "agent-type" | "agent-version";
-  export type PathVariable = {
-    variableName: string;
-  };
   export type PathSegment =
   {
-    tag: 'literal'
-    val: string
+    tag: 'segment'
+    val: NeutralPathSegment
   } |
   {
     tag: 'system-variable'
     val: SystemVariable
-  } |
-  {
-    tag: 'path-variable'
-    val: PathVariable
-  } |
-  /** only allowed as the last segment */
-  {
-    tag: 'remaining-path-variable'
-    val: PathVariable
-  };
-  export type HeaderVariable = {
-    headerName: string;
-    variableName: string;
-  };
-  export type QueryVariable = {
-    queryParamName: string;
-    variableName: string;
   };
   export type AuthDetails = {
     required: boolean;
@@ -213,6 +129,7 @@ declare module 'golem:agent/common@2.0.0' {
     queryVars: QueryVariable[];
     authDetails?: AuthDetails;
     corsOptions: CorsOptions;
+    mode?: HttpRouteMode;
     durableStreams?: DurableStreamRouteOptions;
   };
   export type AgentMethod = {
@@ -257,6 +174,15 @@ declare module 'golem:agent/common@2.0.0' {
   } |
   {
     tag: 'anonymous'
+  };
+  /**
+   * The principals that caused an invocation.
+   */
+  export type Caller = {
+    /** The principal at the root of the call tree. */
+    original: Principal;
+    /** The principal that made this call. */
+    immediate: Principal;
   };
   export type AgentConstructor = {
     name?: string;

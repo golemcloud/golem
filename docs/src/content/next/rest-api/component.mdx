@@ -1526,12 +1526,18 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "http_endpoint": [
             {
               "httpMethod": {
-                "type": "Any"
+                "type": "Method",
+                "value": {
+                  "type": "Patch"
+                }
               },
               "pathSuffix": [
                 {
-                  "type": "Literal",
-                  "value": "string"
+                  "type": "Segment",
+                  "value": {
+                    "type": "Literal",
+                    "value": "string"
+                  }
                 }
               ],
               "headerVars": [
@@ -1554,6 +1560,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
                   "string"
                 ]
               },
+              "mode": "durableStreams",
               "durableStreams": {
                 "slots": [
                   {
@@ -1565,9 +1572,6 @@ The request body is encoded as multipart/form-data containing metadata and the W
                     "contentType": "string"
                   }
                 ],
-                "allowExternalWrites": true,
-                "allowStreamDelete": true,
-                "allowInvocationDelete": true,
                 "load": {
                   "maxConcurrentReadersPerStream": 0,
                   "maxAppendRequestsPerSecondPerStream": 0
@@ -1735,12 +1739,18 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "http_endpoint": [
                 {
                   "httpMethod": {
-                    "type": "Any"
+                    "type": "Method",
+                    "value": {
+                      "type": "Patch"
+                    }
                   },
                   "pathSuffix": [
                     {
-                      "type": "Literal",
-                      "value": "string"
+                      "type": "Segment",
+                      "value": {
+                        "type": "Literal",
+                        "value": "string"
+                      }
                     }
                   ],
                   "headerVars": [
@@ -1763,6 +1773,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
                       "string"
                     ]
                   },
+                  "mode": "durableStreams",
                   "durableStreams": {
                     "slots": [
                       {
@@ -1774,9 +1785,6 @@ The request body is encoded as multipart/form-data containing metadata and the W
                         "contentType": "string"
                       }
                     ],
-                    "allowExternalWrites": true,
-                    "allowStreamDelete": true,
-                    "allowInvocationDelete": true,
                     "load": {
                       "maxConcurrentReadersPerStream": 0,
                       "maxAppendRequestsPerSecondPerStream": 0
@@ -1798,8 +1806,11 @@ The request body is encoded as multipart/form-data containing metadata and the W
       "http_mount": {
         "pathPrefix": [
           {
-            "type": "Literal",
-            "value": "string"
+            "type": "Segment",
+            "value": {
+              "type": "Literal",
+              "value": "string"
+            }
           }
         ],
         "authDetails": {
@@ -1818,8 +1829,11 @@ The request body is encoded as multipart/form-data containing metadata and the W
         },
         "webhookSuffix": [
           {
-            "type": "Literal",
-            "value": "string"
+            "type": "Segment",
+            "value": {
+              "type": "Literal",
+              "value": "string"
+            }
           }
         ],
         "staticBindings": [

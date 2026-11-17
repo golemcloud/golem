@@ -26,13 +26,13 @@
 //! runtime reconstructs the full positional record by iterating the
 //! [`InputSchema`] and inserting auto-injected fields in declaration order.
 
-use golem_common::model::agent::{
-    HeaderVariable, HttpEndpointDetails, HttpMountDetails, PathSegment, QueryVariable,
-};
+use golem_common::model::agent::{HttpEndpointDetails, HttpMountDetails, PathSegment};
 use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_or_raw_kind};
 use golem_common::schema::{
     FieldSource, InputSchema, NamedField, NamedFieldType, SchemaGraph, SchemaType,
 };
+use golem_schema::http as schema_http;
+use golem_schema::http::{HeaderVariable, QueryVariable};
 use golem_service_base::custom_api::{
     CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, QueryOrHeaderType,
     RequestBodySchema,
@@ -294,7 +294,10 @@ fn collect_path_bindings_from_segments<E>(
 
         let is_variable = matches!(
             segment,
-            PathSegment::PathVariable(_) | PathSegment::RemainingPathVariable(_)
+            PathSegment::Segment(
+                schema_http::PathSegment::PathVariable(_)
+                    | schema_http::PathSegment::RemainingPathVariable(_)
+            )
         );
 
         if is_variable {
@@ -303,7 +306,10 @@ fn collect_path_bindings_from_segments<E>(
             // Only variables inside bindable_range are exposed
             if bindable_range.contains(&i) {
                 let var = match segment {
-                    PathSegment::PathVariable(v) | PathSegment::RemainingPathVariable(v) => v,
+                    PathSegment::Segment(
+                        schema_http::PathSegment::PathVariable(v)
+                        | schema_http::PathSegment::RemainingPathVariable(v),
+                    ) => v,
                     _ => unreachable!(),
                 };
 
@@ -322,7 +328,10 @@ fn collect_path_bindings_from_segments<E>(
                 .checked_add(1)
                 .ok_or_else(|| make_error("Path variable index overflow".into()))?;
 
-            if matches!(segment, PathSegment::RemainingPathVariable(_)) {
+            if matches!(
+                segment,
+                PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(_))
+            ) {
                 found_remaining_path_variable = true;
             }
         }
@@ -413,7 +422,7 @@ fn validate_path_segment_type<E>(
     ty: &PathSegmentType,
     make_error: &impl Fn(String) -> E,
 ) -> Result<(), E> {
-    if let PathSegment::RemainingPathVariable(_) = segment
+    if let PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(_)) = segment
         && !matches!(ty, PathSegmentType::Str)
     {
         return Err(make_error(
@@ -426,11 +435,13 @@ fn validate_path_segment_type<E>(
 #[cfg(test)]
 mod test {
     use golem_common::model::agent::{
-        CorsOptions, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-        LiteralSegment, PathSegment, PathVariable, QueryVariable,
+        CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
     };
     use golem_common::schema::{
         BinaryRestrictions, InputSchema, NamedField, SchemaGraph, SchemaType, TextRestrictions,
+    };
+    use golem_schema::http::{
+        self as schema_http, HeaderVariable, LiteralSegment, PathVariable, QueryVariable,
     };
     use test_r::test;
 
@@ -438,7 +449,7 @@ mod test {
         build_http_agent_constructor_parameters, build_http_agent_method_parameters,
     };
     use assert2::{assert, let_assert};
-    use golem_common::model::Empty;
+    use golem_schema::Empty;
     use golem_service_base::custom_api::{
         ConstructorParameter, MethodParameter, PathSegmentType, RequestBodySchema,
     };
@@ -464,12 +475,12 @@ mod test {
             file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
-                PathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(schema_http::PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
-                }),
-                PathSegment::PathVariable(PathVariable {
+                })),
+                PathSegment::Segment(schema_http::PathSegment::PathVariable(PathVariable {
                     variable_name: "agent_id".into(),
-                }),
+                })),
             ],
             auth_details: None,
             phantom_agent: false,
@@ -503,9 +514,11 @@ mod test {
             filesystem_bindings: vec![],
             file_response_headers: vec![],
             openapi_provider_method: None,
-            path_prefix: vec![PathSegment::Literal(LiteralSegment {
-                value: "agents".into(),
-            })],
+            path_prefix: vec![PathSegment::Segment(schema_http::PathSegment::Literal(
+                LiteralSegment {
+                    value: "agents".into(),
+                },
+            ))],
             auth_details: None,
             phantom_agent: false,
             phantom_id_binding: None,
@@ -531,9 +544,11 @@ mod test {
             filesystem_bindings: vec![],
             file_response_headers: vec![],
             openapi_provider_method: None,
-            path_prefix: vec![PathSegment::RemainingPathVariable(PathVariable {
-                variable_name: "rest".into(),
-            })],
+            path_prefix: vec![PathSegment::Segment(
+                schema_http::PathSegment::RemainingPathVariable(PathVariable {
+                    variable_name: "rest".into(),
+                }),
+            )],
             auth_details: None,
             phantom_agent: false,
             phantom_id_binding: None,
@@ -559,9 +574,11 @@ mod test {
             filesystem_bindings: vec![],
             file_response_headers: vec![],
             openapi_provider_method: None,
-            path_prefix: vec![PathSegment::PathVariable(PathVariable {
-                variable_name: "agent_id".into(),
-            })],
+            path_prefix: vec![PathSegment::Segment(
+                schema_http::PathSegment::PathVariable(PathVariable {
+                    variable_name: "agent_id".into(),
+                }),
+            )],
             auth_details: None,
             phantom_agent: false,
             phantom_id_binding: None,
@@ -572,16 +589,19 @@ mod test {
         };
 
         let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
+            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             auth_details: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
-            path_suffix: vec![PathSegment::PathVariable(PathVariable {
-                variable_name: "task_id".into(),
-            })],
+            path_suffix: vec![PathSegment::Segment(
+                schema_http::PathSegment::PathVariable(PathVariable {
+                    variable_name: "task_id".into(),
+                }),
+            )],
             query_vars: vec![],
             header_vars: vec![],
+            mode: None,
             durable_streams: None,
         };
 
@@ -718,12 +738,12 @@ mod test {
             file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
-                PathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(schema_http::PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
-                }),
-                PathSegment::PathVariable(PathVariable {
+                })),
+                PathSegment::Segment(schema_http::PathSegment::PathVariable(PathVariable {
                     variable_name: "user_name".into(),
-                }),
+                })),
             ],
             auth_details: None,
             phantom_agent: false,
@@ -758,12 +778,12 @@ mod test {
             file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
-                PathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(schema_http::PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
-                }),
-                PathSegment::PathVariable(PathVariable {
+                })),
+                PathSegment::Segment(schema_http::PathSegment::PathVariable(PathVariable {
                     variable_name: "userName".into(),
-                }),
+                })),
             ],
             auth_details: None,
             phantom_agent: false,
@@ -795,7 +815,7 @@ mod test {
         let mount = empty_mount();
 
         let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
+            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             auth_details: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
@@ -806,6 +826,7 @@ mod test {
                 variable_name: "page_size".into(),
             }],
             header_vars: vec![],
+            mode: None,
             durable_streams: None,
         };
 
@@ -829,7 +850,7 @@ mod test {
         let mount = empty_mount();
 
         let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
+            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             auth_details: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
@@ -840,6 +861,7 @@ mod test {
                 variable_name: "pageSize".into(),
             }],
             header_vars: vec![],
+            mode: None,
             durable_streams: None,
         };
 
@@ -863,7 +885,7 @@ mod test {
         let mount = empty_mount();
 
         let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
+            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             auth_details: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
@@ -874,6 +896,7 @@ mod test {
                 header_name: "x-api-key".into(),
                 variable_name: "x_api_key".into(),
             }],
+            mode: None,
             durable_streams: None,
         };
 
@@ -959,7 +982,7 @@ mod test {
 
     fn empty_get_endpoint() -> HttpEndpointDetails {
         HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
+            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             auth_details: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
@@ -967,6 +990,7 @@ mod test {
             path_suffix: vec![],
             query_vars: vec![],
             header_vars: vec![],
+            mode: None,
             durable_streams: None,
         }
     }

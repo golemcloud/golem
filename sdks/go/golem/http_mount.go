@@ -24,6 +24,7 @@ import (
 	"unicode"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -119,6 +120,7 @@ type Endpoint struct {
 
 	streams      *StreamRoute // nil = Durable Streams defaults
 	streamsCount int          // how many times DurableStreams was applied (>1 is a misuse)
+	mode         RouteMode
 }
 
 // wireBind maps a wire name (a header or query-parameter name) to the input
@@ -459,7 +461,7 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		CorsOptions:      common.CorsOptions{AllowedPatterns: e.mount.CORS},
 		WebhookSuffix:    webhook,
 
-		StaticBindings:        []common.FileMapping{},
+		StaticBindings:        []coreHTTP.FileMapping{},
 		FilesystemBindings:    files,
 		FileResponseHeaders:   fileHeaders,
 		OpenapiProviderMethod: witTypes.None[string](),
@@ -527,8 +529,12 @@ func phantomSelectorConflict(sel PhantomSelector, det common.HttpEndpointDetails
 	}
 	if sel.source == phantomPath {
 		for _, seg := range det.PathSuffix {
-			if (seg.Tag() == common.PathSegmentPathVariable && seg.PathVariable().VariableName == sel.name) ||
-				(seg.Tag() == common.PathSegmentRemainingPathVariable && seg.RemainingPathVariable().VariableName == sel.name) {
+			if seg.Tag() != common.PathSegmentSegment {
+				continue
+			}
+			shared := seg.Segment()
+			if (shared.Tag() == coreHTTP.PathSegmentPathVariable && shared.PathVariable().VariableName == sel.name) ||
+				(shared.Tag() == coreHTTP.PathSegmentRemainingPathVariable && shared.RemainingPathVariable().VariableName == sel.name) {
 				return fmt.Sprintf("path variable {%s} is the mount's phantom selector", sel.name)
 			}
 		}
@@ -618,22 +624,36 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 		}
 	}
 
-	queryVars := make([]common.QueryVariable, 0, len(pp.query)+len(ep.query))
+	queryVars := make([]coreHTTP.QueryVariable, 0, len(pp.query)+len(ep.query))
 	for _, q := range pp.query {
-		queryVars = append(queryVars, common.QueryVariable{QueryParamName: q.wire, VariableName: q.field})
+		queryVars = append(queryVars, coreHTTP.QueryVariable{QueryParamName: q.wire, VariableName: q.field})
 	}
 	for _, q := range ep.query {
-		queryVars = append(queryVars, common.QueryVariable{QueryParamName: q.wire, VariableName: q.field})
+		queryVars = append(queryVars, coreHTTP.QueryVariable{QueryParamName: q.wire, VariableName: q.field})
 	}
-	headerVars := make([]common.HeaderVariable, 0, len(ep.headers))
+	headerVars := make([]coreHTTP.HeaderVariable, 0, len(ep.headers))
 	for _, h := range ep.headers {
-		headerVars = append(headerVars, common.HeaderVariable{HeaderName: h.wire, VariableName: h.field})
+		headerVars = append(headerVars, coreHTTP.HeaderVariable{HeaderName: h.wire, VariableName: h.field})
 	}
 	auth := witTypes.None[common.AuthDetails]()
 	if ep.auth != nil {
 		auth = witTypes.Some(common.AuthDetails{Required: *ep.auth})
 	}
 
+	mode := witTypes.None[coreHTTP.HttpRouteMode]()
+	switch ep.mode {
+	case "":
+	case RouteDurableStreams:
+		mode = witTypes.Some(coreHTTP.HttpRouteModeDurableStreams)
+	case RoutePlain:
+		mode = witTypes.Some(coreHTTP.HttpRouteModePlain)
+	case RouteSSE:
+		mode = witTypes.Some(coreHTTP.HttpRouteModeSse)
+	case RouteWebSocket:
+		mode = witTypes.Some(coreHTTP.HttpRouteModeWebSocket)
+	default:
+		errs = append(errs, fmt.Sprintf("unknown HTTP route mode %q", ep.mode))
+	}
 	det := common.HttpEndpointDetails{
 		HttpMethod:  witMethod(ep.method),
 		PathSuffix:  witSegments(pp.segs),
@@ -643,6 +663,7 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 		CorsOptions: common.CorsOptions{AllowedPatterns: ep.cors},
 
 		DurableStreams: streams,
+		Mode:           mode,
 	}
 	return det, errs
 }
@@ -652,11 +673,11 @@ func witSegments(segs []pathSeg) []common.PathSegment {
 	for _, s := range segs {
 		switch s.kind {
 		case literalSeg:
-			out = append(out, common.MakePathSegmentLiteral(s.value))
+			out = append(out, common.MakePathSegmentSegment(coreHTTP.MakePathSegmentLiteral(s.value)))
 		case varSeg:
-			out = append(out, common.MakePathSegmentPathVariable(common.PathVariable{VariableName: s.value}))
+			out = append(out, common.MakePathSegmentSegment(coreHTTP.MakePathSegmentPathVariable(coreHTTP.PathVariable{VariableName: s.value})))
 		case restSeg:
-			out = append(out, common.MakePathSegmentRemainingPathVariable(common.PathVariable{VariableName: s.value}))
+			out = append(out, common.MakePathSegmentSegment(coreHTTP.MakePathSegmentRemainingPathVariable(coreHTTP.PathVariable{VariableName: s.value})))
 		case sysSeg:
 			sv := common.SystemVariableAgentType
 			if s.value == "agent-version" {
@@ -669,28 +690,30 @@ func witSegments(segs []pathSeg) []common.PathSegment {
 }
 
 func witMethod(verb string) common.HttpMethod {
+	var method coreHTTP.HttpMethod
 	switch strings.ToUpper(verb) {
 	case "GET":
-		return common.MakeHttpMethodGet()
+		method = coreHTTP.MakeHttpMethodGet()
 	case "HEAD":
-		return common.MakeHttpMethodHead()
+		method = coreHTTP.MakeHttpMethodHead()
 	case "POST":
-		return common.MakeHttpMethodPost()
+		method = coreHTTP.MakeHttpMethodPost()
 	case "PUT":
-		return common.MakeHttpMethodPut()
+		method = coreHTTP.MakeHttpMethodPut()
 	case "DELETE":
-		return common.MakeHttpMethodDelete()
+		method = coreHTTP.MakeHttpMethodDelete()
 	case "CONNECT":
-		return common.MakeHttpMethodConnect()
+		method = coreHTTP.MakeHttpMethodConnect()
 	case "OPTIONS":
-		return common.MakeHttpMethodOptions()
+		method = coreHTTP.MakeHttpMethodOptions()
 	case "TRACE":
-		return common.MakeHttpMethodTrace()
+		method = coreHTTP.MakeHttpMethodTrace()
 	case "PATCH":
-		return common.MakeHttpMethodPatch()
+		method = coreHTTP.MakeHttpMethodPatch()
 	default:
-		return common.MakeHttpMethodCustom(verb)
+		method = coreHTTP.MakeHttpMethodCustom(verb)
 	}
+	return common.MakeHttpMethodMethod(method)
 }
 
 // routeKey renders a verb plus the full path (mount prefix ++ endpoint suffix)
@@ -704,12 +727,16 @@ func routeKey(method common.HttpMethod, prefix, suffix []common.PathSegment) str
 		for _, s := range group {
 			b.WriteByte('/')
 			switch s.Tag() {
-			case common.PathSegmentLiteral:
-				b.WriteString(s.Literal())
-			case common.PathSegmentPathVariable:
-				b.WriteString("{}")
-			case common.PathSegmentRemainingPathVariable:
-				b.WriteString("{*}")
+			case common.PathSegmentSegment:
+				shared := s.Segment()
+				switch shared.Tag() {
+				case coreHTTP.PathSegmentLiteral:
+					b.WriteString(shared.Literal())
+				case coreHTTP.PathSegmentPathVariable:
+					b.WriteString("{}")
+				case coreHTTP.PathSegmentRemainingPathVariable:
+					b.WriteString("{*}")
+				}
 			case common.PathSegmentSystemVariable:
 				if s.SystemVariable() == common.SystemVariableAgentVersion {
 					b.WriteString("{agent-version}")
@@ -723,29 +750,31 @@ func routeKey(method common.HttpMethod, prefix, suffix []common.PathSegment) str
 }
 
 func verbName(m common.HttpMethod) string {
-	switch m.Tag() {
-	case common.HttpMethodGet:
-		return "GET"
-	case common.HttpMethodHead:
-		return "HEAD"
-	case common.HttpMethodPost:
-		return "POST"
-	case common.HttpMethodPut:
-		return "PUT"
-	case common.HttpMethodDelete:
-		return "DELETE"
-	case common.HttpMethodConnect:
-		return "CONNECT"
-	case common.HttpMethodOptions:
-		return "OPTIONS"
-	case common.HttpMethodTrace:
-		return "TRACE"
-	case common.HttpMethodPatch:
-		return "PATCH"
-	case common.HttpMethodAny:
+	if m.Tag() == common.HttpMethodAny {
 		return "*"
+	}
+	method := m.Method()
+	switch method.Tag() {
+	case coreHTTP.HttpMethodGet:
+		return "GET"
+	case coreHTTP.HttpMethodHead:
+		return "HEAD"
+	case coreHTTP.HttpMethodPost:
+		return "POST"
+	case coreHTTP.HttpMethodPut:
+		return "PUT"
+	case coreHTTP.HttpMethodDelete:
+		return "DELETE"
+	case coreHTTP.HttpMethodConnect:
+		return "CONNECT"
+	case coreHTTP.HttpMethodOptions:
+		return "OPTIONS"
+	case coreHTTP.HttpMethodTrace:
+		return "TRACE"
+	case coreHTTP.HttpMethodPatch:
+		return "PATCH"
 	default:
-		return m.Custom()
+		return method.Custom()
 	}
 }
 

@@ -3,9 +3,10 @@ import { defineAgent, method, http, completePromise, PromiseId } from '@golemclo
 
 export type WorkflowId = string;
 
-// A Golem `PromiseId` is a nested record carrying bigints (its component-id halves
-// and oplog index), so instead of declaring a matching schema we ship it across
-// the agent boundary as a bigint-aware JSON string. The awaiting WorkflowAgent
+// A Golem `PromiseId` is a nested record carrying bigints (the halves of its
+// component-id and fingerprint UUIDs, and its oplog index), so instead of
+// declaring a matching schema we ship it across the agent boundary as a
+// bigint-aware JSON string. The awaiting WorkflowAgent
 // encodes the id it created; the HumanAgent decodes it to complete the promise.
 export function encodePromiseId(id: PromiseId): string {
   return JSON.stringify(id, (_key, value) =>

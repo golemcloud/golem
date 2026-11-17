@@ -2,7 +2,6 @@ use super::*;
 use golem_common::base_model::UntypedJsonBody;
 use golem_common::base_model::retry_policy::{ApiNeverPolicy, ApiPredicateFalse};
 use golem_common::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
-use golem_common::model::Empty;
 use golem_common::model::agent::CorsOptions;
 use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
 use golem_common::model::environment::EnvironmentId;
@@ -13,6 +12,7 @@ use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
 use golem_common::schema::agent::{InputSchema, NamedField, OutputSchema};
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaTypeDef, SchemaValue, TypeId};
+use golem_schema::Empty;
 use test_r::test;
 use uuid::Uuid;
 
@@ -139,7 +139,7 @@ fn http_method(input: SchemaType, output: OutputSchema) -> AgentMethodSchema {
         input_schema: InputSchema::parameters([NamedField::user_supplied("input", input)]),
         output_schema: output,
         http_endpoint: vec![HttpEndpointDetails {
-            http_method: HttpMethod::Post(Empty {}),
+            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})),
             path_suffix: vec![],
             header_vars: vec![],
             query_vars: vec![],
@@ -147,6 +147,7 @@ fn http_method(input: SchemaType, output: OutputSchema) -> AgentMethodSchema {
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },
+            mode: None,
             durable_streams: None,
         }],
         read_only: None,

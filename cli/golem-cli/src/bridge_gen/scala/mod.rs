@@ -307,6 +307,7 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "SchemaValueCodec",
     "Json",
     "BridgeException",
+    "BridgeInvocationRejectedException",
     "GolemServer",
     "Configuration",
     "AgentId",
@@ -3934,12 +3935,12 @@ fn write_dir(dir: &Dir<'_>, dest: &Utf8Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::schema::{
         AgentConstructorSchema, AgentTypeSchema, InputSchema, MetadataEnvelope, NamedFieldType,
         SchemaTypeDef, TypeId,
     };
+    use golem_schema::Empty;
     use tempfile::TempDir;
     use test_r::test;
 

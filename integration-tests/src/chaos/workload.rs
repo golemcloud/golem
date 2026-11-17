@@ -47,7 +47,7 @@ use crate::chaos::history::{
 };
 use chrono::Utc;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::BenchmarkTestDependencies;
@@ -393,7 +393,7 @@ pub(crate) async fn increment_counter(
     agent: &str,
     key: String,
 ) -> OperationOutcome {
-    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.to_string());
     let ctx2 = ctx.clone();
     run_operation(ctx, stream, agent.to_string(), "increment", key, |k| {
         let ctx = ctx2.clone();
@@ -590,7 +590,7 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
         Stream::Durable => {
             let agent = ctx.agent_name(Stream::Durable, index);
             let key = ctx.idempotency_key(&agent, seq);
-            let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.clone());
+            let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.clone());
             let ctx2 = ctx.clone();
             let parsed2 = parsed.clone();
             run_operation(ctx, Stream::Durable, agent.clone(), "increment", key, |k| {
@@ -620,7 +620,7 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
             // executor rather than being routed to one.
             let agent = ctx.agent_name(Stream::Rpc, index);
             let key = ctx.idempotency_key(&agent, seq);
-            let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.clone());
+            let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.clone());
             let ctx2 = ctx.clone();
             let parsed2 = parsed.clone();
             run_operation(
@@ -652,7 +652,7 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
         Stream::Ephemeral => {
             let agent = ctx.agent_name(Stream::Ephemeral, index);
             let key = ctx.idempotency_key(&agent, seq);
-            let parsed: ParsedAgentId = agent_id!(EPHEMERAL_COUNTER_AGENT, agent.clone());
+            let parsed: ParsedAgentKey = agent_id!(EPHEMERAL_COUNTER_AGENT, agent.clone());
             let ctx2 = ctx.clone();
             let parsed2 = parsed.clone();
             run_operation(
@@ -688,7 +688,7 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
             let emitter = ctx.agent_name(Stream::Scheduled, index);
             let target = ctx.schedule_target_name(index);
             let key = ctx.idempotency_key(&emitter, seq);
-            let parsed: ParsedAgentId = agent_id!(SCHEDULE_EMITTER_AGENT, emitter.clone());
+            let parsed: ParsedAgentKey = agent_id!(SCHEDULE_EMITTER_AGENT, emitter.clone());
             let fire_at = std::time::SystemTime::now() + SCHEDULE_LEAD;
             let since_epoch = fire_at
                 .duration_since(std::time::UNIX_EPOCH)
@@ -732,7 +732,7 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
             // the one stream a shard-manager partition can actually disturb.
             let agent = ctx.agent_name(Stream::Quota, index);
             let key = ctx.idempotency_key(&agent, seq);
-            let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.clone());
+            let parsed: ParsedAgentKey = agent_id!(QUOTA_COUNTER_AGENT, agent.clone());
             let ctx2 = ctx.clone();
             let parsed2 = parsed.clone();
             run_operation(
@@ -764,7 +764,7 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
         Stream::Promise => {
             let agent = ctx.agent_name(Stream::Promise, index);
             let key = ctx.idempotency_key(&agent, seq);
-            let parsed: ParsedAgentId = agent_id!(PROMISE_AGENT, agent.clone());
+            let parsed: ParsedAgentKey = agent_id!(PROMISE_AGENT, agent.clone());
             let ctx2 = ctx.clone();
             let parsed2 = parsed.clone();
             run_operation(
@@ -835,7 +835,7 @@ where
 
 pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
     read_with_timeout("count", agent, async {
-        let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+        let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.to_string());
         match ctx
             .user
             .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
@@ -858,7 +858,7 @@ pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, Str
 /// which is the only answer that settles the question.
 pub async fn read_component_version(ctx: &WorkloadContext, agent: &str) -> Result<u32, String> {
     read_with_timeout("component_version", agent, async {
-        let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+        let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.to_string());
         match ctx
             .user
             .invoke_and_await_agent(&ctx.counters, &parsed, "component_version", data_value!())
@@ -881,7 +881,7 @@ pub async fn read_component_version(ctx: &WorkloadContext, agent: &str) -> Resul
 /// component id plus the *string form* of the parsed agent id. Anything else
 /// would name a different agent from the one the workload is driving.
 pub fn counter_agent_id(ctx: &WorkloadContext, agent: &str) -> golem_common::model::AgentId {
-    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.to_string());
     golem_common::model::AgentId {
         component_id: ctx.counters.id,
         agent_id: parsed.to_string(),
@@ -896,7 +896,7 @@ pub fn counter_agent_id(ctx: &WorkloadContext, agent: &str) -> golem_common::mod
 /// could no longer renew.
 pub async fn read_refused(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
     read_with_timeout("refused", agent, async {
-        let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+        let parsed: ParsedAgentKey = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
         match ctx
             .user
             .invoke_and_await_agent(&ctx.counters, &parsed, "refused", data_value!())
@@ -914,7 +914,7 @@ pub async fn read_refused(ctx: &WorkloadContext, agent: &str) -> Result<u64, Str
 /// Reads back a quota agent's committed count.
 pub async fn read_quota_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
     read_with_timeout("count", agent, async {
-        let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+        let parsed: ParsedAgentKey = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
         match ctx
             .user
             .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
@@ -941,7 +941,7 @@ pub async fn read_fires(
     agent: &str,
 ) -> Result<Vec<(String, u64, u64)>, String> {
     read_within("fires", agent, FIRE_READ_TIMEOUT, async {
-        let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
+        let parsed: ParsedAgentKey = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
         match ctx
             .user
             .invoke_and_await_agent(&ctx.counters, &parsed, "fires", data_value!())
@@ -959,7 +959,7 @@ pub async fn read_fires(
 /// Reads back how many scheduled polls actually fired on a target agent.
 pub async fn read_polls(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
     read_with_timeout("polls", agent, async {
-        let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
+        let parsed: ParsedAgentKey = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
         match ctx
             .user
             .invoke_and_await_agent(&ctx.counters, &parsed, "polls", data_value!())

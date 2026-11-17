@@ -11,6 +11,11 @@ import {
   type TypedImplementation,
 } from "../src/Middleware.js"
 import { byteItems, startMiddleware, type ByteStreamItem } from "./tool-middleware-test-support.js"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import * as Durability from "../src/Durability.js"
+import { DurabilityLive } from "../src/host/DurabilityClient.js"
+import { CustomInvocationContextLive } from "../src/host/CustomInvocationContextClient.js"
+import * as Host from "./mocks/golem-durability.js"
 
 const wire = <A>(schema: Schema.Schema<A>, value: A) => {
   const codec = Effect.runSync(compile(schema))
@@ -126,18 +131,19 @@ describe("typed tool middleware", () => {
       const stderrWriter = cancelled === "stderr" ? rejected : sibling.writer
 
       await expect(
-        toolMiddlewareGuest.invokeToolMiddleware(
-          `typed-cancel-${cancelled}`,
-          "dual-output",
-          metadata,
-          wire(Schema.Struct({}), {}),
-          [],
-          wire(Schema.Struct({}), {}),
-          undefined,
-          stdoutWriter as never,
-          stderrWriter as never,
-          { tag: "anonymous" },
-          { invoke: vi.fn() } as never,
+        withCaller({ tag: "anonymous" }, () =>
+          toolMiddlewareGuest.invokeToolMiddleware(
+            `typed-cancel-${cancelled}`,
+            "dual-output",
+            metadata,
+            wire(Schema.Struct({}), {}),
+            [],
+            wire(Schema.Struct({}), {}),
+            undefined,
+            stdoutWriter as never,
+            stderrWriter as never,
+            { invoke: vi.fn() } as never,
+          ),
         ),
       ).rejects.toMatchObject({ tag: "closed" })
       expect(sibling.bytes).toEqual(cancelled === "stdout" ? [10, 20] : [1])
@@ -163,18 +169,19 @@ describe("typed tool middleware", () => {
       const stderrWriter = cancelled === "stderr" ? rejected : sibling.writer
 
       await expect(
-        toolMiddlewareGuest.invokeToolMiddleware(
-          `universal-cancel-${cancelled}`,
-          "target",
-          metadata,
-          wire(Schema.Struct({}), {}),
-          [],
-          wire(Schema.Void, undefined),
-          undefined,
-          stdoutWriter as never,
-          stderrWriter as never,
-          { tag: "anonymous" },
-          { invoke: vi.fn() } as never,
+        withCaller({ tag: "anonymous" }, () =>
+          toolMiddlewareGuest.invokeToolMiddleware(
+            `universal-cancel-${cancelled}`,
+            "target",
+            metadata,
+            wire(Schema.Struct({}), {}),
+            [],
+            wire(Schema.Void, undefined),
+            undefined,
+            stdoutWriter as never,
+            stderrWriter as never,
+            { invoke: vi.fn() } as never,
+          ),
         ),
       ).rejects.toMatchObject({ tag: "closed" })
       expect(sibling.bytes).toEqual(cancelled === "stdout" ? [10, 20] : [1])
@@ -212,7 +219,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({}), {}),
       undefined,
       undefined,
-      { tag: "anonymous" },
       { invoke: vi.fn() } as never,
     )
     await expect(
@@ -239,7 +245,6 @@ describe("typed tool middleware", () => {
         wire(Schema.Void, undefined),
         undefined,
         undefined,
-        { tag: "anonymous" },
         { invoke: vi.fn() } as never,
       ).completion,
     ).rejects.toMatchObject({ tag: "invalid-input" })
@@ -303,7 +308,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({ message: Schema.String }), { message: "abc" }),
       undefined,
       undefined,
-      { tag: "anonymous" },
       { invoke } as never,
     )
     const completion = await result.completion
@@ -364,7 +368,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({}), {}),
       undefined,
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async () => underlyingResult(wire(Schema.String, "ok"), byteItems(source)),
       } as never,
@@ -403,7 +406,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       byteItems(stdin.iterable),
       undefined,
-      { tag: "anonymous" },
       { invoke: async () => underlyingResult(undefined, byteItems(a.iterable)) } as never,
     )
     expect(stdin.close).not.toHaveBeenCalled()
@@ -456,7 +458,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       undefined,
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async () =>
           underlyingResult(undefined, byteItems(call++ === 0 ? a.iterable : b.iterable)),
@@ -502,7 +503,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       byteItems(raw.iterable),
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async (_path: unknown, _input: unknown, stdin: AsyncIterable<ByteStreamItem>) =>
           underlyingResult(undefined, stdin),
@@ -514,6 +514,44 @@ describe("typed tool middleware", () => {
     await result.completion
     expect(output).toEqual([19, 43])
     expect(raw.close).toHaveBeenCalledOnce()
+  })
+
+  it("runs custom durability in middleware layer acquisition and release", async () => {
+    Host.__resetAll()
+    const durable = (name: string) =>
+      Durability.wrapInfallible(
+        {
+          iface: "",
+          function: name,
+          functionType: Durability.FunctionType.writeRemote,
+          requestSchema: Schema.Struct({}),
+          success: Schema.String,
+        },
+        {},
+        Effect.succeed(name),
+      )
+    universal({
+      name: "durable-layer",
+      parameters: Schema.Struct({}),
+      layer: Layer.effectDiscard(
+        Effect.acquireRelease(durable("acquire"), () => durable("release")),
+      ).pipe(Layer.provide(Layer.merge(DurabilityLive, CustomInvocationContextLive))),
+      handler: () => Effect.succeed({}),
+    })
+    const result = startMiddleware(
+      toolMiddlewareGuest.invokeToolMiddleware,
+      "durable-layer",
+      "target",
+      metadata,
+      wire(Schema.Struct({}), {}),
+      [],
+      wire(Schema.Void, undefined),
+      undefined,
+      undefined,
+      { invoke: vi.fn() } as never,
+    )
+    await expect(result.completion).resolves.toBeDefined()
+    expect(Host.__getBeginCalls().map((call) => call.functionName)).toEqual(["acquire", "release"])
   })
 
   it("cancels before first pull without pulling and releases raw and layer resources once", async () => {
@@ -535,7 +573,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       byteItems(raw.iterable),
       undefined,
-      { tag: "anonymous" },
       { invoke: vi.fn() } as never,
     )
     await Promise.all([
@@ -588,7 +625,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({}), {}),
       undefined,
       undefined,
-      { tag: "anonymous" },
       { invoke: vi.fn() } as never,
     )
     const iterator = result.stdout![Symbol.asyncIterator]()
@@ -642,7 +678,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({}), {}),
       undefined,
       undefined,
-      { tag: "anonymous" },
       { invoke: vi.fn() } as never,
     )
     const iterator = result.stdout![Symbol.asyncIterator]()
@@ -694,7 +729,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       undefined,
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async () => {
           invokeStarted.open()
@@ -747,7 +781,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       undefined,
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async () => [
           {
@@ -805,7 +838,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       undefined,
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async () => [
           {
@@ -855,7 +887,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       undefined,
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async () => [{ get, cancel, [Symbol.dispose]: dispose }, undefined, undefined],
       } as never,
@@ -899,7 +930,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       undefined,
       undefined,
-      { tag: "anonymous" },
       { invoke: vi.fn() } as never,
     )
 
@@ -932,7 +962,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({}), {}),
       undefined,
       undefined,
-      { tag: "anonymous" },
       { invoke: vi.fn() } as never,
     )
     const iterator = result.stdout![Symbol.asyncIterator]()
@@ -1002,7 +1031,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       undefined,
       undefined,
-      { tag: "anonymous" },
       { invoke: async () => underlyingResult(undefined, byteItems(source)) } as never,
     )
     await pullStarted.wait
@@ -1042,7 +1070,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Void, undefined),
       undefined,
       undefined,
-      { tag: "anonymous" },
       { invoke: async () => underlyingResult(undefined, byteItems(other.iterable)) } as never,
     )
     await result.stdout.return?.()
@@ -1069,7 +1096,6 @@ describe("typed tool middleware", () => {
         wire(Schema.Void, undefined),
         byteItems(stdin.iterable),
         undefined,
-        { tag: "anonymous" },
         { invoke: vi.fn() } as never,
       ).completion,
     ).rejects.toThrow("handler failed")
@@ -1114,7 +1140,6 @@ describe("typed tool middleware", () => {
         wire(Schema.Struct({}), {}),
         stdin ? byteItems(stdin) : undefined,
         undefined,
-        { tag: "anonymous" },
         { invoke: vi.fn() } as never,
       )
     await expect(invoke("absent-streams", unexpected).completion).rejects.toMatchObject({
@@ -1157,7 +1182,6 @@ describe("typed tool middleware", () => {
         wire(Schema.Struct({ value: Schema.Number }), { value: 1 }),
         undefined,
         undefined,
-        { tag: "anonymous" },
         { invoke: vi.fn() } as never,
       ).completion,
     ).rejects.toMatchObject({ tag: "invalid-input" })
@@ -1172,7 +1196,6 @@ describe("typed tool middleware", () => {
         wire(Schema.Struct({ value: Schema.String }), { value: "blocked" }),
         undefined,
         undefined,
-        { tag: "anonymous" },
         { invoke: vi.fn() } as never,
       ).completion,
     ).rejects.toMatchObject({ tag: "custom-error" })
@@ -1215,7 +1238,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({}), {}),
       undefined,
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async () =>
           underlyingResult(undefined).map((value, index) =>
@@ -1257,7 +1279,6 @@ describe("typed tool middleware", () => {
       wire(Schema.Struct({}), {}),
       undefined,
       undefined,
-      { tag: "anonymous" },
       {
         invoke: async () =>
           underlyingResult(
@@ -1364,18 +1385,19 @@ describe("typed tool middleware", () => {
       finish: vi.fn(async () => undefined),
       fail: vi.fn(async () => undefined),
     }
-    const result = await toolMiddlewareGuest.invokeToolMiddleware(
-      "overlap",
-      "overlap",
-      metadata,
-      wire(Schema.Struct({}), {}),
-      [],
-      wire(Schema.Struct({}), {}),
-      undefined,
-      writer,
-      undefined,
-      { tag: "anonymous" },
-      wrapped as never,
+    const result = await withCaller({ tag: "anonymous" }, () =>
+      toolMiddlewareGuest.invokeToolMiddleware(
+        "overlap",
+        "overlap",
+        metadata,
+        wire(Schema.Struct({}), {}),
+        [],
+        wire(Schema.Struct({}), {}),
+        undefined,
+        writer,
+        undefined,
+        wrapped as never,
+      ),
     )
     expect(bytes).toEqual([1, 2])
     expect(writer.finish).toHaveBeenCalledOnce()

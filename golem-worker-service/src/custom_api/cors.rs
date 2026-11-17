@@ -17,7 +17,10 @@ use super::error::RequestHandlerError;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::HttpMethod;
-use golem_service_base::custom_api::{CorsPreflightBehaviour, CorsPreflightMethodPolicy};
+use golem_schema::http as schema_http;
+use golem_service_base::custom_api::{
+    CorsPreflightBehaviour, CorsPreflightMethodPolicy, MountFileSource,
+};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use std::collections::BTreeSet;
 use tracing::debug;
@@ -76,10 +79,12 @@ pub fn handle_selected_preflight(
                     .map(|header| (*header).to_owned()),
             );
         }
-        RichRouteBehaviour::HttpRouter(_) => {
+        RichRouteBehaviour::Mount(mount)
+            if matches!(mount.files, MountFileSource::Router { .. }) =>
+        {
             allowed_headers.extend(requested_preflight_headers(request)?)
         }
-        RichRouteBehaviour::AgentFilesystem(_) => allowed_headers.extend(
+        RichRouteBehaviour::Mount(_) => allowed_headers.extend(
             [
                 "range",
                 "if-range",
@@ -96,9 +101,11 @@ pub fn handle_selected_preflight(
         request,
         &CorsPreflightBehaviour {
             method_policies: vec![CorsPreflightMethodPolicy {
-                method: HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
-                    value: requested_method.to_string(),
-                }),
+                method: HttpMethod::Method(schema_http::HttpMethod::Custom(
+                    golem_schema::http::CustomHttpMethod {
+                        value: requested_method.to_string(),
+                    },
+                )),
                 allowed_origins: selected
                     .route
                     .cors
@@ -246,8 +253,10 @@ pub fn apply_cors_outgoing_middleware(
                 .is_some_and(|slot| slot.writable());
         let mut exposed = vec!["Allow", "Retry-After"];
         match resolved_route.route.route_match.method() {
-            Some(HttpMethod::Put(_)) if is_base => exposed.push("Location"),
-            Some(HttpMethod::Put(_)) if is_slot => {
+            Some(HttpMethod::Method(schema_http::HttpMethod::Put(_))) if is_base => {
+                exposed.push("Location")
+            }
+            Some(HttpMethod::Method(schema_http::HttpMethod::Put(_))) if is_slot => {
                 exposed.extend([
                     "Stream-Next-Offset",
                     "Stream-Closed",
@@ -261,29 +270,34 @@ pub fn apply_cors_outgoing_middleware(
                     exposed.push("Location");
                 }
             }
-            Some(HttpMethod::Head(_)) if is_slot => exposed.extend([
-                "Stream-Next-Offset",
-                "Stream-Closed",
-                "Stream-Cancelled",
-                "Stream-Up-To-Date",
-                "Stream-TTL",
-                "Stream-Expires-At",
-                "ETag",
-            ]),
-            Some(HttpMethod::Head(_)) => {
+            Some(HttpMethod::Method(schema_http::HttpMethod::Head(_))) if is_slot => exposed
+                .extend([
+                    "Stream-Next-Offset",
+                    "Stream-Closed",
+                    "Stream-Cancelled",
+                    "Stream-Up-To-Date",
+                    "Stream-TTL",
+                    "Stream-Expires-At",
+                    "ETag",
+                ]),
+            Some(HttpMethod::Method(schema_http::HttpMethod::Head(_))) => {
                 exposed.extend(["Stream-Closed", "Stream-TTL", "Stream-Expires-At"])
             }
-            Some(HttpMethod::Get(_)) if is_slot => exposed.extend([
-                "Stream-Next-Offset",
-                "Stream-Closed",
-                "Stream-Cancelled",
-                "Stream-Up-To-Date",
-                "Stream-Cursor",
-                "Stream-SSE-Data-Encoding",
-                "ETag",
-            ]),
-            Some(HttpMethod::Get(_)) => exposed.push("Stream-Closed"),
-            Some(HttpMethod::Post(_))
+            Some(HttpMethod::Method(schema_http::HttpMethod::Get(_))) if is_slot => {
+                exposed.extend([
+                    "Stream-Next-Offset",
+                    "Stream-Closed",
+                    "Stream-Cancelled",
+                    "Stream-Up-To-Date",
+                    "Stream-Cursor",
+                    "Stream-SSE-Data-Encoding",
+                    "ETag",
+                ])
+            }
+            Some(HttpMethod::Method(schema_http::HttpMethod::Get(_))) => {
+                exposed.push("Stream-Closed")
+            }
+            Some(HttpMethod::Method(schema_http::HttpMethod::Post(_)))
                 if behaviour
                     .durable_streams
                     .as_ref()
@@ -479,12 +493,12 @@ mod tests {
     use super::*;
     use crate::custom_api::RichSecuritySchemeRouteSecurity;
     use crate::custom_api::model::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
-    use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::security_scheme::{
         Provider, SecuritySchemeId, SecuritySchemeLogin, SecuritySchemeName, SecuritySchemeRevision,
     };
+    use golem_schema::Empty;
     use golem_service_base::custom_api::SecuritySchemeDetails;
     use golem_service_base::custom_api::{
         CorsOptions, OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern, PathSegment,
@@ -511,7 +525,7 @@ mod tests {
                 "If-None-Match, Stream-Expires-At, Stream-Forked-From, Content-Type",
                 StatusCode::NO_CONTENT,
             ),
-            (AgentRouteMode::Rest, "Producer-Id", StatusCode::FORBIDDEN),
+            (AgentRouteMode::Plain, "Producer-Id", StatusCode::FORBIDDEN),
             (
                 AgentRouteMode::DurableStreams,
                 "X-Unexpected",
@@ -786,7 +800,7 @@ mod tests {
             &request,
             &CorsPreflightBehaviour {
                 method_policies: vec![CorsPreflightMethodPolicy {
-                    method: HttpMethod::Post(Empty {}),
+                    method: HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})),
                     allowed_origins: BTreeSet::from([OriginPattern(
                         "https://frontend.example.com".to_string(),
                     )]),
@@ -841,7 +855,7 @@ mod tests {
             &request,
             &CorsPreflightBehaviour {
                 method_policies: vec![CorsPreflightMethodPolicy {
-                    method: HttpMethod::Post(Empty {}),
+                    method: HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})),
                     allowed_origins: BTreeSet::from([OriginPattern(
                         "https://frontend.example.com".to_string(),
                     )]),
@@ -882,7 +896,7 @@ mod tests {
                     id: SecuritySchemeId::new(),
                     revision: SecuritySchemeRevision::INITIAL,
                     name: SecuritySchemeName("frontend".into()),
-                    provider_type: Provider::Google(Empty {}),
+                    provider_type: Provider::Google(Default::default()),
                     client_id: ClientId::new("client".into()),
                     client_secret: ClientSecret::new("secret".into()),
                     redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
@@ -912,7 +926,7 @@ mod tests {
             unreachable!()
         };
         Arc::get_mut(&mut security.security_scheme).unwrap().login =
-            SecuritySchemeLogin::Cookie(Empty {});
+            SecuritySchemeLogin::Cookie(Default::default());
         let result = handle_selected_preflight(&request, &selected).unwrap();
         assert_eq!(result.status, StatusCode::FORBIDDEN);
         assert_eq!(
@@ -966,12 +980,12 @@ mod tests {
             &CorsPreflightBehaviour {
                 method_policies: vec![
                     CorsPreflightMethodPolicy {
-                        method: HttpMethod::Get(Empty {}),
+                        method: HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})),
                         allowed_origins: BTreeSet::from([OriginPattern("*".to_string())]),
                         allowed_headers: BTreeSet::new(),
                     },
                     CorsPreflightMethodPolicy {
-                        method: HttpMethod::Post(Empty {}),
+                        method: HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})),
                         allowed_origins: BTreeSet::from([OriginPattern(
                             "https://frontend.example.com".to_string(),
                         )]),
@@ -1001,7 +1015,7 @@ mod tests {
                 environment_id: EnvironmentId(uuid::Uuid::nil()),
                 deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
                 route_id: 1,
-                route_match: HttpMethod::Get(Empty {}).into(),
+                route_match: HttpMethod::Method(schema_http::HttpMethod::Get(Empty {})).into(),
                 path: vec![PathSegment::Literal {
                     value: "notes".to_string(),
                 }],
@@ -1013,10 +1027,7 @@ mod tests {
                 cors: CorsOptions { allowed_patterns },
             }),
             captured_path_parameters: vec![],
-            request_target: golem_common::model::agent::http_files::HttpRequestTarget::parse(
-                "/notes",
-            )
-            .unwrap(),
+            request_target: golem_schema::http::HttpRequestTarget::parse("/notes").unwrap(),
             openapi_inputs: None,
         }
     }

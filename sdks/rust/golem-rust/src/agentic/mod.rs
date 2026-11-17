@@ -34,7 +34,7 @@ pub use golem_tool_metadata::{WireToolSchema, WireTypeRef};
 pub use http::*;
 #[doc(hidden)]
 pub use identity::{
-    __agent_proxy, __agent_proxy_or_panic, __connect_agent, __connect_agent_or_panic,
+    __agent_proxy, __agent_proxy_or_panic, __bind_self, __connect_agent, __connect_agent_or_panic,
 };
 pub use multimodal::*;
 pub use resolved_agent::*;
@@ -57,9 +57,14 @@ pub use unstructured_text::*;
 pub use webhook::*;
 pub use wit_bindgen::spawn_local;
 
+/// Returns the immediate caller of the running invocation, as recorded by the host.
+pub(crate) fn immediate_caller() -> crate::golem_agentic::golem::agent::common::Principal {
+    crate::golem_agentic::golem::agent::invocation_context::caller().immediate
+}
+
 #[derive(Debug)]
 pub struct EphemeralInvocationResult<T> {
-    pub metadata: crate::golem_agentic::golem::agent::host::InvocationMetadata,
+    pub metadata: reflection::InvocationMetadata,
     pub value: T,
 }
 

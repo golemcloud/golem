@@ -16,7 +16,7 @@ these requests in three ways:
 | --- | --- | --- |
 | Custom handler | Parameterless ephemeral router agent | A streaming handler invocation |
 | Immutable static file | Router's read-only initial files | Gateway reads shared blob storage; no executor call |
-| Live file | Ordinary durable agent | Agent initialization/restoration if needed, then a serialized filesystem read |
+| Live file | Ordinary durable agent that already exists | Agent initialization or restoration if needed, then a serialized filesystem read |
 
 ## Router identity and mounts
 
@@ -135,10 +135,14 @@ non-phantom agent's HTTP mount. Every constructor parameter must occur exactly o
 as a path capture. Header, query, body, or caller identity cannot choose the agent ID.
 For example, `/documents/{owner}` can select the agent whose constructor takes `owner`.
 
-The first GET/HEAD can create and initialize that agent. Constructor-created files
-are immediately serveable; a nonresident agent is restored. File serving invokes
-no exported method, but initialization and replay can execute guest code. Concurrent
-first requests use the normal single-agent initialization lifecycle. Initialization
+A GET/HEAD served by a file mapping never creates that agent. When no agent exists
+for the captured constructor parameters, or it was deleted, every mapping misses and
+the response is the same 404 as for an unknown file. Create the agent through an
+invocation or an explicit create first. Constructor-created files are serveable once
+the agent exists; a nonresident agent is restored, and a created agent whose
+constructor has not run yet is initialized first. File serving invokes no exported
+method, but initialization and replay can execute guest code. Concurrent first
+requests use the normal single-agent initialization lifecycle. Initialization
 failure is a server error, not a missing file.
 
 A read waits for initialization and is serialized against invocations, mutations,
@@ -156,7 +160,7 @@ does not automatically expand after an agent update.
 Live files use `Cache-Control: no-store` and emit neither ETag nor Last-Modified.
 Golem does not hash mutable files into strong validators. See the
 [timeout configuration](/next/operate/http-gateway#setting-timeouts-and-resource-budgets) for the
-serving deadline and current resource-limit behavior.
+live-file deadline and current resource-limit behavior.
 
 Mounts can configure additional file response headers for both live and static file
 bindings. See the SDK examples in [Serving live agent files](/next/invoke/making-custom-apis/http-routers#serving-live-agent-files).
@@ -229,7 +233,10 @@ Both upload and download apply backpressure: a slow consumer limits how far its
 producer can advance, with bounded transport buffering rather than whole-body buffering.
 Do not collect a body simply to forward it or calculate its length. A handler can
 return a response before upload EOF. Dropping unused input stops its delivery without
-cancelling the response. The host bounds abandoned uploads rather than waiting forever.
+cancelling the response; a client that disconnects afterwards still cancels the
+invocation. A body that delivers no bytes for
+[`request_body_idle_timeout`](/next/operate/http-gateway#setting-timeouts-and-resource-budgets)
+fails with an `Interrupted` stream error, which the handler can catch.
 
 Only final statuses 200–599 are accepted. HEAD and statuses 204/205/304 dispose the
 response producer without polling body items. Content-Length is removed for 204,
@@ -290,7 +297,7 @@ mount protection does not make the API description private.
 | Initialization, host, or storage failure (including missing indexed blob) | 500 |
 | CONNECT, TRACE, upgrade request, unsupported transfer coding | 501 |
 | Guest trap, invalid response head, stream/session failure, failed recovery | 502 |
-| Serving exchange deadline | 504 |
+| Live-file deadline (`file_lookup_timeout`) | 504 |
 
 After commitment, a failure aborts/resets the stream (or closes HTTP/1); it cannot
 send a second status, append an error JSON body, or manufacture successful EOF.

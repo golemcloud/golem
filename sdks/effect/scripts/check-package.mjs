@@ -135,7 +135,8 @@ defineAgent({
       id === "effect/http" ||
       id === "node:sqlite" ||
       id.startsWith("golem:") ||
-      id.startsWith("wasi:"),
+      id.startsWith("wasi:") ||
+      id.startsWith("wasm-rquickjs:"),
     plugins: [nodeResolve({ extensions: [".mjs", ".js"] })],
     onwarn: (warning) => {
       if (warning.code !== "CIRCULAR_DEPENDENCY") throw new Error(warning.message)
@@ -329,7 +330,7 @@ defineAgent({
     loader,
     `const modules = new Map(${JSON.stringify([...hostExports].map(([key, value]) => [key, [...value]]))});
 export async function resolve(specifier, context, nextResolve) {
-  if (specifier.startsWith("golem:") || specifier.startsWith("wasi:") || specifier === "node:sqlite") return { url: "golem-host:" + encodeURIComponent(specifier), shortCircuit: true };
+  if (specifier.startsWith("golem:") || specifier.startsWith("wasi:") || specifier.startsWith("wasm-rquickjs:") || specifier === "node:sqlite") return { url: "golem-host:" + encodeURIComponent(specifier), shortCircuit: true };
   return nextResolve(specifier, context);
 }
 export async function load(url, context, nextLoad) {

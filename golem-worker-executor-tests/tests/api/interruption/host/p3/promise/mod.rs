@@ -149,7 +149,7 @@ pub(super) async fn pending_promise(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, METHOD))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -165,6 +165,7 @@ pub(super) async fn pending_promise(
         Principal::anonymous(),
     )
     .await?;
+    let stored_key = executor.external_invocation_key(&id, &key, METHOD).await?;
     let admitted_revision = registry.current_limits().monthly_policy_revision;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -182,7 +183,7 @@ pub(super) async fn pending_promise(
             loop {
                 executor.commit_oplog(&id).await?;
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                if let Some(record) = history::promise_record(&entries, &key, &id, false, 0)? {
+                if let Some(record) = history::promise_record(&entries, &stored_key, &id, false, 0)? {
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     info!(?entries, ?record, "Committed guest promise creation and open get-result Start under one unfinished method");
                     return Ok::<_, anyhow::Error>(record);
@@ -234,7 +235,7 @@ pub(super) async fn pending_promise(
             Ok::<_, anyhow::Error>(())
         }).await.context("quota stop and physical settlement exceeded 8s bound")??;
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(history::promise_record(&stopped, &key, &id, false, 0)? == Some(original.clone()));
+        ensure!(history::promise_record(&stopped, &stored_key, &id, false, 0)? == Some(original.clone()));
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         for entry in entries.values() {
@@ -296,7 +297,7 @@ pub(super) async fn pending_promise(
             let resumed = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await.context("promise completion must resume the original invocation after the grant")???;
             ensure!(resumed.into_typed::<Vec<u8>>()? == PAYLOAD);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::promise_record(&recovered, &key, &id, true, 1)? == Some(original.clone()));
+            ensure!(history::promise_record(&recovered, &stored_key, &id, true, 1)? == Some(original.clone()));
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             ensure!(recovered.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))).count() == 1);
             history::settled(&recovered)?;
@@ -320,8 +321,11 @@ pub(super) async fn pending_promise(
             let healthy = tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "get_retry_policy_count", data_value!())).await??;
             let _ = healthy.into_typed::<u64>()?;
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::promise_record(&replayed, &key, &id, true, 1)? == Some(original.clone()));
-            history::invocation(&replayed, &fresh_key, 1)?;
+            ensure!(history::promise_record(&replayed, &stored_key, &id, true, 1)? == Some(original.clone()));
+            let stored_fresh_key = executor
+                .external_invocation_key(&id, &fresh_key, "get_retry_policy_count")
+                .await?;
+            history::invocation(&replayed, &stored_fresh_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (3, 3));
             history::settled(&replayed)?;
             let calls_after_replay = labels.map(|label| storage_calls.calls(label));
@@ -332,7 +336,7 @@ pub(super) async fn pending_promise(
             ensure!(pending.is_ready().await && pending.get().await == Some(PAYLOAD.to_vec()));
             ensure!(tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!())).await?.is_err());
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::promise_record(&failed, &key, &id, false, 0)? == Some(original.clone()));
+            ensure!(history::promise_record(&failed, &stored_key, &id, false, 0)? == Some(original.clone()));
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!failed.iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))));

@@ -17,7 +17,7 @@ use super::{
     AttachmentWriteAcceptance, AttachmentWriteBody, AttachmentWritePublication, BufferedChunk,
     ByteStreamCloseCause, ByteStreamFailure, Ordering, PreparedAttachmentTerminal,
     PreparedAttachmentWrite, PreparedWriteContent, ProducerOperation, StagedAttachmentWrite,
-    StreamWriteError, close_cause_eq,
+    StreamWriteError,
 };
 
 impl StagedAttachmentWrite {
@@ -27,7 +27,9 @@ impl StagedAttachmentWrite {
         state.accepted_bytes = state.accepted_bytes.saturating_add(self.length as u64);
         if matches!(
             state.mode,
-            AttachmentMode::Pending | AttachmentMode::Completion { .. }
+            AttachmentMode::Pending
+                | AttachmentMode::CompletionStaged
+                | AttachmentMode::CompletionPublished
         ) {
             state.accepted_completion_bytes += self.length;
         }
@@ -84,8 +86,8 @@ impl PreparedAttachmentWrite {
             .0
             .clone();
         let mut state = attachment.state.lock().unwrap();
-        if let Some(cause) = &state.terminal {
-            return Err(StreamWriteError::Closed(cause.clone()));
+        if let Some(cause) = state.terminal.selected_cause() {
+            return Err(StreamWriteError::Closed(cause));
         }
         if state.mode == AttachmentMode::Discard {
             return Ok(AttachmentWriteAcceptance::Discarded);
@@ -104,7 +106,7 @@ impl PreparedAttachmentWrite {
                     return Ok(AttachmentWriteAcceptance::Retry);
                 }
             }
-            AttachmentMode::Completion { .. } => {
+            AttachmentMode::CompletionStaged | AttachmentMode::CompletionPublished => {
                 if len
                     > attachment
                         .limit
@@ -131,7 +133,9 @@ impl PreparedAttachmentWrite {
         state.accepted_bytes = state.accepted_bytes.saturating_add(len as u64);
         if matches!(
             state.mode,
-            AttachmentMode::Pending | AttachmentMode::Completion { .. }
+            AttachmentMode::Pending
+                | AttachmentMode::CompletionStaged
+                | AttachmentMode::CompletionPublished
         ) {
             state.accepted_completion_bytes += len;
         }
@@ -166,11 +170,13 @@ impl PreparedAttachmentWrite {
             notified.as_mut().enable();
             let ready = {
                 let state = attachment.state.lock().unwrap();
-                state.terminal.is_some()
+                state.terminal.is_selected()
                     || (!attachment.memory.tracking_pending()
                         && (matches!(
                             state.mode,
-                            AttachmentMode::Discard | AttachmentMode::Completion { .. }
+                            AttachmentMode::Discard
+                                | AttachmentMode::CompletionStaged
+                                | AttachmentMode::CompletionPublished
                         ) || len <= attachment.limit.saturating_sub(state.buffered_bytes)))
             };
             if ready {
@@ -232,16 +238,12 @@ impl PreparedAttachmentTerminal {
     ) -> Result<Option<R>, StreamWriteError> {
         let attachment = self.operation.0.clone();
         let mut state = attachment.state.lock().unwrap();
-        if let Some(selected) = &state.terminal {
-            return if close_cause_eq(selected, &self.cause) {
-                Ok(None)
-            } else {
-                Err(StreamWriteError::Closed(selected.clone()))
-            };
+        if !state
+            .terminal
+            .accept(self.cause, self.host_resource_exhausted)?
+        {
+            return Ok(None);
         }
-        state.terminal = Some(self.cause);
-        state.host_resource_exhausted = self.host_resource_exhausted;
-        state.terminal_pending = true;
         let result = enqueue(AttachmentTerminalPublication {
             attachment: attachment.clone(),
             _operation: Some(self.operation),
@@ -258,8 +260,7 @@ impl AttachmentTerminalPublication {
         if state.owner_fenced {
             return;
         }
-        state.terminal_end = Some(end);
-        state.terminal_pending = false;
+        state.terminal.publish(end);
         let reader = state.reader_waker.take();
         drop(state);
         attachment.changed.notify_waiters();

@@ -84,8 +84,6 @@ Upload = Agent.Method[UploadIn, int64]("upload",
             {Input: "chunks", Name: "data", ContentType: "application/vnd.example.media"},
             {Result: true, Name: "size"},
         },
-        NoStreamDelete:      true,
-        NoInvocationDelete:  true,
         MaxReadersPerStream: 8,
     }))))
 ```
@@ -93,8 +91,7 @@ Upload = Agent.Method[UploadIn, int64]("upload",
 - A slot is selected by exactly one of `Input` (an `AgentStream` input field, by the same schema name `golem.Query`/`golem.Header` bind), `Output` (an `AgentStream` field of the returned struct) or `Result: true` (the returned value itself).
 - `Name` changes the public URL and OpenAPI name; the canonical name is no longer accepted.
 - `ContentType` is allowed only for a direct `AgentStream[byte]` slot and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. Other streams stay `application/json`. SSE still uses `text/event-stream` with base64 data.
-- `NoExternalWrites`, `NoStreamDelete` and `NoInvocationDelete` remove that protocol operation (`405` with an exact `Allow` header); leaving them `false` keeps the operation.
-- `MaxReadersPerStream` is 1 through 16 and applies to long-poll and SSE. `MaxAppendsPerSecond` must not be combined with `NoExternalWrites`. A limit rejection is `429` with `Retry-After: 1`; limits are per route and worker-service node, not cluster-wide.
+- `MaxReadersPerStream` and `MaxAppendsPerSecond` must be positive and no greater than the installation maximums. Zero selects the registry installation defaults. Limits are per route and worker-service node, not cluster-wide.
 - A stream input cannot be bound from the path, query or a header.
 
 ## Serving the Agent's Own Files

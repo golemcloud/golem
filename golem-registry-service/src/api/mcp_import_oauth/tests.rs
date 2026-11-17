@@ -2,7 +2,6 @@ use crate::api::make_open_api_service;
 use crate::bootstrap::Services;
 use crate::config::{ComponentCompilationConfig, LoginConfig, RegistryServiceConfig};
 use golem_common::config::{DbConfig, DbSqliteConfig};
-use golem_common::model::Empty;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::card::owner::EmptyOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
@@ -17,6 +16,7 @@ use golem_common::model::mcp_import::{
 use golem_common::model::security_scheme::{Provider, SecuritySchemeCreation, SecuritySchemeName};
 use golem_common::model::tool::ToolBindingInput;
 use golem_common::model::tool_middleware::{CompiledToolMiddlewareChain, RegisteredToolMiddleware};
+use golem_schema::Empty;
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
 };

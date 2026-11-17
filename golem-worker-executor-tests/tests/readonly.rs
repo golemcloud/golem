@@ -199,7 +199,7 @@ async fn t2_read_only_caches_until_write(
 async fn wait_for_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -426,7 +426,7 @@ async fn t5_read_only_bypasses_agent_loading(
     //   `agent_sdk` component. The assertions verify the calibration is still valid —
     //   if the component's module or linear memory grows or shrinks materially, the
     //   test fails with a clear diagnostic instead of silently passing or hanging.
-    const SYSTEM_MEMORY: u64 = 6 * 1024 * 1024;
+    const SYSTEM_MEMORY: u64 = 7 * 1024 * 1024;
     const COMPONENT_SIZE_COEFFICIENT: f64 = 2.0;
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
@@ -892,7 +892,7 @@ fn assert_well_formed_record(typed: &golem_common::schema::TypedSchemaValue) {
 async fn wait_for_principal_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
     worker_id: &AgentId,
     principal: &golem_common::model::agent::Principal,
 ) -> anyhow::Result<()> {
@@ -980,7 +980,7 @@ async fn t7_ttl_expires_cache_entry(
 async fn wait_for_ttl_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);

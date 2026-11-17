@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
@@ -666,6 +668,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
         crate::preview2::golem::agent::durable_streams::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::agent::invocation_context::add_to_linker::<
             _,
             HasSelf<DurableWorkerCtx<Ctx>>,
         >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;

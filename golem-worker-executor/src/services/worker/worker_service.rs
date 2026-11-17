@@ -83,7 +83,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
-        let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
+        let lifecycle_gate = self.lifecycle_gate(&owned_agent_id.agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.read().await;
         record_worker_call("get");
 
@@ -123,6 +123,7 @@ impl WorkerService for DefaultWorkerService {
                     local_agent_config,
                     original_phantom_id,
                     instance_id,
+                    create_request,
                 } = *parameters;
                 owner_kind
                     .validate_instance_name(&agent_id.agent_id)
@@ -193,6 +194,7 @@ impl WorkerService for DefaultWorkerService {
                     original_phantom_id,
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
+                    create_request,
                 };
 
                 let fingerprint = AgentFingerprint(instance_id);
@@ -301,7 +303,7 @@ impl WorkerService for DefaultWorkerService {
         after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
     ) -> Result<(), WorkerExecutorError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
-        let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
+        let lifecycle_gate = self.lifecycle_gate(&owned_agent_id.agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.write().await;
         record_worker_call("remove");
         let current_identity = self
@@ -328,8 +330,9 @@ impl WorkerService for DefaultWorkerService {
         // The oplog goes after everything it can rebuild, so a crash part-way leaves an oplog
         // behind: the next attempt (or load) re-derives whatever of the state below is missing and
         // finishes from there. Removed first, a crash would leave orphaned keys that a retry reads
-        // as an agent already gone. The recovery-index entry comes after it: one a crash leaves
-        // behind names no oplog, and the next recovery scan drops it.
+        // as an agent already gone. The promises and the recovery-index entry come after it: the
+        // promises cannot be rebuilt from the oplog, and a recovery-index entry a crash leaves
+        // behind names no oplog, so the next recovery scan drops it.
         //
         // The epoch is confirmed before anything is removed, so a delete turned away by the fence
         // removes nothing. A new owner claiming the shard between this check and the oplog delete
@@ -370,6 +373,19 @@ impl WorkerService for DefaultWorkerService {
         }
         after_oplog_delete(fingerprint);
 
+        // Promises live only in key-value storage and nothing rebuilds them, so they go after the
+        // oplog: a delete refused by the fence keeps the agent with its promises. A failure before
+        // this point leaves rows only under the deleted fingerprint, which no promise ID of
+        // another incarnation reaches. An in-process retry removes them; after a crash they stay
+        // orphaned. Ordinary promise completion checks and writes under the lifecycle gate this
+        // holds (`run_excluding_removal`), so no completion on this executor adds a row after it.
+        self.remove_all_fields(
+            owned_agent_id,
+            crate::services::promise::promise_namespace_of(&owned_agent_id.agent_id, fingerprint),
+            "promises",
+        )
+        .await?;
+
         let shard_assignment = self
             .shard_service
             .current_assignment()
@@ -385,6 +401,16 @@ impl WorkerService for DefaultWorkerService {
             },
         )
         .await
+    }
+
+    async fn run_excluding_removal<'a>(
+        &self,
+        agent_id: &AgentId,
+        operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        let lifecycle_gate = self.lifecycle_gate(agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.read().await;
+        operation.await
     }
 
     async fn remove_cached_status(
@@ -481,7 +507,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         if let Some(value) = status.durable_stream_sessions.get(key) {
             return Ok(Some(value.clone()));
@@ -505,10 +531,17 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, SessionError> {
         self.stream_session_index
-            .lookup_public_binding(owned_agent_id, agent_mode, fingerprint, public_session_id)
+            .lookup_public_binding(
+                owned_agent_id,
+                agent_mode,
+                fingerprint,
+                route_scope,
+                public_session_id,
+            )
             .await
     }
 
@@ -588,8 +621,7 @@ impl WorkerService for DefaultWorkerService {
                                 let metadata = InvocationResultIndexMetadata {
                                     covered_through: OplogIndex::NONE,
                                     revert_generation: status_generation,
-                                    current_idempotency_key: None,
-                                    cancelled_idempotency_key: None,
+                                    requests: InvocationRequests::default(),
                                 };
                                 let encoded = serialize(&metadata).map_err(WorkerExecutorError::runtime)?;
                                 let deletions: Vec<&str> = snapshot
@@ -661,23 +693,22 @@ impl WorkerService for DefaultWorkerService {
                     let mut mappings = HashMap::new();
                     let mut advanced = metadata.clone();
                     fold_invocation_result_entries(
-                        &mut advanced.current_idempotency_key,
-                        &mut advanced.cancelled_idempotency_key,
+                        &mut advanced.requests,
                         &status.deleted_regions,
                         &entries,
-                        |key, index| {
-                            mappings.insert(key.clone(), index);
+                        |key, position| {
+                            mappings.insert(*key, position);
                         },
                     );
                     advanced.covered_through = *entries.keys().max().unwrap();
 
                     let mut fields = Vec::with_capacity(mappings.len() + 1);
-                    for (key, oplog_index) in mappings {
+                    for (key, position) in mappings {
                         fields.push((
                             invocation_result_index_field(&key),
                             serialize(&PersistedInvocationResult {
                                 revert_generation: advanced.revert_generation,
-                                oplog_index,
+                                position,
                             }).map_err(WorkerExecutorError::runtime)?,
                         ));
                     }
@@ -727,7 +758,7 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<InvocationResultIndexLookup, String> {
         let values = self
             .key_value_storage
@@ -769,12 +800,12 @@ impl WorkerService for DefaultWorkerService {
         if value.revert_generation != metadata.revert_generation
             || status
                 .deleted_regions
-                .is_in_deleted_region(value.oplog_index)
+                .is_in_deleted_region(value.position.terminal)
         {
             return Ok(InvocationResultIndexLookup::DefinitiveMiss);
         }
 
-        Ok(InvocationResultIndexLookup::Found(value.oplog_index))
+        Ok(InvocationResultIndexLookup::Found(value.position))
     }
 
     async fn resolve_agent_identity(

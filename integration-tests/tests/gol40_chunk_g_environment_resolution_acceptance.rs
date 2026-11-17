@@ -16,7 +16,7 @@ use crate::Tracing;
 use golem_client::api::RegistryServiceClient;
 use golem_client::model::{AgentSecretCreation, DeploymentCreation};
 use golem_common::model::agent::{AgentConfigEntryDto, AgentMetadataDto};
-use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
 use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::deployment::{DeploymentPlan, DeploymentVersion};
@@ -65,7 +65,7 @@ struct ChunkGEnvironmentFixture {
 struct ChunkGConsumer {
     environment: Environment,
     component: ComponentDto,
-    parsed_agent_id: ParsedAgentId,
+    parsed_agent_id: ParsedAgentKey,
     agent_id: golem_common::model::AgentId,
 }
 

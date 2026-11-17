@@ -118,6 +118,12 @@ type = "Unrestricted"
 
 [registry_service.domain_registration.available_domains.config]
 
+[registry_service.durable_stream_routes]
+default_append_requests_per_second_per_stream = 100
+default_concurrent_readers_per_stream = 16
+max_append_requests_per_second_per_stream = 1000
+max_concurrent_readers_per_stream = 16
+
 [registry_service.grpc.tls]
 type = "Disabled"
 
@@ -795,9 +801,10 @@ http2_max_pending_accept_reset_streams = 20
 cleanup_timeout = "2s"
 command_queue_frames = 16
 event_queue_frames = 2
-exchange_timeout = "5m"
+file_lookup_timeout = "5m"
 max_event_bytes = 17825792
 max_resume_attempts = 4
+request_body_idle_timeout = "1m"
 retained_input_bytes = 4194304
 retained_input_frames = 32
 retry_deadline = "10s"
@@ -1076,6 +1083,12 @@ type = "Disabled"
 # type = "Unrestricted"
 #
 # [registry_service.domain_registration.available_domains.config]
+#
+# [registry_service.durable_stream_routes]
+# default_append_requests_per_second_per_stream = 100
+# default_concurrent_readers_per_stream = 16
+# max_append_requests_per_second_per_stream = 1000
+# max_concurrent_readers_per_stream = 16
 #
 # [registry_service.grpc.tls]
 # type = "Disabled"
@@ -1816,9 +1829,10 @@ type = "Disabled"
 # cleanup_timeout = "2s"
 # command_queue_frames = 16
 # event_queue_frames = 2
-# exchange_timeout = "5m"
+# file_lookup_timeout = "5m"
 # max_event_bytes = 17825792
 # max_resume_attempts = 4
+# request_body_idle_timeout = "1m"
 # retained_input_bytes = 4194304
 # retained_input_frames = 32
 # retry_deadline = "10s"

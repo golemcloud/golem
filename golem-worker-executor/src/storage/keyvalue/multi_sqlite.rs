@@ -119,7 +119,7 @@ impl MultiSqliteKeyValueStorage {
             KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
-            KeyValueStorageNamespace::Promise { agent_id } => {
+            KeyValueStorageNamespace::Promise { agent_id, .. } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
             KeyValueStorageNamespace::Schedule => "kv-schedule.db".to_string(),

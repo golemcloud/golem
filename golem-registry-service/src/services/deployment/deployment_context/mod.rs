@@ -857,6 +857,7 @@ impl DeploymentContext {
         security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
         errors: &mut Vec<DeployValidationError>,
         warnings: &mut Vec<super::DeployValidationWarning>,
+        stream_limits: &crate::config::DurableStreamRouteLimits,
     ) -> Vec<UnboundCompiledRoute> {
         let mut current_route_id: i32 = 0;
         let mut all_routes = Vec::new();
@@ -963,6 +964,7 @@ impl DeploymentContext {
                             &mut deployment_routes,
                             errors,
                             warnings,
+                            stream_limits,
                         );
                     }
                     if alternative != 0 {
@@ -1006,7 +1008,9 @@ impl DeploymentContext {
             );
 
             deployment_routes.sort_by_cached_key(|route| match &route.behaviour {
-                golem_service_base::custom_api::RouteBehaviour::HttpRouter(router) => (
+                golem_service_base::custom_api::RouteBehaviour::Mount(golem_service_base::custom_api::MountBehaviour {
+                    files: golem_service_base::custom_api::MountFileSource::Router { agent, .. }, ..
+                }) => (
                     false,
                     route
                         .path
@@ -1014,8 +1018,8 @@ impl DeploymentContext {
                         .filter_map(|segment| segment.literal_value().map(str::to_owned))
                         .collect::<Vec<_>>()
                         .join("/"),
-                    router.agent_type.0.clone(),
-                    router.component_id,
+                    agent.agent_type.0.clone(),
+                    agent.component_id,
                 ),
                 _ => (
                     true,
@@ -1876,9 +1880,7 @@ pub(crate) fn validate_final_http_api_router_for_origin(
                 ));
                 continue;
             }
-            match golem_common::model::agent::http_files::HttpRequestTarget::parse(
-                scheme.redirect_url.url().path(),
-            ) {
+            match golem_schema::http::HttpRequestTarget::parse(scheme.redirect_url.url().path()) {
                 Ok(target) => {
                     let path = target
                         .segments()
@@ -1889,8 +1891,8 @@ pub(crate) fn validate_final_http_api_router_for_origin(
                         .collect::<Vec<_>>();
                     if add_reserved(
                         RouteMatch::Method {
-                            method: golem_common::model::agent::HttpMethod::Get(
-                                golem_common::model::Empty {},
+                            method: golem_common::model::agent::HttpMethod::Method(
+                                golem_schema::http::HttpMethod::Get(Default::default()),
                             ),
                             trailing_slash: target.trailing_slash(),
                         },
@@ -1910,17 +1912,20 @@ pub(crate) fn validate_final_http_api_router_for_origin(
             ) {
                 for (method, path) in [
                     (
-                        golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {}),
+                        golem_common::model::agent::HttpMethod::Method(
+                            golem_schema::http::HttpMethod::Get(Default::default()),
+                        ),
                         pkce_authorization_path(&scheme.id),
                     ),
                     (
-                        golem_common::model::agent::HttpMethod::Post(golem_common::model::Empty {}),
+                        golem_common::model::agent::HttpMethod::Method(
+                            golem_schema::http::HttpMethod::Post(Default::default()),
+                        ),
                         pkce_token_path(&scheme.id),
                     ),
                 ] {
-                    let target =
-                        golem_common::model::agent::http_files::HttpRequestTarget::parse(&path)
-                            .expect("generated PKCE endpoint path must be valid");
+                    let target = golem_schema::http::HttpRequestTarget::parse(&path)
+                        .expect("generated PKCE endpoint path must be valid");
                     let path = target
                         .segments()
                         .iter()
@@ -1938,7 +1943,7 @@ pub(crate) fn validate_final_http_api_router_for_origin(
             }
         }
     }
-    let providers = compiled_routes.iter().filter(|route| matches!(&route.behaviour, RouteBehaviour::HttpRouter(router) if router.openapi_provider_method.is_some())).count();
+    let providers = compiled_routes.iter().filter(|route| matches!(&route.behaviour, RouteBehaviour::Mount(mount) if mount.openapi_provider.is_some())).count();
     if providers > 64 {
         errors.push(invalid(
             &[],

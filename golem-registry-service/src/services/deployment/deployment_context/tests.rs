@@ -1,6 +1,5 @@
 use super::*;
 use crate::repo::model::deployment::{CompiledMcpData, DeploymentCompiledMcpRecord};
-use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, Snapshotting};
 use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath, AgentSecretRevision};
@@ -35,6 +34,8 @@ use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
 };
+use golem_schema::Empty;
+use golem_service_base::custom_api::{MountBehaviour, MountFileSource, MountTarget};
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::repo::Blob;
 use serde_json::json;
@@ -64,7 +65,7 @@ fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
         id: golem_common::model::security_scheme::SecuritySchemeId::new(),
         revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
         name,
-        provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
+        provider_type: golem_common::model::security_scheme::Provider::Google(Default::default()),
         client_id: openidconnect::ClientId::new("test-client".into()),
         client_secret: openidconnect::ClientSecret::new("test-secret".into()),
         redirect_url: openidconnect::RedirectUrl::new(
@@ -72,7 +73,7 @@ fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
         )
         .unwrap(),
         scopes: vec![],
-        login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
+        login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Default::default()),
     }
 }
 
@@ -129,7 +130,8 @@ fn http_context(agents: Vec<AgentTypeSchema>) -> DeploymentContext {
 }
 
 fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
-    use golem_common::model::agent::{CorsOptions, HttpMountDetails, LiteralSegment, PathSegment};
+    use golem_common::model::agent::{CorsOptions, HttpMountDetails, PathSegment};
+    use golem_schema::http::LiteralSegment;
     let mut agent = agent_type_with_secret_config(
         AgentTypeName(name.into()),
         vec!["key".into()],
@@ -142,9 +144,9 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
             .split('/')
             .filter(|part| !part.is_empty())
             .map(|value| {
-                PathSegment::Literal(LiteralSegment {
+                PathSegment::Segment(golem_schema::http::PathSegment::Literal(LiteralSegment {
                     value: value.into(),
-                })
+                }))
             })
             .collect(),
         auth_details: None,
@@ -163,22 +165,29 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
 }
 
 fn selector_test_path(path: &str) -> Vec<golem_common::model::agent::PathSegment> {
-    use golem_common::model::agent::{LiteralSegment, PathSegment, PathVariable};
+    use golem_common::model::agent::PathSegment;
+    use golem_schema::http::{LiteralSegment, PathVariable};
     path.split('/')
         .filter(|s| !s.is_empty())
         .map(|s| {
             if let Some(name) = s.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
                 if let Some(name) = name.strip_prefix('*') {
-                    PathSegment::RemainingPathVariable(PathVariable {
-                        variable_name: name.into(),
-                    })
+                    PathSegment::Segment(golem_schema::http::PathSegment::RemainingPathVariable(
+                        PathVariable {
+                            variable_name: name.into(),
+                        },
+                    ))
                 } else {
-                    PathSegment::PathVariable(PathVariable {
-                        variable_name: name.into(),
-                    })
+                    PathSegment::Segment(golem_schema::http::PathSegment::PathVariable(
+                        PathVariable {
+                            variable_name: name.into(),
+                        },
+                    ))
                 }
             } else {
-                PathSegment::Literal(LiteralSegment { value: s.into() })
+                PathSegment::Segment(golem_schema::http::PathSegment::Literal(LiteralSegment {
+                    value: s.into(),
+                }))
             }
         })
         .collect()
@@ -200,7 +209,7 @@ fn selector_test_agent(path: &str, optional: bool) -> AgentTypeSchema {
     }));
     let mut method = provider_method("compare");
     method.http_endpoint = vec![HttpEndpointDetails {
-        http_method: HttpMethod::Get(Empty {}),
+        http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
         path_suffix: vec![],
         header_vars: vec![],
         query_vars: vec![],
@@ -208,10 +217,84 @@ fn selector_test_agent(path: &str, optional: bool) -> AgentTypeSchema {
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },
+        mode: None,
         durable_streams: None,
     }];
     agent.methods = vec![method];
     agent
+}
+
+#[test]
+fn http_compilation_preserves_route_modes_and_rejects_unserved_redeployment() {
+    use golem_common::schema::{NamedField, NamedFieldType, OutputSchema};
+    use golem_schema::http::HttpRouteMode;
+    use golem_service_base::custom_api::RouteBehaviour;
+
+    for shape in 0..4 {
+        let mut agent = selector_test_agent("/events/{instance}", false);
+        let stream = SchemaType::stream(Some(SchemaType::string()));
+        match shape {
+            0 => {
+                agent.methods[0].input_schema =
+                    InputSchema::parameters([NamedField::user_supplied("events", stream)])
+            }
+            1 => agent.methods[0].output_schema = OutputSchema::Single(Box::new(stream)),
+            2 => {
+                agent.methods[0].output_schema =
+                    OutputSchema::Single(Box::new(SchemaType::record(vec![NamedFieldType {
+                        name: "events".into(),
+                        body: stream,
+                        metadata: Default::default(),
+                    }])))
+            }
+            _ => {}
+        }
+        let mut context = http_context(vec![agent]);
+        let mut errors = vec![];
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let calls: Vec<_> = routes
+            .iter()
+            .filter_map(|route| match &route.behaviour {
+                RouteBehaviour::CallAgent(call) => Some(call),
+                _ => None,
+            })
+            .collect();
+        assert!(!calls.is_empty());
+        let expected = if shape == 3 {
+            HttpRouteMode::Plain
+        } else {
+            HttpRouteMode::DurableStreams
+        };
+        assert!(calls.iter().all(|call| call.route_mode == expected));
+
+        let agent = &mut context
+            .registered_agent_types
+            .values_mut()
+            .next()
+            .unwrap()
+            .agent_type;
+        agent.methods[0].http_endpoint[0].mode = Some(if shape == 3 {
+            HttpRouteMode::DurableStreams
+        } else {
+            HttpRouteMode::Plain
+        });
+        context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
+        assert!(!errors.is_empty());
+        if shape != 3 {
+            assert!(format!("{errors:?}").contains("mode not served yet"));
+        }
+    }
 }
 
 #[test]
@@ -225,6 +308,7 @@ fn required_phantom_mount_emits_only_the_selector_path() {
             &HashMap::new(),
             &mut errors,
             &mut vec![],
+            &Default::default(),
         );
         assert!(errors.is_empty(), "{errors:?}");
         let calls: Vec<_> = routes
@@ -245,8 +329,9 @@ fn required_phantom_mount_emits_only_the_selector_path() {
 
 #[test]
 fn phantom_mount_validation_preserves_application_binding_ownership() {
-    use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails, QueryVariable};
+    use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
     use golem_common::schema::NamedField;
+    use golem_schema::http::QueryVariable;
     let valid = selector_test_agent("/decisions/{instance}", true);
     let mut invalid = vec![];
     for path in ["/decisions", "/{instance}/{instance}", "/{*instance}"] {
@@ -282,6 +367,7 @@ fn phantom_mount_validation_preserves_application_binding_ownership() {
             &HashMap::new(),
             &mut errors,
             &mut vec![],
+            &Default::default(),
         );
         assert!(!errors.is_empty());
     }
@@ -326,7 +412,12 @@ fn optional_phantom_mount_rebinds_captures_and_stream_families() {
             vec!["callbacks".into(), "selected".into()],
         ));
         let mut errors = vec![];
-        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(
             routes
@@ -392,6 +483,7 @@ fn optional_phantom_mount_rejects_new_overlap_without_changing_existing_preceden
             &HashMap::new(),
             &mut errors,
             &mut vec![],
+            &Default::default(),
         );
         assert_eq!(errors.is_empty(), !optional, "{errors:?}");
     }
@@ -401,13 +493,15 @@ fn optional_phantom_mount_rejects_new_overlap_without_changing_existing_preceden
         literal.type_name = AgentTypeName("literal".into());
         literal.http_mount.as_mut().unwrap().phantom_id_binding = None;
         if !same_method {
-            literal.methods[0].http_endpoint[0].http_method = HttpMethod::Post(Empty {});
+            literal.methods[0].http_endpoint[0].http_method =
+                HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {}));
         }
         let mut errors = vec![];
         http_context(vec![selected, literal]).compile_http_api_routes(
             &HashMap::new(),
             &mut errors,
             &mut vec![],
+            &Default::default(),
         );
         assert_eq!(errors.is_empty(), !same_method, "{errors:?}");
     }
@@ -416,7 +510,12 @@ fn optional_phantom_mount_rejects_new_overlap_without_changing_existing_preceden
     selected.methods[0].input_schema =
         InputSchema::parameters([NamedField::user_supplied("value", SchemaType::string())]);
     let mut errors = vec![];
-    http_context(vec![selected]).compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    http_context(vec![selected]).compile_http_api_routes(
+        &HashMap::new(),
+        &mut errors,
+        &mut vec![],
+        &Default::default(),
+    );
     assert!(errors.is_empty(), "{errors:?}");
 }
 
@@ -443,6 +542,7 @@ fn query_phantom_mount_compiles_requiredness_and_reserves_stream_controls() {
                     &HashMap::new(),
                     &mut errors,
                     &mut vec![],
+                    &Default::default(),
                 );
                 if streams && name != "instance" {
                     assert!(
@@ -489,8 +589,8 @@ fn provider_method(name: &str) -> golem_common::schema::AgentMethodSchema {
 
 #[test]
 fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
-    use golem_common::model::agent::FileMapping;
     use golem_common::schema::schema_type::SecretSpec;
+    use golem_schema::http::FileMapping;
 
     let corpus: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
@@ -516,8 +616,12 @@ fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
     let context = http_context(vec![router]);
 
     let mut route_errors = vec![];
-    let routes =
-        context.compile_http_api_routes(&HashMap::new(), &mut route_errors, &mut Vec::new());
+    let routes = context.compile_http_api_routes(
+        &HashMap::new(),
+        &mut route_errors,
+        &mut Vec::new(),
+        &Default::default(),
+    );
     assert!(
         route_errors.is_empty(),
         "tooling-router-provisioning: {route_errors:?}"
@@ -525,8 +629,8 @@ fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
     assert!(
         routes.iter().any(|route| matches!(
             &route.behaviour,
-            golem_service_base::custom_api::RouteBehaviour::HttpRouter(router)
-                if router.static_bindings.len() == 1
+            golem_service_base::custom_api::RouteBehaviour::Mount(mount)
+                if matches!(mount.files, MountFileSource::Router { .. }) && mount.file_bindings.len() == 1
         )),
         "tooling-router-provisioning"
     );
@@ -549,7 +653,7 @@ fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
 
 #[test]
 fn http_mount_compilation_loads_metadata_corpus() {
-    use golem_common::model::agent::FileMapping;
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::RouteBehaviour;
     let corpus: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
@@ -600,7 +704,12 @@ fn http_mount_compilation_loads_metadata_corpus() {
         }
         let context = http_context(vec![agent]);
         let mut errors = vec![];
-        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
         if let Some(expected_error) = case["expect"]["error"].as_str() {
             let expected_message = match expected_error {
                 "router-mode" => "HTTP router agents must be ephemeral",
@@ -615,22 +724,22 @@ fn http_mount_compilation_loads_metadata_corpus() {
             );
         } else {
             assert!(errors.is_empty(), "{id}: {errors:?}");
-            let RouteBehaviour::HttpRouter(router) = &routes[0].behaviour else {
+            let RouteBehaviour::Mount(router) = &routes[0].behaviour else {
                 panic!("{id}: expected router")
             };
             assert_eq!(
                 router
                     .handler
                     .as_ref()
-                    .map(|method| method.method_name.as_str()),
+                    .map(|MountTarget::AgentMethod(target)| target.method.method_name.as_str()),
                 case["expect"]["handler"].as_str(),
                 "{id}"
             );
             assert_eq!(
                 router
-                    .openapi_provider_method
+                    .openapi_provider
                     .as_ref()
-                    .map(|method| method.method_name.as_str()),
+                    .map(|MountTarget::AgentMethod(target)| target.method.method_name.as_str()),
                 case["expect"]["provider"].as_str(),
                 "{id}"
             );
@@ -711,40 +820,47 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
         .components
         .insert(component.component_name.clone(), component.clone());
     let mut errors = vec![];
-    let mut routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    let mut routes = context.compile_http_api_routes(
+        &HashMap::new(),
+        &mut errors,
+        &mut vec![],
+        &Default::default(),
+    );
     assert!(errors.is_empty(), "{errors:?}");
     drop(files);
     prepare_router_file_indexes(&context, &mut routes).unwrap();
-    let RouteBehaviour::HttpRouter(router) = &routes[0].behaviour else {
+    let RouteBehaviour::Mount(MountBehaviour {
+        files: MountFileSource::Router { agent, file_index },
+        ..
+    }) = &routes[0].behaviour
+    else {
         unreachable!()
     };
     assert_eq!(
-        router
-            .file_index
+        file_index
             .iter()
             .map(|file| file.path.as_str())
             .collect::<Vec<_>>(),
         vec!["/public/a"]
     );
-    assert_eq!(router.component_revision, component.revision);
-    assert_eq!(router.file_index[0].size, 3);
+    assert_eq!(agent.component_revision, component.revision);
+    assert_eq!(file_index[0].size, 3);
     assert_eq!(
-        router.file_index[0]
-            .blob_key
-            .0
-            .as_blake3_hash()
-            .to_hex()
-            .as_str(),
+        file_index[0].blob_key.0.as_blake3_hash().to_hex().as_str(),
         "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
     );
 
     let bytes = desert_rust::serialize_to_byte_vec(&routes).unwrap();
     let reloaded: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&bytes).unwrap();
-    let RouteBehaviour::HttpRouter(router) = &reloaded[0].behaviour else {
+    let RouteBehaviour::Mount(MountBehaviour {
+        files: MountFileSource::Router { file_index, .. },
+        ..
+    }) = &reloaded[0].behaviour
+    else {
         unreachable!()
     };
-    assert_eq!(router.file_index[0].blob_key, key);
-    assert_eq!(router.file_index[0].size, 3);
+    assert_eq!(file_index[0].blob_key, key);
+    assert_eq!(file_index[0].size, 3);
     context
         .components
         .get_mut(&component.component_name)
@@ -783,7 +899,12 @@ fn http_mount_compilation_provider_limit_and_order() {
     for count in [64, 65] {
         let context = http_context(agents[..count].to_vec());
         let mut errors = vec![];
-        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
         assert_eq!(errors.is_empty(), count == 64, "{errors:?}");
         if count == 64 {
             assert!(
@@ -797,7 +918,12 @@ fn http_mount_compilation_provider_limit_and_order() {
     }
     let context = http_context(vec![router_agent("a", "/a/b"), router_agent("z", "/a-")]);
     let mut errors = vec![];
-    let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    let routes = context.compile_http_api_routes(
+        &HashMap::new(),
+        &mut errors,
+        &mut vec![],
+        &Default::default(),
+    );
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(routes[0].path[0].literal_value(), Some("a-"));
     assert!(routes[0].route_id < routes[1].route_id);
@@ -805,17 +931,18 @@ fn http_mount_compilation_provider_limit_and_order() {
 
 #[test]
 fn http_mount_compilation_rejects_equal_not_nested_or_literal_parameter_overlap() {
-    use golem_common::model::agent::{FileMapping, PathSegment, PathVariable};
+    use golem_common::model::agent::PathSegment;
+    use golem_schema::http::{FileMapping, PathVariable};
     let live = |name: &str| {
         let mut agent = router_agent(name, "/site");
         agent.kind = golem_common::schema::AgentTypeKind::Regular;
         agent.mode = AgentMode::Durable;
         let mount = agent.http_mount.as_mut().unwrap();
-        mount
-            .path_prefix
-            .push(PathSegment::PathVariable(PathVariable {
+        mount.path_prefix.push(PathSegment::Segment(
+            golem_schema::http::PathSegment::PathVariable(PathVariable {
                 variable_name: "id".into(),
-            }));
+            }),
+        ));
         mount.filesystem_bindings = vec![FileMapping::compile("/*", "/public/$1").unwrap()];
         agent.constructor.input_schema =
             InputSchema::Parameters(vec![golem_common::schema::NamedField::user_supplied(
@@ -838,14 +965,20 @@ fn http_mount_compilation_rejects_equal_not_nested_or_literal_parameter_overlap(
     ] {
         let context = http_context(agents);
         let mut errors = vec![];
-        context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
         assert_eq!(errors.is_empty(), accepted, "{errors:?}");
     }
 }
 
 #[test]
 fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
-    use golem_common::model::agent::{CorsOptions, FileMapping, HttpEndpointDetails, HttpMethod};
+    use golem_common::model::agent::{CorsOptions, HttpEndpointDetails, HttpMethod};
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::{PathSegment, RouteBehaviour};
     let mut agent = router_agent("site", "/site");
     agent.kind = golem_common::schema::AgentTypeKind::Regular;
@@ -854,7 +987,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         vec![FileMapping::compile("/*", "/public/$1").unwrap()];
     let mut method = provider_method("typed");
     method.http_endpoint = vec![HttpEndpointDetails {
-        http_method: HttpMethod::Get(Empty {}),
+        http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
         path_suffix: vec![],
         header_vars: vec![],
         query_vars: vec![],
@@ -862,17 +995,23 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },
+        mode: None,
         durable_streams: None,
     }];
     agent.methods = vec![method];
     let context = http_context(vec![agent]);
     let mut errors = vec![];
-    let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    let routes = context.compile_http_api_routes(
+        &HashMap::new(),
+        &mut errors,
+        &mut vec![],
+        &Default::default(),
+    );
     assert!(errors.is_empty(), "{errors:?}");
     assert!(
         routes
             .iter()
-            .any(|route| matches!(route.behaviour, RouteBehaviour::AgentFilesystem(_)))
+            .any(|route| matches!(&route.behaviour, RouteBehaviour::Mount(mount) if matches!(mount.files, MountFileSource::Live { .. })))
     );
     assert!(
         routes
@@ -900,21 +1039,21 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             vec![PathSegment::Literal {
                 value: "openapi.json".into(),
             }],
-            HttpMethod::Get(Empty {}),
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             false,
         ),
         (
             vec![PathSegment::Literal {
                 value: "openapi.json".into(),
             }],
-            HttpMethod::Post(Empty {}),
+            HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})),
             true,
         ),
         (
             vec![PathSegment::Variable {
                 display_name: "other".into(),
             }],
-            HttpMethod::Get(Empty {}),
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
             true,
         ),
     ] {
@@ -959,11 +1098,12 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             },
             last,
         ];
-        typed.route_match = HttpMethod::Post(Empty {}).into();
+        typed.route_match =
+            HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})).into();
         routes.push(UnboundCompiledRoute {
             domain: Domain("example.com".into()),
             route_id: 99,
-            route_match: HttpMethod::Post(Empty {}).into(),
+            route_match: HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})).into(),
             path: vec![
                 PathSegment::Literal {
                     value: "hooks".into(),
@@ -1001,13 +1141,17 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             id: golem_common::model::security_scheme::SecuritySchemeId::new(),
             revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
             name: name.clone(),
-            provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
+            provider_type: golem_common::model::security_scheme::Provider::Google(
+                Default::default(),
+            ),
             client_id: openidconnect::ClientId::new("test-client".into()),
             client_secret: openidconnect::ClientSecret::new("test-secret".into()),
             redirect_url: openidconnect::RedirectUrl::new(format!("https://example.com{callback}"))
                 .unwrap(),
             scopes: vec![],
-            login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
+            login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                Default::default(),
+            ),
         };
         let mut routes: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
         let typed = routes
@@ -1023,9 +1167,9 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             },
         ];
         typed.route_match = if post {
-            HttpMethod::Post(Empty {})
+            HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {}))
         } else {
-            HttpMethod::Get(Empty {})
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {}))
         }
         .into();
         typed.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
@@ -1156,7 +1300,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
                     origins: vec!["https://frontend.example".into()],
                 },
             );
-        let endpoint = golem_common::model::agent::http_files::HttpRequestTarget::parse(
+        let endpoint = golem_schema::http::HttpRequestTarget::parse(
             &golem_service_base::custom_api::pkce_authorization_path(&scheme.id),
         )
         .unwrap();
@@ -1172,7 +1316,8 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
                 value: value.clone(),
             })
             .collect();
-        typed.route_match = HttpMethod::Get(Empty {}).into();
+        typed.route_match =
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})).into();
         typed.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
             crate::model::api_definition::UnboundSecuritySchemeRouteSecurity {
                 security_scheme: name.clone(),
@@ -1196,11 +1341,12 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
 
 #[test]
 fn http_mounts_compile_only_when_selected_for_deployment() {
-    use golem_common::model::agent::{CorsOptions, FileMapping, HttpMountDetails};
+    use golem_common::model::agent::{CorsOptions, HttpMountDetails};
     use golem_common::model::http_api_deployment::{
         HttpApiDeploymentId, HttpApiDeploymentRevision,
     };
     use golem_common::schema::AgentTypeKind;
+    use golem_schema::http::FileMapping;
 
     for (kind, static_files, live_files) in [
         (AgentTypeKind::HttpRouter, false, false),
@@ -1257,7 +1403,12 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
         let mut warnings = vec![];
         assert!(
             context
-                .compile_http_api_routes(&HashMap::new(), &mut errors, &mut warnings)
+                .compile_http_api_routes(
+                    &HashMap::new(),
+                    &mut errors,
+                    &mut warnings,
+                    &Default::default()
+                )
                 .is_empty()
         );
         assert!(errors.is_empty());
@@ -1277,7 +1428,12 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
                 created_at: chrono::Utc::now(),
             },
         );
-        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut warnings);
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut warnings,
+            &Default::default(),
+        );
         assert!(errors.is_empty(), "{errors:?}");
         if kind == AgentTypeKind::HttpRouter || live_files {
             assert_eq!(routes.len(), 3);
@@ -1286,12 +1442,16 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
                 golem_service_base::custom_api::RouteMatch::MountPrefix
             ));
             match &routes[0].behaviour {
-                golem_service_base::custom_api::RouteBehaviour::HttpRouter(router) => {
+                golem_service_base::custom_api::RouteBehaviour::Mount(router)
+                    if kind == AgentTypeKind::HttpRouter =>
+                {
                     assert!(router.handler.is_none());
-                    assert_eq!(router.static_bindings.len(), usize::from(static_files));
+                    assert!(matches!(router.files, MountFileSource::Router { .. }));
+                    assert_eq!(router.file_bindings.len(), usize::from(static_files));
                 }
-                golem_service_base::custom_api::RouteBehaviour::AgentFilesystem(filesystem) => {
-                    assert_eq!(filesystem.filesystem_bindings.len(), 1)
+                golem_service_base::custom_api::RouteBehaviour::Mount(filesystem) => {
+                    assert!(matches!(filesystem.files, MountFileSource::Live { .. }));
+                    assert_eq!(filesystem.file_bindings.len(), 1)
                 }
                 _ => panic!("expected fallback descriptor"),
             }
@@ -1322,7 +1482,7 @@ fn agent_type_with_secret_config(
         dependencies: Vec::new(),
         mode: AgentMode::Durable,
         http_mount: None,
-        snapshotting: Snapshotting::Disabled(Empty {}),
+        snapshotting: Snapshotting::Disabled(Default::default()),
         config: vec![AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
             path,

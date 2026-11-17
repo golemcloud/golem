@@ -13,14 +13,17 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::agent::{AgentMode, OwnerKind, Principal};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::base_model::{AgentId, OplogIndex};
+use crate::base_model::regions::OplogRegion;
+use crate::base_model::{AgentId, IdempotencyKey, OplogIndex};
 use crate::model::Timestamp;
 use crate::model::agent::UntypedAgentConfigEntry;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
+use crate::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
+};
 use crate::model::oplog::{OplogEntry, OplogPayload};
 use crate::model::quota::ResourceName;
 use desert_rust::{
@@ -28,7 +31,7 @@ use desert_rust::{
     SerializationContext,
 };
 use nonempty_collections::NEVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -56,6 +59,59 @@ pub struct CreateParameters {
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
     pub original_phantom_id: Option<Uuid>,
     pub instance_id: Uuid,
+    pub create_request: CreateRequest,
+}
+
+/// The request that created an owner: its kind, its idempotency key, and the principal and
+/// invocation context of its caller.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct CreateRequest {
+    pub kind: CreateRequestKind,
+    pub idempotency_key: Option<IdempotencyKey>,
+    pub principal: Principal,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub invocation_context: Vec<SpanData>,
+}
+
+impl CreateRequest {
+    pub fn new(
+        kind: CreateRequestKind,
+        idempotency_key: Option<IdempotencyKey>,
+        principal: Principal,
+        invocation_context: &InvocationContextStack,
+    ) -> Self {
+        Self {
+            kind,
+            idempotency_key,
+            principal,
+            trace_id: invocation_context.trace_id.clone(),
+            trace_states: invocation_context.trace_states.clone(),
+            invocation_context: invocation_context.to_oplog_data(),
+        }
+    }
+
+    pub fn invocation_context(&self) -> InvocationContextStack {
+        InvocationContextStack::from_oplog_data(
+            self.trace_id.clone(),
+            self.trace_states.clone(),
+            self.invocation_context.clone(),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum CreateRequestKind {
+    /// Creates the owner unless it exists, and otherwise joins it.
+    GetOrCreate,
+    /// Creates the owner only if it does not exist yet.
+    Exclusive,
+    /// Creates an owner whose ID carries a phantom ID.
+    Phantom,
+    /// Copies another owner's history.
+    Fork,
 }
 
 /// Supplied oplog observations do not establish ownership of a canonical key.
@@ -108,6 +164,7 @@ impl From<CreateParameters> for CreateProjectionParameters {
             local_agent_config,
             original_phantom_id,
             instance_id,
+            create_request: _,
         } = value;
         Self {
             agent_id,
@@ -146,17 +203,23 @@ impl From<OplogEntry> for OplogEnrichmentEntry {
 /// A map of attributes, serialized as WIT `list<attribute>` where attribute is a record `{ key: string, value: attribute-value }`
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(transparent)]
-pub struct AttributeMap(pub HashMap<String, AttributeValue>);
+pub struct AttributeMap(pub BTreeMap<String, AttributeValue>);
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum DurableStreamEventSummary {
     Registered,
-    Items { item_count: u64 },
-    End { outcome: DurableStreamOutcome },
-    Cancelled,
+    Items {
+        item_count: u64,
+    },
+    Terminal {
+        outcome: DurableStreamTerminalOutcome,
+        origin: crate::model::durable_stream::StreamTerminalOrigin,
+    },
     SessionResult,
-    SessionFinished { outcome: DurableStreamOutcome },
+    SessionFinished {
+        outcome: DurableStreamOutcome,
+    },
     SessionCancellation,
     SessionExpired,
 }
@@ -168,6 +231,14 @@ pub enum DurableStreamOutcome {
     Error,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum DurableStreamTerminalOutcome {
+    Finished,
+    Failed,
+    ConsumerCancelled,
+}
+
 impl DurableStreamEventSummary {
     pub fn items(record: &crate::model::durable_stream::StreamItemsRecord) -> Self {
         Self::Items {
@@ -175,15 +246,16 @@ impl DurableStreamEventSummary {
         }
     }
 
-    pub fn end(record: &crate::model::durable_stream::StreamEndRecord) -> Self {
-        Self::End {
-            outcome: if matches!(
-                record.result,
-                crate::model::durable_stream::StreamEndResult::Ok
-            ) {
-                DurableStreamOutcome::Success
-            } else {
-                DurableStreamOutcome::Error
+    pub fn terminal(record: &crate::model::durable_stream::StreamTerminalRecord) -> Self {
+        use crate::model::durable_stream::StreamTerminal;
+        Self::Terminal {
+            origin: record.origin,
+            outcome: match &record.terminal {
+                StreamTerminal::Finished => DurableStreamTerminalOutcome::Finished,
+                StreamTerminal::Failed(_) => DurableStreamTerminalOutcome::Failed,
+                StreamTerminal::ConsumerCancelled { .. } => {
+                    DurableStreamTerminalOutcome::ConsumerCancelled
+                }
             },
         }
     }
@@ -263,19 +335,19 @@ pub struct SpanAttributes {
 }
 
 impl std::ops::Deref for AttributeMap {
-    type Target = HashMap<String, AttributeValue>;
+    type Target = BTreeMap<String, AttributeValue>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl From<HashMap<String, AttributeValue>> for AttributeMap {
-    fn from(map: HashMap<String, AttributeValue>) -> Self {
+impl From<BTreeMap<String, AttributeValue>> for AttributeMap {
+    fn from(map: BTreeMap<String, AttributeValue>) -> Self {
         Self(map)
     }
 }
 
-impl From<AttributeMap> for HashMap<String, AttributeValue> {
+impl From<AttributeMap> for BTreeMap<String, AttributeValue> {
     fn from(map: AttributeMap) -> Self {
         map.0
     }
@@ -401,7 +473,7 @@ pub enum SpanData {
         start: Timestamp,
         parent_id: Option<SpanId>,
         linked_context: Option<Vec<SpanData>>,
-        attributes: HashMap<String, AttributeValue>,
+        attributes: BTreeMap<String, AttributeValue>,
         inherited: bool,
     },
     ExternalSpan {
@@ -543,6 +615,8 @@ pub enum UpdateDescription {
         snapshot_revision: ComponentRevision,
         /// The filesystem snapshot of the selected record. `None` when the record has no name.
         filesystem_snapshot: Option<FilesystemSnapshotName>,
+        /// The bootstrap range that the selected record names.
+        snapshot_bootstrap: Option<OplogRegion>,
     },
 
     /// Custom update by loading a given snapshot on the new version

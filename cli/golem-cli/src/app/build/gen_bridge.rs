@@ -568,6 +568,11 @@ async fn collect_agent_manifest_targets_for_entry(
     }
 
     let is_matching_all = matchers.remove("*");
+    // An agent type matcher reads the metadata of every source component, also after a match,
+    // so that the metadata index rejects an agent type that two components define.
+    let has_agent_type_matchers = matchers
+        .iter()
+        .any(|matcher| !application_component_names.contains(matcher.as_str()));
 
     for component_name in source_component_names {
         if skip_missing_sources && !ctx.application().component(component_name).wasm().exists() {
@@ -576,12 +581,7 @@ async fn collect_agent_manifest_targets_for_entry(
 
         let is_matching_component = matchers.remove(component_name.as_str());
 
-        if !is_matching_all
-            && !is_matching_component
-            && matchers
-                .iter()
-                .all(|matcher| application_component_names.contains(matcher.as_str()))
-        {
+        if !is_matching_all && !is_matching_component && !has_agent_type_matchers {
             continue;
         }
 
@@ -2010,7 +2010,6 @@ mod tests {
     use super::*;
     use crate::model::app::{Application, ApplicationPreload, ComponentPresetSelector};
     use crate::model::app_raw;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::component::ComponentName;
     use golem_common::schema::agent::AgentConfigDeclarationSchema;
@@ -2021,6 +2020,7 @@ mod tests {
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
         NamedField, OutputSchema, SchemaGraph, SchemaType,
     };
+    use golem_schema::Empty;
     use indoc::indoc;
     use strum::IntoEnumIterator;
     use tempfile::{TempDir, tempdir};

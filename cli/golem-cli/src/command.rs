@@ -1094,6 +1094,7 @@ pub mod shared_args {
         /// Write the oplog into a self-contained interactive HTML viewer at the given path instead of printing it.
         /// The page embeds every selected entry; use `--serve` for very large oplogs.
         /// Structured formats still emit one output document per oplog entry.
+        /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.
         #[arg(long, value_name = "FILE", conflicts_with = "serve")]
         pub html: Option<std::path::PathBuf>,
         /// Serve the interactive oplog viewer on a local port. The viewer loads the oplog page by page
@@ -1110,6 +1111,35 @@ pub mod shared_args {
         /// Do not open the served viewer in the default browser.
         #[arg(long, requires = "serve")]
         pub no_open: bool,
+    }
+
+    /// Options of the obfuscated oplog export.
+    #[derive(Debug, Args)]
+    pub struct OplogExportArgs {
+        /// Export an obfuscated report: customer values become tokens. Tokens are equal only inside
+        /// one export, because each CLI process draws a new random key. The report is for reading,
+        /// not for replay.
+        #[arg(long)]
+        pub obfuscate: bool,
+        /// Show numbers, bools, datetimes, durations and the mantissa, scale and unit of quantities
+        /// in clear. Never byte lists, discriminants, lengths or text.
+        #[arg(long, requires = "obfuscate")]
+        pub keep_scalars: bool,
+        /// Show discriminants, presence, and list, map and byte lengths.
+        #[arg(long, requires = "obfuscate")]
+        pub keep_shape: bool,
+        /// Keep the free text of error messages. It can contain any customer value.
+        #[arg(long, requires = "obfuscate")]
+        pub keep_error_text: bool,
+        /// Read an entry that the oplog page omitted only when its size is at most N bytes. A
+        /// larger entry stays omitted with its size.
+        #[arg(
+            long,
+            value_name = "N",
+            default_value_t = 16_777_216,
+            requires = "obfuscate"
+        )]
+        pub max_entry_bytes: u64,
     }
 
     #[derive(Debug, Args)]
@@ -1413,7 +1443,7 @@ pub mod tool {
     #[derive(Debug, Args)]
     #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
     pub struct ToolInvokeArgs {
-        /// Existing agent that owns the invocation
+        /// Existing agent; for --lookup use the receipt's <component-id>:<agent-id>
         #[arg(long)]
         pub agent: Option<RawAgentId>,
         /// Component used to create a fresh ephemeral invocation owner without constructing an agent
@@ -1442,13 +1472,13 @@ pub mod tool {
         /// Enqueue without waiting
         #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub trigger: bool,
-        /// Look up an existing invocation without starting execution or input
+        /// Look up the receipt's final invocation UUID and owner without starting execution or input
         #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub lookup: bool,
         /// Schedule execution at an RFC 3339 timestamp
         #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub schedule_at: Option<DateTime<Utc>>,
-        /// Idempotency key; `-` generates a fresh key
+        /// Request seed; `-` generates a fresh seed. With --lookup, the receipt's final invocation UUID
         #[arg(long, short)]
         pub idempotency_key: Option<IdempotencyKey>,
     }
@@ -1582,8 +1612,8 @@ pub mod worker {
     use crate::args::parse_cursor;
     use crate::args::parse_key_val;
     use crate::command::shared_args::{
-        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogViewerArgs, PostDeployArgs,
-        StreamArgs,
+        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogExportArgs, OplogViewerArgs,
+        PostDeployArgs, StreamArgs,
     };
     use crate::model::agent::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
@@ -1707,17 +1737,22 @@ pub mod worker {
             #[arg(long, conflicts_with = "agent_type_name")]
             component_name: Option<ComponentName>,
 
-            /// Filter for agent metadata in form of `property op value`.
+            /// Filter for agent metadata in form of `property op value`, combined with
+            /// `and`, `or`, `not` and parentheses.
             ///
             /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
             /// `env.<KEY>`, `config.<PATH>`.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
-            /// Operator and value are case-insensitive; spaces around the operator are required
-            /// and the value itself must not contain spaces.
+            /// Spaces around the operator are required. `not` binds tightest, then `and`,
+            /// then `or`; keywords are case-insensitive.
+            /// Quote a value with `"` when it contains whitespace outside parentheses, starts
+            /// with `(` or `"`, or has unbalanced parentheses or quotes; inside quotes use `\"`
+            /// and `\\`. Agent IDs such as `Counter("a b", 2)` need no extra quotes.
             ///
             /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
-            /// `status == Running`, `env.var1 == value`, `name like %worker%`.
+            /// `status == Running`, `env.var1 == value`, `name like worker`,
+            /// `(status == Failed or status == Retrying) and not env.MODE == test`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
             filter: Vec<String>,
@@ -1769,15 +1804,18 @@ pub mod worker {
             #[command(flatten)]
             stream_args: StreamArgs,
         },
-        /// Like stream, but for helping Bridge SDK-based REPLs
+        /// Like stream, but for helping Bridge SDK-based REPLs. Shows the output of the
+        /// invocation whose accepted ID arrives as the first line of stdin, then exits.
         #[clap(hide = true)]
         ReplStream {
             /// Agent type name
             agent_type_name: AgentTypeName,
             /// Agent parameters in UntypedDataValue JSON format
             parameters: String,
-            /// Idempotency key, used for filtering
+            /// Idempotency key of the invocation
             idempotency_key: IdempotencyKey,
+            /// Method name of the invocation, which selects an ephemeral agent's phantom ID
+            method_name: String,
             /// Phantom ID
             phantom_id: Option<Uuid>,
             #[command(flatten)]
@@ -1824,6 +1862,7 @@ pub mod worker {
         },
         /// Queries and streams an agent's full oplog.
         /// Structured formats emit one output document per oplog entry.
+        /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.
         #[command(after_help = crate::command_examples::AGENT_OPLOG)]
         Oplog {
             #[command(flatten)]
@@ -1843,10 +1882,12 @@ pub mod worker {
             /// Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by
             /// default), for example an entry with a large snapshot, invocation input or host call
             /// response. By default the CLI reads each omitted entry in full.
-            #[arg(long)]
+            #[arg(long, conflicts_with = "obfuscate")]
             omit_payloads: bool,
             #[command(flatten)]
             viewer: OplogViewerArgs,
+            #[command(flatten)]
+            export: OplogExportArgs,
         },
         /// DESTRUCTIVE: Rewrites the agent's oplog by undoing recent operations. Reverted entries are lost. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
         #[command(after_help = crate::command_examples::AGENT_REVERT)]
@@ -3236,6 +3277,7 @@ mod test {
     };
     use crate::error::ShowClapHelpTarget;
     use crate::model::agent::AgentUpdateMode;
+    use crate::model::format::Format;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory, Parser};
     use itertools::Itertools;
@@ -3286,8 +3328,105 @@ mod test {
     }
 
     #[test]
+    fn format_flag_accepts_the_names_profile_config_accepts() {
+        for (name, expected) in [
+            ("pretty", Format::PrettyJson),
+            ("pretty-json", Format::PrettyJson),
+            ("pretty-yaml", Format::PrettyYaml),
+            ("toon", Format::Toon),
+        ] {
+            let command = GolemCliCommand::try_parse_from(["golem", "--format", name, "build"])
+                .unwrap_or_else(|error| panic!("--format {name}: {error}"));
+            assert_eq!(
+                command.global_flags.format,
+                Some(expected),
+                "--format {name}"
+            );
+            let config: Format = serde_json::from_value(serde_json::json!(name)).unwrap();
+            assert_eq!(config, expected, "profile default format {name}");
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(["golem", "--format", "pretty-text", "build"]).is_err()
+        );
+    }
+
+    #[test]
     fn command_debug_assert() {
         GolemCliCommand::command().debug_assert();
+    }
+
+    fn parse_oplog(extra: &[&str]) -> Result<GolemCliCommand, clap::Error> {
+        GolemCliCommand::try_parse_from(
+            ["golem", "agent", "oplog", "A(\"x\")"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+    }
+
+    fn oplog_export_args(command: GolemCliCommand) -> crate::command::shared_args::OplogExportArgs {
+        match command.subcommand {
+            GolemCliSubcommand::Agent {
+                subcommand: crate::command::worker::AgentSubcommand::Oplog { export, .. },
+            } => export,
+            _ => panic!("expected agent oplog"),
+        }
+    }
+
+    #[test]
+    fn oplog_keep_flags_and_max_entry_bytes_require_obfuscate() {
+        for flag in [
+            vec!["--keep-scalars"],
+            vec!["--keep-shape"],
+            vec!["--keep-error-text"],
+            vec!["--max-entry-bytes", "10"],
+        ] {
+            let error = parse_oplog(&flag).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "{flag:?}"
+            );
+            let with_obfuscate: Vec<&str> = flag.iter().copied().chain(["--obfuscate"]).collect();
+            assert!(parse_oplog(&with_obfuscate).is_ok(), "{flag:?}");
+        }
+        let plain = oplog_export_args(parse_oplog(&[]).unwrap());
+        assert!(!plain.obfuscate);
+        let export = oplog_export_args(parse_oplog(&["--obfuscate"]).unwrap());
+        assert!(export.obfuscate);
+        assert_eq!(export.max_entry_bytes, 16_777_216);
+        assert!(!export.keep_scalars && !export.keep_shape && !export.keep_error_text);
+    }
+
+    #[test]
+    fn oplog_omit_payloads_conflicts_with_obfuscate() {
+        let error = parse_oplog(&["--omit-payloads", "--obfuscate"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        assert!(parse_oplog(&["--omit-payloads"]).is_ok());
+    }
+
+    #[test]
+    fn oplog_obfuscate_parses_with_from_query_html_serve() {
+        for extra in [
+            vec!["--from", "5"],
+            vec!["--query", "error"],
+            vec!["--html", "report.html", "--open"],
+            vec!["--serve", "--port", "0", "--no-open"],
+            vec![
+                "--keep-scalars",
+                "--keep-shape",
+                "--keep-error-text",
+                "--max-entry-bytes",
+                "400000",
+            ],
+        ] {
+            let args: Vec<&str> = extra.iter().copied().chain(["--obfuscate"]).collect();
+            let export = oplog_export_args(parse_oplog(&args).unwrap_or_else(|e| {
+                panic!("{args:?}: {e}");
+            }));
+            assert!(export.obfuscate);
+        }
+        assert!(parse_oplog(&["--obfuscate", "--from", "5", "--query", "x"]).is_err());
+        assert!(parse_oplog(&["--obfuscate", "--html", "a.html", "--serve"]).is_err());
     }
 
     #[test]

@@ -103,15 +103,21 @@ impl ForwardingOplogState {
 
         if flush_set.is_empty() {
             self.finish_empty_flush();
-        } else if let Some(component_metadata) = self.get_component_metadata(&status).await {
+        } else {
+            let component_metadata = self.get_component_metadata(&status).await;
             let committed_tail = self.last_committed_idx;
 
             for grant_id in flush_set {
                 if self.forwarding_retired.is_cancelled() {
                     return;
                 }
-                self.flush_one_plugin(grant_id, committed_tail, &status, &component_metadata)
-                    .await;
+                self.flush_one_plugin(
+                    grant_id,
+                    committed_tail,
+                    &status,
+                    component_metadata.as_ref(),
+                )
+                .await;
             }
 
             self.prune_buffer();
@@ -136,6 +142,7 @@ impl ForwardingOplogState {
                         sending_up_to: cp.sending_up_to,
                         send_in_progress: false,
                         last_batch_start: cp.last_batch_start,
+                        delivery: cp.delivery.clone(),
                     }
                 } else {
                     LivePluginState {
@@ -144,6 +151,7 @@ impl ForwardingOplogState {
                         sending_up_to: OplogIndex::NONE,
                         send_in_progress: false,
                         last_batch_start: OplogIndex::NONE,
+                        delivery: None,
                     }
                 };
                 e.insert(live);
@@ -193,26 +201,38 @@ impl ForwardingOplogState {
         grant_id: EnvironmentPluginGrantId,
         committed_tail: OplogIndex,
         status: &AgentStatusRecord,
-        component_metadata: &Component,
+        component_metadata: Option<&Component>,
     ) {
         let live = match self.plugin_state.get(&grant_id) {
             Some(s) if !s.send_in_progress => s.clone(),
             _ => return,
         };
 
-        let plugin = match component_metadata
-            .metadata
-            .owner_plugins(
-                self.initial_worker_metadata.owner_kind,
-                self.initial_worker_metadata.agent_type_name.as_ref(),
-            )
-            .and_then(|plugins| {
-                plugins
-                    .iter()
-                    .find(|p| p.environment_plugin_grant_id == grant_id)
-            }) {
-            Some(p) => p.clone(),
-            None => return,
+        let pinned_delivery: Option<(InstalledPlugin, AgentMetadata)> =
+            live.delivery.as_ref().map(|delivery| {
+                golem_common::serialization::deserialize(delivery)
+                    .expect("committed oplog processor delivery snapshot must decode")
+            });
+        let plugin = if let Some((plugin, _)) = &pinned_delivery {
+            plugin.clone()
+        } else {
+            let Some(component_metadata) = component_metadata else {
+                return;
+            };
+            match component_metadata
+                .metadata
+                .owner_plugins(
+                    self.initial_worker_metadata.owner_kind,
+                    self.initial_worker_metadata.agent_type_name.as_ref(),
+                )
+                .and_then(|plugins| {
+                    plugins
+                        .iter()
+                        .find(|p| p.environment_plugin_grant_id == grant_id)
+                }) {
+                Some(p) => p.clone(),
+                None => return,
+            }
         };
 
         let batch = if live.sending_up_to > live.confirmed_up_to {
@@ -262,9 +282,11 @@ impl ForwardingOplogState {
                         .write_checkpoint(
                             grant_id,
                             &id,
+                            status.component_revision,
                             live.confirmed_up_to,
                             live.confirmed_up_to,
                             live.last_batch_start,
+                            None,
                         )
                         .await
                         .is_err()
@@ -282,16 +304,6 @@ impl ForwardingOplogState {
                 }
             }
         };
-
-        // Capture locality before the send so error handling uses the
-        // same classification as the actual send path.
-        let Some(target_is_local) = self
-            .while_forwarding(self.oplog_plugins.is_local(&target_agent_id))
-            .await
-        else {
-            return;
-        };
-        let target_is_local = target_is_local.unwrap_or(true);
 
         if let Some(s) = self.plugin_state.get_mut(&grant_id) {
             s.send_in_progress = true;
@@ -330,25 +342,20 @@ impl ForwardingOplogState {
             return;
         }
 
-        if !is_retry {
-            if self
-                .write_checkpoint(
-                    grant_id,
-                    &target_agent_id,
-                    live.confirmed_up_to,
-                    batch_end,
-                    batch_start,
-                )
-                .await
-                .is_err()
-            {
-                return;
-            }
-            if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                s.sending_up_to = batch_end;
-            }
-        }
-
+        // Only these status fields reach the processor. Historical host indexes must not
+        // be copied into every delivery checkpoint.
+        let delivery_status = AgentStatusRecord {
+            status: status.status,
+            component_revision: status.component_revision,
+            current_retry_state: status
+                .current_retry_state
+                .iter()
+                .max_by_key(|(idx, _)| **idx)
+                .map(|(idx, state)| (*idx, state.clone()))
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
         let metadata = AgentMetadata {
             agent_id: self.initial_worker_metadata.agent_id.clone(),
             component_id: self.initial_worker_metadata.component_id,
@@ -362,11 +369,48 @@ impl ForwardingOplogState {
             config: self.initial_worker_metadata.config.clone(),
             created_at: self.initial_worker_metadata.created_at,
             parent: self.initial_worker_metadata.parent.clone(),
-            last_known_status: status.clone(),
+            last_known_status: delivery_status,
             original_phantom_id: self.initial_worker_metadata.original_phantom_id,
             fingerprint: self.initial_worker_metadata.fingerprint,
             agent_mode: self.initial_worker_metadata.agent_mode,
+            create_request: self.initial_worker_metadata.create_request.clone(),
         };
+
+        let (plugin, metadata, delivery) = if is_retry {
+            let delivery = live
+                .delivery
+                .expect("in-flight batch has a committed delivery snapshot");
+            let (plugin, metadata) =
+                pinned_delivery.expect("in-flight batch has a delivery snapshot");
+            (plugin, metadata, delivery)
+        } else {
+            let delivery =
+                golem_common::serialization::serialize(&(plugin.clone(), metadata.clone()))
+                    .expect("oplog processor delivery snapshot must encode");
+            (plugin, metadata, delivery)
+        };
+        let source_component_revision = metadata.last_known_status.component_revision;
+        if !is_retry {
+            if self
+                .write_checkpoint(
+                    grant_id,
+                    &target_agent_id,
+                    source_component_revision,
+                    live.confirmed_up_to,
+                    batch_end,
+                    batch_start,
+                    Some(delivery.clone()),
+                )
+                .await
+                .is_err()
+            {
+                return;
+            }
+            if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                s.sending_up_to = batch_end;
+                s.delivery = Some(delivery);
+            }
+        }
 
         let Some(result) = self
             .while_forwarding(self.oplog_plugins.send(
@@ -395,9 +439,11 @@ impl ForwardingOplogState {
                     .write_checkpoint(
                         grant_id,
                         &target_agent_id,
+                        source_component_revision,
                         batch_end,
                         batch_end,
                         batch_start,
+                        None,
                     )
                     .await
                     .is_err()
@@ -407,6 +453,7 @@ impl ForwardingOplogState {
                 if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                     s.confirmed_up_to = batch_end;
                     s.sending_up_to = batch_end;
+                    s.delivery = None;
                     s.send_in_progress = false;
                     s.last_batch_start = batch_start;
                 }
@@ -513,29 +560,10 @@ impl ForwardingOplogState {
                     );
                 }
 
-                if target_is_local {
-                    // Local failure: invalidate target so next flush creates a fresh instance
-                    if self
-                        .while_forwarding(self.oplog_plugins.invalidate_target(
-                            self.initial_worker_metadata.environment_id,
-                            &plugin,
-                        ))
-                        .await
-                        .is_none()
-                    {
-                        return;
-                    }
-                    if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                        s.target_agent_id = None;
-                        s.send_in_progress = false;
-                    }
-                } else {
-                    // Remote failure: keep the recorded target to avoid duplicating
-                    // delivery across two different plugin workers. The batch remains
-                    // pending and will be retried against the same recorded target.
-                    if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                        s.send_in_progress = false;
-                    }
+                // A failed response does not prove that acceptance failed, even locally.
+                // Retry the committed request against its recorded target.
+                if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                    s.send_in_progress = false;
                 }
             }
         }
@@ -585,9 +613,11 @@ impl ForwardingOplogState {
         &mut self,
         grant_id: EnvironmentPluginGrantId,
         target_agent_id: &AgentId,
+        source_component_revision: ComponentRevision,
         confirmed_up_to: OplogIndex,
         sending_up_to: OplogIndex,
         last_batch_start: OplogIndex,
+        delivery: Option<Vec<u8>>,
     ) -> Result<(), OplogRefusal> {
         // Checked here as well as when the flush starts: the worker's own write can latch the
         // fence while the flush awaits a send or a lookup, and a checkpoint added after that
@@ -605,10 +635,12 @@ impl ForwardingOplogState {
         let checkpoint = OplogEntry::OplogProcessorCheckpoint {
             timestamp: golem_common::model::Timestamp::now_utc(),
             plugin_grant_id: grant_id,
+            source_component_revision,
             target_agent_id: target_agent_id.clone(),
             confirmed_up_to,
             sending_up_to,
             last_batch_start,
+            delivery,
         };
         let cache_entries = self.cache_is_required();
         let cached_checkpoint = cache_entries.then(|| checkpoint.clone());
@@ -890,9 +922,11 @@ impl ForwardingOplogState {
                 .write_checkpoint(
                     grant_id,
                     &new_target,
+                    status.component_revision,
                     confirmed,
                     confirmed,
                     last_batch_start,
+                    None,
                 )
                 .await
                 .is_err()

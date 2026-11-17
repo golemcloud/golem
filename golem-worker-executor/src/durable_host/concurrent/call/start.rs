@@ -216,6 +216,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             observational_owner,
             invocation_id,
             logical_key_position: None,
+            agent_invocation: ctx.state.get_current_idempotency_key(),
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN)
@@ -234,6 +235,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         requires_agent_authority: bool,
         invocation_id: Option<DurableInvocationId>,
     ) -> Result<BegunCall<Pair, P, Ctx>, WorkerExecutorError> {
+        ctx.state.refuse_on_bootstrap_cursor(format_args!(
+            "the accessor call {}",
+            Pair::HOST_FUNCTION_NAME
+        ))?;
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         if claim_options.require_recorded_start
             && (durable_execution_state.is_live || durable_execution_state.snapshotting_mode)
@@ -326,17 +331,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             requires_agent_authority,
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
-            primary_runtime: ctx.runtime == OwnerRuntime::Agent,
-            replaying_incomplete_entity: ctx
-                .entity_invocation_scope()
-                .is_some_and(|scope| scope.mode() == InvocationExecutionMode::ReplayingIncomplete),
+            store_replay_state: ctx.state.store_replay_state.clone(),
             tool_entity: matches!(
                 ctx.runtime,
                 OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
             ),
             tool_operation: ctx.entity_tool_operation(),
             admission_boundary: None,
-            local_live_tail: ctx.state.local_live_tail(),
             replay_state: ctx.state.replay_state.clone(),
             linear_memory: ctx.linear_memory.clone(),
             execution_scope,
@@ -754,6 +755,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         executed: ExecutedAccessStart<Pair, P>,
     ) -> Self {
+        if executed.state.has_recorded_start() {
+            ctx.state.observe_bootstrap_start(executed.start_idx);
+        }
         DurableCallSession {
             start_idx: executed.start_idx,
             state: executed.state,
@@ -912,12 +916,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
         ctx: &DurableWorkerCtx<Ctx>,
     ) -> IdempotencyKeyPosition {
         ctx.idempotency_key_position(self.execution_scope.logical_key_position)
-    }
-
-    pub fn agent_auth_ctx(&self) -> &AuthCtx {
-        self.agent_auth_ctx
-            .as_ref()
-            .expect("agent authority context requested from a call without live agent authority")
     }
 
     /// Second phase on the live path: upload the request and append the eager host-call `Start`

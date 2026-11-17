@@ -138,6 +138,10 @@ unsafe fn absent_invoke(_: *mut u8) -> i32 {
     core::arch::wasm32::unreachable()
 }
 
+unsafe fn absent_agent_call(_: *mut u8, _: usize, _: *mut u8, _: usize, _: i32) -> i32 {
+    core::arch::wasm32::unreachable()
+}
+
 unsafe fn absent_callback(_: u32, _: u32, _: u32) -> u32 {
     core::arch::wasm32::unreachable()
 }
@@ -173,9 +177,9 @@ unsafe fn absent_load(payload: *mut u8, len: usize, mime: *mut u8, mime_len: usi
 }
 
 capability!(agent_exports, [agent::Guest, load::Guest, save::Guest], {
-    initialize(p: *mut u8) -> i32 = "[async-lift]golem:agent/guest@2.0.0#initialize", agent::_export_initialize_cabi::<T>, absent_invoke;
+    initialize(a: *mut u8, b: usize, c: *mut u8, d: usize, e: i32) -> i32 = "[async-lift]golem:agent/guest@2.0.0#initialize", agent::_export_initialize_cabi::<T>, absent_agent_call;
     initialize_callback(a: u32, b: u32, c: u32) -> u32 = "[callback][async-lift]golem:agent/guest@2.0.0#initialize", agent::__callback_initialize, absent_callback;
-    invoke(p: *mut u8) -> i32 = "[async-lift]golem:agent/guest@2.0.0#invoke", agent::_export_invoke_cabi::<T>, absent_invoke;
+    invoke(a: *mut u8, b: usize, c: *mut u8, d: usize, e: i32) -> i32 = "[async-lift]golem:agent/guest@2.0.0#invoke", agent::_export_invoke_cabi::<T>, absent_agent_call;
     invoke_callback(a: u32, b: u32, c: u32) -> u32 = "[callback][async-lift]golem:agent/guest@2.0.0#invoke", agent::__callback_invoke, absent_callback;
     definition() -> *mut u8 = "golem:agent/guest@2.0.0#get-definition", agent::_export_get_definition_cabi::<T>, absent_definition;
     definition_post(p: *mut u8) -> () = "cabi_post_golem:agent/guest@2.0.0#get-definition", agent::__post_return_get_definition::<T>, post_empty;

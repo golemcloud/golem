@@ -1992,6 +1992,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
             auth: None,
             cors: [],
             durable_streams: None,
+            mode: None,
           }),
           read_only: None,
         },
@@ -2011,6 +2012,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
             auth: None,
             cors: [],
             durable_streams: None,
+            mode: None,
           }),
           read_only: None,
         },
@@ -2039,9 +2041,15 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
   ]
   let output = @formatter.impls_to_string(generate_agent_registration(agents))
   // GET endpoint with a query variable.
-  assert_true(output.contains("http_method: @common.HttpMethod::Get"))
   assert_true(
-    output.contains("path_suffix: [@common.PathSegment::Literal(\"current\")]"),
+    output.contains(
+      "http_method: @common.HttpMethod::Method(@coreHttp.HttpMethod::Get)",
+    ),
+  )
+  assert_true(
+    strip_whitespace(output).contains(
+      "path_suffix:[@common.PathSegment::Segment(@coreHttp.PathSegment::Literal(\"current\"),),]",
+    ),
   )
   assert_true(
     output.contains(
@@ -2049,7 +2057,11 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
     ),
   )
   // POST endpoint with a header variable.
-  assert_true(output.contains("http_method: @common.HttpMethod::Post"))
+  assert_true(
+    output.contains(
+      "http_method: @common.HttpMethod::Method(@coreHttp.HttpMethod::Post)",
+    ),
+  )
   assert_true(
     output.contains("{ header_name: \"X-Source\", variable_name: \"source\" }"),
   )
@@ -2057,8 +2069,8 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
   // (the formatter appends a trailing comma to single-field record literals,
   // so match only up to the field value, not the closing brace)
   assert_true(
-    output.contains(
-      "@common.PathSegment::PathVariable({ variable_name: \"city\"",
+    strip_whitespace(output).contains(
+      "@common.PathSegment::Segment(@coreHttp.PathSegment::PathVariable({variable_name:\"city\"",
     ),
   )
   assert_true(output.contains("auth_details: Some({ required: false"))
@@ -2094,6 +2106,7 @@ test "generate_agent_registration emits remaining/system path vars, required aut
             auth: Some(true),
             cors: [],
             durable_streams: None,
+            mode: None,
           }),
           read_only: None,
         },
@@ -2139,7 +2152,7 @@ test "generate_agent_registration emits remaining/system path vars, required aut
   // Remaining-path variable ({*rest}).
   assert_true(
     output.contains(
-      "@common.PathSegment::RemainingPathVariable({variable_name:\"rest\"",
+      "@common.PathSegment::Segment(@coreHttp.PathSegment::RemainingPathVariable({variable_name:\"rest\"",
     ),
   )
   // Required auth on the endpoint.
@@ -2148,7 +2161,7 @@ test "generate_agent_registration emits remaining/system path vars, required aut
   assert_true(output.contains("phantom_agent:true"))
   assert_true(
     output.contains(
-      "webhook_suffix:[@common.PathSegment::Literal(\"events\"),@common.PathSegment::PathVariable({variable_name:\"id\"",
+      "webhook_suffix:[@common.PathSegment::Segment(@coreHttp.PathSegment::Literal(\"events\")),@common.PathSegment::Segment(@coreHttp.PathSegment::PathVariable({variable_name:\"id\"",
     ),
   )
 }
@@ -2160,10 +2173,10 @@ test "durable stream all-options source emits route metadata" {
     #|#derive.mount("/streams")
     #|struct Streams {}
     #|fn Streams::new() -> Streams { {} }
-    #|#derive.endpoint(post="/events")
+    #|#derive.endpoint(post="/events", mode="sse")
     #|#derive.durable_stream_slot(input="input", name="messages")
     #|#derive.durable_stream_slot(output="$result", name="results", content_type="application/vnd.golem.events")
-    #|#derive.durable_streams(allow_external_writes=true, allow_stream_delete=false, allow_invocation_delete=false, max_concurrent_readers_per_stream=8, max_append_requests_per_second_per_stream=25)
+    #|#derive.durable_streams(max_concurrent_readers_per_stream=8, max_append_requests_per_second_per_stream=25)
     #|pub fn Streams::events(self : Self, input : String) -> String { input }
   let agents = parse_agents([("streams.mbt", source)])
   let endpoint = agents[0].methods[0].http_endpoint.unwrap()
@@ -2180,9 +2193,6 @@ test "durable stream all-options source emits route metadata" {
       #|        content_type: Some("application/vnd.golem.events"),
       #|      },
       #|    ],
-      #|    allow_external_writes: Some(true),
-      #|    allow_stream_delete: Some(false),
-      #|    allow_invocation_delete: Some(false),
       #|    max_concurrent_readers_per_stream: Some(8),
       #|    max_append_requests_per_second_per_stream: Some(25),
       #|  },
@@ -2195,14 +2205,14 @@ test "durable stream all-options source emits route metadata" {
   assert_true(
     compact.contains(
       strip_whitespace(
-        "source: @common.DurableStreamSlotSource::Input(\"input\")",
+        "source: @coreHttp.DurableStreamSlotSource::Input(\"input\")",
       ),
     ),
   )
   assert_true(
     compact.contains(
       strip_whitespace(
-        "source: @common.DurableStreamSlotSource::Output(\"$result\")",
+        "source: @coreHttp.DurableStreamSlotSource::Output(\"$result\")",
       ),
     ),
   )
@@ -2211,6 +2221,8 @@ test "durable stream all-options source emits route metadata" {
       strip_whitespace("max_append_requests_per_second_per_stream: Some(25)"),
     ),
   )
+  assert_eq(endpoint.mode, Some("sse"))
+  assert_true(compact.contains("mode:Some(@coreHttp.HttpRouteMode::SSE)"))
 }
 
 ///|

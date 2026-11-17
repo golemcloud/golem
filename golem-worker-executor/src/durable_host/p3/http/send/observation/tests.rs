@@ -19,6 +19,7 @@ use crate::services::oplog::Oplog;
 use golem_common::model::Timestamp;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::{HostPayloadPair, HostRequestNoInput, OplogEntry, OplogPayload};
+use std::collections::BTreeMap;
 use test_r::test;
 
 fn opening() -> OplogEntry {
@@ -37,7 +38,7 @@ fn opening() -> OplogEntry {
             parent_span_id: None,
             links: Vec::new(),
             started_at: "2025-03-12T13:14:00Z".parse().unwrap(),
-            attributes: AttributeMap(HashMap::new()),
+            attributes: AttributeMap(BTreeMap::new()),
             kind: SpanKind::Client,
         })),
         denial: None,
@@ -167,9 +168,7 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
     use crate::durable_host::concurrent::{
         Resolution, ResolutionOutcome, cleanup_recorder_for_store,
     };
-    use crate::durable_host::replay_state::{
-        ReplayStartClaimOutcome, ReplayState, ReplayToLiveRole, StartClaim,
-    };
+    use crate::durable_host::replay_state::{ReplayStartClaimOutcome, ReplayState, StartClaim};
     use golem_common::model::entity::InvocationExecutionMode;
     use golem_common::model::{AgentId, OwnedAgentId};
 
@@ -229,8 +228,9 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
     let (recorder, mut events) = cleanup_recorder_for_store(
         oplog.clone(),
         replay.clone(),
-        completed_entity.then_some(InvocationExecutionMode::ReplayingCompleted),
-        Arc::new(AtomicBool::new(false)),
+        crate::durable_host::StoreReplayState::new(
+            completed_entity.then_some(InvocationExecutionMode::ReplayingCompleted),
+        ),
         true,
     );
     let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
@@ -289,10 +289,7 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
         )),
         std::time::Instant::now(),
     );
-    replay
-        .switch_to_live(&memory, ReplayToLiveRole::PrimaryAgent)
-        .await
-        .unwrap();
+    replay.publish_primary_live(&memory).await.unwrap();
     assert!(replay.is_live_published());
     let mut delivery = if let Some(delivery) = delivery.take() {
         delivery

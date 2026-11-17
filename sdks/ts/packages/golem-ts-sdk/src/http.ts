@@ -30,12 +30,12 @@
 // `runtime.ts` next to the codecs.
 
 import {
-  DurableStreamRouteOptions as WitDurableStreamRouteOptions,
   HttpEndpointDetails,
   HttpMethod,
   HttpMountDetails,
   PathSegment as WitPathSegment,
 } from 'golem:agent/common@2.0.0';
+import { DurableStreamRouteOptions as WitDurableStreamRouteOptions } from 'golem:core/http@2.0.0';
 import { parsePath } from './internal/http/path';
 import { parseQuery } from './internal/http/query';
 import {
@@ -85,18 +85,21 @@ export type {
 export type PathSegment = WitPathSegment;
 
 /** Build a literal path segment, e.g. `http.literal('counters')`. */
-export const literal = (value: string): PathSegment => ({ tag: 'literal', val: value });
+export const literal = (value: string): PathSegment => ({
+  tag: 'segment',
+  val: { tag: 'literal', val: value },
+});
 
 /** Build a path-variable segment, e.g. `http.pathVar('name')` → `{name}`. */
 export const pathVar = (variableName: string): PathSegment => ({
-  tag: 'path-variable',
-  val: { variableName },
+  tag: 'segment',
+  val: { tag: 'path-variable', val: { variableName } },
 });
 
 /** Build a catch-all (remaining-path) variable segment; only valid last. */
 export const restVar = (variableName: string): PathSegment => ({
-  tag: 'remaining-path-variable',
-  val: { variableName },
+  tag: 'segment',
+  val: { tag: 'remaining-path-variable', val: { variableName } },
 });
 
 /** `{agent-type}` — runtime-injected by the host. */
@@ -148,11 +151,10 @@ export interface DurableStreamRouteLoadOptions {
 /** Durable stream metadata attached to an HTTP endpoint. */
 export interface DurableStreamRouteOptions {
   readonly slots: readonly DurableStreamSlotOptions[];
-  readonly allowExternalWrites?: boolean;
-  readonly allowStreamDelete?: boolean;
-  readonly allowInvocationDelete?: boolean;
   readonly load?: DurableStreamRouteLoadOptions;
 }
+
+export type HttpRouteMode = 'durableStreams' | 'plain' | 'sse' | 'webSocket';
 
 function resolvePath(path: PathInput, entityName: string): PathSegment[] {
   if (typeof path !== 'string') return [...path];
@@ -183,8 +185,8 @@ export type HttpVerb =
   | { readonly custom: string };
 
 function verbToWit(v: HttpVerb): HttpMethod {
-  if (typeof v !== 'string') return { tag: 'custom', val: v.custom };
-  return { tag: v };
+  if (typeof v !== 'string') return { tag: 'method', val: { tag: 'custom', val: v.custom } };
+  return { tag: 'method', val: { tag: v } };
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +295,7 @@ export interface HttpEndpointSpec<
   readonly cors?: readonly string[];
   /** Durable streams exposed by this endpoint. Omit to use platform defaults. */
   readonly durableStreams?: DurableStreamRouteOptions;
+  readonly mode?: HttpRouteMode;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +341,7 @@ export interface EndpointOptsFor<
   readonly cors?: readonly string[];
   /** Durable streams exposed by this endpoint. Omit to use platform defaults. */
   readonly durableStreams?: DurableStreamRouteOptions;
+  readonly mode?: HttpRouteMode;
 }
 
 /** Escape-hatch (segment-array) form options: maps un-parameterised. */
@@ -555,6 +559,15 @@ function resolveEndpointPath(
 
 /** Compile a single {@link HttpEndpointSpec} to a WIT `http-endpoint-details`. */
 export function compileEndpoint(spec: HttpEndpointSpec): HttpEndpointDetails {
+  if (
+    spec.mode !== undefined &&
+    spec.mode !== 'durableStreams' &&
+    spec.mode !== 'plain' &&
+    spec.mode !== 'sse' &&
+    spec.mode !== 'webSocket'
+  ) {
+    throw new TypeError('mode must be durableStreams, plain, sse, or webSocket');
+  }
   const { pathSuffix, inlineQuery } = resolveEndpointPath(spec.path, 'endpoint');
 
   const explicitQuery = spec.query
@@ -578,6 +591,12 @@ export function compileEndpoint(spec: HttpEndpointSpec): HttpEndpointDetails {
     queryVars: [...inlineQuery, ...explicitQuery],
     authDetails: spec.auth === undefined ? undefined : { required: spec.auth },
     corsOptions: { allowedPatterns: spec.cors ? [...spec.cors] : [] },
+    mode:
+      spec.mode === 'durableStreams'
+        ? 'durable-streams'
+        : spec.mode === 'webSocket'
+          ? 'web-socket'
+          : spec.mode,
     durableStreams:
       spec.durableStreams === undefined
         ? undefined
@@ -590,17 +609,6 @@ function compileDurableStreamRouteOptions(
 ): WitDurableStreamRouteOptions {
   if (!options || !Array.isArray(options.slots)) {
     throw new TypeError('durableStreams.slots must be an array');
-  }
-
-  const optionalBooleans = [
-    ['allowExternalWrites', options.allowExternalWrites],
-    ['allowStreamDelete', options.allowStreamDelete],
-    ['allowInvocationDelete', options.allowInvocationDelete],
-  ] as const;
-  for (const [name, value] of optionalBooleans) {
-    if (value !== undefined && typeof value !== 'boolean') {
-      throw new TypeError(`durableStreams.${name} must be a boolean`);
-    }
   }
 
   if (options.load !== undefined) {
@@ -634,9 +642,6 @@ function compileDurableStreamRouteOptions(
         contentType: slot.contentType,
       };
     }),
-    allowExternalWrites: options.allowExternalWrites,
-    allowStreamDelete: options.allowStreamDelete,
-    allowInvocationDelete: options.allowInvocationDelete,
     load:
       options.load === undefined
         ? undefined
@@ -651,8 +656,11 @@ function compileDurableStreamRouteOptions(
 export function pathVariableNames(segments: readonly PathSegment[]): Set<string> {
   const names = new Set<string>();
   for (const s of segments) {
-    if (s.tag === 'path-variable' || s.tag === 'remaining-path-variable') {
-      names.add(s.val.variableName);
+    if (
+      s.tag === 'segment' &&
+      (s.val.tag === 'path-variable' || s.val.tag === 'remaining-path-variable')
+    ) {
+      names.add(s.val.val.variableName);
     }
   }
   return names;

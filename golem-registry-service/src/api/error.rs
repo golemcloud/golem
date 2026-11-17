@@ -139,6 +139,9 @@ impl ApiError {
 
 fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str {
     match error {
+        DeployValidationError::IncompatibleConstructorChange { .. } => {
+            api::error_code::deployment_validation::INCOMPATIBLE_CONSTRUCTOR_CHANGE
+        }
         DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret { .. } => {
             api::error_code::deployment_validation::AGENT_SECRET_NOT_COMPATIBLE
         }

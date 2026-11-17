@@ -133,7 +133,11 @@ async fn pending_handshake(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "connect_and_receive_first",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -155,6 +159,9 @@ async fn pending_handshake(
         .context("WebSocket pool initially free")??;
     drop(free);
     let mut peer = Peer::start_with_held_handshake(true).await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "connect_and_receive_first")
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -184,7 +191,7 @@ async fn pending_handshake(
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 if !starts_named(&entries, CONNECT).is_empty() {
                     let start = pool::connect_start(&entries, 0, 0)?;
-                    assert_invocation(&entries, &key, 0)?;
+                    assert_invocation(&entries, &stored_key, 0)?;
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     return Ok::<_, anyhow::Error>(start);
                 }
@@ -252,7 +259,7 @@ async fn pending_handshake(
             .await.context("interrupted handshake must release WebSocket slot")??;
         drop(released_slot);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        assert_invocation(&stopped, &key, 0)?;
+        assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(pool::connect_start(&stopped, 0, 0)? == connect);
         peer.assert_effects(1, 0, 0)?;
         let entries = worker
@@ -367,7 +374,7 @@ async fn pending_handshake(
                 }
             }).await.context("repaired connect and pending receive")??;
             ensure!(pool::connect_start(&repairing, 1, 0)? == connect);
-            assert_invocation(&repairing, &key, 0)?;
+            assert_invocation(&repairing, &stored_key, 0)?;
             peer.assert_effects(2, 1, 0)?;
             second.send.send("recovered".to_string()).map_err(|_| anyhow::anyhow!("recovery frame gate closed"))?;
             let resumed = tokio::time::timeout(Duration::from_secs(15), &mut invocation)
@@ -377,7 +384,7 @@ async fn pending_handshake(
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(pool::connect_start(&recovered, 1, 1)? == connect);
             assert_settled_history(&recovered)?;
-            assert_invocation(&recovered, &key, 1)?;
+            assert_invocation(&recovered, &stored_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "connect_and_receive_first", data_value!(peer.url.clone())).await?;
             ensure!(cached.into_typed::<String>()? == "recovered");
@@ -397,6 +404,7 @@ async fn pending_handshake(
 
             // Reconstruct completed history with an invocation that performs no network work.
             let noop_key = IdempotencyKey::fresh();
+            let stored_noop_key = executor.external_invocation_key(&id, &noop_key, "noop").await?;
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
             peer.assert_effects(2, 1, 1)?;
@@ -404,8 +412,8 @@ async fn pending_handshake(
             ensure!(pool::connect_start(&replayed, 1, 1)? == connect);
             ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (3, 3));
             assert_settled_history(&replayed)?;
-            assert_invocation(&replayed, &key, 1)?;
-            assert_invocation(&replayed, &noop_key, 1)?;
+            assert_invocation(&replayed, &stored_key, 1)?;
+            assert_invocation(&replayed, &stored_noop_key, 1)?;
 
             peer.assert_effects(2, 1, 1)?;
         } else {
@@ -427,7 +435,7 @@ async fn pending_handshake(
             ensure!(probe.into_typed::<String>()? == "probe");
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(pool::connect_start(&failed, 0, 0)? == connect);
-            assert_invocation(&failed, &key, 0)?;
+            assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);

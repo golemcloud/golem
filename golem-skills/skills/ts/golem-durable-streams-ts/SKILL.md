@@ -30,9 +30,6 @@ const Pipe = defineAgent({
             { source: 'input', slot: 'input', name: 'inbox' },
             { source: 'output', slot: '$result', name: 'outbox' },
           ],
-          allowExternalWrites: true,
-          allowStreamDelete: true,
-          allowInvocationDelete: true,
           load: {
             maxConcurrentReadersPerStream: 8,
             maxAppendRequestsPerSecondPerStream: 25,

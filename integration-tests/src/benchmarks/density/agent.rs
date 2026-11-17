@@ -71,7 +71,7 @@ use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::agent_id;
 use golem_common::data_value;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::{AgentEvent, AgentId};
@@ -510,7 +510,7 @@ fn agent_for_index<'a>(
     config: &CellConfig,
     index: u32,
     components: &'a [ComponentDto],
-) -> anyhow::Result<(&'a ComponentDto, ParsedAgentId)> {
+) -> anyhow::Result<(&'a ComponentDto, ParsedAgentKey)> {
     let agent_type = config.agent_type();
     let agent_id = agent_id!(agent_type, format!("{}-{index}", config.cell_name()));
     let component = match config.sharing {
@@ -595,7 +595,7 @@ fn is_overloaded_error(err: &anyhow::Error) -> bool {
 async fn timed_invoke(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     method: &str,
     params: TypedSchemaValue,
     timeout: Duration,

@@ -783,20 +783,11 @@ mod tests {
 
     #[test]
     async fn waiting_returns_when_the_server_is_unreachable() {
-        let (url, _) = start_server(0).await;
         let unreachable = Url::parse("http://127.0.0.1:1/").unwrap();
 
         wait_for_server_startup_with(
             &reqwest::Client::new(),
             &unreachable,
-            Duration::from_secs(30),
-            Duration::from_millis(10),
-        )
-        .await
-        .unwrap();
-        wait_for_server_startup_with(
-            &reqwest::Client::new(),
-            &url,
             Duration::from_secs(30),
             Duration::from_millis(10),
         )

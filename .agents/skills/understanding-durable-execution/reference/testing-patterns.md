@@ -667,7 +667,7 @@ Neither silence nor a later result proves a particular proposal's acceptance boo
 or private window identity. Colocated tests exercise exact acceptance results and
 literal target identity through the existing production guard.
 `matches_running_owner` matches the outer `WorkerInstance::Running` before loading generation or held-permit
-atomics or locking the current target. It never unwraps `deletion_runtime`. The actual path keeps
+atomics or locking the current target. It never reads the runtime that a deletion retains. The actual path keeps
 cached-owner lookup before the instance mutex, then retains that guard through the predicate, active
 recheck, interrupt try-lock, capacity sample, queue and dispatch. Existing short-circuiting stays lazy.
 
@@ -794,10 +794,9 @@ stock twice. Completed replay must perform no new put. Neither path promises ext
 effects after process loss, an unknown provider outcome or a partial backend error.
 
 Preserve the stored prefix and hydrated invocation/host-call payloads exactly. Validate each public
-projection losslessly against those records. Public attribute vectors rendered from a HashMap have
-no recorded sequence: compare their complete typed key/value maps, rejecting duplicate keys and
-cardinality changes. Preserve all recorded sequence order elsewhere. Sorting arbitrary JSON or
-dropping fields would weaken the oracle rather than account for that one unordered projection.
+projection losslessly against those records, and compare public entries by exact equality. Span
+attributes are stored and rendered sorted by key, so their order is deterministic and a reordered
+attribute list is a changed entry. Sorting arbitrary JSON or dropping fields would weaken the oracle.
 
 ## Filesystem snapshots on APFS
 

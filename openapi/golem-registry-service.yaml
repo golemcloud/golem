@@ -12597,6 +12597,31 @@ components:
       properties:
         required:
           type: boolean
+    AgentHttpMethod:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - Method
+          value:
+            $ref: '#/components/schemas/HttpMethod'
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - Any
+          value:
+            $ref: '#/components/schemas/Empty'
     AgentId:
       type: object
       title: AgentId
@@ -12653,6 +12678,31 @@ components:
       enum:
       - Durable
       - Ephemeral
+    AgentPathSegment:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - Segment
+          value:
+            $ref: '#/components/schemas/PathSegment'
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - SystemVariable
+          value:
+            $ref: '#/components/schemas/SystemVariableSegment'
     AgentSecretCreation:
       type: object
       title: AgentSecretCreation
@@ -13814,6 +13864,7 @@ components:
           $ref: '#/components/schemas/AgentId'
         invocationKey:
           type: string
+          format: uuid
         oplogIndex:
           type: integer
           format: uint64
@@ -14589,6 +14640,7 @@ components:
       - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
       - $ref: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
+      - $ref: '#/components/schemas/DeployValidationWarning_IncompatibleConstructorChange'
       discriminator:
         propertyName: type
         mapping:
@@ -14597,6 +14649,7 @@ components:
           ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
           McpImportDiscovery: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
           ToolMiddleware: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
+          IncompatibleConstructorChange: '#/components/schemas/DeployValidationWarning_IncompatibleConstructorChange'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
       - type: object
@@ -14621,6 +14674,18 @@ components:
             - HttpApiReadOnlyTtlBelowOneSecond
             example: HttpApiReadOnlyTtlBelowOneSecond
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_IncompatibleConstructorChange:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - IncompatibleConstructorChange
+            example: IncompatibleConstructorChange
+      - $ref: '#/components/schemas/IncompatibleConstructorChange'
     DeployValidationWarning_McpImportDiscovery:
       allOf:
       - type: object
@@ -15342,12 +15407,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DurableStreamSlotOptions'
-        allowExternalWrites:
-          type: boolean
-        allowStreamDelete:
-          type: boolean
-        allowInvocationDelete:
-          type: boolean
         load:
           $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
     DurableStreamSlotOptions:
@@ -16869,7 +16928,7 @@ components:
         methodName:
           type: string
         httpMethod:
-          $ref: '#/components/schemas/HttpMethod'
+          $ref: '#/components/schemas/AgentHttpMethod'
         path:
           type: string
     HttpApiReadOnlyTtlBelowOneSecond:
@@ -16902,11 +16961,11 @@ components:
       - corsOptions
       properties:
         httpMethod:
-          $ref: '#/components/schemas/HttpMethod'
+          $ref: '#/components/schemas/AgentHttpMethod'
         pathSuffix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         headerVars:
           type: array
           items:
@@ -16919,6 +16978,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
+        mode:
+          $ref: '#/components/schemas/HttpRouteMode'
         durableStreams:
           $ref: '#/components/schemas/DurableStreamRouteOptions'
     HttpMethod:
@@ -16934,7 +16995,6 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
       discriminator:
         propertyName: type
         mapping:
@@ -16948,7 +17008,6 @@ components:
           Trace: '#/components/schemas/HttpMethod_Empty'
           Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
-          Any: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -16970,8 +17029,8 @@ components:
           type:
             type: string
             enum:
-            - Any
-            example: Any
+            - Patch
+            example: Patch
       - $ref: '#/components/schemas/Empty'
     HttpMountDetails:
       type: object
@@ -16988,7 +17047,7 @@ components:
         pathPrefix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         authDetails:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
@@ -17000,7 +17059,7 @@ components:
         webhookSuffix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         staticBindings:
           type: array
           items:
@@ -17016,6 +17075,13 @@ components:
         openapiProviderMethod:
           type: string
           description: The name of a parameterless router method that returns the OpenAPI document as a string.
+    HttpRouteMode:
+      type: string
+      enum:
+      - durableStreams
+      - plain
+      - sse
+      - webSocket
     ImpliesC:
       type: object
       required:
@@ -17036,6 +17102,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Ref'
+    IncompatibleConstructorChange:
+      type: object
+      title: IncompatibleConstructorChange
+      required:
+      - agentType
+      - path
+      - reason
+      properties:
+        agentType:
+          type: string
+        path:
+          type: string
+        reason:
+          type: string
     InitialAgentFile:
       type: object
       title: InitialAgentFile
@@ -18353,14 +18433,12 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PathSegment_LiteralSegment'
-      - $ref: '#/components/schemas/PathSegment_SystemVariableSegment'
       - $ref: '#/components/schemas/PathSegment_PathVariable'
       - $ref: '#/components/schemas/PathSegment_PathVariable'
       discriminator:
         propertyName: type
         mapping:
           Literal: '#/components/schemas/PathSegment_LiteralSegment'
-          SystemVariable: '#/components/schemas/PathSegment_SystemVariableSegment'
           PathVariable: '#/components/schemas/PathSegment_PathVariable'
           RemainingPathVariable: '#/components/schemas/PathSegment_PathVariable'
     PathSegment_LiteralSegment:
@@ -18387,18 +18465,6 @@ components:
             - RemainingPathVariable
             example: RemainingPathVariable
       - $ref: '#/components/schemas/PathVariable'
-    PathSegment_SystemVariableSegment:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - SystemVariable
-            example: SystemVariable
-      - $ref: '#/components/schemas/SystemVariableSegment'
     PathSpec:
       type: object
       required:

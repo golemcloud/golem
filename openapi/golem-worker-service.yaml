@@ -141,7 +141,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -274,7 +274,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -361,7 +361,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -462,7 +462,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -484,7 +484,7 @@ paths:
       summary: Complete a promise
       description: |-
         Completes a promise with a given custom array of bytes.
-        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The promise must be previously created from within the worker, and its identifier (a combination of a worker identifier, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
         The data field is sent back to the worker, and it has no predefined meaning.
       parameters:
       - name: component_id
@@ -558,7 +558,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -659,7 +659,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -764,7 +764,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -850,7 +850,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -942,7 +942,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1058,7 +1058,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1165,7 +1165,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1258,7 +1258,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1347,7 +1347,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1441,7 +1441,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1539,7 +1539,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1637,7 +1637,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1730,7 +1730,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1823,7 +1823,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1843,7 +1843,9 @@ paths:
       tags:
       - Worker
       summary: Cancels a pending invocation if it has not started yet
-      description: The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+      description: |-
+        The invocation to be cancelled is identified by the idempotency key returned when the
+        invoke API accepted it.
       parameters:
       - name: component_id
         schema:
@@ -1917,7 +1919,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -1999,7 +2001,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -2079,7 +2081,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -2166,7 +2168,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -2242,7 +2244,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -2321,7 +2323,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -2396,7 +2398,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '422':
-          description: ''
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
           content:
             application/json; charset=utf-8:
               schema:
@@ -2706,14 +2708,15 @@ components:
       type: object
       title: AgentInitializationParameters
       required:
-      - idempotencyKey
+      - invocationId
       - constructorParameters
       - traceId
       - traceStates
       - invocationContext
       properties:
-        idempotencyKey:
+        invocationId:
           type: string
+          format: uuid
         constructorParameters:
           $ref: '#/components/schemas/TypedSchemaValue'
         traceId:
@@ -2796,6 +2799,7 @@ components:
           $ref: '#/components/schemas/AgentId'
         idempotencyKey:
           type: string
+          format: uuid
         result:
           $ref: '#/components/schemas/ExternalTypedSchemaValue'
         componentRevision:
@@ -2912,15 +2916,16 @@ components:
       type: object
       title: AgentMethodInvocationParameters
       required:
-      - idempotencyKey
+      - invocationId
       - methodName
       - functionInput
       - traceId
       - traceStates
       - invocationContext
       properties:
-        idempotencyKey:
+        invocationId:
           type: string
+          format: uuid
         methodName:
           type: string
         functionInput:
@@ -3914,6 +3919,7 @@ components:
           $ref: '#/components/schemas/AgentId'
         invocationKey:
           type: string
+          format: uuid
         oplogIndex:
           type: integer
           format: uint64
@@ -4100,11 +4106,16 @@ components:
       title: CompleteParameters
       required:
       - oplogIdx
+      - fingerprint
       - data
       properties:
         oplogIdx:
           type: integer
           format: uint64
+        fingerprint:
+          type: string
+          format: uuid
+          description: Fingerprint of the agent incarnation that created the promise.
         data:
           type: array
           items:
@@ -5012,7 +5023,7 @@ components:
       type: object
       title: ExternalToolInvocationParameters
       required:
-      - idempotencyKey
+      - invocationId
       - toolName
       - commandPath
       - input
@@ -5020,8 +5031,9 @@ components:
       - traceStates
       - invocationContext
       properties:
-        idempotencyKey:
+        invocationId:
           type: string
+          format: uuid
         toolName:
           type: string
         commandPath:
@@ -5542,6 +5554,7 @@ components:
           $ref: '#/components/schemas/AgentId'
         idempotencyKey:
           type: string
+          format: uuid
         result:
           $ref: '#/components/schemas/NativeToolResult'
         status:
@@ -6008,10 +6021,11 @@ components:
       type: object
       title: ProcessOplogEntriesParameters
       required:
-      - idempotencyKey
+      - invocationId
       properties:
-        idempotencyKey:
+        invocationId:
           type: string
+          format: uuid
     ProcessOplogEntriesResultParameters:
       type: object
       title: ProcessOplogEntriesResultParameters
@@ -6526,8 +6540,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamTerminalParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
@@ -6586,8 +6599,7 @@ components:
           ToolAttachmentControl: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
           StreamRegistered: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
           StreamItems: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
-          StreamEnd: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
-          StreamCancel: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+          StreamTerminal: '#/components/schemas/PublicOplogEntry_r#StreamTerminalParams'
           StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
@@ -7218,30 +7230,6 @@ components:
             - Start
             example: Start
       - $ref: '#/components/schemas/r#StartParams'
-    PublicOplogEntry_r#StreamCancelParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - StreamCancel
-            example: StreamCancel
-      - $ref: '#/components/schemas/r#StreamCancelParams'
-    PublicOplogEntry_r#StreamEndParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - StreamEnd
-            example: StreamEnd
-      - $ref: '#/components/schemas/r#StreamEndParams'
     PublicOplogEntry_r#StreamItemsParams:
       allOf:
       - type: object
@@ -7278,6 +7266,18 @@ components:
             - StreamSession
             example: StreamSession
       - $ref: '#/components/schemas/r#StreamSessionParams'
+    PublicOplogEntry_r#StreamTerminalParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - StreamTerminal
+            example: StreamTerminal
+      - $ref: '#/components/schemas/r#StreamTerminalParams'
     PublicOplogEntry_r#SuccessfulUpdateParams:
       allOf:
       - type: object
@@ -10149,6 +10149,7 @@ components:
       title: r#AgentInvocationFinishedParams
       required:
       - timestamp
+      - invocationId
       - result
       - consumedFuel
       - componentRevision
@@ -10156,6 +10157,9 @@ components:
         timestamp:
           type: string
           format: date-time
+        invocationId:
+          type: string
+          format: uuid
         result:
           $ref: '#/components/schemas/PublicAgentInvocationResult'
         methodName:
@@ -10198,13 +10202,14 @@ components:
       title: r#CancelPendingInvocationParams
       required:
       - timestamp
-      - idempotencyKey
+      - invocationId
       properties:
         timestamp:
           type: string
           format: date-time
-        idempotencyKey:
+        invocationId:
           type: string
+          format: uuid
     r#CancelledParams:
       type: object
       title: r#CancelledParams
@@ -10624,6 +10629,9 @@ components:
           format: date-time
         kind:
           $ref: '#/components/schemas/OplogErrorKind'
+        invocationId:
+          type: string
+          format: uuid
         error:
           type: string
         retryFrom:
@@ -10739,6 +10747,7 @@ components:
       required:
       - timestamp
       - plugin
+      - sourceComponentRevision
       - targetAgentId
       - confirmedUpTo
       - sendingUpTo
@@ -10749,6 +10758,9 @@ components:
           format: date-time
         plugin:
           $ref: '#/components/schemas/PluginInstallationDescription'
+        sourceComponentRevision:
+          type: integer
+          format: uint64
         targetAgentId:
           $ref: '#/components/schemas/AgentId'
         confirmedUpTo:
@@ -10923,6 +10935,8 @@ components:
           $ref: '#/components/schemas/PublicSnapshotData'
         filesystemSnapshot:
           type: string
+        bootstrap:
+          $ref: '#/components/schemas/OplogRegion'
     r#SpanClosedParams:
       type: object
       title: r#SpanClosedParams
@@ -10967,30 +10981,6 @@ components:
           $ref: '#/components/schemas/PublicSpanStarted'
         denial:
           type: string
-    r#StreamCancelParams:
-      type: object
-      title: r#StreamCancelParams
-      required:
-      - timestamp
-      - record
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        record:
-          $ref: '#/components/schemas/TypedSchemaValue'
-    r#StreamEndParams:
-      type: object
-      title: r#StreamEndParams
-      required:
-      - timestamp
-      - record
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        record:
-          $ref: '#/components/schemas/TypedSchemaValue'
     r#StreamItemsParams:
       type: object
       title: r#StreamItemsParams
@@ -11027,6 +11017,18 @@ components:
           format: date-time
         record:
           $ref: '#/components/schemas/TypedSchemaValue'
+    r#StreamTerminalParams:
+      type: object
+      title: r#StreamTerminalParams
+      required:
+      - timestamp
+      - record
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
     r#SuccessfulUpdateParams:
       type: object
       title: r#SuccessfulUpdateParams
@@ -11051,6 +11053,8 @@ components:
             $ref: '#/components/schemas/PluginInstallationDescription'
         snapshotAssistedDetails:
           $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
+        bootstrap:
+          $ref: '#/components/schemas/OplogRegion'
     r#SuspendParams:
       type: object
       title: r#SuspendParams

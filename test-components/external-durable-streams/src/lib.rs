@@ -310,7 +310,12 @@ impl ExternalDurableStreams for ExternalDurableStreamsImpl {
         url: String,
     ) -> Result<Vec<String>, String> {
         let source = ExternalDurableStreamsClient::get(source_id);
-        source.output_json(url).await.collect().await
+        source
+            .output_json(url)
+            .await
+            .collect()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn consume_forwarded_bytes(
@@ -319,7 +324,12 @@ impl ExternalDurableStreams for ExternalDurableStreamsImpl {
         url: String,
     ) -> Result<Vec<u8>, String> {
         let source = ExternalDurableStreamsClient::get(source_id);
-        source.output_bytes(url).await.collect().await
+        source
+            .output_bytes(url)
+            .await
+            .collect()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn concurrent_reads(

@@ -54,10 +54,12 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::agent::schema_evolution::constructor_key_schema;
 use golem_common::model::mcp_import::McpImportCredential;
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::model::type_id::{TypeId, TypeIdKind};
+use golem_common::schema::graph::SchemaGraph;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -84,6 +86,13 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: Uuid,
         type_id: i64,
     ) -> RepoResult<Option<EnvironmentTypeIdRecord>>;
+
+    /// The last deployed constructor key schema of every agent type name in the
+    /// environment, including removed types.
+    async fn list_agent_type_constructor_schemas(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<(String, Blob<SchemaGraph>)>>;
 
     async fn get_http_routing_epoch_if_exists(
         &self,
@@ -325,6 +334,16 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     ) -> RepoResult<Option<EnvironmentTypeIdRecord>> {
         self.repo
             .get_environment_type_id(environment_id, type_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn list_agent_type_constructor_schemas(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<(String, Blob<SchemaGraph>)>> {
+        self.repo
+            .list_agent_type_constructor_schemas(environment_id)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -850,6 +869,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         ).await
     }
 
+    async fn list_agent_type_constructor_schemas(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<(String, Blob<SchemaGraph>)>> {
+        self.with_ro("list_agent_type_constructor_schemas").fetch_all_as(
+            sqlx::query_as("SELECT name, constructor_schema FROM environment_agent_type_ids WHERE environment_id = $1 AND kind = 'agent-type' AND constructor_schema IS NOT NULL")
+                .bind(environment_id),
+        ).await
+    }
+
     async fn get_http_routing_epoch_if_exists(
         &self,
         environment_id: Uuid,
@@ -1123,6 +1152,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                                 .bind(kind.as_str())
                                 .bind(name)
                                 .bind(i64::from(type_id)),
+                        ).await?;
+                    }
+                    for registration in &deployment_creation.registered_agent_types {
+                        tx.execute(
+                            sqlx::query("UPDATE environment_agent_type_ids SET constructor_schema = $1 WHERE environment_id = $2 AND kind = 'agent-type' AND name = $3")
+                                .bind(Blob::new(constructor_key_schema(registration.agent_type.value())))
+                                .bind(environment_id)
+                                .bind(&registration.agent_type_name),
                         ).await?;
                     }
 

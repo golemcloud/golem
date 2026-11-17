@@ -17,11 +17,12 @@
 /// Renders a single `@common.PathSegment` constructor expression.
 fn path_segment_str(seg : PathSegmentInfo) -> String {
   match seg.kind {
-    Literal(s) => "@common.PathSegment::Literal(\"\{escape_string_lit(s)}\")"
+    Literal(s) =>
+      "@common.PathSegment::Segment(@coreHttp.PathSegment::Literal(\"\{escape_string_lit(s)}\"))"
     PathVariable(name) =>
-      "@common.PathSegment::PathVariable({ variable_name: \"\{escape_string_lit(name)}\" })"
+      "@common.PathSegment::Segment(@coreHttp.PathSegment::PathVariable({ variable_name: \"\{escape_string_lit(name)}\" }))"
     RemainingPathVariable(name) =>
-      "@common.PathSegment::RemainingPathVariable({ variable_name: \"\{escape_string_lit(name)}\" })"
+      "@common.PathSegment::Segment(@coreHttp.PathSegment::RemainingPathVariable({ variable_name: \"\{escape_string_lit(name)}\" }))"
     SystemVariable(kind) => {
       let variant = match kind {
         AgentType => "AGENT_TYPE"
@@ -65,8 +66,9 @@ fn http_method_str(http_method : String) -> String {
     None
   }
   match variant {
-    Some(v) => "@common.HttpMethod::\{v}"
-    None => "@common.HttpMethod::Custom(\"\{escape_string_lit(http_method)}\")"
+    Some(v) => "@common.HttpMethod::Method(@coreHttp.HttpMethod::\{v})"
+    None =>
+      "@common.HttpMethod::Method(@coreHttp.HttpMethod::Custom(\"\{escape_string_lit(http_method)}\"))"
   }
 }
 
@@ -95,19 +97,13 @@ fn durable_streams_str(options : DurableStreamRouteInfo?) -> String {
         .map(slot => {
           let source = match slot.source {
             Input(value) =>
-              "@common.DurableStreamSlotSource::Input(\"\{escape_string_lit(value)}\")"
+              "@coreHttp.DurableStreamSlotSource::Input(\"\{escape_string_lit(value)}\")"
             Output(value) =>
-              "@common.DurableStreamSlotSource::Output(\"\{escape_string_lit(value)}\")"
+              "@coreHttp.DurableStreamSlotSource::Output(\"\{escape_string_lit(value)}\")"
           }
           "{ source: \{source}, name: \{opt_string_lit(slot.name)}, content_type: \{opt_string_lit(slot.content_type)} }"
         })
         .join(", ")
-      let opt_bool = fn(value : Bool?) {
-        match value {
-          Some(v) => "Some(\{v})"
-          None => "None"
-        }
-      }
       let opt_uint = fn(value : UInt32?) {
         match value {
           Some(v) => "Some(\{v})"
@@ -120,7 +116,7 @@ fn durable_streams_str(options : DurableStreamRouteInfo?) -> String {
       } else {
         "Some({ max_concurrent_readers_per_stream: \{opt_uint(options.max_concurrent_readers_per_stream)}, max_append_requests_per_second_per_stream: \{opt_uint(options.max_append_requests_per_second_per_stream)} })"
       }
-      "Some({ slots: [\{slots}], allow_external_writes: \{opt_bool(options.allow_external_writes)}, allow_stream_delete: \{opt_bool(options.allow_stream_delete)}, allow_invocation_delete: \{opt_bool(options.allow_invocation_delete)}, load: \{load} })"
+      "Some({ slots: [\{slots}], load: \{load} })"
     }
   }
 }
@@ -151,7 +147,20 @@ fn http_endpoint_str(endpoint : HttpEndpointInfo?) -> String {
         Any => "@common.HttpMethod::Any"
         Concrete(name) => http_method_str(name)
       }
-      "[{ http_method: \{matcher}, path_suffix: \{path_suffix}, header_vars: \{header_vars}, query_vars: \{query}, auth_details: \{auth_details_str(ep.auth)}, cors_options: \{cors_options_str(ep.cors)}, durable_streams: \{durable_streams_str(ep.durable_streams)} }]"
+      let mode = match ep.mode {
+        None => "None"
+        Some(value) => {
+          let variant = match value {
+            "durableStreams" => "DURABLE_STREAMS"
+            "plain" => "PLAIN"
+            "sse" => "SSE"
+            "webSocket" => "WEB_SOCKET"
+            _ => abort("Invalid HTTP route mode")
+          }
+          "Some(@coreHttp.HttpRouteMode::\{variant})"
+        }
+      }
+      "[{ http_method: \{matcher}, path_suffix: \{path_suffix}, header_vars: \{header_vars}, query_vars: \{query}, auth_details: \{auth_details_str(ep.auth)}, cors_options: \{cors_options_str(ep.cors)}, durable_streams: \{durable_streams_str(ep.durable_streams)}, mode: \{mode} }]"
     }
   }
 }
@@ -234,9 +243,9 @@ fn file_mappings_str(mappings : Array[HttpFileMapping]) -> String {
     let target = "\"\{escape_string_lit(target)}\""
     match m {
       Exact(_, _) =>
-        "@common.FileMapping::Exact({ public_path: \{paths}, file_path: \{target} })"
+        "@coreHttp.FileMapping::Exact({ public_path: \{paths}, file_path: \{target} })"
       Subtree(_, _) =>
-        "@common.FileMapping::Subtree({ public_prefix: \{paths}, filesystem_root: \{target} })"
+        "@coreHttp.FileMapping::Subtree({ public_prefix: \{paths}, filesystem_root: \{target} })"
     }
   })
   .join(", ") +

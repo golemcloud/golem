@@ -220,6 +220,8 @@ golem agent invoke 'CounterAgent("alice")' increment
 
 Choose constructor parameters to match the thing the agent represents. One agent per user keeps a user's state in one place; one agent per conversation gives each conversation its own state. In a multi-tenant application, include the tenant in the constructor parameters, as in `ReportAgent("acme", "q3")`, so each tenant's agents have separate memory and files.
 
+Golem compares constructor arguments exactly as given. The entries of a map argument may come in any order, but strings are compared code point by code point, with no Unicode normalization: `"é"` written as one code point and `"é"` written as `e` plus a combining accent select two different agents. If visually identical strings must reach the same agent, normalize them (for example to NFC) before you call the agent.
+
 ## What each agent owns
 
 Each agent has its own:

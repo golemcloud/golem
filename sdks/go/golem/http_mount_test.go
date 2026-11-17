@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 )
 
 // ---------------------------------------------------------------------------
@@ -129,7 +130,7 @@ func TestBuildHTTPCompilesAFullMountAndEndpoints(t *testing.T) {
 		t.Fatalf("add: want 2 endpoints, got %d", len(add))
 	}
 	// endpoint 0: POST /add?by={by} with X-Tenant header, auth override false
-	if add[0].HttpMethod.Tag() != common.HttpMethodPost {
+	if add[0].HttpMethod.Tag() != common.HttpMethodMethod || add[0].HttpMethod.Method().Tag() != coreHTTP.HttpMethodPost {
 		t.Errorf("add[0] method tag = %d", add[0].HttpMethod.Tag())
 	}
 	if got := renderSegs(add[0].PathSuffix); got != "/add" {
@@ -164,8 +165,8 @@ func TestBuildHTTPCustomVerb(t *testing.T) {
 		t.Fatalf("errs: %v", errs)
 	}
 	m := endpoints["report"][0].HttpMethod
-	if m.Tag() != common.HttpMethodCustom || m.Custom() != "REPORT" {
-		t.Errorf("verb = tag %d %q", m.Tag(), m.Custom())
+	if m.Tag() != common.HttpMethodMethod || m.Method().Tag() != coreHTTP.HttpMethodCustom || m.Method().Custom() != "REPORT" {
+		t.Errorf("verb = %v", m)
 	}
 }
 
@@ -174,18 +175,18 @@ func TestVerbConstructorsMapToWit(t *testing.T) {
 		ep  Endpoint
 		tag uint8
 	}{
-		{GET("/x"), common.HttpMethodGet},
-		{HEAD("/x"), common.HttpMethodHead},
-		{POST("/x"), common.HttpMethodPost},
-		{PUT("/x"), common.HttpMethodPut},
-		{DELETE("/x"), common.HttpMethodDelete},
-		{CONNECT("/x"), common.HttpMethodConnect},
-		{OPTIONS("/x"), common.HttpMethodOptions},
-		{TRACE("/x"), common.HttpMethodTrace},
-		{PATCH("/x"), common.HttpMethodPatch},
+		{GET("/x"), coreHTTP.HttpMethodGet},
+		{HEAD("/x"), coreHTTP.HttpMethodHead},
+		{POST("/x"), coreHTTP.HttpMethodPost},
+		{PUT("/x"), coreHTTP.HttpMethodPut},
+		{DELETE("/x"), coreHTTP.HttpMethodDelete},
+		{CONNECT("/x"), coreHTTP.HttpMethodConnect},
+		{OPTIONS("/x"), coreHTTP.HttpMethodOptions},
+		{TRACE("/x"), coreHTTP.HttpMethodTrace},
+		{PATCH("/x"), coreHTTP.HttpMethodPatch},
 	}
 	for _, c := range cases {
-		if got := witMethod(c.ep.method).Tag(); got != c.tag {
+		if got := witMethod(c.ep.method).Method().Tag(); got != c.tag {
 			t.Errorf("%s -> tag %d, want %d", c.ep.method, got, c.tag)
 		}
 	}
@@ -376,12 +377,16 @@ func renderSegs(segs []common.PathSegment) string {
 	var parts []string
 	for _, s := range segs {
 		switch s.Tag() {
-		case common.PathSegmentLiteral:
-			parts = append(parts, s.Literal())
-		case common.PathSegmentPathVariable:
-			parts = append(parts, "{"+s.PathVariable().VariableName+"}")
-		case common.PathSegmentRemainingPathVariable:
-			parts = append(parts, "{*"+s.RemainingPathVariable().VariableName+"}")
+		case common.PathSegmentSegment:
+			shared := s.Segment()
+			switch shared.Tag() {
+			case coreHTTP.PathSegmentLiteral:
+				parts = append(parts, shared.Literal())
+			case coreHTTP.PathSegmentPathVariable:
+				parts = append(parts, "{"+shared.PathVariable().VariableName+"}")
+			case coreHTTP.PathSegmentRemainingPathVariable:
+				parts = append(parts, "{*"+shared.RemainingPathVariable().VariableName+"}")
+			}
 		case common.PathSegmentSystemVariable:
 			if s.SystemVariable() == common.SystemVariableAgentVersion {
 				parts = append(parts, "{agent-version}")

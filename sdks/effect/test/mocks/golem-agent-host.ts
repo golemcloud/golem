@@ -416,7 +416,16 @@ export class WasmRpc {
     return {
       metadata: {
         agentId: this.agentTypeName + "()",
-        idempotencyKey: String(recordedCalls.length),
+        invocationId: {
+          owner: {
+            tag: "agent",
+            val: {
+              componentId: { uuid: { highBits: 0n, lowBits: 0n } },
+              agentId: this.agentTypeName + "()",
+            },
+          },
+          id: { highBits: 0n, lowBits: BigInt(recordedCalls.length) },
+        },
       },
       future: new FutureInvokeResult(methodName, () =>
         responder({ agentTypeName: call.agentTypeName, methodName, input }),

@@ -119,38 +119,30 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
     /// Store still claims while unclaimed retained `Start`s exist (see
     /// [`ReplayState::claim_start_for_store`]).
     pub(super) fn store_continued_live(&self) -> bool {
-        self.replaying_incomplete_entity && self.local_live_tail.load(Ordering::Acquire)
+        self.store_replay_state.continued_live()
     }
 
     fn replay_to_live_role(&self) -> ReplayToLiveRole {
-        if self.primary_runtime {
-            ReplayToLiveRole::PrimaryAgent
-        } else {
-            ReplayToLiveRole::NonPrimary
-        }
+        self.store_replay_state.role()
     }
 
     fn begin_switch_to_live(
         &self,
     ) -> impl Future<Output = Result<BeginReplayToLive, WorkerExecutorError>> + Send + 'static {
-        let replaying_incomplete_entity = self.replaying_incomplete_entity;
+        let store_replay_state = self.store_replay_state.clone();
         let tool_entity = self.tool_entity;
         let tool_operation = self.tool_operation.clone();
         let public_state = self.public_state.clone();
         let linear_memory = self.linear_memory.clone();
         let replay_state = self.replay_state.clone();
-        let role = self.replay_to_live_role();
-        let local_live_tail = self.local_live_tail.clone();
         async move {
             crate::durable_host::begin_replay_to_live(
-                replaying_incomplete_entity,
+                &store_replay_state,
                 tool_entity,
                 tool_operation,
                 &public_state,
                 &linear_memory,
                 &replay_state,
-                role,
-                local_live_tail,
             )
             .await
         }
@@ -201,7 +193,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
             let owned_claim = claim.clone();
             let store_continued_live = self.store_continued_live();
             let recorded_start_required = self.claim_options.require_recorded_start
-                || (!self.replaying_incomplete_entity && !self.primary_runtime);
+                || (!self.store_replay_state.is_incomplete_entity()
+                    && self.replay_to_live_role() != ReplayToLiveRole::PrimaryAgent);
             let outcome = owned_access_claim(access, recorded_start_required, async move {
                 claiming
                     .claim_start_for_store_with_admission(
@@ -229,8 +222,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                     "completed parent has no recorded host-internal child",
                 ));
             }
-            let primary_replay_tail = self.primary_runtime && replay_ended;
-            if !self.replaying_incomplete_entity && !primary_replay_tail {
+            let primary_replay_tail =
+                self.replay_to_live_role() == ReplayToLiveRole::PrimaryAgent && replay_ended;
+            if !self.store_replay_state.is_incomplete_entity() && !primary_replay_tail {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                     format!(
@@ -261,13 +255,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                 }
             } else {
                 crate::durable_host::begin_local_live_continuation(
-                    self.replaying_incomplete_entity,
+                    &self.store_replay_state,
                     self.tool_entity,
                     self.tool_operation.clone(),
                     &self.public_state,
                     &self.linear_memory,
-                    self.replay_to_live_role(),
-                    self.local_live_tail.clone(),
                     &self.replay_state,
                     self.replay_state.replay_target(),
                 )
@@ -276,7 +268,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
             let finished = pending
                 .finish_at(Some(admission_refusal_before_start(&claim, Pair::FQFN)?))
                 .await?;
-            if finished == FinishReplayToLive::Live && self.primary_runtime {
+            if finished == FinishReplayToLive::Live
+                && self.replay_to_live_role() == ReplayToLiveRole::PrimaryAgent
+            {
                 access.process_replay_events().await?;
             }
             finished.require_live()?;
@@ -353,9 +347,7 @@ pub(in crate::durable_host::concurrent) async fn publish_incomplete_replay_tail_
     let (
         replay_state,
         linear_memory,
-        role,
-        local_live_tail,
-        replaying_incomplete_entity,
+        store_replay_state,
         tool_entity,
         tool_operation,
         public_state,
@@ -363,13 +355,7 @@ pub(in crate::durable_host::concurrent) async fn publish_incomplete_replay_tail_
         (
             ctx.state.replay_state.clone(),
             ctx.linear_memory.clone(),
-            if ctx.runtime == OwnerRuntime::Agent {
-                ReplayToLiveRole::PrimaryAgent
-            } else {
-                ReplayToLiveRole::NonPrimary
-            },
-            ctx.state.local_live_tail(),
-            ctx.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
+            ctx.state.store_replay_state.clone(),
             matches!(
                 ctx.runtime,
                 OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
@@ -379,14 +365,12 @@ pub(in crate::durable_host::concurrent) async fn publish_incomplete_replay_tail_
         )
     });
     let pending = match crate::durable_host::begin_replay_to_live(
-        replaying_incomplete_entity,
+        &store_replay_state,
         tool_entity,
         tool_operation,
         &public_state,
         &linear_memory,
         &replay_state,
-        role,
-        local_live_tail,
     )
     .await?
     {
@@ -398,7 +382,9 @@ pub(in crate::durable_host::concurrent) async fn publish_incomplete_replay_tail_
         BeginReplayToLive::Pending(pending) => pending,
     };
     let outcome = pending.finish_at(boundary).await?;
-    if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
+    if outcome == FinishReplayToLive::Live
+        && store_replay_state.role() == ReplayToLiveRole::PrimaryAgent
+    {
         access.process_replay_events().await?;
     }
     Ok(outcome)
@@ -558,7 +544,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             )
             .await?;
             prepared.switch_to_live().await?;
-            return if prepared.replaying_incomplete_entity || prepared.primary_runtime {
+            return if prepared.store_replay_state.is_incomplete_entity()
+                || prepared.replay_to_live_role() == ReplayToLiveRole::PrimaryAgent
+            {
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
                 Err(WorkerExecutorError::unexpected_oplog_entry(

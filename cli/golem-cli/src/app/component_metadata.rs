@@ -275,9 +275,9 @@ async fn extract(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, Snapshotting};
     use golem_common::schema::{AgentConstructorSchema, InputSchema, SchemaGraph};
+    use golem_schema::Empty;
     use test_r::test;
 
     #[test]

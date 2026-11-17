@@ -64,6 +64,7 @@ fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 heck = { workspace = true }
+hmac = { workspace = true }
 http = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
@@ -82,6 +83,7 @@ prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 prost = { workspace = true }
 quote = { workspace = true }
+rand = { workspace = true }
 reedline = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
@@ -96,6 +98,7 @@ semver = { workspace = true }
 sha2 = { workspace = true }
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
+stacker = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
@@ -149,6 +152,7 @@ expectrl = { workspace = true }
 flate2 = { workspace = true }
 goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
+golem-model-mock = { workspace = true }
 golem-native-tool = { workspace = true }
 log = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
@@ -165,3 +169,4 @@ wat = { workspace = true }
 lenient_bool = { workspace = true }
 serde_json = { workspace = true }
 shadow-rs = { workspace = true }
+toml = { workspace = true }

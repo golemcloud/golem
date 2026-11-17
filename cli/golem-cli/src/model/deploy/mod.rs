@@ -1346,26 +1346,34 @@ fn render_path(segments: &[PathSegment]) -> String {
 }
 
 fn render_path_segment(segment: &PathSegment) -> String {
+    use golem_schema::http as schema_http;
     match segment {
-        PathSegment::Literal(segment) => segment.value.clone(),
+        PathSegment::Segment(schema_http::PathSegment::Literal(segment)) => segment.value.clone(),
         PathSegment::SystemVariable(segment) => format!("{{{}}}", segment.value),
-        PathSegment::PathVariable(segment) => format!("{{{}}}", segment.variable_name),
-        PathSegment::RemainingPathVariable(segment) => format!("{{*{}}}", segment.variable_name),
+        PathSegment::Segment(schema_http::PathSegment::PathVariable(segment)) => {
+            format!("{{{}}}", segment.variable_name)
+        }
+        PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(segment)) => {
+            format!("{{*{}}}", segment.variable_name)
+        }
     }
 }
 
 fn render_http_method(method: &HttpMethod) -> &str {
+    use golem_schema::http as schema_http;
     match method {
-        HttpMethod::Get(_) => "GET",
-        HttpMethod::Head(_) => "HEAD",
-        HttpMethod::Post(_) => "POST",
-        HttpMethod::Put(_) => "PUT",
-        HttpMethod::Delete(_) => "DELETE",
-        HttpMethod::Connect(_) => "CONNECT",
-        HttpMethod::Options(_) => "OPTIONS",
-        HttpMethod::Trace(_) => "TRACE",
-        HttpMethod::Patch(_) => "PATCH",
-        HttpMethod::Custom(method) => &method.value,
+        HttpMethod::Method(method) => match method {
+            schema_http::HttpMethod::Get(_) => "GET",
+            schema_http::HttpMethod::Head(_) => "HEAD",
+            schema_http::HttpMethod::Post(_) => "POST",
+            schema_http::HttpMethod::Put(_) => "PUT",
+            schema_http::HttpMethod::Delete(_) => "DELETE",
+            schema_http::HttpMethod::Connect(_) => "CONNECT",
+            schema_http::HttpMethod::Options(_) => "OPTIONS",
+            schema_http::HttpMethod::Trace(_) => "TRACE",
+            schema_http::HttpMethod::Patch(_) => "PATCH",
+            schema_http::HttpMethod::Custom(method) => &method.value,
+        },
         HttpMethod::Any(_) => "<any>",
     }
 }
@@ -1633,6 +1641,21 @@ impl TextOutput for DeploymentDiff {
                             ));
                             if diff.wasm_changed {
                                 logln("    - binary");
+                            }
+                            if !diff.agent_type_changes.is_empty() {
+                                logln("    - agent type declarations");
+                                for (agent_type, change) in &diff.agent_type_changes {
+                                    let action = match change {
+                                        BTreeMapDiffValue::Create => "create".green(),
+                                        BTreeMapDiffValue::Delete => "delete".red(),
+                                        BTreeMapDiffValue::Update(_) => "update".yellow(),
+                                    };
+                                    logln(format!(
+                                        "      - {} agent type {}",
+                                        action,
+                                        agent_type.log_color_highlight()
+                                    ));
+                                }
                             }
                             if !diff.agent_type_provision_config_changes.is_empty() {
                                 logln("    - provision configs");

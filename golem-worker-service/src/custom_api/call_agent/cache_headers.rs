@@ -223,9 +223,9 @@ pub fn add_vary_header(headers: &mut http::HeaderMap, header_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::CachePolicyTtl;
     use golem_common::model::component::ComponentId;
+    use golem_schema::Empty;
     use test_r::test;
     use uuid::uuid;
 
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn etag_token_is_url_encoded_to_survive_commas_and_quotes() {
-        // ParsedAgentId rendering can include commas, parentheses and quotes;
+        // ParsedAgentKey rendering can include commas, parentheses and quotes;
         // the etag token must encode them so the comma-delimited
         // `If-None-Match` parser still round-trips.
         let agent_id = AgentId {

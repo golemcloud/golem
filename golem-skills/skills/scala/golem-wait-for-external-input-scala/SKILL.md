@@ -34,7 +34,7 @@ For structured data, use the JSON variants which require an implicit `zio.blocks
 import golem.HostApi
 import golem.HostApi.PromiseId
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import zio.blocks.schema.Schema
 ```
 
@@ -69,22 +69,25 @@ HostApi.completePromiseJson(promiseId, Decision("approved"))
 
 ## PromiseId Structure
 
-A `PromiseId` contains an `agentId` and an `oplogIdx`. To let an external system complete the promise via the Golem REST API, the agent must expose both fields. The external caller then sends:
+A `PromiseId` contains an `agentId`, a `fingerprint` and an `oplogIdx`. The `fingerprint` is a UUID that identifies the agent incarnation that created the promise. To let an external system complete the promise via the Golem REST API, the agent must expose all three fields. The external caller then sends:
 
 ```
 POST /v1/components/{component_id}/workers/{agent_name}/complete
 Content-Type: application/json
 
-{"oplogIdx": <oplog_idx>, "data": [<bytes>]}
+{"oplogIdx": <oplog_idx>, "fingerprint": "<fingerprint_uuid>", "data": [<bytes>]}
 ```
+
+All three body fields are required. Use `JsUuid.toUuid` from `golem.host.js` to convert the `fingerprint` and the component ID to `java.util.UUID` values.
 
 ## Full Example: Human-in-the-Loop Approval
 
 ```scala
 import golem.*
+import golem.host.js.JsUuid
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import zio.blocks.schema.Schema
 
 case class Decision(status: String) derives Schema
@@ -103,7 +106,12 @@ class WorkflowAgentImpl(private val name: String) extends WorkflowAgent {
     val promiseId = HostApi.createPromise()
 
     // Publish the identity before waiting (replace with your notification integration).
-    println(s"Approval for $name: ${promiseId.agentId}, ${promiseId.oplogIdx}")
+    val componentId = JsUuid.toUuid(promiseId.agentId.componentId.uuid)
+    val fingerprint = JsUuid.toUuid(promiseId.fingerprint)
+    println(
+      s"Approval for $name: component $componentId, agent ${promiseId.agentId.agentId}, " +
+        s"fingerprint $fingerprint, oplog index ${promiseId.oplogIdx}"
+    )
 
     // 3. Wait for external completion
     HostApi.awaitPromiseJson[Decision](promiseId).map { decision =>

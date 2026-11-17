@@ -26,8 +26,9 @@ mod tests {
     use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
-        CachePolicy, DurableStreamSlotSource, Snapshotting, SnapshottingConfig,
+        CachePolicy, Snapshotting, SnapshottingConfig,
     };
+    use golem_rust::golem_schema::http::wit::wire::{DurableStreamSlotSource, HttpRouteMode};
     use golem_rust::schema::VariantValuePayload;
     use golem_rust::{
         AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, FromWire, IntoSchema,
@@ -1088,8 +1089,10 @@ mod tests {
             first: AgentStream<String>,
             second: AgentStream<u32>,
         ) -> String {
-            let first = first.into_raw().await.unwrap().take_handle();
-            let second = second.into_raw().await.unwrap().take_handle();
+            let (first, _first_outcome) = first.into_raw().await.unwrap();
+            let (second, _second_outcome) = second.into_raw().await.unwrap();
+            let first = first.take_handle();
+            let second = second.take_handle();
             format!("{prefix}:{first}:{second}")
         }
 
@@ -1485,6 +1488,7 @@ mod tests {
 
         #[endpoint(
             get = "/greet?l={location}&n={name}",
+            mode = "sse",
             durable_streams(
                 input("location", name = "messages"),
                 output(
@@ -1492,9 +1496,6 @@ mod tests {
                     name = "results",
                     content_type = "application/vnd.golem.events"
                 ),
-                allow_external_writes = true,
-                allow_stream_delete = false,
-                allow_invocation_delete = false,
                 max_concurrent_readers_per_stream = 8,
                 max_append_requests_per_second_per_stream = 25,
             )
@@ -1593,9 +1594,7 @@ mod tests {
             options.slots[1].content_type.as_deref(),
             Some("application/vnd.golem.events")
         );
-        assert_eq!(options.allow_external_writes, Some(true));
-        assert_eq!(options.allow_stream_delete, Some(false));
-        assert_eq!(options.allow_invocation_delete, Some(false));
+        assert_eq!(greet1.http_endpoint[0].mode, Some(HttpRouteMode::Sse));
         let load = options.load.as_ref().unwrap();
         assert_eq!(load.max_concurrent_readers_per_stream, Some(8));
         assert_eq!(load.max_append_requests_per_second_per_stream, Some(25));
@@ -1609,7 +1608,7 @@ mod tests {
             greet2
                 .http_endpoint
                 .iter()
-                .all(|endpoint| endpoint.durable_streams.is_none())
+                .all(|endpoint| endpoint.durable_streams.is_none() && endpoint.mode.is_none())
         );
     }
 
@@ -3268,6 +3267,8 @@ mod tests {
     #[test]
     fn test_all_http_methods_supported() {
         use golem_rust::agentic::get_all_agent_types;
+        use golem_rust::golem_agentic::golem::agent::common::HttpMethod;
+        use golem_rust::golem_schema::http::wit::wire as http;
 
         let agent_types = get_all_agent_types();
 
@@ -3279,11 +3280,11 @@ mod tests {
         assert!(matches!(agent.kind, AgentTypeKind::Regular));
 
         let expected_methods = vec![
-            ("get_method", "HttpMethod::Get"),
-            ("post_method", "HttpMethod::Post"),
-            ("put_method", "HttpMethod::Put"),
-            ("delete_method", "HttpMethod::Delete"),
-            ("patch_method", "HttpMethod::Patch"),
+            ("get_method", http::HttpMethod::Get),
+            ("post_method", http::HttpMethod::Post),
+            ("put_method", http::HttpMethod::Put),
+            ("delete_method", http::HttpMethod::Delete),
+            ("patch_method", http::HttpMethod::Patch),
         ];
 
         for (method_name, expected_http_method) in expected_methods {
@@ -3301,10 +3302,12 @@ mod tests {
             );
 
             let endpoint = &method.http_endpoint[0];
-            // Convert HttpMethod enum to string representation for comparison
-            let method_str = format!("{:?}", endpoint.http_method);
+            let HttpMethod::Method(actual) = &endpoint.http_method else {
+                panic!("Expected a concrete HTTP method for {}", method_name);
+            };
             assert_eq!(
-                method_str, expected_http_method,
+                std::mem::discriminant(actual),
+                std::mem::discriminant(&expected_http_method),
                 "HTTP method mismatch for {}",
                 method_name
             );

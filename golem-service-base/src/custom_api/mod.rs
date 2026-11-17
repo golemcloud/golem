@@ -20,16 +20,17 @@ use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentFileContentHash, AgentMode, AgentTypeName, FileMapping, FileResponseHeader, HttpMethod,
-    ReadOnlyConfig,
+    AgentFileContentHash, AgentMode, AgentTypeName, HttpMethod, ReadOnlyConfig,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_common::model::security_scheme::{SecuritySchemeLogin, SecuritySchemeRevision};
-use golem_common::model::{AgentId, OplogIndex, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, PromiseId};
 use golem_common::schema::{InputSchema, MetadataEnvelope, OutputSchema, SchemaGraph, SchemaType};
+pub use golem_schema::http::HttpRouteMode as AgentRouteMode;
+use golem_schema::http::{FileMapping, FileResponseHeader};
 use hmac::{Hmac, Mac};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use sha2::Sha256;
@@ -397,14 +398,9 @@ impl RouteMatch {
     }
 
     pub fn validate(&self, path: &[PathSegment], behavior: &RouteBehaviour) -> Result<(), String> {
-        let mount_behavior = matches!(
-            behavior,
-            RouteBehaviour::HttpRouter(_) | RouteBehaviour::AgentFilesystem(_)
-        );
+        let mount_behavior = matches!(behavior, RouteBehaviour::Mount(_));
         if matches!(self, Self::MountPrefix) != mount_behavior {
-            return Err(
-                "MountPrefix must be paired with HttpRouter or AgentFilesystem behavior".into(),
-            );
+            return Err("MountPrefix must be paired with Mount behavior".into());
         }
         if let Self::Method {
             method,
@@ -421,88 +417,82 @@ impl RouteMatch {
         {
             return Err("MountPrefix cannot contain a catch-all".into());
         }
-        match behavior {
-            RouteBehaviour::HttpRouter(router) => {
-                router.constructor_input.validate()?;
-                for method in router
-                    .handler
-                    .iter()
-                    .chain(router.openapi_provider_method.iter())
-                {
-                    method.input.validate()?;
-                    method.output.validate()?;
+        if let RouteBehaviour::Mount(mount) = behavior {
+            mount.files.agent().constructor_input.validate()?;
+            for target in mount.handler.iter().chain(mount.openapi_provider.iter()) {
+                let MountTarget::AgentMethod(target) = target;
+                target.agent.constructor_input.validate()?;
+                target.method.input.validate()?;
+                target.method.output.validate()?;
+                if target.method.method_name.is_empty() {
+                    return Err("Mount method name must not be empty".into());
                 }
-                if path
-                    .iter()
-                    .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
+            }
+            if let (Some(handler), Some(provider)) = (&mount.handler, &mount.openapi_provider) {
+                let (MountTarget::AgentMethod(handler), MountTarget::AgentMethod(provider)) =
+                    (handler, provider);
+                if handler.agent.component_id == provider.agent.component_id
+                    && handler.agent.agent_type == provider.agent.agent_type
+                    && handler.method.method_name == provider.method.method_name
                 {
-                    return Err("HttpRouter mount must be literal".into());
+                    return Err("Mount handler and provider must be distinct methods".into());
                 }
-                if router
-                    .handler
-                    .iter()
-                    .chain(router.openapi_provider_method.iter())
-                    .any(|method| method.method_name.is_empty())
-                {
-                    return Err("Router method name must not be empty".into());
-                }
-                if let (Some(handler), Some(provider)) =
-                    (&router.handler, &router.openapi_provider_method)
-                    && handler.method_name == provider.method_name
-                {
-                    return Err("Router handler and provider must be distinct methods".into());
-                }
-                FileMapping::validate_list(&router.static_bindings)?;
-                golem_common::schema::agent::http::validate_file_response_headers(
-                    &router.file_response_headers,
-                    !router.static_bindings.is_empty(),
-                )
-                .map_err(|error| error.to_string())?;
-                let mut paths = BTreeSet::new();
-                for entry in &router.file_index {
-                    let path = entry
-                        .path
-                        .strip_prefix('/')
-                        .ok_or("Router file path must be absolute")?;
-                    if path.chars().any(char::is_control)
-                        || path.split('/').any(|part| {
-                            part.is_empty() || part == "." || part == ".." || part.contains('\\')
-                        })
+            }
+            FileMapping::validate_list(&mount.file_bindings)?;
+            golem_common::schema::agent::http::validate_file_response_headers(
+                &mount.file_response_headers,
+                !mount.file_bindings.is_empty(),
+            )
+            .map_err(|error| error.to_string())?;
+            match &mount.files {
+                MountFileSource::Router { file_index, .. } => {
+                    if path
+                        .iter()
+                        .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
                     {
-                        return Err("Router file path must be canonical and name a file".into());
+                        return Err("HttpRouter mount must be literal".into());
                     }
-                    if !paths.insert(&entry.path) {
-                        return Err("Duplicate router file index path".into());
+                    let mut paths = BTreeSet::new();
+                    for entry in file_index {
+                        let path = entry
+                            .path
+                            .strip_prefix('/')
+                            .ok_or("Router file path must be absolute")?;
+                        if path.chars().any(char::is_control)
+                            || path.split('/').any(|part| {
+                                part.is_empty()
+                                    || part == "."
+                                    || part == ".."
+                                    || part.contains('\\')
+                            })
+                        {
+                            return Err("Router file path must be canonical and name a file".into());
+                        }
+                        if !paths.insert(&entry.path) {
+                            return Err("Duplicate router file index path".into());
+                        }
+                    }
+                }
+                MountFileSource::Live { agent } => {
+                    let captures = path
+                        .iter()
+                        .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
+                        .count();
+                    let mut bound = BTreeSet::new();
+                    for ConstructorParameter::Path {
+                        path_segment_index, ..
+                    } in &agent.constructor_parameters
+                    {
+                        let index: usize = (*path_segment_index).into();
+                        if index >= captures || !bound.insert(index) {
+                            return Err(
+                        "Filesystem constructor parameters must bind distinct mount captures"
+                            .into(),
+                    );
+                        }
                     }
                 }
             }
-            RouteBehaviour::AgentFilesystem(filesystem) => {
-                filesystem.constructor_input.validate()?;
-                FileMapping::validate_list(&filesystem.filesystem_bindings)?;
-                golem_common::schema::agent::http::validate_file_response_headers(
-                    &filesystem.file_response_headers,
-                    !filesystem.filesystem_bindings.is_empty(),
-                )
-                .map_err(|error| error.to_string())?;
-                let captures = path
-                    .iter()
-                    .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
-                    .count();
-                let mut bound = BTreeSet::new();
-                for ConstructorParameter::Path {
-                    path_segment_index, ..
-                } in &filesystem.constructor_parameters
-                {
-                    let index: usize = (*path_segment_index).into();
-                    if index >= captures || !bound.insert(index) {
-                        return Err(
-                            "Filesystem constructor parameters must bind distinct mount captures"
-                                .into(),
-                        );
-                    }
-                }
-            }
-            _ => {}
         }
         Ok(())
     }
@@ -516,22 +506,61 @@ pub enum RouteBehaviour {
     CorsPreflight(CorsPreflightBehaviour),
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
-    HttpRouter(HttpRouterBehaviour),
-    AgentFilesystem(AgentFilesystemBehaviour),
+    Mount(MountBehaviour),
 }
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
-pub struct HttpRouterBehaviour {
+pub struct MountBehaviour {
+    pub handler: Option<MountTarget>,
+    pub openapi_provider: Option<MountTarget>,
+    pub files: MountFileSource,
+    pub file_bindings: Vec<FileMapping>,
+    pub file_response_headers: Vec<FileResponseHeader>,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub enum MountTarget {
+    AgentMethod(MountAgentMethod),
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct MountAgentMethod {
+    pub agent: MountAgent,
+    pub method: RouterMethod,
+}
+
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct MountAgent {
     pub component_id: ComponentId,
+    /// Revision at which the mount policy was selected, not a required executor version.
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
     pub constructor_input: CompiledInputSchema,
-    pub handler: Option<RouterMethod>,
-    pub openapi_provider_method: Option<RouterMethod>,
-    pub static_bindings: Vec<FileMapping>,
-    pub file_index: Vec<RouterFileIndexEntry>,
-    pub file_response_headers: Vec<FileResponseHeader>,
+    pub constructor_parameters: Vec<ConstructorParameter>,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub enum MountFileSource {
+    Router {
+        agent: MountAgent,
+        file_index: Vec<RouterFileIndexEntry>,
+    },
+    Live {
+        agent: MountAgent,
+    },
+}
+
+impl MountFileSource {
+    pub fn agent(&self) -> &MountAgent {
+        match self {
+            Self::Router { agent, .. } | Self::Live { agent } => agent,
+        }
+    }
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -549,19 +578,6 @@ pub struct RouterFileIndexEntry {
     /// BLAKE3 digest computed during upload, used for blob lookup and the immutable HTTP ETag.
     pub blob_key: AgentFileContentHash,
     pub size: u64,
-}
-
-#[derive(Debug, BinaryCodec)]
-#[desert(evolution())]
-pub struct AgentFilesystemBehaviour {
-    pub component_id: ComponentId,
-    /// Revision at which the exposure policy was selected, not a required executor version.
-    pub component_revision: ComponentRevision,
-    pub agent_type: AgentTypeName,
-    pub constructor_input: CompiledInputSchema,
-    pub constructor_parameters: Vec<ConstructorParameter>,
-    pub filesystem_bindings: Vec<FileMapping>,
-    pub file_response_headers: Vec<FileResponseHeader>,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
@@ -608,15 +624,11 @@ pub enum PhantomSelection {
     Query { name: String, optional: bool },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BinaryCodec)]
-pub enum AgentRouteMode {
-    Rest,
-    DurableStreams,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct DurableStreamRoutePolicy {
+    /// The original base route ID, shared by every endpoint in this route family.
+    pub family_id: RouteId,
     pub slots: Vec<DurableStreamSlot>,
     pub allow_external_writes: bool,
     pub allow_stream_delete: bool,
@@ -811,27 +823,22 @@ impl OriginPattern {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 /// PromiseId (-component-id) to be base64-url encoded and used as the final segment in a webhook callback.
 /// Includes a checksum that can be used to verify that the webhook was indeed created by the worker executor and
-/// for the correct component_id.
+/// for the correct component_id. The checksum covers the agent's fingerprint, so a webhook of a deleted agent
+/// does not complete a promise of the agent re-created with the same name.
 pub struct AgentWebhookId {
     pub agent_name: String,
+    pub fingerprint: AgentFingerprint,
     pub oplog_idx: OplogIndex,
     pub checksum: [u8; 32],
 }
 
 impl AgentWebhookId {
     pub fn from_promise_id(promise_id: &PromiseId, hmac_key: &[u8]) -> Self {
-        let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
-
-        mac.update(b"agent-webhook-id:v1");
-        let promise_id_bytes = desert_rust::serialize_to_byte_vec(&promise_id)
-            .expect("PromiseId serialization must not fail");
-        mac.update(&promise_id_bytes);
-
-        let checksum = mac.finalize().into_bytes().into();
         Self {
             agent_name: promise_id.agent_id.agent_id.clone(),
+            fingerprint: promise_id.fingerprint,
             oplog_idx: promise_id.oplog_idx,
-            checksum,
+            checksum: Self::checksum(promise_id, hmac_key),
         }
     }
 
@@ -841,26 +848,32 @@ impl AgentWebhookId {
                 component_id,
                 agent_id: self.agent_name,
             },
+            fingerprint: self.fingerprint,
             oplog_idx: self.oplog_idx,
         }
     }
 
     pub fn verify_checksum(&self, component_id: ComponentId, hmac_key: &[u8]) -> bool {
-        let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
+        let promise_id = self.clone().into_promise_id(component_id);
+        Self::mac(&promise_id, hmac_key)
+            .verify_slice(&self.checksum)
+            .is_ok()
+    }
 
+    fn checksum(promise_id: &PromiseId, hmac_key: &[u8]) -> [u8; 32] {
+        Self::mac(promise_id, hmac_key)
+            .finalize()
+            .into_bytes()
+            .into()
+    }
+
+    fn mac(promise_id: &PromiseId, hmac_key: &[u8]) -> Hmac<Sha256> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
         mac.update(b"agent-webhook-id:v1");
-        let promise_id = PromiseId {
-            agent_id: AgentId {
-                component_id,
-                agent_id: self.agent_name.clone(),
-            },
-            oplog_idx: self.oplog_idx,
-        };
-        let promise_id_bytes = desert_rust::serialize_to_byte_vec(&promise_id)
+        let promise_id_bytes = desert_rust::serialize_to_byte_vec(promise_id)
             .expect("PromiseId serialization must not fail");
         mac.update(&promise_id_bytes);
-
-        mac.verify_slice(&self.checksum).is_ok()
+        mac
     }
 
     pub fn to_base64_url(&self) -> String {
@@ -894,8 +907,32 @@ mod tests {
     }
 
     #[test]
+    fn webhook_id_checksum_covers_the_fingerprint() {
+        let hmac_key = b"webhook-test-key";
+        let component_id = ComponentId(uuid::Uuid::from_u128(1));
+        let promise_id = PromiseId {
+            agent_id: AgentId {
+                component_id,
+                agent_id: "approval(\"order-1\")".to_string(),
+            },
+            fingerprint: AgentFingerprint(uuid::Uuid::from_u128(2)),
+            oplog_idx: OplogIndex::from_u64(7),
+        };
+        let webhook_id = AgentWebhookId::from_promise_id(&promise_id, hmac_key);
+
+        let decoded = AgentWebhookId::from_base64_url(&webhook_id.to_base64_url()).unwrap();
+        assert!(decoded.verify_checksum(component_id, hmac_key));
+        assert_eq!(decoded.into_promise_id(component_id), promise_id);
+
+        let mut of_new_incarnation = webhook_id.clone();
+        of_new_incarnation.fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
+        assert!(!of_new_incarnation.verify_checksum(component_id, hmac_key));
+    }
+
+    #[test]
     fn durable_stream_policy_resolves_public_and_canonical_slot_names() {
         let policy = DurableStreamRoutePolicy {
+            family_id: 37,
             slots: vec![
                 DurableStreamSlot {
                     canonical_name: "input".into(),

@@ -27,9 +27,10 @@ use crate::model::{
     AgentStatus, AgentStatusRecord, ComponentId, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
     DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
-    ExportForkAdmissions, FilterComparator, IdempotencyKey, InvocationResultBloom,
-    InvocationResultMembership, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator, Timestamp,
+    ExportForkAdmissions, FilterComparator, IdempotencyKey, InvocationId, InvocationResultBloom,
+    InvocationResultMembership, InvocationResultPosition, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator,
+    Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -39,7 +40,11 @@ use std::vec;
 use test_r::test;
 use uuid::{Uuid, uuid};
 
-fn durable_stream_test_session_key(key: &str) -> StreamInvocationId {
+fn invocation_id(value: u128) -> InvocationId {
+    InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210 + value))
+}
+
+fn durable_stream_test_session_key(key: u128) -> StreamInvocationId {
     StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
         callee: AgentId {
@@ -47,7 +52,35 @@ fn durable_stream_test_session_key(key: &str) -> StreamInvocationId {
             agent_id: "agent".to_string(),
         },
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
-        idempotency_key: IdempotencyKey::new(key.to_string()),
+        idempotency_key: invocation_id(key),
+    }
+}
+
+fn test_route_scope() -> String {
+    crate::model::durable_stream::durable_stream_route_scope("environment", "1", "route")
+}
+
+#[test]
+fn durable_stream_route_scope_is_canonical_and_preserves_tuple_boundaries() {
+    use crate::model::durable_stream::{
+        durable_stream_route_scope, validate_durable_stream_route_scope,
+    };
+    let first = durable_stream_route_scope("a:b", "c", "雪\"route");
+    let second = durable_stream_route_scope("a", "b:c", "雪\"route");
+    assert_ne!(first, second);
+    assert!(validate_durable_stream_route_scope(&first).is_ok());
+    assert!(validate_durable_stream_route_scope(&second).is_ok());
+    for invalid in [
+        "",
+        "route",
+        "[\"a\",\"b\"]",
+        "[\"a\", \"b\",\"c\"]",
+        "[\"a\",\"b\",\"\"]",
+    ] {
+        assert!(
+            validate_durable_stream_route_scope(invalid).is_err(),
+            "{invalid}"
+        );
     }
 }
 
@@ -60,14 +93,15 @@ fn fold_public_binding(
 
 #[test]
 fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
-    let first = durable_stream_test_session_key("first");
-    let second = durable_stream_test_session_key("second");
+    let first = durable_stream_test_session_key(1);
+    let second = durable_stream_test_session_key(2);
     let public = "report-42";
     let initialize = |invocation: &StreamInvocationId, deadline| {
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
-            session_key: invocation.idempotency_key.clone(),
+            session_key: invocation.idempotency_key,
             source_invocation: invocation.clone(),
             request_hash: vec![7; 32],
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
@@ -77,8 +111,9 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
     let refresh = |invocation: &StreamInvocationId, expected, deadline| {
         StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
-            session_key: invocation.idempotency_key.clone(),
+            session_key: invocation.idempotency_key,
             expected_deadline_millis: expected,
             refreshed_at_millis: deadline - 10_000,
             deadline_millis: deadline,
@@ -87,8 +122,9 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
     let expire = |invocation: &StreamInvocationId, expected| {
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
-            session_key: invocation.idempotency_key.clone(),
+            session_key: invocation.idempotency_key,
             expected_deadline_millis: expected,
             expired_at_millis: expected,
         })
@@ -161,14 +197,15 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
 
 #[test]
 fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() {
-    let invocation = durable_stream_test_session_key("absolute");
+    let invocation = durable_stream_test_session_key(3);
     let public = "report-absolute";
     let mut index = DurableStreamSessionIndex::default();
     let initialized =
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
-            session_key: invocation.idempotency_key.clone(),
+            session_key: invocation.idempotency_key,
             source_invocation: invocation.clone(),
             request_hash: vec![7; 32],
             expiry_policy: StreamSessionExpiryPolicy::Absolute {
@@ -178,7 +215,8 @@ fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() 
         });
     let refreshed = StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
         format_version: 1,
-        session_key: invocation.idempotency_key.clone(),
+        route_scope: test_route_scope(),
+        session_key: invocation.idempotency_key,
         public_session_id: public.to_string(),
         expected_deadline_millis: 10_000,
         refreshed_at_millis: 9_000,
@@ -212,7 +250,7 @@ fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() 
 #[test]
 fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
     use crate::model::durable_stream::StreamForkCutRecord;
-    let source = durable_stream_test_session_key("fork");
+    let source = durable_stream_test_session_key(4);
     let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![0; 32],
@@ -227,7 +265,7 @@ fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
     let prepared_attempt = AttemptId::fresh();
     let attachment_attempt = AttemptId::fresh();
     let original = DurableStreamSessionStatus {
-        session_key: Some(source.idempotency_key.clone()),
+        session_key: Some(source.idempotency_key),
         first_prepared: Some(OplogIndex::from_u64(2)),
         prepared: Some(OplogIndex::from_u64(2)),
         prepared_attempt_id: Some(prepared_attempt),
@@ -245,10 +283,10 @@ fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
         ..Default::default()
     };
     let mut index = DurableStreamSessionIndex::default();
-    index.insert(source.idempotency_key.clone(), original.clone());
-    let sibling_key = IdempotencyKey::new("sibling".to_string());
+    index.insert(source.idempotency_key, original.clone());
+    let sibling_key = invocation_id(5);
     let sibling = DurableStreamSessionStatus {
-        session_key: Some(sibling_key.clone()),
+        session_key: Some(sibling_key),
         attachment_epoch: Some(9),
         attachment_attempt_id: Some(AttemptId::fresh()),
         attachment_attached: Some(true),
@@ -256,7 +294,7 @@ fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
         tombstoned_slots: ["output".to_string()].into_iter().collect(),
         ..Default::default()
     };
-    index.insert(sibling_key.clone(), sibling.clone());
+    index.insert(sibling_key, sibling.clone());
     index.apply_record(OplogIndex::from_u64(21), &cut);
     let expected = DurableStreamSessionStatus {
         attachment_epoch: Some(1),
@@ -279,15 +317,16 @@ fn durable_stream_self_revert_preserves_retained_session() {
     use crate::model::durable_stream::StreamForkCutRecord;
     use crate::model::regions::OplogRegion;
 
-    let source = durable_stream_test_session_key("self-revert");
+    let source = durable_stream_test_session_key(6);
     let public_session_id = "retained-public";
     let mut index = DurableStreamSessionIndex::default();
     index.apply_record(
         OplogIndex::from_u64(2),
         &StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public_session_id.into(),
-            session_key: source.idempotency_key.clone(),
+            session_key: source.idempotency_key,
             source_invocation: source.clone(),
             request_hash: vec![0; 32],
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
@@ -321,11 +360,11 @@ fn durable_stream_self_revert_preserves_retained_session() {
 
 #[test]
 fn durable_stream_control_records_binary_roundtrip_and_validate() {
-    let session_key = durable_stream_test_session_key("control-roundtrip");
+    let session_key = durable_stream_test_session_key(7);
     let records = [
         StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(session_key.idempotency_key.clone()),
+            session_key: StreamRegistrationInvocation::Local(session_key.idempotency_key),
             slot: "input".to_string(),
             role: SessionStreamRole::Input,
         }),
@@ -345,7 +384,7 @@ fn durable_stream_control_records_binary_roundtrip_and_validate() {
     let invalid = StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
         format_version: 1,
         session_key: StreamRegistrationInvocation::Local(
-            durable_stream_test_session_key("empty-slot").idempotency_key,
+            durable_stream_test_session_key(8).idempotency_key,
         ),
         slot: String::new(),
         role: SessionStreamRole::Input,
@@ -363,8 +402,8 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
     };
     use golem_schema::schema::SchemaFingerprintV1;
 
-    let invocation = durable_stream_test_session_key("forward-target");
-    let source = StreamRegistrationInvocation::Local(IdempotencyKey::new("source".into()));
+    let invocation = durable_stream_test_session_key(9);
+    let source = StreamRegistrationInvocation::Local(invocation_id(10));
     let mapping = StreamSessionMappingRecord {
         transport_stream_id: 29,
         role: SessionStreamRole::Input,
@@ -503,20 +542,20 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
 
 #[test]
 fn durable_stream_control_status_folds_after_finished_idempotently() {
-    let session_key = durable_stream_test_session_key("control-fold");
-    let key = session_key.idempotency_key.clone();
+    let session_key = durable_stream_test_session_key(11);
+    let key = session_key.idempotency_key;
     let mut index = DurableStreamSessionIndex::default();
     index.insert(
-        key.clone(),
+        key,
         DurableStreamSessionStatus {
-            session_key: Some(session_key.idempotency_key.clone()),
+            session_key: Some(session_key.idempotency_key),
             finished: Some(OplogIndex::from_u64(10)),
             ..Default::default()
         },
     );
     let tombstone = StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
         format_version: 1,
-        session_key: StreamRegistrationInvocation::Local(session_key.idempotency_key.clone()),
+        session_key: StreamRegistrationInvocation::Local(session_key.idempotency_key),
         slot: "output".to_string(),
         role: SessionStreamRole::Output,
     });
@@ -543,12 +582,12 @@ fn durable_stream_control_status_folds_after_finished_idempotently() {
 
 #[test]
 fn durable_stream_remote_control_cannot_cancel_same_owner_local_session() {
-    let session = durable_stream_test_session_key("same-owner");
+    let session = durable_stream_test_session_key(12);
     let mut index = DurableStreamSessionIndex::default();
     index.insert(
-        session.idempotency_key.clone(),
+        session.idempotency_key,
         DurableStreamSessionStatus {
-            session_key: Some(session.idempotency_key.clone()),
+            session_key: Some(session.idempotency_key),
             prepared: Some(OplogIndex::from_u64(2)),
             ..Default::default()
         },
@@ -571,9 +610,7 @@ fn durable_stream_remote_control_cannot_cancel_same_owner_local_session() {
     );
     index.apply_record(
         OplogIndex::from_u64(4),
-        &cancel(StreamRegistrationInvocation::Local(
-            session.idempotency_key.clone(),
-        )),
+        &cancel(StreamRegistrationInvocation::Local(session.idempotency_key)),
     );
     assert!(
         index
@@ -586,9 +623,9 @@ fn durable_stream_remote_control_cannot_cancel_same_owner_local_session() {
 #[test]
 fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished() {
     let mut index = DurableStreamSessionIndex::default();
-    let unfinished = IdempotencyKey::new("unfinished".to_string());
+    let unfinished = invocation_id(13);
     index.insert(
-        unfinished.clone(),
+        unfinished,
         DurableStreamSessionStatus {
             first_prepared: Some(OplogIndex::from_u64(1)),
             ..Default::default()
@@ -596,7 +633,7 @@ fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished()
     );
     for n in 0..140 {
         index.insert(
-            IdempotencyKey::new(format!("done-{n}")),
+            invocation_id(100 + u128::from(n)),
             DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(n + 2)),
                 finished: Some(OplogIndex::from_u64(n + 1000)),
@@ -613,16 +650,8 @@ fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished()
             .count(),
         128
     );
-    assert!(
-        index
-            .get(&IdempotencyKey::new("done-0".to_string()))
-            .is_none()
-    );
-    assert!(
-        index
-            .get(&IdempotencyKey::new("done-139".to_string()))
-            .is_some()
-    );
+    assert!(index.get(&invocation_id(100)).is_none());
+    assert!(index.get(&invocation_id(239)).is_some());
 }
 
 #[test]
@@ -630,7 +659,7 @@ fn durable_stream_session_index_serialization_stays_bounded() {
     let mut index = DurableStreamSessionIndex::default();
     for n in 0..128 {
         index.insert(
-            IdempotencyKey::new(format!("done-{n:04}")),
+            invocation_id(100 + n),
             DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(1)),
                 finished: Some(OplogIndex::from_u64(2)),
@@ -642,7 +671,7 @@ fn durable_stream_session_index_serialization_stays_bounded() {
 
     for n in 128..1_128 {
         index.insert(
-            IdempotencyKey::new(format!("done-{n:04}")),
+            invocation_id(100 + n),
             DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(1)),
                 finished: Some(OplogIndex::from_u64(2)),
@@ -659,7 +688,7 @@ fn durable_stream_session_index_serialization_stays_bounded() {
 
 #[test]
 fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
-    let key = IdempotencyKey::new("invocation".to_string());
+    let key = invocation_id(14);
     let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
         callee: AgentId {
@@ -667,7 +696,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
             agent_id: "agent".to_string(),
         },
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
-        idempotency_key: key.clone(),
+        idempotency_key: key,
     };
     let attempt = AttemptId::fresh();
     let attachment_id = AttachmentId::primary(
@@ -680,7 +709,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
     let mut status = DurableStreamSessionStatus {
         first_prepared: Some(OplogIndex::from_u64(10)),
         prepared: Some(OplogIndex::from_u64(10)),
-        session_key: Some(session_key.idempotency_key.clone()),
+        session_key: Some(session_key.idempotency_key),
         prepared_attempt_id: Some(attempt),
         ..Default::default()
     };
@@ -689,7 +718,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
         OplogIndex::from_u64(13),
         &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attachment_id,
             attempt_id: attempt,
             epoch: 1,
@@ -702,7 +731,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
 
 #[test]
 fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
-    let key = IdempotencyKey::new("invocation".to_string());
+    let key = invocation_id(15);
     let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
         callee: AgentId {
@@ -722,7 +751,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     let mut status = DurableStreamSessionStatus {
         first_prepared: Some(OplogIndex::from_u64(10)),
         prepared: Some(OplogIndex::from_u64(10)),
-        session_key: Some(session_key.idempotency_key.clone()),
+        session_key: Some(session_key.idempotency_key),
         prepared_attempt_id: Some(attempt),
         ..Default::default()
     };
@@ -730,7 +759,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         OplogIndex::from_u64(13),
         &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attachment_id,
             attempt_id: attempt,
             epoch: 1,
@@ -749,14 +778,14 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         let mut invalid = DurableStreamSessionStatus {
             first_prepared: Some(OplogIndex::from_u64(10)),
             prepared: Some(OplogIndex::from_u64(10)),
-            session_key: status.session_key.clone(),
+            session_key: status.session_key,
             prepared_attempt_id: Some(attempt),
             ..Default::default()
         };
         invalid.apply_pending_invocation(pending, &invalid.session_key.as_ref().unwrap().clone());
         let mut attached = match StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: invalid.session_key.clone().unwrap(),
+            session_key: invalid.session_key.unwrap(),
             attachment_id: AttachmentId::primary(
                 session_key.callee_environment_id,
                 &session_key.callee,
@@ -784,7 +813,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         let mut unsupported = DurableStreamSessionStatus {
             first_prepared: Some(OplogIndex::from_u64(10)),
             prepared: Some(OplogIndex::from_u64(10)),
-            session_key: Some(attached.session_key.clone()),
+            session_key: Some(attached.session_key),
             prepared_attempt_id: Some(attempt),
             ..Default::default()
         };
@@ -795,22 +824,29 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     }
 }
 
+fn result_at(terminal: u64) -> InvocationResultPosition {
+    InvocationResultPosition {
+        terminal: OplogIndex::from_u64(terminal),
+        request: Some(OplogIndex::from_u64(terminal - 1)),
+    }
+}
+
 #[test]
 fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
     let mut membership = InvocationResultMembership::new(2, 64, 3);
-    let first = IdempotencyKey::new("first".to_string());
-    let second = IdempotencyKey::new("second".to_string());
-    let third = IdempotencyKey::new("third".to_string());
-    let fourth = IdempotencyKey::new("fourth".to_string());
-    let fifth = IdempotencyKey::new("fifth".to_string());
+    let first = invocation_id(1);
+    let second = invocation_id(2);
+    let third = invocation_id(3);
+    let fourth = invocation_id(4);
+    let fifth = invocation_id(5);
 
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    membership.insert(first, result_at(10));
+    membership.insert(second, result_at(20));
     assert!(membership.is_exact_complete());
 
-    membership.insert(third.clone(), OplogIndex::from_u64(30));
-    membership.insert(fourth.clone(), OplogIndex::from_u64(40));
-    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
+    membership.insert(third, result_at(30));
+    membership.insert(fourth, result_at(40));
+    membership.insert(fifth, result_at(50));
 
     assert_eq!(membership.len(), 2);
     assert!(!membership.is_exact_complete());
@@ -824,6 +860,7 @@ fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
     assert_eq!(membership.get(&third), None);
     assert_eq!(membership.get(&fourth), Some(&OplogIndex::from_u64(40)));
     assert_eq!(membership.get(&fifth), Some(&OplogIndex::from_u64(50)));
+    assert_eq!(membership.position(&fourth), Some(&result_at(40)));
     assert!(membership.might_contain(&first));
     assert!(membership.might_contain(&second));
     assert!(membership.might_contain(&third));
@@ -834,22 +871,23 @@ fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
 #[test]
 fn invocation_result_membership_updates_recency_for_repeated_keys() {
     let mut membership = InvocationResultMembership::new(2, 64, 3);
-    let first = IdempotencyKey::new("first".to_string());
-    let second = IdempotencyKey::new("second".to_string());
-    let third = IdempotencyKey::new("third".to_string());
-    let fourth = IdempotencyKey::new("fourth".to_string());
-    let fifth = IdempotencyKey::new("fifth".to_string());
-    let sixth = IdempotencyKey::new("sixth".to_string());
+    let first = invocation_id(1);
+    let second = invocation_id(2);
+    let third = invocation_id(3);
+    let fourth = invocation_id(4);
+    let fifth = invocation_id(5);
+    let sixth = invocation_id(6);
 
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second.clone(), OplogIndex::from_u64(20));
-    membership.insert(third, OplogIndex::from_u64(30));
-    membership.insert(fourth, OplogIndex::from_u64(40));
-    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
-    membership.insert(first.clone(), OplogIndex::from_u64(60));
-    membership.insert(sixth.clone(), OplogIndex::from_u64(70));
+    membership.insert(first, result_at(10));
+    membership.insert(second, result_at(20));
+    membership.insert(third, result_at(30));
+    membership.insert(fourth, result_at(40));
+    membership.insert(fifth, result_at(50));
+    membership.insert(first, result_at(60));
+    membership.insert(sixth, result_at(70));
 
     assert_eq!(membership.get(&first), Some(&OplogIndex::from_u64(60)));
+    assert_eq!(membership.position(&first), Some(&result_at(60)));
     assert_eq!(membership.get(&second), None);
     assert_eq!(membership.get(&fifth), None);
     assert_eq!(membership.get(&sixth), Some(&OplogIndex::from_u64(70)));
@@ -860,16 +898,16 @@ fn invocation_result_membership_binary_round_trip_preserves_membership() {
     use crate::serialization::{deserialize, serialize};
 
     let mut membership = InvocationResultMembership::new(2, 64, 3);
-    let first = IdempotencyKey::new("first".to_string());
-    let second = IdempotencyKey::new("second".to_string());
-    let third = IdempotencyKey::new("third".to_string());
-    let fourth = IdempotencyKey::new("fourth".to_string());
-    let fifth = IdempotencyKey::new("fifth".to_string());
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second, OplogIndex::from_u64(20));
-    membership.insert(third, OplogIndex::from_u64(30));
-    membership.insert(fourth, OplogIndex::from_u64(40));
-    membership.insert(fifth, OplogIndex::from_u64(50));
+    let first = invocation_id(1);
+    let second = invocation_id(2);
+    let third = invocation_id(3);
+    let fourth = invocation_id(4);
+    let fifth = invocation_id(5);
+    membership.insert(first, result_at(10));
+    membership.insert(second, result_at(20));
+    membership.insert(third, result_at(30));
+    membership.insert(fourth, result_at(40));
+    membership.insert(fifth, result_at(50));
     membership.set_revert_generation(4);
 
     let bytes = serialize(&membership).unwrap();
@@ -885,10 +923,7 @@ fn small_invocation_result_membership_serializes_without_a_bloom_filter() {
     use crate::serialization::{deserialize, serialize};
 
     let mut membership = InvocationResultMembership::default();
-    membership.insert(
-        IdempotencyKey::new("first".to_string()),
-        OplogIndex::from_u64(10),
-    );
+    membership.insert(invocation_id(1), result_at(10));
 
     assert!(membership.is_exact_complete());
     let bytes = serialize(&membership).unwrap();
@@ -905,12 +940,12 @@ fn default_invocation_result_bloom_keeps_new_invocations_local_at_100x_capacity(
         DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
     );
     for index in 0..history_size {
-        bloom.insert(&IdempotencyKey::new(format!("existing-{index}")));
+        bloom.insert(&invocation_id(index as u128));
     }
 
     let sample_size = 100_000;
     let false_positives = (0..sample_size)
-        .filter(|index| bloom.might_contain(&IdempotencyKey::new(format!("new-{index}"))))
+        .filter(|index| bloom.might_contain(&invocation_id((history_size + index) as u128)))
         .count();
 
     assert!(
@@ -987,6 +1022,367 @@ fn worker_filter_parse() {
             "abc".to_string(),
         )
     );
+}
+
+#[test]
+fn worker_filter_parse_agent_ids_without_quotes() {
+    assert_eq!(
+        AgentFilter::from_str(r#"name == CounterAgent("a b", 2)"#).unwrap(),
+        AgentFilter::new_name(
+            StringFilterComparator::Equal,
+            r#"CounterAgent("a b", 2)"#.to_string()
+        )
+    );
+    assert_eq!(
+        AgentFilter::from_str(r#"(name == Chat("x") or status == Failed)"#).unwrap(),
+        AgentFilter::new_or(vec![
+            AgentFilter::new_name(StringFilterComparator::Equal, r#"Chat("x")"#.to_string()),
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Failed),
+        ])
+    );
+}
+
+#[test]
+fn worker_filter_parse_precedence_and_keywords() {
+    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    assert_eq!(
+        AgentFilter::from_str("name == a or name == b AND not name == c").unwrap(),
+        AgentFilter::new_or(vec![
+            name("a"),
+            AgentFilter::new_and(vec![name("b"), name("c").not()]),
+        ])
+    );
+    assert_eq!(
+        AgentFilter::from_str("(name == a or name == b) and name == c").unwrap(),
+        AgentFilter::new_and(vec![
+            AgentFilter::new_or(vec![name("a"), name("b")]),
+            name("c"),
+        ])
+    );
+    assert_eq!(AgentFilter::from_str("name == and").unwrap(), name("and"));
+    assert_eq!(
+        AgentFilter::from_str("TRUE or false").unwrap(),
+        AgentFilter::new_or(vec![
+            AgentFilter::new_and(vec![]),
+            AgentFilter::new_or(vec![])
+        ])
+    );
+}
+
+#[test]
+fn worker_filter_parse_quoted_values_and_keys() {
+    assert_eq!(
+        AgentFilter::from_str(r#"name startswith "Type(""#).unwrap(),
+        AgentFilter::new_name(StringFilterComparator::StartsWith, "Type(".to_string())
+    );
+    assert_eq!(
+        AgentFilter::from_str(r#"env."my key" == "a \"b\" \\ c""#).unwrap(),
+        AgentFilter::new_env(
+            "my key".to_string(),
+            StringFilterComparator::Equal,
+            r#"a "b" \ c"#.to_string()
+        )
+    );
+    assert_eq!(
+        AgentFilter::from_str("config.db.pool == 10").unwrap(),
+        AgentFilter::new_config(
+            "db.pool".to_string(),
+            StringFilterComparator::Equal,
+            "10".to_string()
+        )
+    );
+}
+
+#[test]
+fn worker_filter_parse_brackets_in_values() {
+    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    for (input, value) in [
+        ("name == a(())()", "a(())()"),
+        (r#"name == a(")")"#, r#"a(")")"#),
+        (r#"name == ")()(""#, ")()("),
+        (r#"name == "(())()""#, "(())()"),
+        ("((name == a))", "a"),
+    ] {
+        assert_eq!(
+            AgentFilter::from_str(input).unwrap(),
+            name(value),
+            "input: {input}"
+        );
+    }
+    for value in [")()(", "(())()", "a)(", "a(()", "(", ")", r#"a(")"#] {
+        let displayed = name(value).to_string();
+        assert_eq!(
+            AgentFilter::from_str(&displayed).unwrap(),
+            name(value),
+            "displayed: {displayed}"
+        );
+    }
+}
+
+#[test]
+fn worker_filter_parse_brackets_in_env_and_config_keys() {
+    let env = |k: &str| {
+        AgentFilter::new_env(
+            k.to_string(),
+            StringFilterComparator::Equal,
+            "x".to_string(),
+        )
+    };
+    let config = |k: &str| {
+        AgentFilter::new_config(
+            k.to_string(),
+            StringFilterComparator::Equal,
+            "x".to_string(),
+        )
+    };
+    for (input, filter) in [
+        ("env.a(b) == x", env("a(b)")),
+        ("config.a(())() == x", config("a(())()")),
+        (r#"env.a(")") == x"#, env(r#"a(")")"#)),
+        (r#"env.")()(" == x"#, env(")()(")),
+        (r#"config."(())()" == x"#, config("(())()")),
+        ("env.(())() == x", env("(())()")),
+        ("(env.a(b) == x)", env("a(b)")),
+    ] {
+        assert_eq!(
+            AgentFilter::from_str(input).unwrap(),
+            filter,
+            "input: {input}"
+        );
+    }
+    for key in [")()(", "(())()", "a)(", "a(()", "(", ")", r#"a(")"#, "a(b)"] {
+        for filter in [env(key), config(key)] {
+            let displayed = filter.to_string();
+            assert_eq!(
+                AgentFilter::from_str(&displayed).unwrap(),
+                filter,
+                "displayed: {displayed}"
+            );
+        }
+    }
+    for invalid in [
+        "env.)()( == x",
+        "config.a)( == x",
+        "env.a(() == x",
+        "config.a(b == x",
+        "env.a)b == x",
+        r#"env.a(") == x"#,
+        r#"config.")()( == x"#,
+        r#"env.")"b == x"#,
+    ] {
+        assert!(
+            AgentFilter::from_str(invalid).is_err(),
+            "expected `{invalid}` to be refused"
+        );
+    }
+}
+
+#[test]
+fn worker_filter_parse_limits_nesting() {
+    use crate::model::MAX_AGENT_FILTER_DEPTH as MAX;
+
+    let name = AgentFilter::new_name(StringFilterComparator::Equal, "a".to_string());
+    let nots = |n: usize| format!("{}name == a", "not ".repeat(n));
+    let parens = |n: usize| format!("{}name == a{}", "(".repeat(n), ")".repeat(n));
+    let and_chain = |depth: usize| {
+        (1..depth).fold(name.clone(), |filter, _| {
+            AgentFilter::new_and(vec![filter, name.clone()])
+        })
+    };
+    let depth_error = format!("nested deeper than {MAX} levels");
+
+    assert_eq!(
+        AgentFilter::from_str(&nots(MAX - 1)).unwrap(),
+        not_chain(name.clone(), MAX)
+    );
+    assert_eq!(AgentFilter::from_str(&parens(MAX - 1)).unwrap(), name);
+    assert_eq!(
+        AgentFilter::from_str(&and_chain(MAX).to_string()).unwrap(),
+        and_chain(MAX)
+    );
+    assert!(AgentFilter::from(vec![nots(MAX - 1)]).is_ok());
+
+    for input in [
+        nots(MAX),
+        parens(MAX),
+        and_chain(MAX + 1).to_string(),
+        nots(1_000_000),
+        parens(1_000_000),
+    ] {
+        let error = AgentFilter::from_str(&input).unwrap_err();
+        assert!(
+            error.contains(&depth_error),
+            "{}",
+            &error[error.len() - 80..]
+        );
+    }
+    // Several `--filter` values join under one `And`, which is a level too.
+    assert!(
+        AgentFilter::from(vec![nots(MAX - 1), "name == b".to_string()])
+            .unwrap_err()
+            .contains(&depth_error)
+    );
+}
+
+#[test]
+fn worker_filter_canonical_form() {
+    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+
+    assert_eq!(
+        AgentFilter::new_or(vec![AgentFilter::new_and(vec![AgentFilter::new_not(
+            AgentFilter::new_or(vec![name("a")])
+        ),])])
+        .canonical(),
+        name("a").not()
+    );
+    assert_eq!(
+        AgentFilter::new_and(vec![name("a"), AgentFilter::new_or(vec![name("b")])]).canonical(),
+        AgentFilter::new_and(vec![name("a"), name("b")])
+    );
+    assert_eq!(
+        AgentFilter::new_and(vec![]).canonical(),
+        AgentFilter::new_and(vec![])
+    );
+
+    // The canonical form is what counts against the depth limit, and the text of a filter has
+    // no parentheses for a one-child `And` or `Or`, so such a filter parses back from its text.
+    use crate::model::MAX_AGENT_FILTER_DEPTH as MAX;
+    let wrapped = AgentFilter::new_or(vec![AgentFilter::new_and(vec![not_chain(name("a"), MAX)])]);
+    assert_eq!(wrapped.depth(), MAX + 2);
+    assert_eq!(
+        wrapped.clone().validated().unwrap(),
+        not_chain(name("a"), MAX)
+    );
+    assert_eq!(
+        AgentFilter::from_str(&wrapped.to_string()).unwrap(),
+        wrapped.canonical()
+    );
+    assert!(
+        AgentFilter::new_and(vec![not_chain(name("a"), MAX + 1)])
+            .validated()
+            .is_err()
+    );
+
+    // One `--filter` is its filter, not an `And` around it; none is the empty `And`.
+    assert_eq!(
+        AgentFilter::from(vec!["name == a".to_string()]).unwrap(),
+        name("a")
+    );
+    assert_eq!(
+        AgentFilter::from(vec![]).unwrap(),
+        AgentFilter::new_and(vec![])
+    );
+}
+
+#[test]
+fn worker_filter_parse_rejects_malformed_filters() {
+    for invalid in [
+        "name startswith Type(",
+        r#"name == "abc"#,
+        "(name == a",
+        "name == a)",
+        ")()(",
+        "(())()",
+        "()",
+        "((name == a)",
+        "(name == a))",
+        ")name == a(",
+        "name == )()(",
+        "name == (())()",
+        "name == a)(",
+        "name == a(()",
+        "name == a())",
+        r#"name == a(")"#,
+        "name ==",
+        "name == a name == b",
+        "env. == a",
+        "unknown == a",
+        "not",
+        "",
+    ] {
+        assert!(
+            AgentFilter::from_str(invalid).is_err(),
+            "expected `{invalid}` to be refused"
+        );
+    }
+}
+
+fn agent_filter_strategy() -> impl proptest::strategy::Strategy<Value = AgentFilter> {
+    use proptest::prelude::*;
+
+    // Text that hits every quoting rule: whitespace, parentheses, quotes, backslashes,
+    // keywords, empty text and agent-ID shapes.
+    let text = prop_oneof![
+        r#"[a-zA-Z0-9 ()"\\.,_\-]{0,10}"#,
+        Just("and".to_string()),
+        Just("NOT".to_string()),
+        Just(String::new()),
+        "[a-z]{1,6}".prop_map(|t| format!(r#"Agent("{t} x", 2)"#)),
+    ];
+    let comparator = prop_oneof![
+        Just(FilterComparator::Equal),
+        Just(FilterComparator::NotEqual),
+        Just(FilterComparator::GreaterEqual),
+        Just(FilterComparator::Greater),
+        Just(FilterComparator::LessEqual),
+        Just(FilterComparator::Less),
+    ];
+    let string_comparator = prop_oneof![
+        Just(StringFilterComparator::Equal),
+        Just(StringFilterComparator::NotEqual),
+        Just(StringFilterComparator::Like),
+        Just(StringFilterComparator::NotLike),
+        Just(StringFilterComparator::StartsWith),
+    ];
+    let status = prop_oneof![
+        Just(AgentStatus::Running),
+        Just(AgentStatus::Idle),
+        Just(AgentStatus::Suspended),
+        Just(AgentStatus::Interrupted),
+        Just(AgentStatus::Retrying),
+        Just(AgentStatus::Failed),
+        Just(AgentStatus::Exited),
+    ];
+    let mode = prop_oneof![Just(AgentMode::Durable), Just(AgentMode::Ephemeral)];
+
+    let leaf = prop_oneof![
+        (string_comparator.clone(), text.clone()).prop_map(|(c, v)| AgentFilter::new_name(c, v)),
+        (comparator.clone(), status).prop_map(|(c, v)| AgentFilter::new_status(c, v)),
+        (comparator.clone(), 0u64..1_000_000).prop_map(|(c, v)| {
+            AgentFilter::new_revision(c, ComponentRevision::new(v).unwrap())
+        }),
+        (comparator.clone(), mode).prop_map(|(c, v)| AgentFilter::new_mode(c, v)),
+        (comparator, 0u64..4_000_000_000_000)
+            .prop_map(|(c, millis)| AgentFilter::new_created_at(c, Timestamp::from(millis))),
+        (text.clone(), string_comparator.clone(), text.clone())
+            .prop_map(|(k, c, v)| AgentFilter::new_env(k, c, v)),
+        (text.clone(), string_comparator, text)
+            .prop_map(|(k, c, v)| AgentFilter::new_config(k, c, v)),
+    ];
+
+    leaf.prop_recursive(4, 24, 4, |inner| {
+        prop_oneof![
+            proptest::collection::vec(inner.clone(), 0..4).prop_map(AgentFilter::new_and),
+            proptest::collection::vec(inner.clone(), 0..4).prop_map(AgentFilter::new_or),
+            inner.prop_map(|f| f.not()),
+        ]
+    })
+}
+
+mod worker_filter_syntax {
+    use super::*;
+    use proptest::prelude::*;
+    use test_r::test;
+
+    proptest! {
+        #[test]
+        fn display_parses_back_to_the_same_filter(filter in agent_filter_strategy()) {
+            let displayed = filter.to_string();
+            let parsed = AgentFilter::from_str(&displayed)
+                .map_err(|e| TestCaseError::fail(format!("{displayed}: {e}")))?;
+            prop_assert_eq!(parsed, filter.canonical(), "displayed: {}", displayed);
+        }
+    }
 }
 
 #[test]
@@ -1127,6 +1523,12 @@ fn worker_filter_matches() {
         original_phantom_id: None,
         fingerprint: AgentFingerprint(Uuid::now_v7()),
         agent_mode: AgentMode::Durable,
+        create_request: crate::model::oplog::CreateRequest::new(
+            crate::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            crate::model::agent::Principal::anonymous(),
+            &crate::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     };
 
     assert!(
@@ -1253,6 +1655,29 @@ fn worker_filter_matches() {
         parsed,
         AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable)
     );
+
+    // `true` is the empty `and` and `false` the empty `or`, and both mean what they say.
+    for (text, expected) in [
+        ("true", true),
+        ("false", false),
+        ("not true", false),
+        ("not false", true),
+        ("name == worker-1 and true", true),
+        ("name == worker-1 and false", false),
+        ("name == worker-2 or true", true),
+        ("name == worker-2 or false", false),
+        ("name == worker-1 or false", true),
+        ("status == Idle and not false", true),
+    ] {
+        assert_eq!(
+            AgentFilter::from_str(text)
+                .unwrap()
+                .matches(&worker_metadata),
+            expected,
+            "{text}"
+        );
+    }
+    assert!(!AgentFilter::new_or(vec![]).matches(&worker_metadata));
 }
 
 #[test]
@@ -1277,7 +1702,7 @@ fn scheduled_invocations_become_pending_work_only_when_due() {
             timestamp: Timestamp::from(1000),
             not_before: Some(deadline),
             oplog_index: OplogIndex::INITIAL,
-            idempotency_key: Some(IdempotencyKey::fresh()),
+            idempotency_key: Some(InvocationId::new()),
             manual_update_target_revision: None,
         }],
         ..Default::default()
@@ -1408,11 +1833,13 @@ fn agent_status_record_agent_mode_is_not_serialized() {
             files: crate::model::SnapshotFiles::Confirmed(
                 crate::model::oplog::FilesystemSnapshotName::periodic(),
             ),
+            bootstrap: None,
         }),
         previous_usable_automatic_snapshot: Some(crate::model::UsableAutomaticSnapshot {
             index: crate::model::oplog::OplogIndex::from_u64(5),
             component_revision: ComponentRevision::new(7).unwrap(),
             filesystem_snapshot: Some(crate::model::oplog::FilesystemSnapshotName::periodic()),
+            bootstrap: None,
         }),
         export_fork_admissions: ExportForkAdmissions {
             owner_fingerprint: Some(AgentFingerprint(Uuid::new_v4())),
@@ -1496,7 +1923,7 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
         expires_at: None,
     };
     let invocation = AgentInvocation::AgentMethod {
-        idempotency_key: IdempotencyKey::fresh(),
+        idempotency_key: InvocationId::new(),
         method_name: "run".to_string(),
         input: SchemaValue::Tuple {
             elements: Vec::new(),
@@ -1648,6 +2075,7 @@ fn an_automatic_snapshot_is_usable_when_confirmed_or_without_a_name() {
             timestamp: crate::model::Timestamp::from(1_000),
             component_revision: ComponentRevision::new(2).unwrap(),
             files,
+            bootstrap: None,
         }
         .into_usable()
         .map(|usable| usable.filesystem_snapshot)
@@ -1725,4 +2153,35 @@ fn pod_uri_and_display_bracket_ipv6() {
     };
     assert_eq!(v6.to_string(), "[fdaa:0:1:a7b::2]:9000");
     assert_eq!(v6.uri(true).to_string(), "https://[fdaa:0:1:a7b::2]:9000/");
+}
+
+/// A chain of `not` above `leaf`, `depth` levels deep in total.
+fn not_chain(leaf: AgentFilter, depth: usize) -> AgentFilter {
+    (1..depth).fold(leaf, |filter, _| filter.not())
+}
+
+#[test]
+fn agent_filter_depth_limit_matches_grpc() {
+    use crate::model::MAX_AGENT_FILTER_DEPTH;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::GetWorkersMetadataRequest;
+    use prost::Message;
+
+    // A `created_at` leaf takes the most protobuf messages of any leaf.
+    let leaf = AgentFilter::new_created_at(FilterComparator::Equal, Timestamp::from(1u64));
+    let decodes = |filter: &AgentFilter| {
+        let request = GetWorkersMetadataRequest {
+            filter: Some(filter.clone().into()),
+            ..Default::default()
+        };
+        GetWorkersMetadataRequest::decode(request.encode_to_vec().as_slice()).is_ok()
+    };
+
+    let deepest = not_chain(leaf.clone(), MAX_AGENT_FILTER_DEPTH);
+    assert_eq!(deepest.depth(), MAX_AGENT_FILTER_DEPTH);
+    assert!(decodes(&deepest));
+    assert!(deepest.validate_depth().is_ok());
+
+    let too_deep = not_chain(leaf, MAX_AGENT_FILTER_DEPTH + 1);
+    assert!(!decodes(&too_deep));
+    assert!(too_deep.validate_depth().is_err());
 }

@@ -33,7 +33,6 @@
 package golem_tool_guest
 
 import (
-	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
@@ -48,7 +47,6 @@ type InvocationResult = golem_tool_common.InvocationResult
 type ByteStreamItem = witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]
 type ToolOutputWriter = golem_tool_streams.ToolOutputWriter
 type TypedSchemaValue = golem_core_types.TypedSchemaValue
-type Principal = golem_agent_common.Principal
 
 //go:wasmimport [export]golem:tool/guest@0.1.0 [stream-new-0]invoke
 func wasm_stream_new_result_list_u8_golem_tool_streams_byte_stream_failure() uint64

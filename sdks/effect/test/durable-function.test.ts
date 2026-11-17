@@ -1,12 +1,24 @@
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
 import * as Durability from "../src/Durability.js"
+import {
+  CustomInvocationContextClient,
+  CustomInvocationContextLive,
+} from "../src/host/CustomInvocationContextClient.js"
 import { DurabilityClient, DurabilityLive } from "../src/host/DurabilityClient.js"
+import { withCustomScopes } from "../src/internal/customScope.js"
 import { toWitCodec } from "../src/WitCodec.js"
 import { typedSchemaValueToWit } from "../src/internal/schema-model/wit.js"
 import * as Host from "./mocks/golem-durability.js"
+import * as Runtime from "./mocks/wasm-rquickjs-custom-invocation-context.js"
 
-const TestLayer: Layer.Layer<DurabilityClient> = DurabilityLive
+const TestLayer: Layer.Layer<DurabilityClient | CustomInvocationContextClient> = Layer.merge(
+  DurabilityLive,
+  CustomInvocationContextLive,
+)
+const provide = <A, E>(
+  effect: Effect.Effect<A, E, DurabilityClient | CustomInvocationContextClient>,
+) => withCustomScopes(effect).pipe(Effect.provide(TestLayer))
 const Req = Schema.Struct({ symbol: Schema.String })
 const Ok = Schema.Struct({ price: Schema.Number })
 const Err = Schema.Struct({ code: Schema.String })
@@ -19,7 +31,10 @@ const options = {
   error: Err,
 }
 
-beforeEach(() => Host.__resetAll())
+beforeEach(() => {
+  Host.__resetAll()
+  Runtime.__reset()
+})
 
 const response = (value: Result.Result<{ readonly price: number }, { readonly code: string }>) =>
   Effect.gen(function* () {
@@ -42,7 +57,7 @@ describe("Durability.wrap 1.6", () => {
       expect(Host.__getFinishCalls()).toHaveLength(1)
       expect(Host.__getFinishCalls()[0]!.forcedCommit).toBe(true)
       expect(Host.__getDrops()).toBe(0)
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(provide),
   )
 
   it.effect("persists a typed failure and returns it in the Effect error channel", () =>
@@ -53,7 +68,7 @@ describe("Durability.wrap 1.6", () => {
       expect(Host.__getFinishCalls()).toHaveLength(1)
       if (Exit.isFailure(exit))
         expect(exit.cause.reasons.find(Cause.isFailReason)?.error).toEqual({ code: "no" })
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(provide),
   )
 
   it.effect("drops unfinished resources on defect, interruption, and response encode failure", () =>
@@ -65,7 +80,7 @@ describe("Durability.wrap 1.6", () => {
       )
       expect(Host.__getFinishCalls()).toHaveLength(0)
       expect(Host.__getDrops()).toBe(3)
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(provide),
   )
 
   it.effect("does not persist typed failures combined with abnormal termination", () =>
@@ -94,7 +109,7 @@ describe("Durability.wrap 1.6", () => {
       }
       expect(Host.__getFinishCalls()).toHaveLength(0)
       expect(Host.__getDrops()).toBe(2)
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(provide),
   )
 
   it.effect("does not begin or evaluate the body when request encoding fails", () =>
@@ -112,7 +127,7 @@ describe("Durability.wrap 1.6", () => {
       )
       expect(ran).toBe(false)
       expect(Host.__getBeginCalls()).toHaveLength(0)
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(provide),
   )
 
   it.effect("replays typed success and failure without evaluating user Effects", () =>
@@ -149,7 +164,7 @@ describe("Durability.wrap 1.6", () => {
       expect(ran).toBe(false)
       if (Exit.isFailure(exit))
         expect(exit.cause.reasons.find(Cause.isFailReason)?.error).toEqual({ code: "cached" })
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(provide),
   )
 
   it.effect("rejects replay name and function type mismatches", () =>
@@ -182,7 +197,7 @@ describe("Durability.wrap 1.6", () => {
         ),
       )
       expect(Exit.isFailure(kindExit)).toBe(true)
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(provide),
   )
 
   it.effect("supports nested invocations with independent owned lifecycles", () =>
@@ -210,6 +225,6 @@ describe("Durability.wrap 1.6", () => {
       expect(Host.__getBeginCalls()).toHaveLength(2)
       expect(Host.__getFinishCalls()).toHaveLength(2)
       expect(Host.__getDrops()).toBe(0)
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(provide),
   )
 })

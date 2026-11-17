@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from "@effect/vitest"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Cause, Effect, Option, Schema, Stream } from "effect"
 import { defineAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import { PrincipalSchema } from "../src/Principal.js"
+import { AgentStream } from "../src/WitTypes.js"
 import { guest } from "../src/internal/guest.js"
 import {
   agentType,
@@ -303,15 +304,15 @@ describe("Http compileMount / compileEndpoint", () => {
     })
     const w = compileMount(m)
     expect(w.pathPrefix).toEqual([
-      { tag: "literal", val: "api" },
-      { tag: "path-variable", val: { variableName: "tenant" } },
+      { tag: "segment", val: { tag: "literal", val: "api" } },
+      { tag: "segment", val: { tag: "path-variable", val: { variableName: "tenant" } } },
     ])
     expect(w.authDetails).toEqual({ required: true })
     expect(w.phantomAgent).toBe(true)
     expect(w.corsOptions).toEqual({ allowedPatterns: ["*", "https://acme.com"] })
     expect(w.webhookSuffix).toEqual([
-      { tag: "literal", val: "hooks" },
-      { tag: "path-variable", val: { variableName: "tenant" } },
+      { tag: "segment", val: { tag: "literal", val: "hooks" } },
+      { tag: "segment", val: { tag: "path-variable", val: { variableName: "tenant" } } },
     ])
     expect(w.staticBindings).toEqual([])
     expect(w.filesystemBindings).toEqual([])
@@ -331,10 +332,10 @@ describe("Http compileMount / compileEndpoint", () => {
       cors: ["https://x"],
     })
     const w = compileEndpoint(e)
-    expect(w.httpMethod).toEqual({ tag: "get" })
+    expect(w.httpMethod).toEqual({ tag: "method", val: { tag: "get" } })
     expect(w.pathSuffix).toEqual([
-      { tag: "literal", val: "items" },
-      { tag: "path-variable", val: { variableName: "id" } },
+      { tag: "segment", val: { tag: "literal", val: "items" } },
+      { tag: "segment", val: { tag: "path-variable", val: { variableName: "id" } } },
     ])
     expect(w.queryVars).toEqual([{ queryParamName: "q", variableName: "query" }])
     expect(w.headerVars).toEqual([{ headerName: "X-Tenant", variableName: "tenant" }])
@@ -347,33 +348,45 @@ describe("Http compileMount / compileEndpoint", () => {
     expect(w.pathSuffix).toEqual([
       { tag: "system-variable", val: "agent-type" },
       { tag: "system-variable", val: "agent-version" },
-      { tag: "literal", val: "x" },
+      { tag: "segment", val: { tag: "literal", val: "x" } },
     ])
   })
 
   it("compiles catch-all segments", () => {
     const w = compileEndpoint(endpoint("GET", "/files/{*path}"))
     expect(w.pathSuffix).toEqual([
-      { tag: "literal", val: "files" },
-      { tag: "remaining-path-variable", val: { variableName: "path" } },
+      { tag: "segment", val: { tag: "literal", val: "files" } },
+      { tag: "segment", val: { tag: "remaining-path-variable", val: { variableName: "path" } } },
     ])
   })
 
   it("compiles a custom HTTP verb", () => {
     const w = compileEndpoint(custom("PROPFIND", "/x"))
-    expect(w.httpMethod).toEqual({ tag: "custom", val: "PROPFIND" })
+    expect(w.httpMethod).toEqual({ tag: "method", val: { tag: "custom", val: "PROPFIND" } })
   })
 
   it("maps each verb shorthand to the correct WIT tag", () => {
-    expect(compileEndpoint(get("/x")).httpMethod).toEqual({ tag: "get" })
-    expect(compileEndpoint(head("/x")).httpMethod).toEqual({ tag: "head" })
-    expect(compileEndpoint(post("/x")).httpMethod).toEqual({ tag: "post" })
-    expect(compileEndpoint(put("/x")).httpMethod).toEqual({ tag: "put" })
-    expect(compileEndpoint(del("/x")).httpMethod).toEqual({ tag: "delete" })
-    expect(compileEndpoint(patch("/x")).httpMethod).toEqual({ tag: "patch" })
-    expect(compileEndpoint(opt("/x")).httpMethod).toEqual({ tag: "options" })
-    expect(compileEndpoint(trace("/x")).httpMethod).toEqual({ tag: "trace" })
-    expect(compileEndpoint(connect("/x")).httpMethod).toEqual({ tag: "connect" })
+    expect(compileEndpoint(get("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "get" } })
+    expect(compileEndpoint(head("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "head" } })
+    expect(compileEndpoint(post("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "post" } })
+    expect(compileEndpoint(put("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "put" } })
+    expect(compileEndpoint(del("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "delete" } })
+    expect(compileEndpoint(patch("/x")).httpMethod).toEqual({
+      tag: "method",
+      val: { tag: "patch" },
+    })
+    expect(compileEndpoint(opt("/x")).httpMethod).toEqual({
+      tag: "method",
+      val: { tag: "options" },
+    })
+    expect(compileEndpoint(trace("/x")).httpMethod).toEqual({
+      tag: "method",
+      val: { tag: "trace" },
+    })
+    expect(compileEndpoint(connect("/x")).httpMethod).toEqual({
+      tag: "method",
+      val: { tag: "connect" },
+    })
   })
 
   it("escape-hatch segment constructors round-trip", () => {
@@ -384,10 +397,27 @@ describe("Http compileMount / compileEndpoint", () => {
     expect(agentVersion()).toEqual({ _tag: "SystemVar", name: "agent-version" })
   })
 
+  it("validates public route mode spellings before emitting WIT metadata", () => {
+    for (const [mode, expected] of [
+      ["durableStreams", "durable-streams"],
+      ["plain", "plain"],
+      ["sse", "sse"],
+      ["webSocket", "web-socket"],
+      [undefined, undefined],
+    ] as const) {
+      expect(compileEndpoint(get("/events", { mode })).mode).toBe(expected)
+    }
+    for (const mode of ["websocket", "SSE", "durable-streams", "web-socket", "", null, 0, {}]) {
+      expect(() => compileEndpoint(get("/events", { mode: mode as never }))).toThrow(TypeError)
+    }
+  })
+
   it("endpoint with no auth option emits undefined authDetails (inherits)", () => {
     const w = compileEndpoint(get("/x"))
     expect(w.authDetails).toBeUndefined()
     expect(w.durableStreams).toBeUndefined()
+    expect(w.mode).toBeUndefined()
+    expect(compileEndpoint(get("/events", { mode: "sse" })).mode).toBe("sse")
   })
 
   it("compiles full durable-stream options to the WIT metadata shape", () => {
@@ -404,9 +434,6 @@ describe("Http compileMount / compileEndpoint", () => {
                 contentType: "application/vnd.golem.events",
               },
             ],
-            allowExternalWrites: true,
-            allowStreamDelete: false,
-            allowInvocationDelete: false,
             load: {
               maxConcurrentReadersPerStream: 8,
               maxAppendRequestsPerSecondPerStream: 25,
@@ -423,9 +450,6 @@ describe("Http compileMount / compileEndpoint", () => {
           contentType: "application/vnd.golem.events",
         },
       ],
-      allowExternalWrites: true,
-      allowStreamDelete: false,
-      allowInvocationDelete: false,
       load: {
         maxConcurrentReadersPerStream: 8,
         maxAppendRequestsPerSecondPerStream: 25,
@@ -492,6 +516,39 @@ describe("Http isQueryOrHeaderBindableSchema", () => {
 describe("Http defineAgent integration", () => {
   beforeEach(async () => {
     await __resetAgents()
+  })
+
+  it("publishes declared modes without resolving streaming defaults", async () => {
+    defineAgent({
+      name: "DeclaredRouteModes",
+      id: {},
+      http: mount("/route-modes"),
+      methods: {
+        events: method({
+          input: {},
+          success: AgentStream(Schema.String),
+          http: [get("/events", { mode: "sse" })],
+        }),
+        inferred: method({
+          input: {},
+          success: AgentStream(Schema.String),
+          http: [get("/inferred")],
+        }),
+      },
+    }).implement({
+      init: () => Effect.void,
+      methods: () =>
+        Effect.succeed({
+          events: () => Effect.succeed(Stream.empty),
+          inferred: () => Effect.succeed(Stream.empty),
+        }),
+    })
+    const types = await guest.discoverAgentTypes()
+    const methods = types.find((type) => type.typeName === "DeclaredRouteModes")!.methods
+    expect(methods.find((method) => method.name === "events")!.httpEndpoint[0].mode).toBe("sse")
+    expect(
+      methods.find((method) => method.name === "inferred")!.httpEndpoint[0].mode,
+    ).toBeUndefined()
   })
 
   it("publishes all selector variants through agent registration", async () => {
@@ -617,8 +674,8 @@ describe("Http defineAgent integration", () => {
       expect(a.constructor.promptHint).toBe("use this counter")
       expect(a.httpMount).toBeDefined()
       expect(a.httpMount!.pathPrefix).toEqual([
-        { tag: "literal", val: "counters" },
-        { tag: "path-variable", val: { variableName: "name" } },
+        { tag: "segment", val: { tag: "literal", val: "counters" } },
+        { tag: "segment", val: { tag: "path-variable", val: { variableName: "name" } } },
       ])
       expect(a.httpMount!.corsOptions.allowedPatterns).toEqual(["*"])
       expect(a.httpMount!.authDetails).toEqual({ required: true })
@@ -626,12 +683,20 @@ describe("Http defineAgent integration", () => {
       const valueMethod = a.methods.find((m) => m.name === "value")!
       expect(valueMethod.description).toBe("current value")
       expect(valueMethod.httpEndpoint).toHaveLength(1)
-      expect(valueMethod.httpEndpoint[0]!.httpMethod).toEqual({ tag: "get" })
-      expect(valueMethod.httpEndpoint[0]!.pathSuffix).toEqual([{ tag: "literal", val: "value" }])
+      expect(valueMethod.httpEndpoint[0]!.httpMethod).toEqual({
+        tag: "method",
+        val: { tag: "get" },
+      })
+      expect(valueMethod.httpEndpoint[0]!.pathSuffix).toEqual([
+        { tag: "segment", val: { tag: "literal", val: "value" } },
+      ])
 
       const addMethod = a.methods.find((m) => m.name === "add")!
       expect(addMethod.httpEndpoint).toHaveLength(2)
-      expect(addMethod.httpEndpoint.map((e) => e.httpMethod.tag)).toEqual(["post", "get"])
+      expect(addMethod.httpEndpoint.map((e) => e.httpMethod)).toEqual([
+        { tag: "method", val: { tag: "post" } },
+        { tag: "method", val: { tag: "get" } },
+      ])
       expect(addMethod.httpEndpoint[1]!.queryVars).toEqual([
         { queryParamName: "by", variableName: "by" },
       ])
@@ -1075,18 +1140,12 @@ describe("Http pipeable combinators — endpoints", () => {
   it("`.pipe(withDurableStreams(...))` matches literal endpoint options", () => {
     const durableStreams = {
       slots: [{ source: "output" as const, slot: "$result" }],
-      allowExternalWrites: false,
-      allowStreamDelete: false,
-      allowInvocationDelete: false,
       load: { maxConcurrentReadersPerStream: 0 },
     }
     const piped = post("/x").pipe(withDurableStreams(durableStreams))
     const literal = endpoint("POST", "/x", { durableStreams })
     expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
     expect(compileEndpoint(piped).durableStreams).toMatchObject({
-      allowExternalWrites: false,
-      allowStreamDelete: false,
-      allowInvocationDelete: false,
       load: { maxConcurrentReadersPerStream: 0 },
     })
   })

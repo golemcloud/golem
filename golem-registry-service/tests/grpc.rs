@@ -17,7 +17,7 @@ use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::card::{Card, CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, Empty, IdempotencyKey, OplogIndex};
+use golem_common::model::{AgentId, InvocationId, OplogIndex};
 use golem_registry_service::RegistryService as RegistryServer;
 use golem_registry_service::config::{
     ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
@@ -26,6 +26,7 @@ use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, RegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_schema::Empty;
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
 };
@@ -57,7 +58,7 @@ fn runtime_card_provenance(oplog_index: u64) -> CardManagedByRuntimeDerived {
             component_id: ComponentId::new(),
             agent_id: "runtime-card-grpc-test".to_string(),
         },
-        invocation_key: IdempotencyKey::new(format!("runtime-card-grpc-test-{oplog_index}")),
+        invocation_key: InvocationId(uuid::Uuid::from_u128(u128::from(oplog_index))),
         oplog_index: OplogIndex::from_u64(oplog_index),
     }
 }

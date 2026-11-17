@@ -17,7 +17,9 @@ use crate::Tracing;
 use axum::extract::Path;
 use axum::routing::get;
 use axum::{Json, Router};
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentInvocation, PublicAgentInvocationResult, PublicOplogEntry,
+};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value, phantom_agent_id};
@@ -818,17 +820,72 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
         component_id: component.id,
         agent_id: parsed_target_agent_id.to_string(),
     };
-    let target_result = user
-        .invoke_and_await_agent_with_key(
-            &component,
-            &parsed_target_agent_id,
-            &idempotency_key,
-            "fork_test",
-            data_value!("hello"),
-        )
-        .await?
-        .into_return_value()
-        .expect("Expected return value");
+    let source_oplog = user
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    let source_invocation_id = source_oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationFinished(finished)
+                if finished.method_name.as_deref() == Some("fork_test") =>
+            {
+                Some(finished.invocation_id)
+            }
+            _ => None,
+        })
+        .expect("Expected the source fork_test invocation to finish");
+
+    // The fork resumes the copied invocation. Submitting the external key again would
+    // create a new invocation because the target has a different fingerprint.
+    let target_oplog = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let oplog = user
+                .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+                .await?;
+            if oplog.iter().any(|entry| {
+                matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationFinished(finished)
+                        if finished.invocation_id == source_invocation_id)
+            }) {
+                break anyhow::Ok(oplog);
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("The copied fork_test invocation did not finish"))??;
+
+    let target_starts: Vec<_> = target_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "fork_test" =>
+                {
+                    Some(method.invocation_id)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(target_starts, vec![source_invocation_id]);
+    let target_finishes: Vec<_> = target_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationFinished(finished)
+                if finished.method_name.as_deref() == Some("fork_test") =>
+            {
+                Some(finished)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(target_finishes.len(), 1);
+    assert_eq!(target_finishes[0].invocation_id, source_invocation_id);
+    let PublicAgentInvocationResult::AgentMethod(target_result) = &target_finishes[0].result else {
+        panic!("Expected a fork_test method result");
+    };
 
     http_server.abort();
 
@@ -840,8 +897,8 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
         ))
     );
     assert_eq!(
-        target_result,
-        SchemaValue::String(format!(
+        target_result.output.value(),
+        &SchemaValue::String(format!(
             "{source_name}-hello::{}-forked-{forked_phantom_id}",
             target_agent_id.agent_id
         ))

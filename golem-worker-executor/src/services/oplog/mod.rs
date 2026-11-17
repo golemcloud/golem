@@ -33,8 +33,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
-    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
-    StreamSessionRecord,
+    StreamItemsRecord, StreamRegisteredRecord, StreamSessionRecord, StreamTerminalRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -46,7 +45,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    DurableStreamSessionStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
+    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;

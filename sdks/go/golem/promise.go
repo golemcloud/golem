@@ -41,28 +41,44 @@ import (
 
 // PromiseID is the durable, serializable identity of a promise. Hand it to
 // whoever will complete the promise — another agent, or an external system via
-// the worker-service complete endpoint (which needs its component, agent and
-// oplog index). The exported fields make it directly JSON-marshalable.
+// the worker-service complete endpoint (which needs its component, agent,
+// fingerprint and oplog index). The exported fields make it directly
+// JSON-marshalable.
 type PromiseID struct {
 	// AgentID is the agent that created the promise; its AgentID string is the
 	// ":agent" path segment of the REST complete endpoint.
 	AgentID AgentID
-	// OplogIndex disambiguates promises created by the same agent — the "oplogIdx"
-	// field of the REST complete endpoint.
+	// Fingerprint identifies the incarnation of the agent that created the
+	// promise — the "fingerprint" field of the REST complete endpoint, as the
+	// UUID's string form. A deleted and re-created agent keeps its AgentID but
+	// gets a new fingerprint, so a promise of the deleted incarnation cannot
+	// complete one of the new incarnation.
+	Fingerprint UUID
+	// OplogIndex disambiguates promises created by the same agent incarnation —
+	// the "oplogIdx" field of the REST complete endpoint.
 	OplogIndex uint64
 }
 
-// String renders a compact, human-readable form (not a parse target).
+// String renders the promise ID as <agent-id>/<fingerprint>/<oplog-idx>, the
+// form the host displays it in (not a parse target).
 func (id PromiseID) String() string {
-	return fmt.Sprintf("%s/%s/%d", id.AgentID.ComponentID, id.AgentID.AgentID, id.OplogIndex)
+	return fmt.Sprintf("%s/%s/%s/%d", id.AgentID.ComponentID, id.AgentID.AgentID, id.Fingerprint, id.OplogIndex)
 }
 
 func promiseIDFromWit(w types.PromiseId) PromiseID {
-	return PromiseID{AgentID: agentIDFromWit(w.AgentId), OplogIndex: w.OplogIdx}
+	return PromiseID{
+		AgentID:     agentIDFromWit(w.AgentId),
+		Fingerprint: uuidFromWit(w.Fingerprint),
+		OplogIndex:  w.OplogIdx,
+	}
 }
 
 func (id PromiseID) toWit() types.PromiseId {
-	return types.PromiseId{AgentId: id.AgentID.toWit(), OplogIdx: id.OplogIndex}
+	return types.PromiseId{
+		AgentId:     id.AgentID.toWit(),
+		Fingerprint: uuidToWit(id.Fingerprint),
+		OplogIdx:    id.OplogIndex,
+	}
 }
 
 // Promise is a handle to a durable promise whose completion payload is T. Obtain

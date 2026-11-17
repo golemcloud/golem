@@ -19,10 +19,49 @@ import { method } from '../src/method';
 import * as http from '../src/http';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
+import { s } from '../src/schema/markers';
 
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
 describe('agent HTTP routing (Phase 6)', () => {
+  it('validates public route mode spellings before emitting WIT metadata', () => {
+    for (const [mode, expected] of [
+      ['durableStreams', 'durable-streams'],
+      ['plain', 'plain'],
+      ['sse', 'sse'],
+      ['webSocket', 'web-socket'],
+      [undefined, undefined],
+    ] as const) {
+      expect(http.compileEndpoint(http.get('/events', { mode })).mode).toBe(expected);
+    }
+    for (const mode of ['websocket', 'SSE', 'durable-streams', 'web-socket', '', null, 0, {}]) {
+      expect(() => http.compileEndpoint(http.get('/events', { mode: mode as never }))).toThrow(
+        TypeError,
+      );
+    }
+  });
+
+  it('publishes declared modes and leaves streaming defaults to the registry', () => {
+    defineAgent({
+      name: 'declaredRouteModes',
+      id: {},
+      http: http.mount('/route-modes'),
+      methods: {
+        events: method({
+          input: {},
+          returns: s.stream(z.string()),
+          http: http.get('/events', { mode: 'sse' }),
+        }),
+        inferred: method({ input: {}, returns: s.stream(z.string()), http: http.get('/inferred') }),
+      },
+    });
+    const methods = get('declaredRouteModes')!.methods;
+    expect(methods.find((method) => method.name === 'events')!.httpEndpoint[0].mode).toBe('sse');
+    expect(
+      methods.find((method) => method.name === 'inferred')!.httpEndpoint[0].mode,
+    ).toBeUndefined();
+  });
+
   it('publishes required and optional path/query selectors without constructor bindings', () => {
     for (const source of ['path', 'query'] as const) {
       for (const optional of [false, true]) {
@@ -108,7 +147,7 @@ describe('agent HTTP routing (Phase 6)', () => {
     ).toMatch(/conflicts/);
   });
 
-  it('compiles full durable stream route options without losing explicit false values', () => {
+  it('compiles full durable stream route options', () => {
     const durableStreams = {
       slots: [
         { source: 'input' as const, slot: 'input', name: 'messages' },
@@ -119,9 +158,6 @@ describe('agent HTTP routing (Phase 6)', () => {
           contentType: 'application/vnd.golem.events',
         },
       ],
-      allowExternalWrites: true,
-      allowStreamDelete: false,
-      allowInvocationDelete: false,
       load: {
         maxConcurrentReadersPerStream: 8,
         maxAppendRequestsPerSecondPerStream: 25,
@@ -137,9 +173,6 @@ describe('agent HTTP routing (Phase 6)', () => {
           contentType: 'application/vnd.golem.events',
         },
       ],
-      allowExternalWrites: true,
-      allowStreamDelete: false,
-      allowInvocationDelete: false,
       load: {
         maxConcurrentReadersPerStream: 8,
         maxAppendRequestsPerSecondPerStream: 25,
@@ -166,6 +199,8 @@ describe('agent HTTP routing (Phase 6)', () => {
   });
 
   it('omits durable stream metadata and preserves omitted nested options', () => {
+    expect(http.compileEndpoint(http.get('/events', { mode: 'sse' })).mode).toEqual('sse');
+    expect(http.compileEndpoint(http.post('/plain')).mode).toBeUndefined();
     expect(http.compileEndpoint(http.post('/plain')).durableStreams).toBeUndefined();
     expect(
       http.compileEndpoint(
@@ -175,9 +210,6 @@ describe('agent HTTP routing (Phase 6)', () => {
       ).durableStreams,
     ).toEqual({
       slots: [{ source: { tag: 'input', val: 'input' }, name: undefined, contentType: undefined }],
-      allowExternalWrites: undefined,
-      allowStreamDelete: undefined,
-      allowInvocationDelete: undefined,
       load: undefined,
     });
   });
@@ -216,8 +248,8 @@ describe('agent HTTP routing (Phase 6)', () => {
     // Mount: /counters/{name} → [literal "counters", path-variable "name"]
     expect(at.httpMount).toBeDefined();
     expect(at.httpMount!.pathPrefix).toEqual([
-      { tag: 'literal', val: 'counters' },
-      { tag: 'path-variable', val: { variableName: 'name' } },
+      { tag: 'segment', val: { tag: 'literal', val: 'counters' } },
+      { tag: 'segment', val: { tag: 'path-variable', val: { variableName: 'name' } } },
     ]);
     expect(at.httpMount!.corsOptions).toEqual({ allowedPatterns: ['*'] });
     expect(at.httpMount!.authDetails).toEqual({ required: false });
@@ -231,12 +263,22 @@ describe('agent HTTP routing (Phase 6)', () => {
 
     // GET /value
     expect(methods['value'].httpEndpoint).toHaveLength(1);
-    expect(methods['value'].httpEndpoint[0].httpMethod).toEqual({ tag: 'get' });
-    expect(methods['value'].httpEndpoint[0].pathSuffix).toEqual([{ tag: 'literal', val: 'value' }]);
+    expect(methods['value'].httpEndpoint[0].httpMethod).toEqual({
+      tag: 'method',
+      val: { tag: 'get' },
+    });
+    expect(methods['value'].httpEndpoint[0].pathSuffix).toEqual([
+      { tag: 'segment', val: { tag: 'literal', val: 'value' } },
+    ]);
 
     // POST /add
-    expect(methods['add'].httpEndpoint[0].httpMethod).toEqual({ tag: 'post' });
-    expect(methods['add'].httpEndpoint[0].pathSuffix).toEqual([{ tag: 'literal', val: 'add' }]);
+    expect(methods['add'].httpEndpoint[0].httpMethod).toEqual({
+      tag: 'method',
+      val: { tag: 'post' },
+    });
+    expect(methods['add'].httpEndpoint[0].pathSuffix).toEqual([
+      { tag: 'segment', val: { tag: 'literal', val: 'add' } },
+    ]);
   });
 
   it('binds path, query, and header variables to method parameters', () => {
@@ -258,8 +300,8 @@ describe('agent HTTP routing (Phase 6)', () => {
 
     const ep = get('httpBindings')!.methods.find((m) => m.name === 'getMessage')!.httpEndpoint[0];
     expect(ep.pathSuffix).toEqual([
-      { tag: 'literal', val: 'messages' },
-      { tag: 'path-variable', val: { variableName: 'messageId' } },
+      { tag: 'segment', val: { tag: 'literal', val: 'messages' } },
+      { tag: 'segment', val: { tag: 'path-variable', val: { variableName: 'messageId' } } },
     ]);
     expect(ep.queryVars).toEqual([{ queryParamName: 'limit', variableName: 'limit' }]);
     expect(ep.headerVars).toEqual([{ headerName: 'X-Trace', variableName: 'trace' }]);
@@ -281,8 +323,8 @@ describe('agent HTTP routing (Phase 6)', () => {
 
     const eps = get('httpMulti')!.methods.find((m) => m.name === 'add')!.httpEndpoint;
     expect(eps).toHaveLength(2);
-    expect(eps[0].httpMethod).toEqual({ tag: 'post' });
-    expect(eps[1].httpMethod).toEqual({ tag: 'get' });
+    expect(eps[0].httpMethod).toEqual({ tag: 'method', val: { tag: 'post' } });
+    expect(eps[1].httpMethod).toEqual({ tag: 'method', val: { tag: 'get' } });
     expect(eps[1].queryVars).toEqual([{ queryParamName: 'by', variableName: 'by' }]);
   });
 

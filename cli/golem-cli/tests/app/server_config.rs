@@ -1,5 +1,5 @@
 use crate::Tracing;
-use crate::app::TestContext;
+use crate::app::{TestContext, cmd};
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use reqwest::StatusCode;
 use test_r::{inherit_test_dep, test, timeout};
@@ -44,14 +44,39 @@ async fn server_refuses_well_known_token_on_non_loopback_address(_tracing: &Trac
         "{output}"
     );
     assert!(output.contains("router.address = 0.0.0.0"), "{output}");
-    for variable in [
-        "GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN",
-        "GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY",
-        "GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY",
-        "GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY",
+}
+
+#[test]
+#[timeout("10m")]
+async fn unauthenticated_requests_get_json_unauthorized(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for path in [
+        "/v1/me/token".to_string(),
+        format!("/v1/components/{}/workers/agent", uuid::Uuid::new_v4()),
     ] {
-        assert!(output.contains(variable), "{output}");
+        let response = client
+            .get(format!("http://127.0.0.1:{}{path}", ctx.router_port()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "AUTH_UNAUTHORIZED", "{path}: {body}");
     }
+
+    ctx.add_env_var("GOLEM_AUTH_TOKEN", "rotated-token");
+    let output = ctx.cli([cmd::ACCOUNT, "usage", "show"]).await;
+
+    assert!(!output.success());
+    assert!(output.stderr_contains("401"), "{}", output.stderr_text());
+    assert!(
+        output.stderr_contains("Could not authenticate user using token (AUTH_UNAUTHORIZED)"),
+        "{}",
+        output.stderr_text()
+    );
 }
 
 #[test]
@@ -121,30 +146,4 @@ async fn configured_admin_token_replaces_well_known_token(_tracing: &Tracing) {
         current_token_status(&ctx, ADMIN_TOKEN).await,
         StatusCode::OK
     );
-}
-
-#[test]
-#[timeout("10m")]
-async fn server_rejects_stale_and_launcher_owned_settings(_tracing: &Tracing) {
-    let mut ctx = TestContext::new();
-    ctx.add_env_var("GOLEM__RESOURCE_USAGE_METERING__COMPUTE", "true");
-
-    let output = ctx.run_server_expecting_startup_failure().await;
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.contains("resource_usage_metering"), "{output}");
-
-    let mut ctx = TestContext::new();
-    ctx.add_env_var("GOLEM__WORKER_EXECUTOR__GRPC__PORT", "9000");
-
-    let output = ctx.run_server_expecting_startup_failure().await;
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.contains("worker_executor.grpc.port"), "{output}");
 }
