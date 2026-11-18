@@ -26,6 +26,7 @@ use golem_common::model::card::{
     CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, ScopeCard, StoredCard,
     parse_polymorphic_permission,
 };
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -34,7 +35,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, OwnedAgentId, PromiseId,
 };
 use golem_common::schema::{SchemaType, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
@@ -42,6 +43,7 @@ use golem_worker_executor::services::card::{
     CardRevokeResult, CardService, CardState, RuntimeCardCreation,
 };
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start_with_overrides,
@@ -231,7 +233,7 @@ fn connect_local_card_delivery(
 impl WorkerProxy for LocalCardDeliveryProxy {
     async fn prepare(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: &ResolvedTarget,
         method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
@@ -244,7 +246,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
             .prepare(
-                owned_agent_id,
+                target,
                 method_name,
                 caller_agent_id,
                 caller_env,
@@ -260,7 +262,8 @@ impl WorkerProxy for LocalCardDeliveryProxy {
 
     async fn create(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: &ResolvedTarget,
+        exclusive: bool,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -271,7 +274,8 @@ impl WorkerProxy for LocalCardDeliveryProxy {
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
             .create(
-                owned_agent_id,
+                target,
+                exclusive,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -285,7 +289,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        target: &ResolvedTarget,
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
@@ -304,7 +308,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         self.inner
             .invoke_agent(
-                agent_id,
+                target,
                 method_name,
                 method_parameters,
                 mode,
@@ -338,7 +342,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
             ))
         })?;
         delivery(
-            target_agent_id.clone(),
+            *target_agent_id,
             environment_id,
             transfer_id,
             source_card_id,
@@ -368,7 +372,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
 
     async fn resume(
         &self,
-        owned_agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         force: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
@@ -377,7 +381,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
 
     async fn fork_worker(
         &self,
-        source_agent_id: &AgentId,
+        source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         principal: Principal,
@@ -396,35 +400,36 @@ impl WorkerProxy for LocalCardDeliveryProxy {
 
     async fn revert(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
-            .revert(agent_id, target, resolved_revert, auth_ctx)
+            .revert(owned_agent_id, target, resolved_revert, auth_ctx)
             .await
     }
 
     async fn complete_promise(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .complete_promise(promise_id, data, auth_ctx)
+            .complete_promise(environment_id, promise_id, data, auth_ctx)
             .await
     }
 
     async fn cancel_invocation(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: golem_common::model::InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_invocation(agent_id, idempotency_key, auth_ctx)
+            .cancel_invocation(owned_agent_id, idempotency_key, auth_ctx)
             .await
     }
 
@@ -457,6 +462,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
         &self,
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
@@ -470,6 +476,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
             .process_oplog_entries(
                 target_agent_id,
                 environment_id,
+                component_id,
                 component_revision,
                 idempotency_key,
                 account_id,
@@ -574,7 +581,7 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
     assert_eq!(card_parameter_polymorphism("receiveTemplate"), Some(true));
     assert_eq!(card_parameter_polymorphism("receiveConcrete"), Some(false));
 
-    let caller = agent_id!("ScalaPermissionCardAgent", "scenario");
+    let caller = agent_key!("ScalaPermissionCardAgent", "scenario");
     let root = component
         .metadata
         .agent_type_provision_configs

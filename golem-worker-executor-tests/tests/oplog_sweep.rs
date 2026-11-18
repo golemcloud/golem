@@ -18,11 +18,12 @@
 use crate::Tracing;
 
 use golem_api_grpc::proto::golem::worker::{
-    AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
+    AgentInvocationMode, AgentTarget, InvocationFreshnessDisposition, InvocationStart, agent_target,
 };
+use golem_common::model::agent::AgentKey;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -66,7 +67,7 @@ pub(super) async fn ephemeral_layer_rows(
         "SELECT COUNT(*) FROM index_storage \
          WHERE namespace LIKE 'ephemeral-worker-c%-oplog' AND key = ?",
     )
-    .bind(agent_id.to_redis_key())
+    .bind(OwnedAgentId::new(context.default_environment_id, agent_id).storage_key())
     .fetch_one(&pool)
     .await?;
     pool.close().await;
@@ -118,9 +119,14 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("EphemeralCounter", "swept-after-lookup");
+    let parsed_agent_id = agent_key!("EphemeralCounter", "swept-after-lookup");
     executor
-        .start_agent(&component.id, parsed_agent_id.clone())
+        .create_unkeyed_agent(
+            &component.id,
+            None,
+            parsed_agent_id.clone(),
+            std::collections::HashMap::new(),
+        )
         .await?;
     let idempotency_key = IdempotencyKey::fresh();
     executor
@@ -132,21 +138,14 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
             data_value!(),
         )
         .await?;
-    // The DSL runs each ephemeral invocation under a phantom derived from its key.
-    let agent_id = AgentId::from_agent_id(
-        component.id,
-        &parsed_agent_id
-            .with_ephemeral_invocation_phantom(
-                &golem_common::model::InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&idempotency_key),
-                )
-                .owner_key("increment"),
-            )
-            .map_err(anyhow::Error::msg)?,
-    )
-    .map_err(anyhow::Error::msg)?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    // The DSL runs each ephemeral invocation on an instance whose ID derives from its key.
+    let owned_agent_id = executor.ephemeral_invocation_agent_id(
+        context.default_environment_id,
+        &parsed_agent_id.agent_type,
+        &idempotency_key,
+        "increment",
+    );
+    let agent_id = owned_agent_id.agent_id;
 
     // Teardown removes the worker and drains its layer.
     wait_until("the invocation's teardown", || async {
@@ -157,7 +156,19 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
 
     executor
         .invoke_agent_session(InvocationStart {
-            agent_id: Some(agent_id.clone().into()),
+            target: Some(AgentTarget {
+                target: Some(agent_target::Target::Id(agent_id.into())),
+            }),
+            constructor: Some(
+                AgentKey::new(
+                    parsed_agent_id.agent_type.clone(),
+                    parsed_agent_id.parameters.clone(),
+                )
+                .map_err(|err| anyhow::anyhow!("{err}"))?
+                .try_into()
+                .map_err(anyhow::Error::msg)?,
+            ),
+            component_id: Some(component.id.into()),
             method_name: None,
             input: None,
             mode: AgentInvocationMode::Lookup as i32,

@@ -38,7 +38,7 @@ pub mod transactions;
 pub mod websocket;
 
 use crate::Tracing;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -74,7 +74,7 @@ async fn go_counter_basic_invoke(
         .store()
         .await?;
 
-    let agent_id = agent_id!("CounterAgent", "go-counter-1");
+    let agent_id = agent_key!("CounterAgent", "go-counter-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -121,7 +121,7 @@ async fn go_handler_panic_fails_only_its_invocation(
         .store()
         .await?;
 
-    let agent_id = agent_id!("CounterAgent", "go-counter-panic-1");
+    let agent_id = agent_key!("CounterAgent", "go-counter-panic-1");
     let worker = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

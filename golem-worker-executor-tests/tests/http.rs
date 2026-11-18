@@ -19,7 +19,7 @@ use bytes::Bytes;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -90,7 +90,7 @@ async fn http_client(
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
-    let agent_id = agent_id!("HttpClient");
+    let agent_id = agent_key!("HttpClient");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -162,7 +162,7 @@ async fn http_client_using_reqwest(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient2");
+    let agent_id = agent_key!("HttpClient2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -238,7 +238,7 @@ async fn http_client_using_reqwest_async(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient3");
+    let agent_id = agent_key!("HttpClient3");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -313,7 +313,7 @@ async fn http_client_using_reqwest_async_parallel(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient3");
+    let agent_id = agent_key!("HttpClient3");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -511,7 +511,7 @@ async fn http_client_using_reqwest_async_parallel_replay(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient3");
+    let agent_id = agent_key!("HttpClient3");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -649,7 +649,7 @@ async fn outgoing_http_contains_trace_context_headers(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient2");
+    let agent_id = agent_key!("HttpClient2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -729,7 +729,7 @@ async fn outgoing_http_response_dropped_without_consuming_body_replays(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -852,7 +852,7 @@ impl std::fmt::Debug for PartitionedStarts {
 
 async fn wait_for_oplog(
     executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
-    worker_id: &golem_common::model::AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
     description: &str,
     predicate: impl Fn(&[golem_common::model::oplog::PublicOplogEntryWithIndex]) -> bool,
 ) -> anyhow::Result<Vec<golem_common::model::oplog::PublicOplogEntryWithIndex>> {
@@ -860,7 +860,7 @@ async fn wait_for_oplog(
     loop {
         // A pending chunk's Start can follow the guest's last commit. Flush the resident
         // buffer so this checkpoint observes a durable prefix, not the commit race.
-        executor.commit_oplog(worker_id).await?;
+        executor.commit_oplog(&worker_id.agent_id).await?;
         let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
         if predicate(&oplog) {
             return Ok(oplog);
@@ -1082,7 +1082,7 @@ async fn outgoing_http_pending_body_read_can_be_cancelled(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -1162,7 +1162,7 @@ async fn outgoing_http_pending_body_read_cancellation_replays(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -1455,7 +1455,7 @@ async fn outgoing_http_opens_scope_after_primary_replay_tail(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -1530,13 +1530,13 @@ async fn outgoing_http_recovers_missing_consume_body_scope_start(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
     let key = IdempotencyKey::fresh();
     let mut gate = executor
-        .gate_next_consume_body_scope_start(&worker_id)
+        .gate_next_consume_body_scope_start(&worker_id.agent_id)
         .await;
 
     executor
@@ -1677,12 +1677,14 @@ async fn outgoing_http_recovers_incomplete_consume_body_scope_after_restart(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
     let key = IdempotencyKey::fresh();
-    let mut gate = executor.gate_next_consume_body_scope_end(&worker_id).await;
+    let mut gate = executor
+        .gate_next_consume_body_scope_end(&worker_id.agent_id)
+        .await;
 
     executor
         .invoke_agent_with_key(&component, &agent_id, &key, "get_idempotent", data_value!())
@@ -1818,13 +1820,13 @@ async fn outgoing_http_missing_consume_scope_refuses_full_duplex_body_cycle(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
     let key = IdempotencyKey::fresh();
     let mut gate = executor
-        .gate_next_consume_body_scope_start(&worker_id)
+        .gate_next_consume_body_scope_start(&worker_id.agent_id)
         .await;
 
     executor
@@ -1976,13 +1978,15 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // Arm the gate before the invocation that performs the gated read.
-    let mut gate = executor.gate_first_consume_body_chunk_end(&worker_id).await;
+    let mut gate = executor
+        .gate_first_consume_body_chunk_end(&worker_id.agent_id)
+        .await;
 
     let invocation = timeout(
         Duration::from_secs(30),
@@ -2019,7 +2023,9 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
     // live round on top of it.
     drop(executor);
     let executor = start(deps, &context).await?;
-    let mut gate = executor.gate_first_consume_body_chunk_end(&worker_id).await;
+    let mut gate = executor
+        .gate_first_consume_body_chunk_end(&worker_id.agent_id)
+        .await;
 
     let invocation = timeout(
         Duration::from_secs(60),
@@ -2196,12 +2202,16 @@ async fn outgoing_http_replayed_cancelled_body_read_preserves_delivered_bytes(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
-    let mut gate = executor.gate_first_consume_body_chunk_end(&worker_id).await;
-    let mut reply_gate = executor.defer_first_consume_body_reply(&worker_id).await;
+    let mut gate = executor
+        .gate_first_consume_body_chunk_end(&worker_id.agent_id)
+        .await;
+    let mut reply_gate = executor
+        .defer_first_consume_body_reply(&worker_id.agent_id)
+        .await;
 
     let invocation = timeout(
         Duration::from_secs(30),
@@ -2307,7 +2317,7 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2439,7 +2449,7 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2459,10 +2469,13 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
     drop(executor);
     let executor = start(deps, &context).await?;
 
-    let mut send_admission =
-        executor.gate_next_replay_access_admission(&worker_id, "client::send", Stage::AfterScope);
+    let mut send_admission = executor.gate_next_replay_access_admission(
+        &worker_id.agent_id,
+        "client::send",
+        Stage::AfterScope,
+    );
     let mut cancel_timer = executor.gate_next_replay_access_admission(
-        &worker_id,
+        &worker_id.agent_id,
         "monotonic-clock::wait-for",
         Stage::BeforeScope,
     );
@@ -2480,7 +2493,7 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
         // wait only after the drop.
         tokio::join!(send_admission.entered(), cancel_timer.entered());
         let mut checkpoint = executor.gate_next_replay_access_admission(
-            &worker_id,
+            &worker_id.agent_id,
             "monotonic-clock::wait-for",
             Stage::BeforeScope,
         );
@@ -2577,7 +2590,7 @@ async fn outgoing_http_post_cancel_records_cancelled_and_replays(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2745,13 +2758,13 @@ async fn interrupt_while_parked_in_p3_http_response_wait(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
     let before_invocation = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            executor.commit_oplog(&worker_id).await?;
+            executor.commit_oplog(&worker_id.agent_id).await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             if oplog
                 .iter()
@@ -2791,7 +2804,7 @@ async fn interrupt_while_parked_in_p3_http_response_wait(
     recv_request_event(&mut request_rx).await?;
     let (send_start, invocation_start) = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            executor.commit_oplog(&worker_id).await?;
+            executor.commit_oplog(&worker_id.agent_id).await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             let terminal_starts = oplog
                 .iter()
@@ -3078,7 +3091,7 @@ async fn outgoing_http_body_stream_drop_releases_connection_permit(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -3185,7 +3198,7 @@ async fn outgoing_http_request_body_transmission_error_is_recorded_and_replayed(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -3292,7 +3305,7 @@ async fn outgoing_http_send_permanent_error_is_recorded_and_replayed(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -3413,7 +3426,7 @@ async fn outgoing_http_full_response_is_replayed_without_network(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -3539,7 +3552,7 @@ async fn ignored_trailers_replay(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -3691,7 +3704,7 @@ async fn outgoing_http_contains_idempotency_key(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient2");
+    let agent_id = agent_key!("HttpClient2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -3715,7 +3728,7 @@ async fn outgoing_http_contains_idempotency_key(
     // than from a fixed position, because unrelated invocation bookkeeping may add or remove
     // entries before the send without changing this contract.
     let stored_key = executor
-        .external_invocation_key(&worker_id, &key, "run")
+        .external_invocation_key(&worker_id.agent_id, &key, "run")
         .await?;
     let expected_key =
         IdempotencyKey::derived(&IdempotencyKey::new(stored_key.to_string()), sends.ended[0]);
@@ -3813,7 +3826,7 @@ async fn outgoing_http_commits_random_key_before_dispatch(
             .component_dep(&context.default_environment_id, http_tests)
             .store()
             .await?;
-        let agent = agent_id!("HttpClient");
+        let agent = agent_key!("HttpClient");
         let worker = executor
             .start_agent_with(
                 &component.id,
@@ -3839,7 +3852,7 @@ async fn outgoing_http_commits_random_key_before_dispatch(
             assert_eq!(first.0, first.1);
         }
         // Read storage, not the live oplog handle, which also contains buffered entries.
-        let stored = executor.stored_oplog(&worker).await;
+        let stored = executor.stored_oplog(&worker.agent_id).await;
         let send = stored
             .iter()
             .position(|entry| {
@@ -3946,7 +3959,7 @@ async fn spawned_guest_task_durable_call_lands_before_invocation_finished(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;

@@ -154,7 +154,7 @@ async fn completed_entity_writer_disposal_replays_its_attachment_terminals(
                 metadata.tools,
             )),
         );
-        let agent = agent_id!("ToolStreamingCaller", "completed-entity-writer-disposal");
+        let agent = agent_key!("ToolStreamingCaller", "completed-entity-writer-disposal");
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         executor
             .invoke_and_await_agent(
@@ -164,7 +164,7 @@ async fn completed_entity_writer_disposal_replays_its_attachment_terminals(
                 data_value!(),
             )
             .await?;
-        let before = executor.stored_oplog(&worker).await;
+        let before = executor.stored_oplog(&worker.agent_id).await;
         let creations = before
             .iter()
             .enumerate()
@@ -226,7 +226,7 @@ async fn completed_entity_writer_disposal_replays_its_attachment_terminals(
             .await?
             .into_typed()?;
         assert_eq!(probe, "replayed");
-        let after = executor.stored_oplog(&worker).await;
+        let after = executor.stored_oplog(&worker.agent_id).await;
         assert_eq!(&after[..before.len()], before.as_slice());
         assert_eq!(
             controls(&after),
@@ -289,14 +289,14 @@ async fn cancelled_stdin_disposal_replay_consumes_historical_finish(
             metadata.tools,
         )),
     );
-    let agent = agent_id!("ToolStreamingCaller", "cancelled-stdin-disposal-replay");
+    let agent = agent_key!("ToolStreamingCaller", "cancelled-stdin-disposal-replay");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let _: String = executor
         .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
         .await?
         .into_typed()?;
-    let mut body = executor.gate_next_live_entity_body_completion(&worker, "streaming");
-    let settled = executor.probe_primary_settlement_access(&worker);
+    let mut body = executor.gate_next_live_entity_body_completion(&worker.agent_id, "streaming");
+    let settled = executor.probe_primary_settlement_access(&worker.agent_id);
     {
         let invocation = executor.invoke_and_await_agent(
             &component,
@@ -317,7 +317,7 @@ async fn cancelled_stdin_disposal_replay_consumes_historical_finish(
         body.release();
         tokio::time::timeout(Duration::from_secs(30), invocation).await??;
     }
-    let original = executor.stored_oplog(&worker).await;
+    let original = executor.stored_oplog(&worker.agent_id).await;
     let controls = |entries: &[golem_common::model::oplog::OplogEntry]| {
         entries
             .iter()
@@ -340,15 +340,15 @@ async fn cancelled_stdin_disposal_replay_consumes_historical_finish(
     };
     drop(executor);
     executor = start_with_overrides(deps, &context, overrides).await?;
-    let mut claim = executor.gate_next_entity_reconstruction_claim(&worker);
-    let mut body = executor.gate_next_entity_body_start(&worker);
+    let mut claim = executor.gate_next_entity_reconstruction_claim(&worker.agent_id);
+    let mut body = executor.gate_next_entity_body_start(&worker.agent_id);
     {
         let invocation =
             executor.invoke_and_await_agent(&component, &agent, "replay_probe", data_value!());
         tokio::pin!(invocation);
         let observe = async {
             tokio::time::timeout(Duration::from_secs(30), claim.entered()).await?;
-            let settled = executor.probe_primary_settlement_access(&worker);
+            let settled = executor.probe_primary_settlement_access(&worker.agent_id);
             claim.release();
             tokio::time::timeout(Duration::from_secs(30), body.entered()).await?;
             // The replayed closed.wait and writer drop precede primary guest settlement,
@@ -368,7 +368,7 @@ async fn cancelled_stdin_disposal_replay_consumes_historical_finish(
             "replayed"
         );
     }
-    let replayed = executor.stored_oplog(&worker).await;
+    let replayed = executor.stored_oplog(&worker.agent_id).await;
     assert_eq!(controls(&replayed), controls(&original));
     assert_eq!(starts(&replayed[..original.len()]), starts(&original));
     assert!(starts(&replayed[original.len()..]).is_empty());
@@ -399,7 +399,7 @@ async fn snapshot_attachment_constructors_and_reads_are_suppressed(
             .component_dep(&context.default_environment_id, caller)
             .store()
             .await?;
-        let agent = agent_id!("ToolStreamingCaller", format!("snapshot-{mode}"));
+        let agent = agent_key!("ToolStreamingCaller", format!("snapshot-{mode}"));
         let worker = executor
             .start_agent_with(
                 &component.id,
@@ -492,7 +492,7 @@ async fn producer_disposal_receipt_blocks_invocation_success(
         .component_dep(&context.default_environment_id, caller)
         .store()
         .await?;
-    let agent = agent_id!("ToolStreamingCaller", "delayed-stdin-disposal-receipt");
+    let agent = agent_key!("ToolStreamingCaller", "delayed-stdin-disposal-receipt");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let _: String = executor
         .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
@@ -505,7 +505,7 @@ async fn producer_disposal_receipt_blocks_invocation_success(
             .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
             .count()
     };
-    let (entered, release) = executor.gate_next_stdin_terminal_receipt(&worker);
+    let (entered, release) = executor.gate_next_stdin_terminal_receipt(&worker.agent_id);
     {
         let invocation = executor.invoke_and_await_agent(
             &component,
@@ -561,7 +561,7 @@ async fn producer_disposal_receipt_blocks_invocation_success(
             })
             .collect::<Vec<_>>()
     };
-    let original = executor.stored_oplog(&worker).await;
+    let original = executor.stored_oplog(&worker.agent_id).await;
     let terminals = terminal_controls(&original);
     assert_eq!(
         terminals.len(),
@@ -586,7 +586,7 @@ async fn producer_disposal_receipt_blocks_invocation_success(
         .into_typed()?;
     assert_eq!(probe, "replayed");
     assert_eq!(
-        terminal_controls(&executor.stored_oplog(&worker).await),
+        terminal_controls(&executor.stored_oplog(&worker.agent_id).await),
         terminals,
         "completed replay must preserve the single disposal terminal"
     );
@@ -616,15 +616,15 @@ async fn producer_disposal_receipt_blocks_closed_notification(
         .component_dep(&context.default_environment_id, caller)
         .store()
         .await?;
-    let agent = agent_id!("ToolStreamingCaller", "delayed-stdin-closed-notification");
+    let agent = agent_key!("ToolStreamingCaller", "delayed-stdin-closed-notification");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let _: String = executor
         .invoke_and_await_agent(&component, &agent, "replay_probe", data_value!())
         .await?
         .into_typed()?;
     let method = "abandon_stdin_and_wait_closed";
-    let (entered, release) = executor.gate_next_stdin_terminal_receipt(&worker);
-    let mut success = executor.gate_next_agent_function_success(&worker, method);
+    let (entered, release) = executor.gate_next_stdin_terminal_receipt(&worker.agent_id);
+    let mut success = executor.gate_next_agent_function_success(&worker.agent_id, method);
     {
         let invocation = executor.invoke_and_await_agent(&component, &agent, method, data_value!());
         tokio::pin!(invocation);
@@ -655,7 +655,10 @@ async fn producer_disposal_receipt_blocks_closed_notification(
         golem_common::model::oplog::OplogEntry::ToolAttachmentControl { transition: golem_common::model::oplog::attachment::ToolAttachmentControl::TerminalSelected(_), .. }
     )).count()
     };
-    assert_eq!(terminal_count(&executor.stored_oplog(&worker).await), 1);
+    assert_eq!(
+        terminal_count(&executor.stored_oplog(&worker.agent_id).await),
+        1
+    );
     drop(executor);
     executor = start_with_overrides(deps, &context, overrides).await?;
     let probe: String = executor
@@ -663,7 +666,10 @@ async fn producer_disposal_receipt_blocks_closed_notification(
         .await?
         .into_typed()?;
     assert_eq!(probe, "replayed");
-    assert_eq!(terminal_count(&executor.stored_oplog(&worker).await), 1);
+    assert_eq!(
+        terminal_count(&executor.stored_oplog(&worker.agent_id).await),
+        1
+    );
     executor.delete_worker(&worker).await?;
     Ok(())
 }

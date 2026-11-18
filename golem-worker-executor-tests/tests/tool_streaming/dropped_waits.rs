@@ -25,7 +25,7 @@ struct ClockToolOwner {
     executor: TestWorkerExecutor,
     caller_component: golem_common::model::component::ComponentDto,
     agent: golem_common::model::agent::ParsedAgentKey,
-    worker_id: golem_common::model::AgentId,
+    worker_id: golem_common::model::OwnedAgentId,
 }
 
 impl ClockToolOwner {
@@ -76,7 +76,7 @@ impl ClockToolOwner {
                 metadata.tools,
             )),
         );
-        let agent = agent_id!("ToolStreamingCaller", name);
+        let agent = agent_key!("ToolStreamingCaller", name);
         let worker_id = executor
             .start_agent(&caller_component.id, agent.clone())
             .await?;
@@ -124,7 +124,7 @@ impl ClockToolOwner {
         let output = self
             .executor
             .invoke_external_tool(
-                &self.worker_id,
+                &self.worker_id.agent_id,
                 fingerprint,
                 IdempotencyKey::fresh(),
                 ToolName::try_from("clock-race").unwrap(),
@@ -243,7 +243,7 @@ struct RecordedWait {
 impl ClockToolOwner {
     /// The agent's calls of the wait named `function` in oplog order.
     async fn recorded_waits(&self, function: &str) -> anyhow::Result<Vec<RecordedWait>> {
-        self.executor.commit_oplog(&self.worker_id).await?;
+        self.executor.commit_oplog(&self.worker_id.agent_id).await?;
         let oplog = self
             .executor
             .get_oplog(&self.worker_id, OplogIndex::INITIAL)
@@ -321,11 +321,13 @@ impl ClockToolOwner {
         stage: ReplayAdmissionStage,
         checkpoint: &str,
     ) -> anyhow::Result<()> {
-        let mut gate =
-            self.executor
-                .gate_next_replay_access_admission(&self.worker_id, function, stage);
+        let mut gate = self.executor.gate_next_replay_access_admission(
+            &self.worker_id.agent_id,
+            function,
+            stage,
+        );
         let mut checkpoint_gate = self.executor.gate_next_replay_access_admission(
-            &self.worker_id,
+            &self.worker_id.agent_id,
             checkpoint,
             ReplayAdmissionStage::BeforeLiveStart,
         );

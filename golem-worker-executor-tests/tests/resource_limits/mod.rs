@@ -21,8 +21,8 @@ use crate::execution_observations::WorkerObservations;
 use axum::Router;
 use axum::routing::get;
 use futures::FutureExt;
-use golem_common::model::{AgentStatus, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::model::AgentStatus;
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
@@ -97,7 +97,7 @@ async fn production_context_memory_admission_is_isolated_from_shared_rss(
             Duration::from_secs(10),
             executor.start_agent(
                 &component.id,
-                agent_id!("Networking", "admission-isolation"),
+                agent_key!("Networking", "admission-isolation"),
             ),
         )
         .await
@@ -130,7 +130,7 @@ async fn table_within_limit_succeeds(
         .store()
         .await?;
 
-    let agent_id = agent_id!("Counter", "table-limit-ok-1");
+    let agent_id = agent_key!("Counter", "table-limit-ok-1");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -163,7 +163,7 @@ async fn table_exceeding_limit_not_retried(
         .store()
         .await?;
 
-    let agent_id = agent_id!("Counter", "table-limit-no-retry-1");
+    let agent_id = agent_key!("Counter", "table-limit-no-retry-1");
 
     // First attempt: expect failure due to table limit at instantiation.
     let first_result = executor.start_agent(&component.id, agent_id.clone()).await;
@@ -217,10 +217,10 @@ async fn concurrent_agent_limit_not_reached_starts_immediately(
         .store()
         .await?;
 
-    let a1 = agent_id!("Counter", "concurrent-limit-ok-1");
+    let a1 = agent_key!("Counter", "concurrent-limit-ok-1");
     executor.start_agent(&component.id, a1.clone()).await?;
 
-    let a2 = agent_id!("Counter", "concurrent-limit-ok-2");
+    let a2 = agent_key!("Counter", "concurrent-limit-ok-2");
     executor.start_agent(&component.id, a2.clone()).await?;
 
     // Both agents should be invocable.
@@ -253,8 +253,8 @@ async fn concurrent_agent_limit_allows_rpc_progress(
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let caller = agent_id!("Counter", "rpc-permit-caller");
-        let callee = agent_id!("Counter", "rpc-permit-caller-inner");
+        let caller = agent_key!("Counter", "rpc-permit-caller");
+        let callee = agent_key!("Counter", "rpc-permit-caller-inner");
 
         // Complete both constructors before exercising the contested RPC path.
         // Incrementing the callee also verifies its code is independently executable.
@@ -323,10 +323,10 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("Counter", "waiting-stop-seed"))
+        .start_agent(&component.id, agent_key!("Counter", "waiting-stop-seed"))
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id)
         .await
         .unwrap()
         .primary();
@@ -341,15 +341,12 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
         (InterruptKind::Restart, true),
     ] {
         let held = executor
-            .acquire_account_concurrent_agent_permit(seed_id.clone())
+            .acquire_account_concurrent_agent_permit(seed_id.agent_id)
             .await;
-        let name = agent_id!("Counter", format!("waiting-stop-{kind:?}-{drop_requester}"));
-        let id = golem_common::model::AgentId {
-            component_id: component.id,
-            agent_id: name.to_string(),
-        };
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
-        let worker = Worker::get_or_create_suspended(
+        let name = agent_key!("Counter", format!("waiting-stop-{kind:?}-{drop_requester}"));
+        let id = executor.keyed_agent_id(context.default_environment_id, &name)?;
+        let owned = id.clone();
+        let worker = Worker::get_or_create_suspended_with_freshness(
             seed.all(),
             &owned,
             None,
@@ -358,6 +355,11 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
             None,
             &InvocationContextStack::fresh(),
             Principal::anonymous(),
+            golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+            golem_worker_executor::worker::CreateIntent::Invocation {
+                owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
+                idempotency_key: None,
+            },
         )
         .await?;
         let attempt = Worker::start_if_needed(worker.clone()).await?.unwrap();
@@ -421,7 +423,7 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
             drop(
                 tokio::time::timeout(
                     Duration::from_secs(5),
-                    executor.acquire_account_concurrent_agent_permit(id.clone()),
+                    executor.acquire_account_concurrent_agent_permit(id.agent_id),
                 )
                 .await?,
             );
@@ -432,7 +434,7 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
             drop(
                 tokio::time::timeout(
                     Duration::from_secs(5),
-                    executor.acquire_account_concurrent_agent_permit(id.clone()),
+                    executor.acquire_account_concurrent_agent_permit(id.agent_id),
                 )
                 .await?,
             );
@@ -499,9 +501,9 @@ async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("Counter", "sealed-stop");
+        let name = agent_key!("Counter", "sealed-stop");
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let owned = id.clone();
         let worker = executor
             .production_active_agent(&owned)
             .await
@@ -516,16 +518,18 @@ async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
         );
         // Acquiring the real account permit establishes physical release of the old window.
         let held = executor
-            .acquire_account_concurrent_agent_permit(id.clone())
+            .acquire_account_concurrent_agent_permit(id.agent_id)
             .await;
         worker.join_accepted_stops_for_test().await?;
         let directory = root
             .path()
             .join(context.default_environment_id.to_string())
-            .join(component.id.to_string())
-            .join(golem_service_base::storage::blob::agent_path_segment(&id));
+            .join(format!("{:08x}", id.agent_id.type_tag()))
+            .join(golem_service_base::storage::blob::agent_path_segment(
+                &id.agent_id,
+            ));
         assert!(directory.is_dir());
-        let mut reacquisition = crate::scheduler_waits::queued(&context.account_id, &id);
+        let mut reacquisition = crate::scheduler_waits::queued(&context.account_id, &id.agent_id);
         drop(worker.set_interrupting(InterruptKind::Restart).await?);
         tokio::time::timeout(Duration::from_secs(5), reacquisition.entered()).await??;
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -603,10 +607,10 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("Networking", "unload-stop-seal");
+    let name = agent_key!("Networking", "unload-stop-seal");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id)
         .await
         .unwrap()
         .primary();
@@ -628,16 +632,16 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
         }
     });
     connection.await?;
-    let holder_id = golem_common::model::AgentId {
-        component_id: id.component_id,
-        agent_id: agent_id!("GolemHostApi", "late-stop-permit-holder").to_string(),
-    };
-    let mut permit = Box::pin(executor.acquire_account_concurrent_agent_permit(holder_id));
+    let holder_id = executor.keyed_agent_id(
+        context.default_environment_id,
+        &agent_key!("GolemHostApi", "late-stop-permit-holder"),
+    )?;
+    let mut permit = Box::pin(executor.acquire_account_concurrent_agent_permit(holder_id.agent_id));
     assert!(
         (&mut permit).now_or_never().is_none(),
         "real FIFO contender cannot acquire the active owner's permit"
     );
-    let mut reacquisition = crate::scheduler_waits::queued(&context.account_id, &id);
+    let mut reacquisition = crate::scheduler_waits::queued(&context.account_id, &id.agent_id);
     let mut first = worker
         .set_interrupting(InterruptKind::Restart)
         .await?
@@ -752,7 +756,7 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
             .component_dep(&context.default_environment_id, http_tests)
             .store()
             .await?;
-        let agent_id = agent_id!("HttpClient2");
+        let agent_id = agent_key!("HttpClient2");
         let mut env = HashMap::new();
         env.insert("PORT".to_string(), port.to_string());
         let worker_id = executor
@@ -763,7 +767,7 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
             .await?;
         tokio::time::timeout(Duration::from_secs(10), polling.notified()).await?;
 
-        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owned = worker_id.clone();
         let worker = executor
             .production_active_agent(&owned)
             .await
@@ -773,11 +777,14 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
             .search_oplog(&worker_id, "AgentInvocationFinished")
             .await?
             .len();
-        let permit_waiter =
-            executor.acquire_account_concurrent_agent_permit(golem_common::model::AgentId {
-                component_id: component.id,
-                agent_id: agent_id!("Counter", "restart-waiter-permit-holder").to_string(),
-            });
+        let permit_waiter = executor.acquire_account_concurrent_agent_permit(
+            executor
+                .keyed_agent_id(
+                    context.default_environment_id,
+                    &agent_key!("Counter", "restart-waiter-permit-holder"),
+                )?
+                .agent_id,
+        );
         tokio::pin!(permit_waiter);
         // Poll the FIFO waiter before Restart releases the running owner's permit.
         tokio::select! {
@@ -786,7 +793,8 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
             _ = tokio::task::yield_now() => {}
         }
 
-        let mut reacquisition = crate::scheduler_waits::queued(&context.account_id, &worker_id);
+        let mut reacquisition =
+            crate::scheduler_waits::queued(&context.account_id, &worker_id.agent_id);
         executor.simulated_crash(&worker_id).await?;
         let held_permit = tokio::time::timeout(Duration::from_secs(5), &mut permit_waiter)
             .await
@@ -891,7 +899,7 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
         .await?;
 
     // Start a1 using the HttpClient2 agent. Pass the HTTP server port via env.
-    let a1 = agent_id!("HttpClient2");
+    let a1 = agent_key!("HttpClient2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let a1_id = executor
@@ -919,7 +927,7 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     // contested path.
     let executor_clone = executor.clone();
     let counters_clone = counters_component.clone();
-    let a2 = agent_id!("Counter", "concurrent-wait-http-2");
+    let a2 = agent_key!("Counter", "concurrent-wait-http-2");
     let a2_clone = a2.clone();
     let a2_start = tokio::spawn(async move {
         executor_clone
@@ -1032,7 +1040,7 @@ async fn concurrent_agent_idle_releases_permit(
         .await?;
 
     // Start a1 using HttpClient2 (polls GET /poll until body equals "done").
-    let a1 = agent_id!("HttpClient2");
+    let a1 = agent_key!("HttpClient2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let a1_id = executor
@@ -1058,7 +1066,7 @@ async fn concurrent_agent_idle_releases_permit(
         .await?;
     let executor_clone = executor.clone();
     let counters_clone = counters_component.clone();
-    let a2 = agent_id!("Counter", "idle-permit-2");
+    let a2 = agent_key!("Counter", "idle-permit-2");
     let a2_clone = a2.clone();
     let a2_start = tokio::spawn(async move {
         executor_clone
@@ -1133,11 +1141,11 @@ async fn live_memory_growth_cannot_bypass_executor_admission(
         .component_dep(&context.default_environment_id, large_dynamic_memory)
         .store()
         .await?;
-    let victim_agent = agent_id!("LargeDynamicMemoryAgent", "executor-admission-victim");
+    let victim_agent = agent_key!("LargeDynamicMemoryAgent", "executor-admission-victim");
     let victim_worker = executor
         .start_agent(&component.id, victim_agent.clone())
         .await?;
-    let victim_owned = OwnedAgentId::new(context.default_environment_id, &victim_worker);
+    let victim_owned = victim_worker.clone();
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_eviction_class(&victim_owned).await != Some(EvictionClass::LoadedIdle)
         {
@@ -1147,11 +1155,11 @@ async fn live_memory_growth_cannot_bypass_executor_admission(
     .await
     .expect("the co-resident worker must become idle and evictable");
 
-    let growing_agent = agent_id!("LargeDynamicMemoryAgent", "executor-admission-growing");
+    let growing_agent = agent_key!("LargeDynamicMemoryAgent", "executor-admission-growing");
     let growing_worker = executor
         .start_agent(&component.id, growing_agent.clone())
         .await?;
-    let growing_owned = OwnedAgentId::new(context.default_environment_id, &growing_worker);
+    let growing_owned = growing_worker.clone();
     let victim_bytes = executor.worker_memory_requirement(&victim_owned).await?;
     let growing_bytes = executor.worker_memory_requirement(&growing_owned).await?;
     let growth_bytes = GROWTH_MIB * 1024 * 1024;
@@ -1233,7 +1241,7 @@ async fn http_call_limit_exceeded_traps_invocation(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient");
+    let agent_id = agent_key!("HttpClient");
     executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -1285,7 +1293,7 @@ async fn rpc_call_limit_exceeded_traps_invocation(
         .store()
         .await?;
 
-    let caller_id = agent_id!("RustParent", "rpc_limit_test");
+    let caller_id = agent_key!("RustParent", "rpc_limit_test");
     executor
         .start_agent(&rpc_component.id, caller_id.clone())
         .await?;
@@ -1323,9 +1331,7 @@ async fn prepare_worker_does_not_start_target_and_public_create_waits_for_loadin
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::workerexecutor::v1::{
-        CreateWorkerRequest, create_worker_response,
-    };
+    use golem_api_grpc::proto::golem::workerexecutor::v1::create_worker_response;
 
     for check_public_create in [false, true] {
         let context = TestContext::new(last_unique_id);
@@ -1334,30 +1340,20 @@ async fn prepare_worker_does_not_start_target_and_public_create_waits_for_loadin
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let agent_id = golem_common::model::AgentId {
-            component_id: component.id,
-            agent_id: agent_id!("Counter", "cold-prepare-under-permit-pressure").to_string(),
-        };
-        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+        let agent = agent_key!("Counter", "cold-prepare-under-permit-pressure");
+        let agent_id = executor.keyed_agent_id(context.default_environment_id, &agent)?;
+        let owned_agent_id = agent_id.clone();
         let held_permit = executor
-            .acquire_account_concurrent_agent_permit(golem_common::model::AgentId {
-                component_id: component.id,
-                agent_id: agent_id!("Counter", "permit-holder").to_string(),
-            })
+            .acquire_account_concurrent_agent_permit(
+                executor
+                    .keyed_agent_id(
+                        context.default_environment_id,
+                        &agent_key!("Counter", "permit-holder"),
+                    )?
+                    .agent_id,
+            )
             .await;
-        let request = CreateWorkerRequest {
-            agent_id: Some(agent_id.clone().into()),
-            component_owner_account_id: Some(context.account_id.into()),
-            environment_id: Some(context.default_environment_id.into()),
-            env: HashMap::new(),
-            config: Vec::new(),
-            ignore_already_existing: true,
-            auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
-            invocation_context: None,
-            idempotency_key: None,
-            freshness_disposition: 0,
-        };
+        let request = executor.create_keyed_worker_request(&component.id, &agent)?;
 
         let first = tokio::time::timeout(
             Duration::from_secs(5),

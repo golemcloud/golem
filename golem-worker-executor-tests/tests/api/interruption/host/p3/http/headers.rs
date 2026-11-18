@@ -186,14 +186,14 @@ async fn pending_headers(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("HttpClient2"))
+        .start_agent(&component.id, agent_key!("HttpClient2"))
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -207,25 +207,21 @@ async fn pending_headers(
     }
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("HttpClient4")
+        agent_key!("HttpClient4")
     } else {
-        agent_id!("EphemeralHttpClient4")
+        agent_key!("EphemeralHttpClient4")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "get_for_quota_wait",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "get_for_quota_wait",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -234,6 +230,15 @@ async fn pending_headers(
         None,
         &InvocationContextStack::fresh(),
         Principal::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "get_for_quota_wait",
+        ),
     )
     .await?;
     let stored_key = executor
@@ -265,7 +270,7 @@ async fn pending_headers(
         let send_start = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == SEND)) {
                     let start = send_start(&entries, 0)?;
                     assert_invocation(&entries, &stored_key, 0)?;
@@ -329,7 +334,7 @@ async fn pending_headers(
         if let Some(refresh) = refresh {
             refresh.await?;
         }
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             self::send_start(&stopped, 0)? == send_start,
@@ -382,7 +387,7 @@ async fn pending_headers(
                     .is_err()
             );
         }
-        executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
+        executor.wait_for_status(&owned, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         info!(?resource, ?mode, ?errors, suspends, "HTTP stop retained one unfinished method with mode-specific lifecycle outcome");
         flush_stopped_usage(&limits, &registry, resource).await?;
@@ -424,17 +429,17 @@ async fn pending_headers(
             }
             registry.set_policy(grant);
             applied_refresh(&limits, &registry, context.account_id).await?.await?;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let second = peer.request().await?;
             ensure!(second.number == 2);
             ensure!(second.idempotency_key == first.idempotency_key);
             executor.commit_oplog(&id).await?;
-            ensure!(self::send_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 0)? == send_start);
+            ensure!(self::send_start(&executor.get_oplog(&owned, OplogIndex::INITIAL).await?, 0)? == send_start);
             second.respond.send(()).map_err(|_| anyhow::anyhow!("second HTTP response gate closed"))?;
             let resumed = tokio::time::timeout(Duration::from_secs(15), &mut invocation)
                 .await.context("retained HTTP invocation continuation and tail finalization")???;
             ensure!(resumed.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             let raw_recovered = executor.stored_oplog(&id).await;
             ensure!(raw_recovered.len() >= committed_prefix.len());
             ensure!(&raw_recovered[..committed_prefix.len()] == committed_prefix.as_slice(), "complete committed prefix must survive repair");
@@ -471,7 +476,7 @@ async fn pending_headers(
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(fresh, response) }).await??;
             ensure!(fresh.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
             peer.assert_counts(3)?;
-            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
             let starts: Vec<_> = history.iter().filter_map(|entry| match &entry.entry {
                 PublicOplogEntry::Start(start) if start.function_name == SEND => Some(entry.oplog_index),
@@ -491,7 +496,7 @@ async fn pending_headers(
             grant.available_ephemeral_storage_byte_seconds = u64::MAX;
             registry.set_policy(grant);
             applied_refresh(&limits, &registry, context.account_id).await?.await?;
-            let probe_name = agent_id!("HttpClient4");
+            let probe_name = agent_key!("HttpClient4");
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "get_for_quota_wait", data_value!(peer.url.clone()));
             let response = async {
@@ -503,7 +508,7 @@ async fn pending_headers(
             };
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(probe, response) }).await??;
             ensure!(probe.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
-            let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::send_start(&failed, 0)? == send_start);
             assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
@@ -520,7 +525,7 @@ async fn pending_headers(
     // Stop and join the peer independently, including failure cleanup of every socket handler.
     let cleanup = peer.finish().await;
     if result.is_err() {
-        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await;
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),

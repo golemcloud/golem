@@ -17,7 +17,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::routing::{get, post};
 use golem_common::model::RetryConfig;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -77,7 +77,7 @@ async fn run_manifest_status_retry_test(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RetryTest", agent_name);
+    let agent_id = agent_key!("RetryTest", agent_name);
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -423,7 +423,7 @@ async fn ts_manifest_status_retry_post_with_json_body(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RetryTest", "manifest-status-retry-post-json");
+    let agent_id = agent_key!("RetryTest", "manifest-status-retry-post-json");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -594,7 +594,7 @@ async fn ts_manifest_status_retry_two_sequential_calls_are_both_re_armed(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RetryTest", "manifest-status-retry-two-step");
+    let agent_id = agent_key!("RetryTest", "manifest-status-retry-two-step");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -753,7 +753,7 @@ async fn ts_manifest_status_retry_ok_then_crash_is_bounded(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RetryTest", "manifest-status-retry-ok-then-crash");
+    let agent_id = agent_key!("RetryTest", "manifest-status-retry-ok-then-crash");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -898,7 +898,7 @@ async fn ts_manifest_status_retry_v2_ok_then_forever_500_is_bounded(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RetryTest", "manifest-status-retry-v2-perma-500");
+    let agent_id = agent_key!("RetryTest", "manifest-status-retry-v2-perma-500");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

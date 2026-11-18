@@ -20,11 +20,11 @@
 //! over RPC.
 
 use crate::Tracing;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
-use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_type::SchemaType;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
@@ -78,7 +78,7 @@ fn is_read_only_violation(err: &anyhow::Error, method: &str) -> bool {
 /// this helper before snapshotting to make those tests deterministic.
 async fn wait_oplog_settled<E: TestDsl + Sync>(
     executor: &E,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -137,7 +137,7 @@ async fn t1_read_only_returns_value_on_fresh_agent(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t1-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t1-{unique_id}"));
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -174,7 +174,7 @@ async fn t2_read_only_caches_until_write(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t2-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t2-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -200,7 +200,7 @@ async fn wait_for_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
     agent_id: &golem_common::model::agent::ParsedAgentKey,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -245,7 +245,7 @@ async fn t3_read_only_invalidates_after_write(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t3-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t3-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -312,7 +312,7 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t4-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t4-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -448,14 +448,14 @@ async fn t5_read_only_bypasses_agent_loading(
 
     // R: the worker whose read-only cache we want to keep alive across eviction.
     let unique_id = context.redis_prefix();
-    let r_agent_id = agent_id!(AGENT_TYPE, format!("t5-r-{unique_id}"));
+    let r_agent_id = agent_key!(AGENT_TYPE, format!("t5-r-{unique_id}"));
     let r_worker_id = tokio::time::timeout(
         Duration::from_secs(10),
         executor.start_agent(&component.id, r_agent_id.clone()),
     )
     .await
     .expect("first worker failed to load: check SYSTEM_MEMORY against the component's module charge and initial linear memory")?;
-    let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id);
+    let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id.agent_id);
 
     // Warm R's read-only cache: cache miss + populate via the detached observer.
     let _ = executor
@@ -491,11 +491,11 @@ async fn t5_read_only_bypasses_agent_loading(
     // Q: a second worker of the same agent type. Loading Q reserves another
     // `r_req` against the budget (Q shares R's already-charged module), which
     // forces eviction of R.
-    let q_agent_id = agent_id!(AGENT_TYPE, format!("t5-q-{unique_id}"));
+    let q_agent_id = agent_key!(AGENT_TYPE, format!("t5-q-{unique_id}"));
     let q_worker_id = executor
         .start_agent(&component.id, q_agent_id.clone())
         .await?;
-    let q_owned = OwnedAgentId::new(context.default_environment_id, &q_worker_id);
+    let q_owned = OwnedAgentId::new(context.default_environment_id, &q_worker_id.agent_id);
 
     // Trigger Q's instance load. The invocation forces the worker out of
     // `Unloaded`, which acquires memory from `ActiveAgents` and runs
@@ -641,7 +641,7 @@ async fn t6_principal_aware_caches_per_principal(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t6-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t6-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -812,7 +812,7 @@ async fn t6b_principal_method_public_oplog_input_is_well_formed(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t6b-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t6b-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -893,7 +893,7 @@ async fn wait_for_principal_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
     agent_id: &golem_common::model::agent::ParsedAgentKey,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     principal: &golem_common::model::agent::Principal,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -944,7 +944,7 @@ async fn t7_ttl_expires_cache_entry(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t7-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t7-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -981,7 +981,7 @@ async fn wait_for_ttl_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
     agent_id: &golem_common::model::agent::ParsedAgentKey,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -1023,7 +1023,7 @@ async fn t8_no_cache_runs_every_time(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t8-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t8-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1080,7 +1080,7 @@ async fn t9_bad_write_traps(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t9w-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t9w-{unique_id}"));
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1116,7 +1116,7 @@ async fn t9_bad_remote_read_traps(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t9r-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t9r-{unique_id}"));
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1156,7 +1156,7 @@ async fn t10_read_only_oplog_markers_present_when_executed(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t10-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t10-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1221,7 +1221,7 @@ async fn t11_concurrent_misses_coalesce(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t11-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t11-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1305,7 +1305,7 @@ async fn t11b_coalesced_owner_survives_caller_cancellation(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t11b-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t11b-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1431,7 +1431,7 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t11c-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t11c-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1520,12 +1520,12 @@ async fn r1_rpc_read_only_uses_cache_fast_path(
 
     let unique_id = context.redis_prefix();
     let target_str = format!("r1-target-{unique_id}");
-    let target_agent_id = agent_id!(AGENT_TYPE, target_str.clone());
+    let target_agent_id = agent_key!(AGENT_TYPE, target_str.clone());
     let target_worker_id = executor
         .start_agent(&component.id, target_agent_id.clone())
         .await?;
 
-    let caller_agent_id = agent_id!(CALLER_TYPE, format!("r1-caller-{unique_id}"));
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("r1-caller-{unique_id}"));
     let _caller_worker_id = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -1597,12 +1597,12 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
 
     let unique_id = context.redis_prefix();
     let target_str = format!("r2-target-{unique_id}");
-    let target_agent_id = agent_id!(AGENT_TYPE, target_str.clone());
+    let target_agent_id = agent_key!(AGENT_TYPE, target_str.clone());
     let target_worker_id = executor
         .start_agent(&component.id, target_agent_id.clone())
         .await?;
 
-    let caller_agent_id = agent_id!(CALLER_TYPE, format!("r2-caller-{unique_id}"));
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("r2-caller-{unique_id}"));
     let _caller_worker_id = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -1662,13 +1662,13 @@ async fn r3_rpc_parallel_reads_coalesce(
 
     let unique_id = context.redis_prefix();
     let target_str = format!("r3-target-{unique_id}");
-    let target_agent_id = agent_id!(AGENT_TYPE, target_str.clone());
+    let target_agent_id = agent_key!(AGENT_TYPE, target_str.clone());
     let target_worker_id = executor
         .start_agent(&component.id, target_agent_id.clone())
         .await?;
     wait_oplog_settled(&executor, &target_worker_id).await?;
 
-    let caller_agent_id = agent_id!(CALLER_TYPE, format!("r3-caller-{unique_id}"));
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("r3-caller-{unique_id}"));
     let _caller_worker_id = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -1758,8 +1758,8 @@ async fn r4_rpc_read_only_method_cannot_make_rpc(
 
     let unique_id = context.redis_prefix();
     let target_str = format!("r4-target-{unique_id}");
-    let _target_agent_id = agent_id!(AGENT_TYPE, target_str.clone());
-    let caller_agent_id = agent_id!(CALLER_TYPE, format!("r4-caller-{unique_id}"));
+    let _target_agent_id = agent_key!(AGENT_TYPE, target_str.clone());
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("r4-caller-{unique_id}"));
     let _caller_worker_id = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -1797,7 +1797,7 @@ async fn settled_read_only_cache_hit_persists_nothing(
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         AGENT_TYPE,
         format!("no-persistence-{}", context.redis_prefix())
     );
@@ -1848,7 +1848,7 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let control_agent_id = agent_id!(
+    let control_agent_id = agent_key!(
         AGENT_TYPE,
         format!("no-followers-control-{}", context.redis_prefix())
     );
@@ -1871,7 +1871,7 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
         .await?;
     let single_invocation_entries = entry_types_since(&control_entries, control_before);
 
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         AGENT_TYPE,
         format!("no-followers-{}", context.redis_prefix())
     );

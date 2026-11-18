@@ -71,15 +71,15 @@ async fn pending_stop(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("BlobStore", "storage-observation-seed"),
+            agent_key!("BlobStore", "storage-observation-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -88,32 +88,38 @@ async fn pending_stop(
     .await?;
     let durable = mode == AgentMode::Durable;
     let name = if !durable {
-        agent_id!("EphemeralStorageObservation", "pending-storage")
+        agent_key!("EphemeralStorageObservation", "pending-storage")
     } else {
-        agent_id!("BlobStore", "pending-storage")
+        agent_key!("BlobStore", "pending-storage")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "container_exists",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
-    let worker = Worker::get_or_create_suspended(
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "container_exists",
+    );
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
-        &OwnedAgentId::new(context.default_environment_id, &id),
+        &owned,
         None,
         vec![],
         None,
         None,
         &InvocationContextStack::fresh(),
         Principal::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "container_exists",
+        ),
     )
     .await?;
     let method = "container_exists";
@@ -134,7 +140,7 @@ async fn pending_stop(
         tokio::time::timeout(Duration::from_secs(10), blob.pending.notified())
             .await.context("blob provider first Poll::Pending")?;
         executor.commit_oplog(&id).await?;
-        let before = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let before = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let matches_boundary = |name: &str| name.ends_with("::container_exists");
         let starts: Vec<_> = before.iter().filter_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(start) if matches_boundary(&start.function_name) => Some(entry.oplog_index), _ => None }).collect();
@@ -156,7 +162,7 @@ async fn pending_stop(
         worker.retained_cleanup_for_test().await?;
         refresh.await?;
         ensure!(blob.dropped.load(Ordering::SeqCst) == 1 && blob.attempts.load(Ordering::SeqCst) == 1);
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(terminal_count(&stopped, start) == 0);
         ensure!(!stopped.iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Cancelled(_))));
         let raw_entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
@@ -167,10 +173,10 @@ async fn pending_stop(
             blob.release.add_permits(1);
             registry.set_policy(policy.clone());
             applied_refresh(&limits, &registry, context.account_id).await?.await?;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let output = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await.context("same-key continuation")???;
             ensure!(!output.into_typed::<bool>()?);
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(terminal_count(&recovered, start) == 1);
             let recovered_starts: Vec<_> = recovered.iter().filter_map(|entry| match &entry.entry {
                 PublicOplogEntry::Start(call) if matches_boundary(&call.function_name) => Some(entry.oplog_index),

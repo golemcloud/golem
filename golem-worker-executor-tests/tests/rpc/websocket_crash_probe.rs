@@ -94,7 +94,7 @@ async fn effect_duplex_websocket_crash_continuation(
         let worker = executor
             .start_agent(
                 &component.id,
-                agent_id!(
+                agent_key!(
                     "ConcurrentStreamProbe",
                     format!("duplex-recovery-{crash}"),
                     2_f64,
@@ -118,7 +118,9 @@ async fn effect_duplex_websocket_crash_continuation(
         let metadata = executor.get_worker_metadata(&worker).await?;
         let key = IdempotencyKey::fresh();
         let start = InvocationStart {
-            agent_id: Some(worker.clone().into()),
+            target: Some(crate::agent::id_target(&worker)),
+            constructor: None,
+            component_id: None,
             method_name: Some("echo".to_string()),
             input: Some(golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -191,7 +193,7 @@ async fn effect_duplex_websocket_crash_continuation(
             // Crash only after the internal clock End and a completed receive are durable.
             // The other websocket reader remains blocked on an open peer with no input.
             loop {
-                executor.commit_oplog(&worker).await?;
+                executor.commit_oplog(&worker.agent_id).await?;
                 let entries = executor.get_oplog(&worker, boundary.next()).await?;
                 let completed_internal_clock = entries.iter().any(|entry| {
                     matches!(&entry.entry, PublicOplogEntry::Start(start)
@@ -219,7 +221,7 @@ async fn effect_duplex_websocket_crash_continuation(
         })
         .await??;
         let mut direct_replay_wait =
-            crash.then(|| executor.signal_next_direct_replay_wait(&worker, ""));
+            crash.then(|| executor.signal_next_direct_replay_wait(&worker.agent_id, ""));
         if crash {
             executor.simulated_crash(&worker).await?;
         }

@@ -43,7 +43,7 @@ use golem_common::model::{
 };
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_schema::proto::golem::schema::{RecordValue, SchemaValueStreamReference, schema_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::{AgentResult, TestDsl};
@@ -67,6 +67,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+mod create_crash_window;
 mod gc_timed_cleanup;
 mod held_response_restart;
 mod hint_before_rpc_start;
@@ -206,7 +207,7 @@ async fn unobserved_async_rpc_suspends_with_timer_and_resumes(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let target_id = agent_id!("RpcBlockingCounter", "unobserved-target");
+    let target_id = agent_key!("RpcBlockingCounter", "unobserved-target");
     executor
         .start_agent(&component.id, target_id.clone())
         .await?;
@@ -214,11 +215,11 @@ async fn unobserved_async_rpc_suspends_with_timer_and_resumes(
         .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
         .await?
         .into_typed::<PromiseId>()?;
-    let caller_id = agent_id!("CancelTester", "unobserved-caller");
+    let caller_id = agent_key!("CancelTester", "unobserved-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
-    let loads = executor.instance_load_count(&caller);
+    let loads = executor.instance_load_count(&caller.agent_id);
     let invocation = executor.invoke_and_await_agent(
         &component,
         &caller_id,
@@ -230,18 +231,20 @@ async fn unobserved_async_rpc_suspends_with_timer_and_resumes(
         result = &mut invocation => panic!("caller finished before suspension: {result:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(15), async {
             executor.wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(10)).await?;
-            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &caller)).await {
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &caller.agent_id)).await {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok::<(), anyhow::Error>(())
         }) => { unloaded??; }
     }
-    executor.complete_promise(&promise, vec![]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &promise, vec![])
+        .await?;
     let value = tokio::time::timeout(Duration::from_secs(45), invocation)
         .await??
         .into_typed::<u64>()?;
     assert_eq!(value, 7);
-    assert!(executor.instance_load_count(&caller) > loads);
+    assert!(executor.instance_load_count(&caller.agent_id) > loads);
     let count = executor
         .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
         .await?
@@ -291,7 +294,7 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
         .store()
         .await?;
     let target_name = "sync-timer-target";
-    let target_id = agent_id!("RpcBlockingCounter", target_name);
+    let target_id = agent_key!("RpcBlockingCounter", target_name);
     let target = executor
         .start_agent(&component.id, target_id.clone())
         .await?;
@@ -299,7 +302,7 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
         .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
         .await?
         .into_typed::<PromiseId>()?;
-    let caller_id = agent_id!("CancelTester", "sync-timer-caller");
+    let caller_id = agent_key!("CancelTester", "sync-timer-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
@@ -319,8 +322,8 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
             }
         }) => { dispatched?; }
     }
-    let loads = executor.instance_load_count(&caller);
-    let owned_caller = OwnedAgentId::new(context.default_environment_id, &caller);
+    let loads = executor.instance_load_count(&caller.agent_id);
+    let owned_caller = OwnedAgentId::new(context.default_environment_id, &caller.agent_id);
     tokio::select! {
         result = &mut invocation => panic!("caller returned before promise release: {result:?}"),
         resident = async {
@@ -328,7 +331,7 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
             while tokio::time::Instant::now() < deadline {
                 assert!(executor.worker_is_loaded(&owned_caller).await);
                 assert_eq!(executor.get_worker_metadata(&caller).await?.status, AgentStatus::Running);
-                assert_eq!(executor.instance_load_count(&caller), loads);
+                assert_eq!(executor.instance_load_count(&caller.agent_id), loads);
                 assert!(!executor.get_oplog(&caller, OplogIndex::INITIAL).await?.iter()
                     .any(|entry| matches!(&entry.entry, PublicOplogEntry::Suspend(_))));
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -337,7 +340,9 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
         } => { resident?; }
     }
     assert_eq!(attempts.lock().unwrap().len(), 1);
-    executor.complete_promise(&promise, vec![]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &promise, vec![])
+        .await?;
     // Once the borrowed call returns, the same long timer may release the Store.
     tokio::select! {
         result = &mut invocation => panic!("timer finished before suspension: {result:?}"),
@@ -353,7 +358,7 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
         .await??
         .into_typed::<u64>()?;
     assert_eq!(value, 7);
-    assert!(executor.instance_load_count(&caller) > loads);
+    assert!(executor.instance_load_count(&caller.agent_id) > loads);
     let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
     assert_eq!(
         target_oplog
@@ -489,7 +494,7 @@ async fn raw_sync_rpc_local_denial_replays_without_span_or_dispatch(
         .without_default_host_permissions("RpcAuthTester")
         .store()
         .await?;
-    let caller_id = agent_id!("RpcAuthTester", "sync-denied-caller");
+    let caller_id = agent_key!("RpcAuthTester", "sync-denied-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
@@ -552,7 +557,7 @@ async fn invalid_async_rpc_closes_span_before_unused_future_is_dropped(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let caller_id = agent_id!("RpcAuthTester", "invalid-async-unused");
+    let caller_id = agent_key!("RpcAuthTester", "invalid-async-unused");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
@@ -667,13 +672,13 @@ async fn rpc_local_denial_prefix_case(
         .without_default_host_permissions("RpcAuthTester")
         .store()
         .await?;
-    let caller_id = agent_id!("RpcAuthTester", "sync-denied-start-caller");
+    let caller_id = agent_key!("RpcAuthTester", "sync-denied-start-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
     let key = IdempotencyKey::fresh();
     let mut gate = executor
-        .gate_next_rpc_commit(&caller, RpcCheckpoint::Start)
+        .gate_next_rpc_commit(&caller.agent_id, RpcCheckpoint::Start)
         .await;
     let invocation = {
         let executor = executor.clone();
@@ -814,12 +819,14 @@ async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let caller_id = agent_id!("CancelTester", "sync-prefix-caller");
+        let caller_id = agent_key!("CancelTester", "sync-prefix-caller");
         let caller = executor
             .start_agent(&component.id, caller_id.clone())
             .await?;
         let key = IdempotencyKey::fresh();
-        let mut gate = executor.gate_next_rpc_commit(&caller, checkpoint).await;
+        let mut gate = executor
+            .gate_next_rpc_commit(&caller.agent_id, checkpoint)
+            .await;
         let invocation = {
             let executor = executor.clone();
             let component = component.clone();
@@ -891,7 +898,7 @@ async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
         let count = executor
             .invoke_and_await_agent(
                 &component,
-                &agent_id!("RpcCounter", "sync-prefix-target"),
+                &agent_key!("RpcCounter", "sync-prefix-target"),
                 "get_value",
                 data_value!(),
             )
@@ -961,7 +968,7 @@ async fn raw_rpc_suspension_case(
         .store()
         .await?;
     let target_name = "raw-rpc-target";
-    let target_id = agent_id!("RpcBlockingCounter", target_name);
+    let target_id = agent_key!("RpcBlockingCounter", target_name);
     let target = executor
         .start_agent(&component.id, target_id.clone())
         .await?;
@@ -970,10 +977,12 @@ async fn raw_rpc_suspension_case(
         .await?
         .into_typed::<PromiseId>()?;
     if !suspend {
-        executor.complete_promise(&promise, vec![]).await?;
+        executor
+            .complete_promise(&executor.context.default_environment_id, &promise, vec![])
+            .await?;
     }
 
-    let caller_id = agent_id!("CancelTester", "raw-rpc-caller");
+    let caller_id = agent_key!("CancelTester", "raw-rpc-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
@@ -1030,7 +1039,9 @@ async fn raw_rpc_suspension_case(
             // The resident caller need not have flushed its buffered RPC Start yet.
             assert_eq!(attempts.lock().unwrap().len(), 1);
         }
-        executor.complete_promise(&promise, vec![]).await?;
+        executor
+            .complete_promise(&executor.context.default_environment_id, &promise, vec![])
+            .await?;
     }
 
     let result = tokio::time::timeout(Duration::from_secs(45), &mut invocation).await;
@@ -1244,10 +1255,10 @@ async fn memory_growth_before_rpc_activation(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let caller = agent_id!("CancelTester", "memory-growth");
+    let caller = agent_key!("CancelTester", "memory-growth");
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
     if inject_oom {
-        executor.fail_memory_growth_after_rpc_creation(&worker);
+        executor.fail_memory_growth_after_rpc_creation(&worker.agent_id);
     }
     let key = IdempotencyKey::fresh();
     let result = executor
@@ -1259,7 +1270,7 @@ async fn memory_growth_before_rpc_activation(
             data_value!("memory-growth-target"),
         )
         .await;
-    let triggered = executor.rpc_memory_failure_triggered(&worker);
+    let triggered = executor.rpc_memory_failure_triggered(&worker.agent_id);
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let boundary_matches = oplog.windows(3).any(|entries| {
         matches!(&entries[0].entry, PublicOplogEntry::Start(start)
@@ -1298,7 +1309,7 @@ async fn memory_growth_before_rpc_activation(
     let count = executor
         .invoke_and_await_agent(
             &component,
-            &agent_id!("RpcCounter", "memory-growth-target"),
+            &agent_key!("RpcCounter", "memory-growth-target"),
             "get_value",
             data_value!(),
         )
@@ -1409,16 +1420,16 @@ async fn rpc_memory_boundary(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let caller = agent_id!("CancelTester", method);
+    let caller = agent_key!("CancelTester", method);
     let target_name = format!("{method}-target");
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
     if inject_oom {
         match boundary {
             RpcMemoryTestBoundary::Completion => {
-                executor.fail_memory_growth_after_rpc_completion(&worker)
+                executor.fail_memory_growth_after_rpc_completion(&worker.agent_id)
             }
             RpcMemoryTestBoundary::Delivery => {
-                executor.fail_memory_growth_after_rpc_delivery(&worker)
+                executor.fail_memory_growth_after_rpc_delivery(&worker.agent_id)
             }
         }
     }
@@ -1432,7 +1443,7 @@ async fn rpc_memory_boundary(
             data_value!(target_name.clone()),
         )
         .await;
-    let triggered = executor.rpc_memory_failure_triggered(&worker);
+    let triggered = executor.rpc_memory_failure_triggered(&worker.agent_id);
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     eprintln!("Before restart: result={result:?}, injected={triggered}");
     print_rpc_memory_oplog(&oplog);
@@ -1457,7 +1468,7 @@ async fn rpc_memory_boundary(
     let count = executor
         .invoke_and_await_agent(
             &component,
-            &agent_id!("RpcCounter", target_name),
+            &agent_key!("RpcCounter", target_name),
             "get_value",
             data_value!(),
         )
@@ -1551,10 +1562,10 @@ async fn durable_operation_after_rpc_delivery(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let caller = agent_id!("CancelTester", format!("tail-{operation}"));
+    let caller = agent_key!("CancelTester", format!("tail-{operation}"));
     let target_name = format!("tail-{operation}-target");
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
-    executor.fail_memory_growth_after_rpc_delivery(&worker);
+    executor.fail_memory_growth_after_rpc_delivery(&worker.agent_id);
     let key = IdempotencyKey::fresh();
 
     executor
@@ -1567,7 +1578,7 @@ async fn durable_operation_after_rpc_delivery(
         )
         .await?;
     assert!(
-        executor.rpc_memory_failure_triggered(&worker),
+        executor.rpc_memory_failure_triggered(&worker.agent_id),
         "delivery fault did not trigger for {operation}: {:#?}",
         executor.get_oplog(&worker, OplogIndex::INITIAL).await?
     );
@@ -1587,7 +1598,7 @@ async fn durable_operation_after_rpc_delivery(
     let count = executor
         .invoke_and_await_agent(
             &component,
-            &agent_id!("RpcCounter", target_name.clone()),
+            &agent_key!("RpcCounter", target_name.clone()),
             "get_value",
             data_value!(),
         )
@@ -1633,7 +1644,10 @@ fn assert_live_tail_operation(oplog: &[PublicOplogEntryWithIndex], operation: &s
     assert!(found, "missing live {operation} oplog boundary after OOM");
 }
 
-struct DenyDirectInvocationAuth;
+/// Denies every direct invocation and counts the checks.
+struct DenyDirectInvocationAuth {
+    checks: Arc<AtomicUsize>,
+}
 
 #[async_trait]
 impl DirectInvocationAuthService for DenyDirectInvocationAuth {
@@ -1641,10 +1655,13 @@ impl DirectInvocationAuthService for DenyDirectInvocationAuth {
         &self,
         _caller_account_id: AccountId,
         _owned_agent_id: &OwnedAgentId,
+        _component_id: golem_common::model::component::ComponentId,
+        _agent_type: Option<golem_common::model::agent::AgentTypeName>,
         _verb: AgentVerb,
         _resource: AgentResourcePattern,
         _auth_ctx: &AuthCtx,
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
+        self.checks.fetch_add(1, Ordering::SeqCst);
         Err(RpcError::Denied {
             details: "direct invocation denied before schema lookup".to_string(),
         })
@@ -1665,10 +1682,10 @@ async fn invalid_start_is_rejected_before_acceptance(
     requests
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(golem_api_grpc::proto::golem::worker::AgentId {
-                    component_id: None,
-                    name: "agent".to_string(),
-                }),
+                target: Some(crate::agent::id_target(&OwnedAgentId::new(
+                    context.default_environment_id,
+                    &AgentId::random_reserved(),
+                ))),
                 method_name: Some("run".to_string()),
                 input: Some(golem_schema::proto::golem::schema::SchemaValue {
                     value: Some(
@@ -1718,7 +1735,7 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingRpcTarget", "cancel-sibling-output");
+    let agent_id = agent_key!("StreamingRpcTarget", "cancel-sibling-output");
     let worker_agent_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1727,7 +1744,9 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
     let key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("produce_siblings".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
@@ -1881,7 +1900,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                 [false, true].map(move |restart| (index, terminal.clone(), restart))
             })
     {
-        let agent = agent_id!(
+        let agent = agent_key!(
             "StreamingRpcTarget",
             format!("input-terminal-{index}-{restart}")
         );
@@ -1907,7 +1926,9 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         let (mut frames, mut responses, accepted) = open_raw_session(
             &executor,
             InvocationStart {
-                agent_id: Some(worker.clone().into()),
+                target: Some(crate::agent::id_target(&worker)),
+                constructor: None,
+                component_id: None,
                 method_name: Some("observe_input_terminal".into()),
                 input: Some(input),
                 request_key: Some(
@@ -2039,7 +2060,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
             sender
                 .send(InvocationRequest {
                     request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                        agent_id: Some(worker.clone().into()),
+                        agent_id: Some(worker.agent_id.into()),
                         environment_id: Some(component.environment_id.into()),
                         idempotency_key: accepted.idempotency_key,
                         attachment_id: accepted.attachment_id,
@@ -2071,7 +2092,9 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
             );
             frames = sender;
         }
-        executor.complete_promise(&gate, Vec::new()).await?;
+        executor
+            .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+            .await?;
         let mut observed = None;
         let mut finished = false;
         while let Some(response) = responses.message().await? {
@@ -2138,7 +2161,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         assert_eq!(observed_terminals[0].authored_by, before[0].authored_by);
         let invocation_id = executor
             .finalized_invocation_key(
-                &worker,
+                &worker.agent_id,
                 &InvocationRequestKey::external(
                     executor.auth_ctx().idempotency_scope(),
                     Some(&key),
@@ -2168,8 +2191,8 @@ async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let target = agent_id!("StreamingRpcTarget", "guest-drop-probe");
-    let caller = agent_id!("StreamingRpcCaller", "guest-drop-probe");
+    let target = agent_key!("StreamingRpcTarget", "guest-drop-probe");
+    let caller = agent_key!("StreamingRpcCaller", "guest-drop-probe");
     let worker = executor.start_agent(&component.id, target.clone()).await?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let gate = executor
@@ -2212,7 +2235,9 @@ async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
     );
     assert_eq!(before[0].origin, StreamTerminalOrigin::Control);
     // Only release the next guest write once the real reader drop has committed.
-    executor.complete_promise(&gate, Vec::new()).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+        .await?;
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
@@ -2239,11 +2264,15 @@ async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
         })
         .expect("drop probe RPC Start");
     let rpc_key = executor
-        .finalized_invocation_key(&worker, &rpc_request.request_key, &rpc_request.method_name)
+        .finalized_invocation_key(
+            &worker.agent_id,
+            &rpc_request.request_key,
+            &rpc_request.method_name,
+        )
         .await?;
     let caller_invocation_id = executor
         .finalized_invocation_key(
-            &caller_worker,
+            &caller_worker.agent_id,
             &InvocationRequestKey::external(
                 executor.auth_ctx().idempotency_scope(),
                 Some(&caller_key),
@@ -2335,17 +2364,19 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed_id = agent_id!("StreamingRpcTarget", "post-result-timer");
+    let parsed_id = agent_key!("StreamingRpcTarget", "post-result-timer");
     let agent_id = executor
         .start_agent(&component.id, parsed_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&agent_id).await?;
-    let loads = executor.instance_load_count(&agent_id);
+    let loads = executor.instance_load_count(&agent_id.agent_id);
     let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("produce_after_timer".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
@@ -2426,7 +2457,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
         executor
             .worker_is_loaded(&OwnedAgentId::new(
                 context.default_environment_id,
-                &agent_id
+                &agent_id.agent_id
             ))
             .await
     );
@@ -2434,7 +2465,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
         response = responses.message() => anyhow::bail!("output advanced before observed unload: {response:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(10), async {
             executor.wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(8)).await?;
-            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &agent_id)).await {
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &agent_id.agent_id)).await {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok::<(), anyhow::Error>(())
@@ -2493,7 +2524,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
     assert_eq!(ends, 1);
     assert_eq!(finishes, 1);
     assert_eq!(offsets.len(), 4);
-    assert!(executor.instance_load_count(&agent_id) > loads);
+    assert!(executor.instance_load_count(&agent_id.agent_id) > loads);
     let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
     let mut recorded_offsets = BTreeSet::new();
     let mut recorded_ends = 0;
@@ -2591,17 +2622,19 @@ async fn output_prefix_survives_autonomous_suspension(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed_id = agent_id!("StreamingRpcTarget", "prefix-timer");
+    let parsed_id = agent_key!("StreamingRpcTarget", "prefix-timer");
     let agent_id = executor
         .start_agent(&component.id, parsed_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&agent_id).await?;
-    let loads = executor.instance_load_count(&agent_id);
+    let loads = executor.instance_load_count(&agent_id.agent_id);
     let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some(
                 if nested {
                     "produce_nested_after_prefix_timer"
@@ -2777,7 +2810,7 @@ async fn output_prefix_survives_autonomous_suspension(
                     executor
                         .worker_is_loaded(&OwnedAgentId::new(
                             context.default_environment_id,
-                            &agent_id
+                            &agent_id.agent_id
                         ))
                         .await
                 );
@@ -2788,7 +2821,7 @@ async fn output_prefix_survives_autonomous_suspension(
                     while executor
                         .worker_is_loaded(&OwnedAgentId::new(
                             context.default_environment_id,
-                            &agent_id,
+                            &agent_id.agent_id,
                         ))
                         .await
                     {
@@ -2805,10 +2838,10 @@ async fn output_prefix_survives_autonomous_suspension(
                                 .map_err(anyhow::Error::msg)?;
                             let id = StreamId::derive(
                                 context.default_environment_id,
-                                &agent_id,
+                                &agent_id.agent_id,
                                 metadata.fingerprint,
                                 record.stream_id.0,
-                            )?;
+                            );
                             prefix.entry(id.0).or_insert_with(Vec::new).push(record);
                         }
                         PublicOplogEntry::StreamTerminal(_) | PublicOplogEntry::Error(_) => {
@@ -2879,10 +2912,10 @@ async fn output_prefix_survives_autonomous_suspension(
                         StreamRecordReference::Local(local) => {
                             StreamId::derive(
                                 context.default_environment_id,
-                                &agent_id,
+                                &agent_id.agent_id,
                                 metadata.fingerprint,
                                 local.0,
-                            )?
+                            )
                             .0
                         }
                         StreamRecordReference::Foreign(handle) => handle.stream_id.0,
@@ -2907,7 +2940,7 @@ async fn output_prefix_survives_autonomous_suspension(
         }
     );
     assert_eq!(handles.len(), if nested { 2 } else { 1 });
-    assert!(executor.instance_load_count(&agent_id) > loads);
+    assert!(executor.instance_load_count(&agent_id.agent_id) > loads);
     let mut recorded_offsets = BTreeSet::new();
     let mut journal_items = BTreeMap::new();
     let mut journal_ends = BTreeMap::new();
@@ -2919,10 +2952,10 @@ async fn output_prefix_survives_autonomous_suspension(
                     .map_err(anyhow::Error::msg)?;
                 let id = StreamId::derive(
                     context.default_environment_id,
-                    &agent_id,
+                    &agent_id.agent_id,
                     metadata.fingerprint,
                     record.stream_id.0,
-                )?
+                )
                 .0;
                 let decoded = match &record.payload {
                     StreamItemsPayload::Values(values) => values
@@ -2955,10 +2988,10 @@ async fn output_prefix_survives_autonomous_suspension(
                             StreamRecordReference::Local(local) => {
                                 StreamId::derive(
                                     context.default_environment_id,
-                                    &agent_id,
+                                    &agent_id.agent_id,
                                     metadata.fingerprint,
                                     local.0,
-                                )?
+                                )
                                 .0
                             }
                             StreamRecordReference::Foreign(handle) => handle.stream_id.0,
@@ -2985,10 +3018,10 @@ async fn output_prefix_survives_autonomous_suspension(
                     .map_err(anyhow::Error::msg)?;
                 let id = StreamId::derive(
                     context.default_environment_id,
-                    &agent_id,
+                    &agent_id.agent_id,
                     metadata.fingerprint,
                     record.stream_id.0,
-                )?
+                )
                 .0;
                 assert_eq!(record.terminal, StreamTerminal::Finished);
                 assert!(
@@ -3089,23 +3122,30 @@ async fn interrupt_output_producer_after_result(
         .await?;
     let key = IdempotencyKey::fresh();
     let agent_id = if ephemeral {
-        agent_id!("EphemeralStreamingRpcTarget", "interrupt-output")
-            .with_ephemeral_invocation_phantom(
-                &InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&key),
-                )
-                .owner_key("produce_then_spin"),
-            )
-            .map_err(anyhow::Error::msg)?
+        let logical = agent_key!("EphemeralStreamingRpcTarget", "interrupt-output");
+        let agent_id = crate::agent::ephemeral_agent_id(
+            &executor,
+            component.environment_id,
+            &logical,
+            &key,
+            "produce_then_spin",
+        );
+        crate::agent::create_unkeyed_agent_at(&executor, &component, &logical, &agent_id).await?;
+        agent_id
     } else {
-        agent_id!("StreamingRpcTarget", "interrupt-output")
+        executor
+            .start_agent(
+                &component.id,
+                agent_key!("StreamingRpcTarget", "interrupt-output"),
+            )
+            .await?
     };
-    let agent_id = executor.start_agent(&component.id, agent_id).await?;
     let metadata = executor.get_worker_metadata(&agent_id).await?;
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("produce_then_spin".to_string()),
             input: Some(golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -3168,7 +3208,7 @@ async fn interrupt_output_producer_after_result(
                             request: Some(invocation_request::Request::ResumeAttach(
                                 ResumeAttach {
                                     idempotency_key: acceptance.idempotency_key,
-                                    agent_id: Some(agent_id.clone().into()),
+                                    agent_id: Some(agent_id.agent_id.into()),
                                     environment_id: Some(component.environment_id.into()),
                                     attachment_id: acceptance.attachment_id,
                                     attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -3412,14 +3452,16 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingRpcTarget", "stream-local-sibling-error");
+    let agent_id = agent_key!("StreamingRpcTarget", "stream-local-sibling-error");
     let worker_agent_id = executor.start_agent(&component.id, agent_id).await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
     let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("produce_sibling_error".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
@@ -3515,8 +3557,8 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let caller = agent_id!("StreamingRpcCaller", "stream-context-lifetime");
-    let target = agent_id!("StreamingRpcTarget", "stream-context-lifetime");
+    let caller = agent_key!("StreamingRpcCaller", "stream-context-lifetime");
+    let target = agent_key!("StreamingRpcTarget", "stream-context-lifetime");
     let target_worker = executor.start_agent(&component.id, target.clone()).await?;
     let mut previous_span_id = None;
 
@@ -3547,7 +3589,9 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
             })
             .await
             .map_err(|_| anyhow::anyhow!("producer did not persist its first output item"))??;
-            executor.complete_promise(&gate, Vec::new()).await
+            executor
+                .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+                .await
         };
         let (result, released) = tokio::join!(collect, release);
         released?;
@@ -3623,7 +3667,7 @@ async fn streaming_sync_rpc_embeds_span_close_in_end(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let caller = agent_id!("StreamingRpcCaller", "embedded-span-terminal");
+    let caller = agent_key!("StreamingRpcCaller", "embedded-span-terminal");
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
 
     assert_eq!(
@@ -3700,7 +3744,7 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
         (true, true, true),
     ] {
         let name = format!("cancelled-read-{crash}-{after_delivery}-{pending}");
-        let target_id = agent_id!("StreamingRpcTarget", name.clone());
+        let target_id = agent_key!("StreamingRpcTarget", name.clone());
         executor
             .start_agent(&component.id, target_id.clone())
             .await?;
@@ -3708,7 +3752,7 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
             .invoke_and_await_agent(&component, &target_id, "create_output_gate", data_value!())
             .await?
             .into_typed::<PromiseId>()?;
-        let caller_id = agent_id!("StreamingRpcCaller", name);
+        let caller_id = agent_key!("StreamingRpcCaller", name);
         let worker = executor
             .start_agent(&component.id, caller_id.clone())
             .await?;
@@ -3755,7 +3799,11 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
                 {
                     if log.message.ends_with(": native read pending") {
                         executor
-                            .complete_promise(pending_gate.as_ref().unwrap(), vec![])
+                            .complete_promise(
+                                &executor.context.default_environment_id,
+                                pending_gate.as_ref().unwrap(),
+                                vec![],
+                            )
                             .await?;
                     }
                     if log.message.ends_with(": native reads cancelled") {
@@ -3764,7 +3812,13 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
                 }
             }
             if after_delivery {
-                executor.complete_promise(&source_gate, vec![]).await?;
+                executor
+                    .complete_promise(
+                        &executor.context.default_environment_id,
+                        &source_gate,
+                        vec![],
+                    )
+                    .await?;
             }
             loop {
                 let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -3795,20 +3849,32 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
             result = invocation.as_mut() => panic!("retention settled before crash: {result:?}"),
             checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoint) => checkpoint??,
         }
-        let loads = executor.instance_load_count(&worker);
+        let loads = executor.instance_load_count(&worker.agent_id);
         if crash {
             executor.simulated_crash(&worker).await?;
         }
-        executor.complete_promise(&resume_gate, vec![]).await?;
+        executor
+            .complete_promise(
+                &executor.context.default_environment_id,
+                &resume_gate,
+                vec![],
+            )
+            .await?;
         if !after_delivery {
-            executor.complete_promise(&source_gate, vec![]).await?;
+            executor
+                .complete_promise(
+                    &executor.context.default_environment_id,
+                    &source_gate,
+                    vec![],
+                )
+                .await?;
         }
         let values = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut())
             .await??
             .into_typed::<Vec<u32>>()?;
         assert_eq!(values, [17, 20, 23, 26, 29, 32, 35]);
         if crash {
-            assert!(executor.instance_load_count(&worker) > loads);
+            assert!(executor.instance_load_count(&worker.agent_id) > loads);
         }
         let records = executor
             .get_oplog(&worker, OplogIndex::INITIAL)
@@ -3860,7 +3926,7 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
         .await?;
     for (crash, before_cancel) in [(false, false), (true, false), (true, true)] {
         let name = format!("ready-cancellation-{crash}-{before_cancel}");
-        let target_id = agent_id!("StreamingRpcTarget", name.clone());
+        let target_id = agent_key!("StreamingRpcTarget", name.clone());
         executor
             .start_agent(&component.id, target_id.clone())
             .await?;
@@ -3868,7 +3934,7 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
             .invoke_and_await_agent(&component, &target_id, "create_output_gate", data_value!())
             .await?
             .into_typed::<PromiseId>()?;
-        let caller_id = agent_id!("StreamingRpcCaller", name);
+        let caller_id = agent_key!("StreamingRpcCaller", name);
         let worker = executor
             .start_agent(&component.id, caller_id.clone())
             .await?;
@@ -3880,7 +3946,7 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
             .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
             .await?
             .into_typed::<PromiseId>()?;
-        let loads = executor.instance_load_count(&worker);
+        let loads = executor.instance_load_count(&worker.agent_id);
         let invocation = executor.invoke_and_await_agent(
             &component,
             &caller_id,
@@ -3916,16 +3982,28 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 if phase == 0 {
-                    executor.complete_promise(&source_gate, vec![]).await?;
+                    executor
+                        .complete_promise(
+                            &executor.context.default_environment_id,
+                            &source_gate,
+                            vec![],
+                        )
+                        .await?;
                 } else if phase == 1 {
                     if before_cancel {
-                        executor.commit_oplog(&worker).await?;
+                        executor.commit_oplog(&worker.agent_id).await?;
                         executor.simulated_crash(&worker).await?;
                     }
-                    executor.complete_promise(&cancel_gate, vec![]).await?;
+                    executor
+                        .complete_promise(
+                            &executor.context.default_environment_id,
+                            &cancel_gate,
+                            vec![],
+                        )
+                        .await?;
                 }
             }
-            executor.commit_oplog(&worker).await?;
+            executor.commit_oplog(&worker.agent_id).await?;
             Ok::<(), anyhow::Error>(())
         };
         tokio::select! {
@@ -3963,13 +4041,19 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
         if crash && !before_cancel {
             executor.simulated_crash(&worker).await?;
         }
-        executor.complete_promise(&resume_gate, vec![]).await?;
+        executor
+            .complete_promise(
+                &executor.context.default_environment_id,
+                &resume_gate,
+                vec![],
+            )
+            .await?;
         let values = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut())
             .await??
             .into_typed::<Vec<u32>>()?;
         assert_eq!(values, [17, 20, 23, 26, 29, 32, 35]);
         if crash {
-            assert!(executor.instance_load_count(&worker) > loads);
+            assert!(executor.instance_load_count(&worker.agent_id) > loads);
         }
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let ordinals = entries
@@ -4031,7 +4115,7 @@ async fn streaming_output_resume_restores_exact_cursors(
         .await?;
     let idempotency_key = IdempotencyKey::fresh();
     let (worker_agent_id, method_name, input, mut gate) = if restart_executor {
-        let agent_id = agent_id!("StreamingRpcTarget", "output-restart");
+        let agent_id = agent_key!("StreamingRpcTarget", "output-restart");
         let worker_agent_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -4046,17 +4130,18 @@ async fn streaming_output_resume_restores_exact_cursors(
             Some(gate),
         )
     } else {
-        let final_agent_id = agent_id!("EphemeralStreamingRpcTarget", "resident-output-resume")
-            .with_ephemeral_invocation_phantom(
-                &InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&idempotency_key),
-                )
-                .owner_key("produce_gated_siblings"),
-            )
-            .map_err(anyhow::Error::msg)?;
+        let logical = agent_key!("EphemeralStreamingRpcTarget", "resident-output-resume");
+        let final_agent_id = crate::agent::ephemeral_agent_id(
+            &executor,
+            component.environment_id,
+            &logical,
+            &idempotency_key,
+            "produce_gated_siblings",
+        );
+        crate::agent::create_unkeyed_agent_at(&executor, &component, &logical, &final_agent_id)
+            .await?;
         (
-            executor.start_agent(&component.id, final_agent_id).await?,
+            final_agent_id,
             "produce_gated_siblings",
             data_value!(),
             None,
@@ -4066,7 +4151,9 @@ async fn streaming_output_resume_restores_exact_cursors(
     let (_, input) = input.into_parts();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some(method_name.to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
@@ -4137,7 +4224,7 @@ async fn streaming_output_resume_restores_exact_cursors(
             let gate_value =
                 SchemaValue::try_from(tuple.elements[0].clone()).map_err(anyhow::Error::msg)?;
             let promise = PromiseId::from_value(&gate_value)?;
-            assert_eq!(promise.agent_id, worker_agent_id);
+            assert_eq!(promise.agent_id, worker_agent_id.agent_id);
             gate = Some(promise);
         }
         if let Some(invocation_response::Response::OutputItem(item)) = response.response {
@@ -4212,7 +4299,7 @@ async fn streaming_output_resume_restores_exact_cursors(
             executor
                 .worker_is_loaded(&OwnedAgentId::new(
                     context.default_environment_id,
-                    &worker_agent_id
+                    &worker_agent_id.agent_id
                 ))
                 .await,
             "the gated ephemeral invocation must still be resident before resume"
@@ -4246,9 +4333,9 @@ async fn streaming_output_resume_restores_exact_cursors(
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: accepted.idempotency_key,
             agent_id: if restart_executor {
-                start.agent_id.clone()
+                crate::agent::start_target_id(start)
             } else {
-                accepted.agent_id.clone()
+                accepted.agent_id
             },
             environment_id: start.environment_id,
             attachment_id: accepted.attachment_id,
@@ -4288,7 +4375,9 @@ async fn streaming_output_resume_restores_exact_cursors(
         match response.response {
             Some(invocation_response::Response::Accepted(resumed)) => {
                 assert_eq!(resumed.epoch, accepted.epoch + 1);
-                executor.complete_promise(&gate, Vec::new()).await?;
+                executor
+                    .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+                    .await?;
             }
             Some(invocation_response::Response::Result(result)) => {
                 mapped_outputs = result.new_stream_mappings.len();
@@ -4353,11 +4442,15 @@ async fn streaming_output_resume_restores_exact_cursors(
     if restart_executor {
         return Ok(());
     }
-    let final_agent_id: AgentId = accepted
-        .agent_id
-        .ok_or_else(|| anyhow::anyhow!("ephemeral acceptance omitted final agent ID"))?
-        .try_into()
-        .map_err(anyhow::Error::msg)?;
+    let final_agent_id = OwnedAgentId::new(
+        component.environment_id,
+        &AgentId::try_from(
+            accepted
+                .agent_id
+                .ok_or_else(|| anyhow::anyhow!("ephemeral acceptance omitted final agent ID"))?,
+        )
+        .map_err(anyhow::Error::msg)?,
+    );
     let starts = executor
         .get_oplog(&final_agent_id, OplogIndex::INITIAL)
         .await?
@@ -4387,8 +4480,8 @@ async fn concurrently_deleting_attached_stream_consumer_and_producer_succeeds(
         .store()
         .await?;
     let name = format!("concurrent-stream-delete-{}", uuid::Uuid::new_v4());
-    let caller = agent_id!("StreamingRpcCaller", name.clone());
-    let producer = agent_id!("StreamingRpcTarget", name);
+    let caller = agent_key!("StreamingRpcCaller", name.clone());
+    let producer = agent_key!("StreamingRpcTarget", name);
 
     executor
         .invoke_and_await_agent(
@@ -4399,9 +4492,8 @@ async fn concurrently_deleting_attached_stream_consumer_and_producer_succeeds(
         )
         .await?;
 
-    let caller_id = AgentId::from_agent_id(component.id, &caller).map_err(anyhow::Error::msg)?;
-    let producer_id =
-        AgentId::from_agent_id(component.id, &producer).map_err(anyhow::Error::msg)?;
+    let caller_id = crate::agent::keyed_agent_id(component.environment_id, &caller);
+    let producer_id = crate::agent::keyed_agent_id(component.environment_id, &producer);
     let (caller_deleted, producer_deleted) = tokio::join!(
         executor.delete_worker(&caller_id),
         executor.delete_worker(&producer_id),
@@ -4427,8 +4519,8 @@ async fn deleting_stream_consumer_after_its_producer_succeeds(
         .store()
         .await?;
     let name = format!("sequential-stream-delete-{}", uuid::Uuid::new_v4());
-    let caller = agent_id!("StreamingRpcCaller", name.clone());
-    let producer = agent_id!("StreamingRpcTarget", name);
+    let caller = agent_key!("StreamingRpcCaller", name.clone());
+    let producer = agent_key!("StreamingRpcTarget", name);
 
     executor
         .invoke_and_await_agent(
@@ -4439,9 +4531,8 @@ async fn deleting_stream_consumer_after_its_producer_succeeds(
         )
         .await?;
 
-    let caller_id = AgentId::from_agent_id(component.id, &caller).map_err(anyhow::Error::msg)?;
-    let producer_id =
-        AgentId::from_agent_id(component.id, &producer).map_err(anyhow::Error::msg)?;
+    let caller_id = crate::agent::keyed_agent_id(component.environment_id, &caller);
+    let producer_id = crate::agent::keyed_agent_id(component.environment_id, &producer);
     executor.delete_worker(&producer_id).await?;
     executor.delete_worker(&caller_id).await?;
     Ok(())
@@ -4462,35 +4553,22 @@ async fn active_ephemeral_compute_interrupt_same_key_does_not_restart_invocation
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let logical_agent_id = agent_id!("EphemeralStreamingRpcTarget", "interrupt-spin");
+    let logical_agent_id = agent_key!("EphemeralStreamingRpcTarget", "interrupt-spin");
     let idempotency_key = IdempotencyKey::fresh();
-    let final_agent_id = AgentId::from_agent_id(
-        component.id,
-        &logical_agent_id
-            .with_ephemeral_invocation_phantom(
-                &InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&idempotency_key),
-                )
-                .owner_key("spin"),
-            )
-            .map_err(anyhow::Error::msg)?,
+    let final_agent_id = crate::agent::ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &logical_agent_id,
+        &idempotency_key,
+        "spin",
+    );
+    crate::agent::create_unkeyed_agent_at(
+        &executor,
+        &component,
+        &logical_agent_id,
+        &final_agent_id,
     )
-    .map_err(anyhow::Error::msg)?;
-    executor
-        .start_agent(
-            &component.id,
-            logical_agent_id
-                .with_ephemeral_invocation_phantom(
-                    &InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
-                        Some(&idempotency_key),
-                    )
-                    .owner_key("spin"),
-                )
-                .map_err(anyhow::Error::msg)?,
-        )
-        .await?;
+    .await?;
 
     let invocation_executor = executor.clone();
     let invocation_component = component.clone();
@@ -4591,27 +4669,24 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
         .await?;
 
     let target_key = IdempotencyKey::fresh();
-    let target_logical = agent_id!("EphemeralStreamingRpcTarget", "pending-cancel-target");
-    let target_parsed = target_logical
-        .with_ephemeral_invocation_phantom(
-            &InvocationRequestKey::external(
-                executor.auth_ctx().idempotency_scope(),
-                Some(&target_key),
-            )
-            .owner_key("spin"),
-        )
-        .map_err(anyhow::Error::msg)?;
-    let target_final =
-        AgentId::from_agent_id(component.id, &target_parsed).map_err(anyhow::Error::msg)?;
+    let target_logical = agent_key!("EphemeralStreamingRpcTarget", "pending-cancel-target");
+    let target_final = crate::agent::ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &target_logical,
+        &target_key,
+        "spin",
+    );
 
     // An interrupt before the target exists is intentionally a no-op. It must not
     // pre-arm a stop that consumes the later accepted invocation.
     executor.interrupt(&target_final).await?;
-    let mut initialization_success = executor.gate_next_agent_invocation_success(&target_final);
+    let mut initialization_success =
+        executor.gate_next_agent_invocation_success(&target_final.agent_id);
     let (mut state, _frames, mut inbound) = open_invocation_session_with_key(
         &executor,
         &component,
-        &target_parsed,
+        &target_logical,
         &target_key,
         "spin",
         data_value!(),
@@ -4635,7 +4710,10 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
         .await
         .map_err(|_| anyhow::anyhow!("initialization did not reach its success barrier"))?;
     let active = executor
-        .active_agent(&OwnedAgentId::new(component.environment_id, &target_final))
+        .active_agent(&OwnedAgentId::new(
+            component.environment_id,
+            &target_final.agent_id,
+        ))
         .await
         .expect("initialization is resident");
     let execution_status = active.resources().execution_status();
@@ -4729,20 +4807,27 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
         .store()
         .await?;
     let idempotency_key = IdempotencyKey::fresh();
-    let final_agent_id = agent_id!("EphemeralStreamingRpcTarget", "interrupt-held-input")
-        .with_ephemeral_invocation_phantom(
-            &InvocationRequestKey::external(
-                executor.auth_ctx().idempotency_scope(),
-                Some(&idempotency_key),
-            )
-            .owner_key("hold_input"),
-        )
-        .map_err(anyhow::Error::msg)?;
-    let worker_agent_id = executor.start_agent(&component.id, final_agent_id).await?;
+    let logical_agent_id = agent_key!("EphemeralStreamingRpcTarget", "interrupt-held-input");
+    let worker_agent_id = crate::agent::ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &logical_agent_id,
+        &idempotency_key,
+        "hold_input",
+    );
+    crate::agent::create_unkeyed_agent_at(
+        &executor,
+        &component,
+        &logical_agent_id,
+        &worker_agent_id,
+    )
+    .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("hold_input".to_string()),
             input: Some(golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -5069,14 +5154,16 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingRpcTarget", "nested-sibling-output-restart");
+    let agent_id = agent_key!("StreamingRpcTarget", "nested-sibling-output-restart");
     let worker_agent_id = executor.start_agent(&component.id, agent_id).await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
     let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("produce_nested_siblings".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
@@ -5110,7 +5197,7 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: accepted.idempotency_key,
-            agent_id: start.agent_id.clone(),
+            agent_id: crate::agent::start_target_id(start),
             environment_id: start.environment_id,
             attachment_id: accepted.attachment_id,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -5142,7 +5229,7 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingRpcTarget", "malformed-after-result");
+    let agent_id = agent_key!("StreamingRpcTarget", "malformed-after-result");
     let worker_agent_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5159,7 +5246,9 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("transform".to_string()),
             input: Some(input),
             request_key: Some(
@@ -5276,14 +5365,14 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
 fn origin_observer_start(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    target: &AgentId,
-    caller: &AgentId,
+    target: &OwnedAgentId,
+    caller: &OwnedAgentId,
     fingerprint: uuid::Uuid,
     key: &IdempotencyKey,
     method: &str,
 ) -> InvocationStart {
     InvocationStart {
-        agent_id: Some(target.clone().into()),
+        target: Some(crate::agent::id_target(target)),
         method_name: Some(method.to_string()),
         input: Some(golem_schema::proto::golem::schema::SchemaValue {
             value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -5300,13 +5389,13 @@ fn origin_observer_start(
         ),
         idempotency_key: Some(key.clone().into()),
         context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-            parent: Some(caller.clone().into()),
+            parent: Some(caller.agent_id.into()),
             ..Default::default()
         }),
         auth_ctx: Some(executor.auth_ctx().into()),
         principal: Some(
             Principal::Agent(AgentPrincipal {
-                agent_id: caller.clone(),
+                agent_id: caller.agent_id,
             })
             .into(),
         ),
@@ -5319,7 +5408,7 @@ fn origin_observer_start(
         expected_callee_fingerprint: Some(fingerprint.into()),
         origin_invocation: Some(StreamInvocationIdentity {
             callee_environment_id: Some(component.environment_id.into()),
-            callee: Some(caller.clone().into()),
+            callee: Some(caller.agent_id.into()),
             callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
             idempotency_key: Some(golem_common::model::InvocationId::new().into()),
         }),
@@ -5371,20 +5460,18 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let target = AgentId::from_agent_id(
-        component.id,
-        &agent_id!("StreamingRpcTarget", "observer-result-failure"),
-    )
-    .map_err(anyhow::Error::msg)?;
-    let caller = AgentId::from_agent_id(
-        component.id,
-        &agent_id!("StreamingRpcCaller", "observer-result-failure"),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let target = crate::agent::keyed_agent_id(
+        component.environment_id,
+        &agent_key!("StreamingRpcTarget", "observer-result-failure"),
+    );
+    let caller = crate::agent::keyed_agent_id(
+        component.environment_id,
+        &agent_key!("StreamingRpcCaller", "observer-result-failure"),
+    );
     executor
         .start_agent(
             &component.id,
-            agent_id!("StreamingRpcTarget", "observer-result-failure"),
+            agent_key!("StreamingRpcTarget", "observer-result-failure"),
         )
         .await?;
     let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint.0;
@@ -5504,13 +5591,12 @@ async fn joined_origin_observer_promptly_receives_failure_without_result(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let parsed = agent_id!("StreamingRpcTarget", "observer-failure-first");
+    let parsed = agent_key!("StreamingRpcTarget", "observer-failure-first");
     let target = executor.start_agent(&component.id, parsed).await?;
-    let caller = AgentId::from_agent_id(
-        component.id,
-        &agent_id!("StreamingRpcCaller", "observer-failure-first"),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let caller = crate::agent::keyed_agent_id(
+        component.environment_id,
+        &agent_key!("StreamingRpcCaller", "observer-failure-first"),
+    );
     let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint.0;
     let start = origin_observer_start(
         &executor,
@@ -5559,10 +5645,15 @@ async fn joined_origin_observer_disconnect_and_control_do_not_detach_original(
             .await?;
         let name = format!("observer-control-{forbidden_control}");
         let target = executor
-            .start_agent(&component.id, agent_id!("StreamingRpcTarget", name.clone()))
+            .start_agent(
+                &component.id,
+                agent_key!("StreamingRpcTarget", name.clone()),
+            )
             .await?;
-        let caller = AgentId::from_agent_id(component.id, &agent_id!("StreamingRpcCaller", name))
-            .map_err(anyhow::Error::msg)?;
+        let caller = crate::agent::keyed_agent_id(
+            component.environment_id,
+            &agent_key!("StreamingRpcCaller", name),
+        );
         let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint.0;
         let start = origin_observer_start(
             &executor,
@@ -5691,16 +5782,21 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
         .store()
         .await?;
     let idempotency_key = IdempotencyKey::fresh();
-    let final_agent_id = agent_id!("EphemeralStreamingRpcTarget", "resident-input-resume")
-        .with_ephemeral_invocation_phantom(
-            &InvocationRequestKey::external(
-                executor.auth_ctx().idempotency_scope(),
-                Some(&idempotency_key),
-            )
-            .owner_key("transform"),
-        )
-        .map_err(anyhow::Error::msg)?;
-    let worker_agent_id = executor.start_agent(&component.id, final_agent_id).await?;
+    let logical_agent_id = agent_key!("EphemeralStreamingRpcTarget", "resident-input-resume");
+    let worker_agent_id = crate::agent::ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &logical_agent_id,
+        &idempotency_key,
+        "transform",
+    );
+    crate::agent::create_unkeyed_agent_at(
+        &executor,
+        &component,
+        &logical_agent_id,
+        &worker_agent_id,
+    )
+    .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
     let input = golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -5713,7 +5809,9 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
     };
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("transform".to_string()),
             input: Some(input),
             request_key: Some(
@@ -5842,10 +5940,10 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
                                 Ok(record)
                                     if golem_common::model::durable_stream::StreamId::derive(
                                         context.default_environment_id,
-                                        &worker_agent_id,
+                                        &worker_agent_id.agent_id,
                                         producer_fingerprint,
                                         record.stream_id.0,
-                                    ).map(|id| id.0).ok() == Some(durable_stream_uuid)
+                                    ).0 == durable_stream_uuid
                                         && record.first_sequence == 1
                             )
                     )
@@ -5893,7 +5991,7 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: accepted.idempotency_key,
-            agent_id: accepted.agent_id.clone(),
+            agent_id: accepted.agent_id,
             environment_id: start.environment_id,
             attachment_id: accepted.attachment_id,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -6107,11 +6205,11 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!("StreamingRpcCaller", "input-source-timer");
+    let parsed = agent_key!("StreamingRpcCaller", "input-source-timer");
     let caller = executor.start_agent(&component.id, parsed.clone()).await?;
-    let loads = executor.instance_load_count(&caller);
+    let loads = executor.instance_load_count(&caller.agent_id);
     let metadata = executor.get_worker_metadata(&caller).await?;
-    let target_parsed = agent_id!("StreamingRpcTarget", "input-source-timer");
+    let target_parsed = agent_key!("StreamingRpcTarget", "input-source-timer");
     let target = executor
         .start_agent(&component.id, target_parsed.clone())
         .await?;
@@ -6126,7 +6224,7 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
         result = &mut invocation => anyhow::bail!("transfer completed before unload: {result:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(12), async {
             executor.wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(10)).await?;
-            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &caller)).await { tokio::time::sleep(Duration::from_millis(10)).await; }
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &caller.agent_id)).await { tokio::time::sleep(Duration::from_millis(10)).await; }
             Ok::<(), anyhow::Error>(())
         }) => { unloaded??; }
     }
@@ -6176,7 +6274,7 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
         .await??
         .into_typed::<Vec<u32>>()?;
     assert_eq!(values, vec![23, 169, 7, 201]);
-    assert!(executor.instance_load_count(&caller) > loads);
+    assert!(executor.instance_load_count(&caller.agent_id) > loads);
     assert_eq!(
         executor.get_worker_metadata(&caller).await?.fingerprint,
         metadata.fingerprint
@@ -6187,13 +6285,13 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
     let observed = input_observations(
         &target_oplog,
         context.default_environment_id,
-        &target,
+        &target.agent_id,
         executor.get_worker_metadata(&target).await?.fingerprint,
     )?;
     let prefix_observed = input_observations(
         &before,
         context.default_environment_id,
-        &target,
+        &target.agent_id,
         executor.get_worker_metadata(&target).await?.fingerprint,
     )?;
     assert_eq!(
@@ -6212,10 +6310,10 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
                     .map_err(anyhow::Error::msg)?;
                 let stream = StreamId::derive(
                     context.default_environment_id,
-                    &caller,
+                    &caller.agent_id,
                     metadata.fingerprint,
                     record.stream_id.0,
-                )?
+                )
                 .0;
                 let values = match record.payload {
                     StreamItemsPayload::Values(values) => values
@@ -6244,10 +6342,10 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
                 assert_eq!(record.terminal, StreamTerminal::Finished);
                 let stream = StreamId::derive(
                     context.default_environment_id,
-                    &caller,
+                    &caller.agent_id,
                     metadata.fingerprint,
                     record.stream_id.0,
-                )?
+                )
                 .0;
                 assert!(
                     produced
@@ -6359,10 +6457,10 @@ async fn consumed_input_boundary(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!("StreamingRpcTarget", format!("consumed-{kind}"));
+    let parsed = agent_key!("StreamingRpcTarget", format!("consumed-{kind}"));
     let id = executor.start_agent(&component.id, parsed.clone()).await?;
     let metadata = executor.get_worker_metadata(&id).await?;
-    let loads = executor.instance_load_count(&id);
+    let loads = executor.instance_load_count(&id.agent_id);
     let wire = |value: SchemaValue| value.try_into().map_err(anyhow::Error::msg);
     let stream = |stream_id| golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::StreamReference(
@@ -6434,7 +6532,9 @@ async fn consumed_input_boundary(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(id.clone().into()),
+            target: Some(crate::agent::id_target(&id)),
+            constructor: None,
+            component_id: None,
             method_name: Some(method.into()),
             input: Some(golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -6539,10 +6639,13 @@ async fn consumed_input_boundary(
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 assert!(
                     executor
-                        .worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id))
+                        .worker_is_loaded(&OwnedAgentId::new(
+                            context.default_environment_id,
+                            &id.agent_id
+                        ))
                         .await
                 );
-                assert_eq!(executor.instance_load_count(&id), loads);
+                assert_eq!(executor.instance_load_count(&id.agent_id), loads);
                 assert_eq!(
                     executor.get_worker_metadata(&id).await?.status,
                     AgentStatus::Running
@@ -6599,7 +6702,7 @@ async fn consumed_input_boundary(
         response = responses.message() => anyhow::bail!("result before unload: {response:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(10), async {
             executor.wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(8)).await?;
-            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id)).await { tokio::time::sleep(Duration::from_millis(10)).await; }
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id.agent_id)).await { tokio::time::sleep(Duration::from_millis(10)).await; }
             Ok::<(), anyhow::Error>(())
         }) => { unloaded??; }
     }
@@ -6637,7 +6740,7 @@ async fn consumed_input_boundary(
         input_observations(
             &oplog,
             context.default_environment_id,
-            &id,
+            &id.agent_id,
             metadata.fingerprint
         )?,
         acknowledged
@@ -6672,7 +6775,7 @@ async fn consumed_input_boundary(
         }
     }
     assert_eq!((results, finishes), (1, 1));
-    assert!(executor.instance_load_count(&id) > loads);
+    assert!(executor.instance_load_count(&id.agent_id) > loads);
     assert_eq!(
         executor.get_worker_metadata(&id).await?.fingerprint,
         metadata.fingerprint
@@ -6799,7 +6902,7 @@ fn input_observations(
             .ok_or_else(|| anyhow::anyhow!("consumer binding slot missing"))?;
         let stream = match &binding.source {
             StreamRecordReference::Local(local) => {
-                StreamId::derive(environment, agent, fingerprint, local.0)?.0
+                StreamId::derive(environment, agent, fingerprint, local.0).0
             }
             StreamRecordReference::Foreign(handle) => handle.stream_id.0,
         };
@@ -6853,7 +6956,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingRpcTarget", "disconnect-after-acceptance");
+    let agent_id = agent_key!("StreamingRpcTarget", "disconnect-after-acceptance");
     let worker_agent_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6871,7 +6974,9 @@ async fn durable_streaming_input_recovers_after_executor_restart(
     let attempt_id = Some(uuid::Uuid::new_v4().into());
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("consume".to_string()),
             input: Some(input),
             request_key: Some(
@@ -7056,7 +7161,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: first_accepted.idempotency_key,
-            agent_id: start.agent_id.clone(),
+            agent_id: crate::agent::start_target_id(start),
             environment_id: start.environment_id,
             attachment_id: first_accepted.attachment_id,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -7165,7 +7270,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
             .into_typed::<u64>()?,
         42
     );
-    assert!(executor.instance_load_count(&worker_agent_id) > 0);
+    assert!(executor.instance_load_count(&worker_agent_id.agent_id) > 0);
     let oplog = executor
         .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
         .await?;
@@ -7220,7 +7325,7 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingRpcTarget", "resume-after-guest-drop");
+    let agent_id = agent_key!("StreamingRpcTarget", "resume-after-guest-drop");
     let worker_agent_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7237,7 +7342,9 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
     let start_key = IdempotencyKey::fresh();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.clone().into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("drop_input".to_string()),
             input: Some(input),
             request_key: Some(
@@ -7366,7 +7473,7 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: first_accepted.idempotency_key,
-            agent_id: start.agent_id.clone(),
+            agent_id: crate::agent::start_target_id(start),
             environment_id: start.environment_id,
             attachment_id: first_accepted.attachment_id,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -7480,11 +7587,11 @@ async fn reacquire_permits_restart_preserves_accepted_queued_live_invocation(
         .store()
         .await?;
 
-    let victim_agent = agent_id!("LargeDynamicMemoryAgent", "live-queue-reacquire-victim");
+    let victim_agent = agent_key!("LargeDynamicMemoryAgent", "live-queue-reacquire-victim");
     let victim_worker = executor
         .start_agent(&component.id, victim_agent.clone())
         .await?;
-    let victim_owned = OwnedAgentId::new(context.default_environment_id, &victim_worker);
+    let victim_owned = OwnedAgentId::new(context.default_environment_id, &victim_worker.agent_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_eviction_class(&victim_owned).await != Some(EvictionClass::LoadedIdle)
         {
@@ -7494,11 +7601,11 @@ async fn reacquire_permits_restart_preserves_accepted_queued_live_invocation(
     .await
     .expect("the co-resident worker must become idle and evictable");
 
-    let target_agent = agent_id!("LargeDynamicMemoryAgent", "live-queue-reacquire-target");
+    let target_agent = agent_key!("LargeDynamicMemoryAgent", "live-queue-reacquire-target");
     let target_worker = executor
         .start_agent(&component.id, target_agent.clone())
         .await?;
-    let target_owned = OwnedAgentId::new(context.default_environment_id, &target_worker);
+    let target_owned = OwnedAgentId::new(context.default_environment_id, &target_worker.agent_id);
     let victim_bytes = executor.worker_memory_requirement(&victim_owned).await?;
     let target_bytes = executor.worker_memory_requirement(&target_owned).await?;
     let growth_bytes = GROWTH_MIB * 1024 * 1024;
@@ -7615,8 +7722,8 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
             (true, "end"),
         ] {
             let name = format!("fork-rpc-{remote}-{synchronous}-{cut_point}");
-            let caller = agent_id!("StreamingRpcCaller", name.clone());
-            let provider = agent_id!("StreamingRpcTarget", name.clone());
+            let caller = agent_key!("StreamingRpcCaller", name.clone());
+            let provider = agent_key!("StreamingRpcTarget", name.clone());
             let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
             let provider_id = executor
                 .start_agent(&component.id, provider.clone())
@@ -7679,22 +7786,18 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
                     .expect("streaming RPC caller attempt"),
                 _ => start_index,
             };
-            let fork =
-                golem_common::phantom_agent_id!("StreamingRpcCaller", uuid::Uuid::new_v4(), name);
-            executor
-                .fork_worker(&caller_id, &fork.to_string(), cut)
-                .await?;
+            let fork = executor.fork_worker(&caller_id, cut).await?;
             assert_eq!(
-                executor
-                    .invoke_and_await_agent_with_key(
-                        &component,
-                        &fork,
-                        &key,
-                        "streaming_increment",
-                        data_value!(synchronous),
-                    )
-                    .await?
-                    .into_typed::<Vec<u64>>()?,
+                crate::agent::invoke_and_await_agent_by_id(
+                    &executor,
+                    &component,
+                    &fork,
+                    Some(&key),
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
                 vec![1],
                 "the fork must join the original provider invocation"
             );
@@ -7745,24 +7848,44 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
             } else {
                 executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
             }
-            for agent in [&caller, &fork] {
+            executor
+                .invoke_and_await_agent(&component, &caller, "create_input_gate", data_value!())
+                .await?;
+            assert_eq!(
                 executor
-                    .invoke_and_await_agent(&component, agent, "create_input_gate", data_value!())
-                    .await?;
-                assert_eq!(
-                    executor
-                        .invoke_and_await_agent_with_key(
-                            &component,
-                            agent,
-                            &key,
-                            "streaming_increment",
-                            data_value!(synchronous),
-                        )
-                        .await?
-                        .into_typed::<Vec<u64>>()?,
-                    vec![1]
-                );
-            }
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &caller,
+                        &key,
+                        "streaming_increment",
+                        data_value!(synchronous),
+                    )
+                    .await?
+                    .into_typed::<Vec<u64>>()?,
+                vec![1]
+            );
+            crate::agent::invoke_and_await_agent_by_id(
+                &executor,
+                &component,
+                &fork,
+                None,
+                "create_input_gate",
+                data_value!(),
+            )
+            .await?;
+            assert_eq!(
+                crate::agent::invoke_and_await_agent_by_id(
+                    &executor,
+                    &component,
+                    &fork,
+                    Some(&key),
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+                vec![1]
+            );
             assert_eq!(
                 executor
                     .invoke_and_await_agent(&component, &provider, "scalar_value", data_value!())
@@ -7791,7 +7914,11 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
                 })
                 .collect::<Vec<_>>();
             let target_key = executor
-                .finalized_invocation_key(&provider_id, &request.request_key, &request.method_name)
+                .finalized_invocation_key(
+                    &provider_id.agent_id,
+                    &request.request_key,
+                    &request.method_name,
+                )
                 .await?;
             assert_eq!(executions, vec![target_key]);
             assert_eq!(
@@ -7806,9 +7933,7 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
                     .into_typed::<u64>()?,
                 2,
             );
-            let fork_id =
-                AgentId::from_agent_id(component.id, &fork).map_err(anyhow::Error::msg)?;
-            for agent in [&caller_id, &fork_id, &provider_id] {
+            for agent in [&caller_id, &fork, &provider_id] {
                 let history = executor.get_oplog(agent, OplogIndex::INITIAL).await?;
                 let errors = history
                     .iter()
@@ -7846,8 +7971,8 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
         .store()
         .await?;
     let name = "fork-agent-output";
-    let caller = agent_id!("StreamingRpcCaller", name);
-    let source = agent_id!("StreamingRpcTarget", name);
+    let caller = agent_key!("StreamingRpcCaller", name);
+    let source = agent_key!("StreamingRpcTarget", name);
     executor.start_agent(&component.id, caller.clone()).await?;
     let source_id = executor.start_agent(&component.id, source.clone()).await?;
     assert_eq!(
@@ -7882,17 +8007,14 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
         })
         .expect("prepared streaming invocation");
     for exported in [false, true] {
-        let target =
-            golem_common::phantom_agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4(), name);
-        let target_id =
-            AgentId::from_agent_id(component.id, &target).map_err(anyhow::Error::msg)?;
+        let target_id = crate::fork::fresh_fork_target(&source_id);
         let invocation_key = if exported {
             let response = executor
                 .client
                 .clone()
                 .fork_stream_slot(ForkStreamSlotRequest {
-                    source_agent_id: Some(source_id.clone().into()),
-                    target_agent_id: Some(target_id.clone().into()),
+                    source_agent_id: Some(source_id.agent_id.into()),
+                    target_agent_id: Some(target_id.agent_id.into()),
                     environment_id: Some(component.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
                     session: session.clone(),
@@ -7915,18 +8037,18 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
                 .invocation_key
                 .expect("export fork returns its invocation key")
         } else {
-            executor
-                .fork_worker(&source_id, &target.to_string(), cut)
-                .await?;
+            crate::fork::fork_worker_to(&executor, &source_id, &target_id, cut).await?;
             source_invocation_key.into()
         };
         // This queued invocation can finish only after the fork's open output has drained.
         assert_eq!(
             tokio::time::timeout(
                 Duration::from_secs(20),
-                executor.invoke_and_await_agent(
+                crate::agent::invoke_and_await_agent_by_id(
+                    &executor,
                     &component,
-                    &target,
+                    &target_id,
+                    None,
                     "increment_scalar",
                     data_value!()
                 )
@@ -7939,7 +8061,7 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
             .client
             .clone()
             .read_stream_slot(ReadStreamSlotRequest {
-                agent_id: Some(target_id.clone().into()),
+                agent_id: Some(target_id.agent_id.into()),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 session: session.clone(),
@@ -8039,9 +8161,9 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
                 "direct"
             }
         );
-        let original = agent_id!("StreamingRpcCaller", name);
-        let provider = agent_id!("StreamingRpcTarget", name);
-        let downstream = agent_id!("StreamingRpcTarget", format!("{name}-forwarded-drop"));
+        let original = agent_key!("StreamingRpcCaller", name);
+        let provider = agent_key!("StreamingRpcTarget", name);
+        let downstream = agent_key!("StreamingRpcTarget", format!("{name}-forwarded-drop"));
         let original_id = executor
             .start_agent(&component.id, original.clone())
             .await?;
@@ -8060,6 +8182,7 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
             let executor = executor.clone();
             let component = component.clone();
             let original_for_invocation = original.clone();
+            let original_agent_id = original_id.agent_id.to_string();
             let gate = gate.clone();
             let invocation_key = invocation_key.clone();
             async move {
@@ -8069,7 +8192,7 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
                         &original_for_invocation,
                         &invocation_key,
                         "fork_drop_inherited_output",
-                        data_value!(gate, original_for_invocation.to_string(), forwarded_drop),
+                        data_value!(gate, original_agent_id, forwarded_drop),
                     )
                     .await
             }
@@ -8119,23 +8242,22 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
         .await
         .map_err(|_| anyhow::anyhow!("RPC did not reach End with an open output"))??;
 
-        let fork =
-            golem_common::phantom_agent_id!("StreamingRpcCaller", uuid::Uuid::new_v4(), name);
-        let fork_id = AgentId::from_agent_id(component.id, &fork).map_err(anyhow::Error::msg)?;
-        executor
-            .fork_worker(&original_id, &fork.to_string(), cut)
-            .await?;
+        let fork_id = executor.fork_worker(&original_id, cut).await?;
         assert_eq!(
-            executor
-                .invoke_and_await_agent_with_key(
-                    &component,
-                    &fork,
-                    &invocation_key,
-                    "fork_drop_inherited_output",
-                    data_value!(gate.clone(), original.to_string(), forwarded_drop),
-                )
-                .await?
-                .into_typed::<Vec<u64>>()?,
+            crate::agent::invoke_and_await_agent_by_id(
+                &executor,
+                &component,
+                &fork_id,
+                Some(&invocation_key),
+                "fork_drop_inherited_output",
+                data_value!(
+                    gate.clone(),
+                    original_id.agent_id.to_string(),
+                    forwarded_drop
+                ),
+            )
+            .await?
+            .into_typed::<Vec<u64>>()?,
             Vec::<u64>::new(),
             "the fork must drop its inherited output reader"
         );
@@ -8145,9 +8267,9 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
                     .get_oplog(&provider_id, OplogIndex::INITIAL)
                     .await?;
                 let expected_consumer = if forwarded_drop {
-                    &downstream_id
+                    &downstream_id.agent_id
                 } else {
-                    &fork_id
+                    &fork_id.agent_id
                 };
                 let finalized_stream = provider_history.iter().find_map(|entry| {
                     let PublicOplogEntry::StreamSession(session) = &entry.entry else {
@@ -8204,7 +8326,9 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
         let _ = invocation.await;
         drop(executor);
         let (executor, _) = crate::fork::start_with_remote_streaming_rpc(deps, &context).await?;
-        executor.complete_promise(&gate, Vec::new()).await?;
+        executor
+            .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+            .await?;
         assert_eq!(
             executor
                 .invoke_and_await_agent_with_key(
@@ -8212,7 +8336,11 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
                     &original,
                     &invocation_key,
                     "fork_drop_inherited_output",
-                    data_value!(gate.clone(), original.to_string(), forwarded_drop),
+                    data_value!(
+                        gate.clone(),
+                        original_id.agent_id.to_string(),
+                        forwarded_drop
+                    ),
                 )
                 .await?
                 .into_typed::<Vec<u64>>()?,
@@ -8228,14 +8356,15 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
                 if matches!(StreamTerminalRecord::from_value(params.record.value()).unwrap().terminal,
                     StreamTerminal::ConsumerCancelled { .. })))
             .count();
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &fork,
-                "drop_new_increment_output",
-                data_value!(),
-            )
-            .await?;
+        crate::agent::invoke_and_await_agent_by_id(
+            &executor,
+            &component,
+            &fork_id,
+            None,
+            "drop_new_increment_output",
+            data_value!(),
+        )
+        .await?;
         let provider_history = executor
             .get_oplog(&provider_id, OplogIndex::INITIAL)
             .await?;
@@ -8267,7 +8396,7 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
         assert_eq!(executions.len(), 2);
         let rpc_key = executor
             .finalized_invocation_key(
-                &provider_id,
+                &provider_id.agent_id,
                 &rpc_request.request_key,
                 &rpc_request.method_name,
             )
@@ -8300,14 +8429,16 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let source = agent_id!("StreamingRpcTarget", "fork-completed-stream");
+    let source = agent_key!("StreamingRpcTarget", "fork-completed-stream");
     let source_id = executor.start_agent(&component.id, source.clone()).await?;
     let metadata = executor.get_worker_metadata(&source_id).await?;
     let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(source_id.clone().into()),
+            target: Some(crate::agent::id_target(&source_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("increment_stream".into()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
@@ -8378,19 +8509,17 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
     drop(responses);
     let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
     let cut = prefix.last().unwrap().oplog_index;
-    let target = golem_common::phantom_agent_id!(
-        "StreamingRpcTarget",
-        uuid::Uuid::new_v4(),
-        "fork-completed-stream"
-    );
-    let target_id = AgentId::from_agent_id(component.id, &target).map_err(anyhow::Error::msg)?;
-    executor
-        .fork_worker(&source_id, &target.to_string(), cut)
-        .await?;
-    let scalar = executor
-        .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
-        .await?
-        .into_typed::<u64>()?;
+    let target_id = executor.fork_worker(&source_id, cut).await?;
+    let scalar = crate::agent::invoke_and_await_agent_by_id(
+        &executor,
+        &component,
+        &target_id,
+        None,
+        "increment_scalar",
+        data_value!(),
+    )
+    .await?
+    .into_typed::<u64>()?;
     assert_eq!(scalar, 2);
     executor
         .revert(
@@ -8402,19 +8531,31 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
             ),
         )
         .await?;
-    let scalar_after_revert = executor
-        .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
-        .await?
-        .into_typed::<u64>()?;
+    let scalar_after_revert = crate::agent::invoke_and_await_agent_by_id(
+        &executor,
+        &component,
+        &target_id,
+        None,
+        "increment_scalar",
+        data_value!(),
+    )
+    .await?
+    .into_typed::<u64>()?;
     assert_eq!(scalar_after_revert, 2);
     // The fork's copied output and guest state must no longer depend on the source oplog.
     executor.delete_worker(&source_id).await?;
     drop(executor);
     let executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
-    let scalar = executor
-        .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
-        .await?
-        .into_typed::<u64>()?;
+    let scalar = crate::agent::invoke_and_await_agent_by_id(
+        &executor,
+        &component,
+        &target_id,
+        None,
+        "increment_scalar",
+        data_value!(),
+    )
+    .await?
+    .into_typed::<u64>()?;
     assert_eq!(scalar, 3);
     let history = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
     let output_records = history
@@ -8440,16 +8581,18 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent = agent_id!("StreamingRpcTarget", "retained-start-revert");
+    let agent = agent_key!("StreamingRpcTarget", "retained-start-revert");
     let worker_id = executor.start_agent(&component.id, agent).await?;
     wait_for_agent_initialization(&executor, &worker_id).await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&worker_id, &key, "consume")
+        .external_invocation_key(&worker_id.agent_id, &key, "consume")
         .await?;
     let start = InvocationStart {
-        agent_id: Some(worker_id.clone().into()),
+        target: Some(crate::agent::id_target(&worker_id)),
+        constructor: None,
+        component_id: None,
         method_name: Some("consume".into()),
         input: Some(golem_schema::proto::golem::schema::SchemaValue {
             value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -8566,7 +8709,7 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
 
     let resume = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            agent_id: start.agent_id,
+            agent_id: crate::agent::start_target_id(&start),
             environment_id: start.environment_id,
             idempotency_key: accepted.idempotency_key,
             expected_callee_fingerprint: start.expected_callee_fingerprint,
@@ -8745,7 +8888,7 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent = agent_id!("StreamingRpcTarget", "revert-stream-acceptance");
+    let agent = agent_key!("StreamingRpcTarget", "revert-stream-acceptance");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     wait_for_agent_initialization(&executor, &worker_id).await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
@@ -8762,7 +8905,9 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
     let start_key = IdempotencyKey::fresh();
     let request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_id.clone().into()),
+            target: Some(crate::agent::id_target(&worker_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("consume".into()),
             input: Some(input),
             request_key: Some(
@@ -8968,7 +9113,7 @@ async fn invoke_agent_session(
 
 async fn wait_for_agent_initialization(
     executor: &TestWorkerExecutor,
-    agent_id: &AgentId,
+    agent_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
@@ -9020,14 +9165,21 @@ async fn open_invocation_session_with_key(
     mpsc::Sender<InvocationRequest>,
     tonic::Streaming<InvocationResponse>,
 )> {
-    let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
-        .map_err(|error| anyhow::anyhow!("invalid agent id: {error}"))?;
+    let (target, constructor) = crate::agent::invocation_target(
+        executor,
+        component,
+        agent_id,
+        idempotency_key,
+        method_name,
+    )?;
     let (_, input) = params.into_parts();
     let input = input.try_into().map_err(anyhow::Error::msg)?;
     let (frames, receiver) = mpsc::channel(8);
     let request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.into()),
+            target: Some(target),
+            constructor,
+            component_id: Some(component.id.into()),
             method_name: Some(method_name.to_string()),
             input: Some(input),
             idempotency_key: Some(idempotency_key.clone().into()),
@@ -9139,7 +9291,7 @@ async fn typescript_streaming_guest_abi_e2e(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let agent_id = agent_id!("TsStreamingRpcTarget", "typescript-guest-abi");
+    let agent_id = agent_key!("TsStreamingRpcTarget", "typescript-guest-abi");
     let worker_agent_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -9156,7 +9308,9 @@ async fn typescript_streaming_guest_abi_e2e(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_agent_id.into()),
+            target: Some(crate::agent::id_target(&worker_agent_id)),
+            constructor: None,
+            component_id: None,
             method_name: Some("transform".to_string()),
             input: Some(input),
             request_key: Some(
@@ -9391,7 +9545,7 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
         for run in 0..runs {
             let name = format!("stream-probe-{readers}-{run}");
             let expected = format!("hello-{readers}-{run}");
-            let agent_id = agent_id!("ConcurrentStreamProbe", name, readers as f64, port as f64);
+            let agent_id = agent_key!("ConcurrentStreamProbe", name, readers as f64, port as f64);
             let worker_id = executor.start_agent(&component.id, agent_id).await?;
             let metadata = executor.get_worker_metadata(&worker_id).await?;
             let input = golem_schema::proto::golem::schema::SchemaValue {
@@ -9406,7 +9560,9 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
             let start_key = IdempotencyKey::fresh();
             let request = InvocationRequest {
                 request: Some(invocation_request::Request::Start(InvocationStart {
-                    agent_id: Some(worker_id.into()),
+                    target: Some(crate::agent::id_target(&worker_id)),
+                    constructor: None,
+                    component_id: None,
                     method_name: Some("echo".to_string()),
                     input: Some(input),
                     request_key: Some(
@@ -9587,7 +9743,7 @@ async fn generated_rust_ephemeral_streaming_rpc_uses_fresh_preparation(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let caller = agent_id!("StreamingRpcCaller", "fresh-ephemeral-streaming");
+    let caller = agent_key!("StreamingRpcCaller", "fresh-ephemeral-streaming");
     let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
 
     for synchronous in [false, true] {
@@ -9648,7 +9804,7 @@ async fn generated_rust_client_streaming_rpc_e2e(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let caller_agent_id = agent_id!("StreamingRpcCaller", "generated_streaming_rpc_e2e");
+    let caller_agent_id = agent_key!("StreamingRpcCaller", "generated_streaming_rpc_e2e");
     let caller = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -9768,7 +9924,7 @@ async fn generated_rust_client_streaming_rpc_e2e(
         "unexpected producer error: {producer_error}"
     );
 
-    let stream_free_caller_id = agent_id!("StreamingRpcCaller", "stream_free_after_stream_error");
+    let stream_free_caller_id = agent_key!("StreamingRpcCaller", "stream_free_after_stream_error");
     executor
         .start_agent(&component.id, stream_free_caller_id.clone())
         .await?;
@@ -9811,7 +9967,7 @@ async fn guest_stream_outcomes_preserve_prefix_forwarding_and_replayed_effects(
         .await?;
     for (kind, outcome) in [(0u8, 73u32), (1, 1), (2, 2), (3, 2)] {
         let name = format!("outcome-{kind}");
-        let caller_id = agent_id!("StreamingRpcCaller", name.clone());
+        let caller_id = agent_key!("StreamingRpcCaller", name.clone());
         let caller = executor
             .start_agent(&component.id, caller_id.clone())
             .await?;
@@ -9832,7 +9988,7 @@ async fn guest_stream_outcomes_preserve_prefix_forwarding_and_replayed_effects(
         executor
             .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
             .await?;
-        let effect_id = agent_id!("StreamingRpcTarget", format!("{name}-outcome-effect"));
+        let effect_id = agent_key!("StreamingRpcTarget", format!("{name}-outcome-effect"));
         let count = executor
             .invoke_and_await_agent(&component, &effect_id, "scalar_value", data_value!())
             .await?
@@ -9881,8 +10037,8 @@ async fn rpc_suspension_retries_after_concurrent_http_wait_finishes(
         .await?;
 
     let name = "rpc-suspension-retry-after-http";
-    let target_id = agent_id!("StreamingRpcTarget", name);
-    let caller_id = agent_id!("StreamingRpcCaller", name);
+    let target_id = agent_key!("StreamingRpcTarget", name);
+    let caller_id = agent_key!("StreamingRpcCaller", name);
     let target = executor
         .start_agent(&component.id, target_id.clone())
         .await?;
@@ -10011,7 +10167,7 @@ async fn rpc_suspension_retries_after_concurrent_http_wait_finishes(
     );
     let target_invocation_key = executor
         .finalized_invocation_key(
-            &target,
+            &target.agent_id,
             &InvocationRequestKey::Internal(rpc_idempotency_key.clone()),
             "increment_scalar",
         )
@@ -10072,7 +10228,7 @@ async fn typescript_client_streaming_rpc_e2e(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let caller_agent_id = agent_id!("TsStreamingRpcCaller", "typescript-client-streaming");
+    let caller_agent_id = agent_key!("TsStreamingRpcCaller", "typescript-client-streaming");
     let caller = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -10205,7 +10361,7 @@ async fn typescript_client_streaming_rpc_e2e(
     );
 
     let stream_free_caller_id =
-        agent_id!("TsStreamingRpcCaller", "typescript-stream-free-after-error");
+        agent_key!("TsStreamingRpcCaller", "typescript-stream-free-after-error");
     executor
         .start_agent(&component.id, stream_free_caller_id.clone())
         .await?;
@@ -10248,16 +10404,16 @@ async fn typescript_early_output_drop_releases_streaming_cleanup_before_next_inv
         .store()
         .await?;
     let name = "early-output-drop-cleanup";
-    let caller_agent_id = agent_id!("TsStreamingRpcCaller", name);
+    let caller_agent_id = agent_key!("TsStreamingRpcCaller", name);
     executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
-    let target_agent_id = agent_id!("TsStreamingRpcTarget", name);
+    let target_agent_id = agent_key!("TsStreamingRpcTarget", name);
     let target = executor
         .start_agent(&component.id, target_agent_id.clone())
         .await?;
     wait_for_agent_initialization(&executor, &target).await?;
-    let mut transform_success = executor.gate_next_agent_invocation_success(&target);
+    let mut transform_success = executor.gate_next_agent_invocation_success(&target.agent_id);
 
     let invocation = {
         let executor = executor.clone();
@@ -10394,7 +10550,7 @@ async fn caller_recovery_restarts_input_drain_after_rpc_result_commit(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let caller_agent_id = agent_id!("StreamingRpcCaller", "caller-input-recovery");
+    let caller_agent_id = agent_key!("StreamingRpcCaller", "caller-input-recovery");
     let caller = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -10439,7 +10595,9 @@ async fn caller_recovery_restarts_input_drain_after_rpc_result_commit(
         "a simulated crash of a suspended caller must not permanently interrupt it"
     );
     assert!(!invocation.is_finished());
-    executor.complete_promise(&gate, Vec::new()).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+        .await?;
 
     let result = invocation
         .await?
@@ -10465,13 +10623,13 @@ async fn callee_recovery_continues_output_after_committed_item(
         .store()
         .await?;
     let name = "callee-output-recovery";
-    let target_agent_id = agent_id!("StreamingRpcTarget", name);
+    let target_agent_id = agent_key!("StreamingRpcTarget", name);
     let target = executor
         .start_agent(&component.id, target_agent_id.clone())
         .await?;
     wait_for_agent_initialization(&executor, &target).await?;
 
-    let caller_agent_id = agent_id!("StreamingRpcCaller", name);
+    let caller_agent_id = agent_key!("StreamingRpcCaller", name);
     let caller = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -10518,7 +10676,9 @@ async fn callee_recovery_continues_output_after_committed_item(
     .map_err(|_| anyhow::anyhow!("callee did not commit its first output item"))??;
 
     let _ = executor.simulated_crash(&target).await;
-    executor.complete_promise(&gate, Vec::new()).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+        .await?;
 
     let result = invocation
         .await?
@@ -10557,8 +10717,8 @@ async fn durable_rpc_stream_reads_unload_and_recheck_both_owners(
             .store()
             .await?;
         let name = format!("durable-read-{independent_output}");
-        let caller_id = agent_id!("StreamingRpcCaller", name.clone());
-        let target_id = agent_id!("StreamingRpcTarget", name);
+        let caller_id = agent_key!("StreamingRpcCaller", name.clone());
+        let target_id = agent_key!("StreamingRpcTarget", name);
         let caller = executor
             .start_agent(&component.id, caller_id.clone())
             .await?;
@@ -10579,7 +10739,7 @@ async fn durable_rpc_stream_reads_unload_and_recheck_both_owners(
         let (method, input) = if independent_output {
             (
                 "fork_drop_inherited_output",
-                data_value!(gate.clone(), caller.agent_id.clone(), false),
+                data_value!(gate.clone(), caller.agent_id.to_string(), false),
             )
         } else {
             (
@@ -10617,7 +10777,7 @@ async fn durable_rpc_stream_reads_unload_and_recheck_both_owners(
                 loop {
                     for (index, owner) in [&caller, &target].into_iter().enumerate() {
                         if executor.get_worker_metadata(owner).await?.status == AgentStatus::Suspended
-                            && !executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, owner)).await
+                            && !executor.worker_is_loaded(owner).await
                         {
                             observed_unloaded[index] = true;
                         }
@@ -10629,16 +10789,18 @@ async fn durable_rpc_stream_reads_unload_and_recheck_both_owners(
         }
         // A promise wakes its waiter, not an arbitrary remote stream consumer. The consumer
         // must independently reconstruct from its persisted recheck before the gate is released.
-        let loads = executor.instance_load_count(consumer);
+        let loads = executor.instance_load_count(&consumer.agent_id);
         tokio::select! {
             result = &mut invocation => panic!("stream completed before its gate: {result:?}"),
             resumed = tokio::time::timeout(Duration::from_secs(15), async {
-                while executor.instance_load_count(consumer) <= loads {
+                while executor.instance_load_count(&consumer.agent_id) <= loads {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             }) => { resumed?; }
         }
-        executor.complete_promise(&gate, Vec::new()).await?;
+        executor
+            .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+            .await?;
         let result = tokio::time::timeout(Duration::from_secs(30), invocation).await??;
         if independent_output {
             assert_eq!(result.into_typed::<Vec<u64>>()?, vec![1, 1]);
@@ -10687,7 +10849,7 @@ async fn durable_agent_live_await_streaming_is_allowed(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let caller_agent_id = agent_id!("StreamingRpcCaller", "durable-live-await");
+    let caller_agent_id = agent_key!("StreamingRpcCaller", "durable-live-await");
 
     let result = invoke_agent_session(
         &executor,
@@ -10724,18 +10886,17 @@ async fn direct_rpc_classification_uses_the_existing_target_revision(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let ts_caller_id = agent_id!("TestAgent", "pinned-ts-rpc-caller");
-    let ts_target_id = agent_id!("ChildAgent", 0_f64);
-    executor
-        .start_agent(&ts_component.id, ts_caller_id.clone())
-        .await?;
+    let ts_caller_id = agent_key!("TestAgent", "pinned-ts-rpc-caller");
+    let ts_target_id = agent_key!("ChildAgent", 0_f64);
+    let ts_caller = executor.start_agent(&ts_component.id, ts_caller_id).await?;
     executor.start_agent(&ts_component.id, ts_target_id).await?;
     executor
         .update_component(&ts_component.id, &agent_rpc_rust.wasm_name)
         .await?;
 
+    // The updated component does not implement the caller's type, so only its ID reaches it.
     let ts_result = executor
-        .invoke_and_await_agent(&ts_component, &ts_caller_id, "run", data_value!(1_f64))
+        .invoke_and_await_agent_by_id(&ts_component, &ts_caller, None, "run", data_value!(1_f64))
         .await?;
     assert_eq!(
         ts_result.into_return_value(),
@@ -10749,10 +10910,10 @@ async fn direct_rpc_classification_uses_the_existing_target_revision(
         .store()
         .await?;
     let rust_name = "pinned-rust-rpc-target";
-    let rust_caller_id = agent_id!("StreamingRpcCaller", rust_name);
-    let rust_target_id = agent_id!("StreamingRpcTarget", rust_name);
-    executor
-        .start_agent(&rust_component.id, rust_caller_id.clone())
+    let rust_caller_id = agent_key!("StreamingRpcCaller", rust_name);
+    let rust_target_id = agent_key!("StreamingRpcTarget", rust_name);
+    let rust_caller = executor
+        .start_agent(&rust_component.id, rust_caller_id)
         .await?;
     executor
         .start_agent(&rust_component.id, rust_target_id)
@@ -10762,9 +10923,10 @@ async fn direct_rpc_classification_uses_the_existing_target_revision(
         .await?;
 
     let rust_result = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &rust_component,
-            &rust_caller_id,
+            &rust_caller,
+            None,
             "call_stream_free",
             data_value!(),
         )
@@ -10785,11 +10947,19 @@ async fn direct_rpc_authorizes_before_execution_revision_lookup(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
+    let checks = Arc::new(AtomicUsize::new(0));
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
-            create_direct_invocation_auth: Some(Arc::new(|| Arc::new(DenyDirectInvocationAuth))),
+            create_direct_invocation_auth: Some(Arc::new({
+                let checks = checks.clone();
+                move || {
+                    Arc::new(DenyDirectInvocationAuth {
+                        checks: checks.clone(),
+                    })
+                }
+            })),
             ..Default::default()
         },
     )
@@ -10798,23 +10968,30 @@ async fn direct_rpc_authorizes_before_execution_revision_lookup(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let caller_id = agent_id!("TestAgent", "denied-rpc-caller");
-    executor
+    let caller_id = agent_key!("TestAgent", "denied-rpc-caller");
+    let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
     executor
         .update_component(&component.id, &agent_rpc_rust.wasm_name)
         .await?;
 
+    // The updated component does not implement `TestAgent`, so only the ID still reaches it.
     let error = executor
-        .invoke_and_await_agent(&component, &caller_id, "run", data_value!(1_f64))
+        .invoke_and_await_agent_by_id(&component, &caller, None, "run", data_value!(1_f64))
         .await
         .expect_err("direct RPC must be denied");
+    // The executor replaces the details of every denial with one text, so a denied caller
+    // learns nothing about the target.
     assert!(
         error
             .to_string()
-            .contains("direct invocation denied before schema lookup"),
+            .contains("denied: Not allowed to Invoke agent"),
         "unexpected error: {error}"
+    );
+    assert!(
+        checks.load(Ordering::SeqCst) > 0,
+        "the denial must come from the direct invocation authorization"
     );
     Ok(())
 }
@@ -10835,7 +11012,7 @@ async fn rust_rpc_with_payload(
         .store()
         .await?;
 
-    let parent_agent_id = agent_id!("RustParent", "rust_rpc_with_payload");
+    let parent_agent_id = agent_key!("RustParent", "rust_rpc_with_payload");
     let parent = executor
         .start_agent(&component.id, parent_agent_id.clone())
         .await?;
@@ -10857,7 +11034,7 @@ async fn rust_rpc_with_payload(
 
     let uuid = <uuid::Uuid as FromSchema>::from_value(&uuid_as_value).expect("UUID expected");
 
-    let child_agent_id = agent_id!("RustChild", uuid);
+    let child_agent_id = agent_key!("RustChild", uuid);
 
     let get_result = executor
         .invoke_and_await_agent(&component, &child_agent_id, "get", data_value!())
@@ -10900,7 +11077,7 @@ async fn rust_rpc_missing_target(
         .store()
         .await?;
 
-    let parent_agent_id = agent_id!("RustParent", "rust_rpc_with_payload");
+    let parent_agent_id = agent_key!("RustParent", "rust_rpc_with_payload");
     let parent = executor
         .start_agent(&component.id, parent_agent_id.clone())
         .await?;
@@ -10950,7 +11127,7 @@ async fn rust_rpc_missing_target_is_recoverable_with_fallible_create(
         .store()
         .await?;
 
-    let parent_agent_id = agent_id!("RustParent", "fallible-create-missing-target");
+    let parent_agent_id = agent_key!("RustParent", "fallible-create-missing-target");
     let parent = executor
         .start_agent(&component.id, parent_agent_id.clone())
         .await?;
@@ -10996,7 +11173,7 @@ async fn counter_resource_test_1(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "counter_resource_test_1");
+    let agent_id = agent_key!("RpcCaller", "counter_resource_test_1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11056,7 +11233,7 @@ async fn counter_resource_test_2(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "counter_resource_test_2");
+    let agent_id = agent_key!("RpcCaller", "counter_resource_test_2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11096,7 +11273,7 @@ async fn counter_resource_test_2_with_restart(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "counter_resource_test_2_with_restart");
+    let agent_id = agent_key!("RpcCaller", "counter_resource_test_2_with_restart");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11144,8 +11321,8 @@ async fn completed_fire_and_forget_rpc_replays_span_before_result(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let caller = agent_id!("GolemHostApi", "fire-and-forget-replay-caller");
-    let counter = agent_id!("Counter", "fire-and-forget-replay-target");
+    let caller = agent_key!("GolemHostApi", "fire-and-forget-replay-caller");
+    let counter = agent_key!("Counter", "fire-and-forget-replay-target");
 
     let caller_worker = executor
         .start_agent(&caller_component.id, caller.clone())
@@ -11231,8 +11408,8 @@ async fn rpc_handle_does_not_reach_a_recreated_child(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let caller = agent_id!("GolemHostApi", "kept-handle-recreated-caller");
-    let counter = agent_id!("Counter", "kept-handle-recreated-child");
+    let caller = agent_key!("GolemHostApi", "kept-handle-recreated-caller");
+    let counter = agent_key!("Counter", "kept-handle-recreated-child");
     executor
         .start_agent(&caller_component.id, caller.clone())
         .await?;
@@ -11248,8 +11425,7 @@ async fn rpc_handle_does_not_reach_a_recreated_child(
         .into_typed::<Result<(), String>>()?;
     assert_eq!(kept, Ok(()));
 
-    let counter_worker =
-        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    let counter_worker = crate::agent::keyed_agent_id(counter_component.environment_id, &counter);
     executor.delete_worker(&counter_worker).await?;
     let recreated = executor
         .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
@@ -11293,8 +11469,8 @@ async fn rpc_handle_does_not_recreate_a_deleted_child_after_restart(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let caller = agent_id!("GolemHostApi", "kept-handle-deleted-caller");
-    let counter = agent_id!("Counter", "kept-handle-deleted-child");
+    let caller = agent_key!("GolemHostApi", "kept-handle-deleted-caller");
+    let counter = agent_key!("Counter", "kept-handle-deleted-child");
     executor
         .start_agent(&caller_component.id, caller.clone())
         .await?;
@@ -11310,8 +11486,7 @@ async fn rpc_handle_does_not_recreate_a_deleted_child_after_restart(
         .into_typed::<Result<(), String>>()?;
     assert_eq!(kept, Ok(()));
 
-    let counter_worker =
-        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    let counter_worker = crate::agent::keyed_agent_id(counter_component.environment_id, &counter);
     executor.delete_worker(&counter_worker).await?;
     let mut executor = executor;
 
@@ -11355,8 +11530,8 @@ async fn rpc_handle_to_a_deleted_child_is_not_found_after_its_component_changes(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let caller = agent_id!("GolemHostApi", "kept-handle-updated-caller");
-    let counter = agent_id!("Counter", "kept-handle-updated-child");
+    let caller = agent_key!("GolemHostApi", "kept-handle-updated-caller");
+    let counter = agent_key!("Counter", "kept-handle-updated-child");
     executor
         .start_agent(&caller_component.id, caller.clone())
         .await?;
@@ -11372,8 +11547,7 @@ async fn rpc_handle_to_a_deleted_child_is_not_found_after_its_component_changes(
         .into_typed::<Result<(), String>>()?;
     assert_eq!(kept, Ok(()));
 
-    let counter_worker =
-        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    let counter_worker = crate::agent::keyed_agent_id(counter_component.environment_id, &counter);
     executor.delete_worker(&counter_worker).await?;
     // The new deployed revision still has a `Counter` agent type, but without `increment`.
     executor
@@ -11409,8 +11583,8 @@ async fn rpc_handle_does_not_recreate_a_deleted_child_through_a_streaming_call(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let caller = agent_id!("GolemHostApi", "kept-handle-streaming-caller");
-    let target = agent_id!("StreamingRpcTarget", "kept-handle-streaming-child");
+    let caller = agent_key!("GolemHostApi", "kept-handle-streaming-caller");
+    let target = agent_key!("StreamingRpcTarget", "kept-handle-streaming-child");
     executor
         .start_agent(&caller_component.id, caller.clone())
         .await?;
@@ -11437,8 +11611,7 @@ async fn rpc_handle_does_not_recreate_a_deleted_child_through_a_streaming_call(
         .into_typed::<Result<Vec<u64>, String>>()?;
     assert_eq!(streamed, Ok(vec![1]));
 
-    let target_worker =
-        AgentId::from_agent_id(target_component.id, &target).map_err(anyhow::Error::msg)?;
+    let target_worker = crate::agent::keyed_agent_id(target_component.environment_id, &target);
     executor.delete_worker(&target_worker).await?;
     let mut executor = executor;
 
@@ -11495,14 +11668,16 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let caller_id = agent_id!("GolemHostApi", format!("fire-and-forget-{suffix}-caller"));
+        let caller_id = agent_key!("GolemHostApi", format!("fire-and-forget-{suffix}-caller"));
         let caller = executor
             .start_agent(&caller_component.id, caller_id.clone())
             .await?;
         let counter_name = format!("fire-and-forget-{suffix}-target");
-        let counter_id = agent_id!("Counter", counter_name.clone());
+        let counter_id = agent_key!("Counter", counter_name.clone());
         let invocation_key = IdempotencyKey::fresh();
-        let mut gate = executor.gate_next_rpc_commit(&caller, checkpoint).await;
+        let mut gate = executor
+            .gate_next_rpc_commit(&caller.agent_id, checkpoint)
+            .await;
 
         let invocation = {
             let executor = executor.clone();
@@ -11631,7 +11806,7 @@ async fn counter_resource_test_3(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "counter_resource_test_3");
+    let agent_id = agent_key!("RpcCaller", "counter_resource_test_3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11671,7 +11846,7 @@ async fn counter_resource_test_3_with_restart(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "counter_resource_test_3_with_restart");
+    let agent_id = agent_key!("RpcCaller", "counter_resource_test_3_with_restart");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11714,7 +11889,7 @@ async fn context_inheritance(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "context_inheritance");
+    let agent_id = agent_key!("RpcCaller", "context_inheritance");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11757,26 +11932,20 @@ async fn context_inheritance(
 
     assert_eq!(args, vec![] as Vec<SchemaValue>);
 
-    let env_keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
-    assert!(
-        env_keys.contains(&"GOLEM_AGENT_ID"),
-        "Expected GOLEM_AGENT_ID in env, got: {env:?}"
-    );
-    assert!(
-        env_keys.contains(&"GOLEM_WORKER_NAME"),
-        "Expected GOLEM_WORKER_NAME in env, got: {env:?}"
-    );
-    assert!(
-        env_keys.contains(&"GOLEM_COMPONENT_ID"),
-        "Expected GOLEM_COMPONENT_ID in env, got: {env:?}"
-    );
-    assert!(
-        env_keys.contains(&"GOLEM_COMPONENT_REVISION"),
-        "Expected GOLEM_COMPONENT_REVISION in env, got: {env:?}"
-    );
-    assert!(
-        env_keys.contains(&"GOLEM_AGENT_TYPE"),
-        "Expected GOLEM_AGENT_TYPE in env, got: {env:?}"
+    let counter = agent_key!("RpcCounter", "context_inheritance_test4_counter");
+    let counter_id = crate::agent::keyed_agent_id(component.environment_id, &counter);
+    assert_eq!(
+        env,
+        vec![
+            (
+                "GOLEM_AGENT_ID".to_string(),
+                counter_id.agent_id.to_string()
+            ),
+            ("GOLEM_AGENT_KEY".to_string(), counter.to_string()),
+            ("GOLEM_AGENT_TYPE".to_string(), "RpcCounter".to_string()),
+            ("GOLEM_COMPONENT_REVISION".to_string(), "0".to_string()),
+        ],
+        "the child gets its own identity and none of the parent's environment"
     );
 
     Ok(())
@@ -11798,7 +11967,7 @@ async fn counter_resource_test_5(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "counter_resource_test_5");
+    let agent_id = agent_key!("RpcCaller", "counter_resource_test_5");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11843,7 +12012,7 @@ async fn wasm_rpc_bug_32_test(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "wasm_rpc_bug_32_test");
+    let agent_id = agent_key!("RpcCaller", "wasm_rpc_bug_32_test");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11881,7 +12050,7 @@ async fn golem_bug_1265_test(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "golem_bug_1265_test");
+    let agent_id = agent_key!("RpcCaller", "golem_bug_1265_test");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11919,7 +12088,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("Counter", "ephemeral_worker_invocation_via_rpc1");
+    let agent_id = agent_key!("Counter", "ephemeral_worker_invocation_via_rpc1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -11965,7 +12134,7 @@ async fn ephemeral_worker_invocation_via_rpc2(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("Counter", "ephemeral_worker_invocation_via_rpc2");
+    let agent_id = agent_key!("Counter", "ephemeral_worker_invocation_via_rpc2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -12011,7 +12180,7 @@ async fn ephemeral_rpc_invocations_get_distinct_final_identities(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("Counter", "ephemeral_rpc_distinct_ids");
+    let agent_id = agent_key!("Counter", "ephemeral_rpc_distinct_ids");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -12058,7 +12227,7 @@ async fn ephemeral_agent_self_rpc_is_allowed(
     // An ephemeral agent invoking its own logical identity via RPC is allowed:
     // the callee is always a fresh instance with a freshly derived identity,
     // never the caller's own invocation queue.
-    let agent_id = agent_id!("EphemeralCounter", "ephemeral_self_rpc");
+    let agent_id = agent_key!("EphemeralCounter", "ephemeral_self_rpc");
     let result = executor
         .invoke_and_await_agent(
             &component,
@@ -12092,7 +12261,7 @@ async fn failed_ephemeral_invocation_retry_does_not_reexecute(
         .store()
         .await?;
 
-    let agent_id = agent_id!("EphemeralCounter", "ephemeral_crash_retry");
+    let agent_id = agent_key!("EphemeralCounter", "ephemeral_crash_retry");
     let idempotency_key = IdempotencyKey::fresh();
 
     // The ephemeral agent increments a durable counter via RPC and then
@@ -12135,7 +12304,7 @@ async fn failed_ephemeral_invocation_retry_does_not_reexecute(
         .await;
     assert!(after_restart.is_err());
 
-    let target_agent_id = agent_id!("Counter", "ephemeral_crash_retry_target");
+    let target_agent_id = agent_key!("Counter", "ephemeral_crash_retry_target");
     let count = executor
         .invoke_and_await_agent(&component, &target_agent_id, "increment", data_value!())
         .await?
@@ -12166,7 +12335,7 @@ async fn cancel_pending_async_rpc_returns_error(
         .store()
         .await?;
 
-    let agent_id = agent_id!("CancelTester", "cancel_pending_test");
+    let agent_id = agent_key!("CancelTester", "cancel_pending_test");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -12227,7 +12396,7 @@ async fn dropping_polled_pending_async_rpc_get_closes_embedded_span(
         .store()
         .await?;
 
-    let target_id = agent_id!("RpcBlockingCounter", "drop-pending-get-target");
+    let target_id = agent_key!("RpcBlockingCounter", "drop-pending-get-target");
     executor
         .start_agent(&component.id, target_id.clone())
         .await?;
@@ -12235,7 +12404,7 @@ async fn dropping_polled_pending_async_rpc_get_closes_embedded_span(
         .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
         .await?
         .into_typed::<PromiseId>()?;
-    let caller_id = agent_id!("CancelTester", "drop-pending-get-caller");
+    let caller_id = agent_key!("CancelTester", "drop-pending-get-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
@@ -12267,7 +12436,13 @@ async fn dropping_polled_pending_async_rpc_get_closes_embedded_span(
             if cancelled.start_index == invoke_start.oplog_index
                 && cancelled.span_finished.as_ref().is_some_and(|span| span.span_id == invoke_span)
     )), "dropped pending get must record Cancelled with its embedded span close: {oplog:#?}");
-    executor.complete_promise(&promise, Vec::new()).await?;
+    executor
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &promise,
+            Vec::new(),
+        )
+        .await?;
     drop(executor);
     let attempts_before_replay = attempts.lock().unwrap().clone();
     let executor = start_with_overrides(deps, &context, overrides).await?;
@@ -12304,7 +12479,7 @@ async fn cancel_completed_async_rpc_is_noop(
         .store()
         .await?;
 
-    let agent_id = agent_id!("CancelTester", "cancel_completed_test");
+    let agent_id = agent_key!("CancelTester", "cancel_completed_test");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -12344,7 +12519,7 @@ async fn ts_abort_before_await_returns_aborted(
         .store()
         .await?;
 
-    let agent_id = agent_id!("TsCancelTester", "ts_abort_test1");
+    let agent_id = agent_key!("TsCancelTester", "ts_abort_test1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -12383,7 +12558,7 @@ async fn ts_abort_after_complete_is_noop(
         .store()
         .await?;
 
-    let agent_id = agent_id!("TsCancelTester", "ts_abort_test2");
+    let agent_id = agent_key!("TsCancelTester", "ts_abort_test2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -12422,7 +12597,7 @@ async fn ts_ephemeral_final_identity_cannot_be_reused(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let agent_id = agent_id!("TestAgent", "ts_ephemeral_final_identity_cannot_be_reused");
+    let agent_id = agent_key!("TestAgent", "ts_ephemeral_final_identity_cannot_be_reused");
 
     let report = executor
         .invoke_and_await_agent(&component, &agent_id, "ephemeralReuseTest", data_value!())
@@ -12447,13 +12622,10 @@ async fn ts_ephemeral_final_identity_cannot_be_reused(
     assert_eq!(value, &SchemaValue::String("captured".to_string()));
     assert_names_the_capture_invocation(&executor, &component, final_agent_id, invocation_id)
         .await?;
-    assert_eq!(
-        category,
-        &SchemaValue::String("remote-agent-error".to_string())
-    );
-    assert_eq!(error_tag, &SchemaValue::String("invalid-input".to_string()));
+    assert_eq!(category, &SchemaValue::String("not-found".to_string()));
+    assert_eq!(error_tag, &SchemaValue::String("not-found".to_string()));
     assert!(
-        matches!(details, SchemaValue::String(value) if value.contains("An ephemeral agent cannot accept another invocation or be resumed")),
+        matches!(details, SchemaValue::String(_)),
         "unexpected ephemeral reuse details: {details:?}"
     );
 
@@ -12481,7 +12653,7 @@ async fn ts_reflection_discovers_binds_and_invokes_durable_agent(
         .store()
         .await?;
     assert_ne!(component.id, target_component.id);
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         "TestAgent",
         "ts_reflection_discovers_binds_and_invokes_durable_agent"
     );
@@ -12544,7 +12716,7 @@ async fn ts_reflected_ephemeral_invocation_returns_final_metadata(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         "TestAgent",
         "ts_reflected_ephemeral_invocation_returns_final_metadata"
     );
@@ -12585,10 +12757,12 @@ async fn assert_names_the_capture_invocation(
     let SchemaValue::String(final_agent_id) = final_agent_id else {
         panic!("expected the final ephemeral agent ID as a string");
     };
-    let final_agent = AgentId {
-        component_id: component.id,
-        agent_id: final_agent_id.clone(),
-    };
+    let final_agent = OwnedAgentId::new(
+        component.environment_id,
+        &final_agent_id
+            .parse::<AgentId>()
+            .map_err(anyhow::Error::msg)?,
+    );
     let capture_invocation_ids: Vec<SchemaValue> = executor
         .get_oplog(&final_agent, OplogIndex::INITIAL)
         .await?
@@ -12636,7 +12810,7 @@ fn promise_id_from_ts_value(agent_id: &AgentId, value: &SchemaValue) -> PromiseI
         panic!("Expected highBits and lowBits fingerprint fields");
     };
     PromiseId {
-        agent_id: agent_id.clone(),
+        agent_id: *agent_id,
         fingerprint: AgentFingerprint(uuid::Uuid::from_u64_pair(*high_bits, *low_bits)),
         oplog_idx: OplogIndex::from_u64(*oplog_idx),
     }
@@ -12660,7 +12834,7 @@ async fn ts_cancel_unblocks_caller_while_callee_blocked(
 
     // Start agent B (TsBlockingAgent) and prepare a promise
     let b_name = "cancel_unblocks_b";
-    let b_agent_id = agent_id!("TsBlockingAgent", b_name);
+    let b_agent_id = agent_key!("TsBlockingAgent", b_name);
     let b_worker_id = executor
         .start_agent(&component.id, b_agent_id.clone())
         .await?;
@@ -12673,11 +12847,11 @@ async fn ts_cancel_unblocks_caller_while_callee_blocked(
         .into_return_value()
         .expect("Expected a single return value from prepareBlock");
 
-    let promise_id = promise_id_from_ts_value(&b_worker_id, &promise_id_value);
+    let promise_id = promise_id_from_ts_value(&b_worker_id.agent_id, &promise_id_value);
 
     // Start agent A (TsCancelCallerAgent)
     let a_name = "cancel_unblocks_a";
-    let a_agent_id = agent_id!("TsCancelCallerAgent", a_name);
+    let a_agent_id = agent_key!("TsCancelCallerAgent", a_name);
     let _a_worker_id = executor
         .start_agent(&component.id, a_agent_id.clone())
         .await?;
@@ -12722,7 +12896,13 @@ async fn ts_cancel_unblocks_caller_while_callee_blocked(
     assert_eq!(b_status, AgentStatus::Suspended);
 
     // Complete the promise to unblock B
-    executor.complete_promise(&promise_id, vec![]).await?;
+    executor
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &promise_id,
+            vec![],
+        )
+        .await?;
 
     // Wait for B to return to Idle
     executor
@@ -12758,7 +12938,7 @@ async fn ts_cancel_survives_executor_restart(
 
     // Start agent B (TsBlockingAgent) and prepare a promise
     let b_name = "cancel_restart_b";
-    let b_agent_id = agent_id!("TsBlockingAgent", b_name);
+    let b_agent_id = agent_key!("TsBlockingAgent", b_name);
     let b_worker_id = executor
         .start_agent(&component.id, b_agent_id.clone())
         .await?;
@@ -12771,11 +12951,11 @@ async fn ts_cancel_survives_executor_restart(
         .into_return_value()
         .expect("Expected a single return value from prepareBlock");
 
-    let promise_id = promise_id_from_ts_value(&b_worker_id, &promise_id_value);
+    let promise_id = promise_id_from_ts_value(&b_worker_id.agent_id, &promise_id_value);
 
     // Start agent A (TsCancelCallerAgent)
     let a_name = "cancel_restart_a";
-    let a_agent_id = agent_id!("TsCancelCallerAgent", a_name);
+    let a_agent_id = agent_key!("TsCancelCallerAgent", a_name);
     let _a_worker_id = executor
         .start_agent(&component.id, a_agent_id.clone())
         .await?;
@@ -12837,7 +13017,13 @@ async fn ts_cancel_survives_executor_restart(
     assert_eq!(outcome_value, "aborted".to_string());
 
     // Complete the promise to unblock B
-    executor.complete_promise(&promise_id, vec![]).await?;
+    executor
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &promise_id,
+            vec![],
+        )
+        .await?;
 
     // Wait for B to return to Idle
     executor

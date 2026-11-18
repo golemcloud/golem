@@ -14,7 +14,6 @@
 
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::types::{
     Enumeration, EnumerationType, Interval, SparseVec, TimeTz, ValuesRange,
 };
@@ -3511,9 +3510,9 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
 
     while let Some(res) = fibers.join_next().await {
         let (agent_id, pool_key, transaction_id, result_execute) = res.unwrap();
-        workers_results.insert(agent_id.clone(), result_execute);
-        workers_pools.insert(agent_id.clone(), pool_key);
-        workers_transactions.insert(agent_id.clone(), transaction_id);
+        workers_results.insert(agent_id, result_execute);
+        workers_pools.insert(agent_id, pool_key);
+        workers_transactions.insert(agent_id, transaction_id);
     }
 
     if test.transaction_end.is_some() {
@@ -3565,8 +3564,5 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
 }
 
 fn new_agent_id() -> AgentId {
-    AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "test".to_string(),
-    }
+    crate::fresh_owned_agent_id().agent_id
 }

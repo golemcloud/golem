@@ -94,11 +94,11 @@ async fn output_producer_can_await_tools_live_and_after_reconstruction(
             metadata.tools,
         )),
     );
-    let collector = agent_id!("ToolStreamingCaller", "output-tool-collector");
+    let collector = agent_key!("ToolStreamingCaller", "output-tool-collector");
     let mut targets = Vec::new();
     for capable in [false, true] {
         let name = format!("output-tool-{capable}");
-        let agent = agent_id!("ToolStreamingCaller", name.clone());
+        let agent = agent_key!("ToolStreamingCaller", name.clone());
         let worker = executor
             .start_agent(&caller_component.id, agent.clone())
             .await?;
@@ -141,7 +141,9 @@ async fn output_producer_can_await_tools_live_and_after_reconstruction(
                 .await
                 .map_err(|_| anyhow::anyhow!("producer did not publish its first tool result"))??;
                 executor.simulated_crash(&worker).await?;
-                executor.complete_promise(&gate, Vec::new()).await?;
+                executor
+                    .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+                    .await?;
             }
             Ok::<_, anyhow::Error>(())
         };
@@ -228,7 +230,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         .store()
         .await?;
     for mode in ["trap", "deadline", "complete"] {
-        let agent = agent_id!("ToolStreamingCaller", format!("producer-{mode}"));
+        let agent = agent_key!("ToolStreamingCaller", format!("producer-{mode}"));
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         let gate = executor
             .invoke_and_await_agent(&component, &agent, "native_veto_gate", data_value!())
@@ -240,7 +242,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         let key = IdempotencyKey::fresh();
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(worker.clone().into()),
+                target: Some(crate::agent::id_target(&worker)),
                 method_name: Some("produce_terminal".to_string()),
                 input: Some(input.try_into().map_err(anyhow::Error::msg)?),
                 idempotency_key: Some(key.clone().into()),
@@ -295,7 +297,13 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
                     items.push(value);
                     if items.len() == 1 {
                         assert_eq!(items[0], "before-terminal");
-                        executor.complete_promise(&gate, Vec::new()).await?;
+                        executor
+                            .complete_promise(
+                                &executor.context.default_environment_id,
+                                &gate,
+                                Vec::new(),
+                            )
+                            .await?;
                     }
                 }
                 Some(invocation_response::Response::StreamEnd(end)) => {
@@ -421,7 +429,7 @@ async fn yielding_guest_receives_tool_result_only_at_a_blocked_wait(
             metadata.tools,
         )),
     );
-    let agent = agent_id!("ToolStreamingCaller", "yielding-tool-result");
+    let agent = agent_key!("ToolStreamingCaller", "yielding-tool-result");
     let worker_id = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
@@ -439,7 +447,7 @@ async fn yielding_guest_receives_tool_result_only_at_a_blocked_wait(
         !observed_while_yielding,
         "the tool result reached a guest that only yielded"
     );
-    let recorded = executor.stored_oplog(&worker_id).await;
+    let recorded = executor.stored_oplog(&worker_id.agent_id).await;
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
@@ -451,7 +459,7 @@ async fn yielding_guest_receives_tool_result_only_at_a_blocked_wait(
     .map_err(|_| anyhow::anyhow!("the rebuild did not replay the tool result"))??
     .into_typed()?;
     assert_eq!(replayed, "replayed");
-    let rebuilt = executor.stored_oplog(&worker_id).await;
+    let rebuilt = executor.stored_oplog(&worker_id.agent_id).await;
     assert_eq!(
         &rebuilt[..recorded.len()],
         &recorded[..],

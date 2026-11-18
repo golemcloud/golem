@@ -59,7 +59,7 @@ async fn monthly_stop_queued_after_reconstruction_suspends_the_pending_invocatio
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let name = agent_id!("Counter", "monthly-after-reconstruction");
+    let name = agent_key!("Counter", "monthly-after-reconstruction");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     assert_eq!(
         executor
@@ -74,11 +74,7 @@ async fn monthly_stop_queued_after_reconstruction_suspends_the_pending_invocatio
             .into_typed::<u32>()?,
         1
     );
-    let worker = executor
-        .active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
-        .await
-        .unwrap()
-        .primary();
+    let worker = executor.active_agent(&id.clone()).await.unwrap().primary();
     tokio::time::timeout(Duration::from_secs(10), async {
         while !worker.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -88,7 +84,7 @@ async fn monthly_stop_queued_after_reconstruction_suspends_the_pending_invocatio
     .context("idle unload")?;
     // The next invocation reconstructs the agent. The monthly stop arrives after the replay
     // has run, before the invocation loop takes queued interrupts.
-    let (reconstructed, release) = executor.gate_next_prepared_instance(&id);
+    let (reconstructed, release) = executor.gate_next_prepared_instance(&id.agent_id);
     let key = IdempotencyKey::fresh();
     let invocation = tokio::spawn({
         let executor = executor.clone();
@@ -184,11 +180,11 @@ async fn same_cached_worker_reconstructs_and_enforces_current_quota(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let name = agent_id!("Counter", "monthly-stale-target");
+    let name = agent_key!("Counter", "monthly-stale-target");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&id, &key, "increment")
+        .external_invocation_key(&id.agent_id, &key, "increment")
         .await?;
     assert_eq!(
         executor
@@ -197,7 +193,7 @@ async fn same_cached_worker_reconstructs_and_enforces_current_quota(
             .into_typed::<u32>()?,
         1
     );
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let owned = id.clone();
     let active = executor.production_active_agent(&owned).await.unwrap();
     let worker = active.primary();
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -212,10 +208,10 @@ async fn same_cached_worker_reconstructs_and_enforces_current_quota(
         .oplog()
         .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
         .await?;
-    let original_raw = executor.stored_oplog(&id).await;
+    let original_raw = executor.stored_oplog(&id.agent_id).await;
     let (_, _, payload) = completed_invocation_payload(&original, &stored_key)?;
     let (old_replay, release_old_replay) =
-        executor.gate_next_oplog_payload_read(&id, payload.clone());
+        executor.gate_next_oplog_payload_read(&id.agent_id, payload.clone());
     worker.set_interrupting(InterruptKind::Restart).await?;
     tokio::time::timeout(Duration::from_secs(10), old_replay)
         .await
@@ -278,13 +274,14 @@ async fn same_cached_worker_reconstructs_and_enforces_current_quota(
     })
     .await
     .context("old window physical cleanup")??;
-    let old_raw = executor.stored_oplog(&id).await;
+    let old_raw = executor.stored_oplog(&id.agent_id).await;
     assert!(old_raw.len() >= original_raw.len());
     assert_eq!(&old_raw[..original_raw.len()], original_raw.as_slice());
     tokio::time::timeout(Duration::from_secs(10), old_refresh).await??;
     tokio::time::timeout(Duration::from_secs(10), restored_refresh).await??;
 
-    let (new_replay, release_new_replay) = executor.gate_next_oplog_payload_read(&id, payload);
+    let (new_replay, release_new_replay) =
+        executor.gate_next_oplog_payload_read(&id.agent_id, payload);
     let resume = tokio::spawn({
         let executor = executor.clone();
         let id = id.clone();
@@ -369,7 +366,7 @@ async fn same_cached_worker_reconstructs_and_enforces_current_quota(
             worker.oplog().current_oplog_index().await.as_u64(),
         )
         .await?;
-    let stopped_raw = executor.stored_oplog(&id).await;
+    let stopped_raw = executor.stored_oplog(&id.agent_id).await;
     assert!(stopped_raw.len() >= old_raw.len());
     assert_eq!(&stopped_raw[..old_raw.len()], old_raw.as_slice());
     assert!(
@@ -452,7 +449,7 @@ mod activation {
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("Counter", "consumed-suspend");
+        let name = agent_key!("Counter", "consumed-suspend");
         let id = executor.start_agent(&component.id, name.clone()).await?;
         assert_eq!(
             executor
@@ -461,7 +458,7 @@ mod activation {
                 .into_typed::<u32>()?,
             1
         );
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let owned = id.clone();
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -474,7 +471,7 @@ mod activation {
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let key = IdempotencyKey::fresh();
         let stored_key = executor
-            .external_invocation_key(&id, &key, "increment")
+            .external_invocation_key(&id.agent_id, &key, "increment")
             .await?;
         let lane = worker.owner_execution().lane();
         let prebody = lane.acquire_exclusive().await;
@@ -637,9 +634,9 @@ mod activation {
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("Counter", "frozen-interrupt-admission");
+        let name = agent_key!("Counter", "frozen-interrupt-admission");
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let owned = id.clone();
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         let mut events = worker.events().subscribe();
@@ -671,7 +668,7 @@ mod activation {
                             agent_id,
                             idempotency_key,
                             result,
-                        } if agent_id == &id && idempotency_key == &constructor_key => {
+                        } if agent_id == &id.agent_id && idempotency_key == &constructor_key => {
                             Some(*result.clone())
                         }
                         _ => None,
@@ -681,10 +678,12 @@ mod activation {
             result => anyhow::bail!("constructor has no successful completion: {result:?}"),
         }
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-        let (selected, release_selected) = executor.gate_next_invocation_outcome_append(&id).await;
+        let (selected, release_selected) = executor
+            .gate_next_invocation_outcome_append(&id.agent_id)
+            .await;
         let completed_key = IdempotencyKey::fresh();
         let stored_completed_key = executor
-            .external_invocation_key(&id, &completed_key, "increment")
+            .external_invocation_key(&id.agent_id, &completed_key, "increment")
             .await?;
         let first = tokio::spawn({
             let executor = executor.clone();
@@ -707,7 +706,7 @@ mod activation {
         // The selected result's terminal append keeps later work queued.
         let key = IdempotencyKey::fresh();
         let stored_key = executor
-            .external_invocation_key(&id, &key, "increment")
+            .external_invocation_key(&id.agent_id, &key, "increment")
             .await?;
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())

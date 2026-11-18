@@ -1,11 +1,9 @@
 use super::*;
-use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentTarget, InvocationFreshnessDisposition,
-};
+use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
 use golem_common::model::card::ScopeCard;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand};
+use golem_worker_executor::worker::target::ResolvedTarget;
 use pretty_assertions::assert_eq;
 use test_r::test;
 
@@ -44,8 +42,8 @@ struct HoldResponseRpc {
 impl Rpc for HoldResponseRpc {
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -64,7 +62,7 @@ impl Rpc for HoldResponseRpc {
             .inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -130,8 +128,7 @@ impl Rpc for HoldResponseRpc {
 
     async fn create_demand(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         method: &str,
         created_by: AccountId,
         caller: &AgentId,
@@ -150,17 +147,7 @@ impl Rpc for HoldResponseRpc {
         let demand = self
             .inner
             .create_demand(
-                agent,
-                environment_id,
-                method,
-                created_by,
-                caller,
-                env,
-                stack,
-                config,
-                auth,
-                key,
-                freshness,
+                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
             )
             .await;
         if hold {
@@ -172,8 +159,7 @@ impl Rpc for HoldResponseRpc {
 
     async fn invoke_and_await(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -196,7 +182,6 @@ impl Rpc for HoldResponseRpc {
             .inner
             .invoke_and_await(
                 agent,
-                environment_id,
                 key,
                 freshness,
                 expected_callee_fingerprint,
@@ -220,8 +205,7 @@ impl Rpc for HoldResponseRpc {
 
     async fn invoke(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -237,7 +221,6 @@ impl Rpc for HoldResponseRpc {
         self.inner
             .invoke(
                 agent,
-                environment_id,
                 key,
                 freshness,
                 expected_callee_fingerprint,
@@ -269,7 +252,7 @@ async fn durable_rpc_after_activation_redispatches_with_the_same_key_after_resta
         last_unique_id,
         deps,
         fixture,
-        agent_id!("CancelTester", "held-response-caller"),
+        agent_key!("CancelTester", "held-response-caller"),
         "grow_memory_before_rpc_activation",
         data_value!("held-response-target"),
         0,
@@ -292,7 +275,7 @@ async fn durable_rpc_without_hint_redispatches_with_the_same_key_after_restart(
         last_unique_id,
         deps,
         fixture,
-        agent_id!("RpcAuthTester", "held-response-caller"),
+        agent_key!("RpcAuthTester", "held-response-caller"),
         "try_call_counter",
         data_value!("held-response-target"),
         0,
@@ -317,7 +300,7 @@ async fn durable_rpc_of_an_anonymous_root_redispatches_with_the_same_key_after_r
         last_unique_id,
         deps,
         fixture,
-        agent_id!("RpcAuthTester", "held-response-caller"),
+        agent_key!("RpcAuthTester", "held-response-caller"),
         "try_call_counter",
         data_value!("held-response-target"),
         0,
@@ -342,7 +325,7 @@ async fn durable_rpc_after_uncommitted_hint_redispatches_with_the_same_key_after
         last_unique_id,
         deps,
         fixture,
-        agent_id!("CancelTester", "held-response-caller"),
+        agent_key!("CancelTester", "held-response-caller"),
         "durable_operation_after_rpc_result",
         data_value!("held-response-target", "async-rpc"),
         1,
@@ -389,7 +372,7 @@ async fn held_response_restart_case(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let target_id = agent_id!("RpcCounter", "held-response-target");
+    let target_id = agent_key!("RpcCounter", "held-response-target");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
@@ -418,7 +401,7 @@ async fn held_response_restart_case(
     let stored_before_crash = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
     assert_eq!(
         executor
-            .stored_oplog(&caller)
+            .stored_oplog(&caller.agent_id)
             .await
             .iter()
             .filter(|entry| matches!(entry,
@@ -525,8 +508,8 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
         .store()
         .await?;
     let server_name = "held-cancellation-target";
-    let server = agent_id!("ScheduledInvocationServer", server_name);
-    let caller_id = agent_id!("ScheduledInvocationClient", "held-cancellation-owner");
+    let server = agent_key!("ScheduledInvocationServer", server_name);
+    let caller_id = agent_key!("ScheduledInvocationClient", "held-cancellation-owner");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
@@ -541,7 +524,7 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
         )
         .await?;
     let scheduled_key = executor
-        .attached_agent_status(&target)
+        .attached_agent_status(&target.agent_id)
         .await?
         .pending_invocations
         .iter()
@@ -616,7 +599,7 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
     );
     assert!(
         executor
-            .attached_agent_status(&target)
+            .attached_agent_status(&target.agent_id)
             .await?
             .pending_invocations
             .iter()
@@ -671,12 +654,12 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let caller_id = agent_id!("RpcAuthTester", "held-activation-caller");
+    let caller_id = agent_key!("RpcAuthTester", "held-activation-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
-    let target_id = agent_id!("RpcCounter", "held-activation-target");
-    let target = AgentId::from_agent_id(component.id, &target_id).map_err(anyhow::Error::msg)?;
+    let target_id = agent_key!("RpcCounter", "held-activation-target");
+    let target = crate::agent::keyed_agent_id(component.environment_id, &target_id);
     let key = IdempotencyKey::fresh();
     let invocation = {
         let executor = executor.clone();
@@ -722,7 +705,7 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
         "the repaired activation must reuse the key of the activation whose result was lost"
     );
     let create_requests = executor
-        .stored_oplog(&target)
+        .stored_oplog(&target.agent_id)
         .await
         .into_iter()
         .filter_map(|entry| match entry {
@@ -741,7 +724,7 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
     assert_eq!(
         create_requests[0].principal,
         Principal::Agent(AgentPrincipal {
-            agent_id: caller.clone(),
+            agent_id: caller.agent_id,
         })
     );
     let initializations = executor

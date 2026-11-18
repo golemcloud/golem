@@ -9,10 +9,10 @@
 use crate::Tracing;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{
-    IdempotencyKey, OwnedAgentId, PromiseId, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
+    IdempotencyKey, PromiseId, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
 };
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::serialization::deserialize;
@@ -103,7 +103,7 @@ async fn run_retirement_during_insert(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         "Clock",
         if shard_lost {
             "retire-during-insert"
@@ -117,7 +117,7 @@ async fn run_retirement_during_insert(
     executor
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = worker_id.clone();
     let old = executor.active_agent(&owned).await.unwrap();
     let boundary = OplogIndex::from_u64(executor.oplog_max_index(&worker_id).await?.as_u64() + 1);
     let key = IdempotencyKey::fresh();
@@ -268,7 +268,7 @@ async fn invocation_deadline_unwinds_parked_p3_wait(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "deadline-parked-p3");
+    let agent_id = agent_key!("Clock", "deadline-parked-p3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -291,14 +291,7 @@ async fn invocation_deadline_unwinds_parked_p3_wait(
             Ok::<(), anyhow::Error>(())
         }) => { parked??; }
     }
-    assert!(
-        executor
-            .worker_is_loaded(&OwnedAgentId::new(
-                context.default_environment_id,
-                &worker_id
-            ))
-            .await
-    );
+    assert!(executor.worker_is_loaded(&worker_id.clone()).await);
     let error = tokio::time::timeout(Duration::from_secs(10), invocation)
         .await?
         .expect_err("deadline must fail the invocation");
@@ -338,7 +331,7 @@ fn promise_id_from_value(value: &SchemaValue) -> PromiseId {
 
 async fn assert_single_await_promise_completion(
     executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
-    worker_id: &golem_common::model::AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<()> {
     let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
     let started = oplog
@@ -478,7 +471,7 @@ async fn run_insert_race(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         "Clock",
         match position {
             InsertGatePosition::Before => "ready-during-persistence",
@@ -506,12 +499,12 @@ async fn run_insert_race(
         use golem_api_grpc::proto::golem::workerexecutor::v1::{
             ResumeWorkerRequest, resume_worker_response,
         };
-        let loads = executor.instance_load_count(&worker_id);
+        let loads = executor.instance_load_count(&worker_id.agent_id);
         let response = executor
             .client
             .clone()
             .resume_worker(ResumeWorkerRequest {
-                agent_id: Some(worker_id.clone().into()),
+                agent_id: Some(worker_id.agent_id.into()),
                 environment_id: Some(context.default_environment_id.into()),
                 force: Some(true),
                 auth_ctx: Some(executor.auth_ctx().into()),
@@ -530,12 +523,12 @@ async fn run_insert_race(
         tokio::select! {
             result = &mut invocation => panic!("long timer completed before reconstruction: {result:?}"),
             reloaded = tokio::time::timeout(Duration::from_secs(5), async {
-                while executor.instance_load_count(&worker_id) <= loads {
+                while executor.instance_load_count(&worker_id.agent_id) <= loads {
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
             }) => { reloaded?; }
         }
-        assert!(executor.instance_load_count(&worker_id) > loads);
+        assert!(executor.instance_load_count(&worker_id.agent_id) > loads);
     }
     // The real timer must complete even while its suspension policy is blocked in persistence.
     let result = tokio::time::timeout(Duration::from_secs(15), &mut invocation).await??;
@@ -644,7 +637,7 @@ async fn status_follows_threshold_commits_while_the_invocation_runs(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "status-follows-threshold-commits");
+    let agent_id = agent_key!("GolemHostApi", "status-follows-threshold-commits");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -692,7 +685,11 @@ async fn status_follows_threshold_commits_while_the_invocation_runs(
     );
 
     executor
-        .complete_promise(&promise_id_from_value(&promise_id), vec![5])
+        .complete_promise(
+            &context.default_environment_id,
+            &promise_id_from_value(&promise_id),
+            vec![5],
+        )
         .await?;
     let params = crate::raw_params(vec![SchemaValue::U64(CALLS), promise_id]);
     assert_eq!(
@@ -726,7 +723,7 @@ async fn promise_completed_before_wait_returns_without_suspending(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "promise-completed-before-wait");
+    let agent_id = agent_key!("GolemHostApi", "promise-completed-before-wait");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -737,7 +734,11 @@ async fn promise_completed_before_wait_returns_without_suspending(
         .expect("create_promise must return an id");
     let boundary = executor.oplog_max_index(&worker_id).await?;
     executor
-        .complete_promise(&promise_id_from_value(&promise_id), vec![3, 1, 4])
+        .complete_promise(
+            &context.default_environment_id,
+            &promise_id_from_value(&promise_id),
+            vec![3, 1, 4],
+        )
         .await?;
     let key = IdempotencyKey::fresh();
     let params = crate::raw_params(vec![promise_id]);
@@ -808,7 +809,7 @@ async fn promise_completion_during_suspend_handoff_is_not_lost(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "promise-completion-during-handoff");
+    let agent_id = agent_key!("GolemHostApi", "promise-completion-during-handoff");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -836,14 +837,18 @@ async fn promise_completion_during_suspend_handoff_is_not_lost(
         Ok::<(), anyhow::Error>(())
     })
     .await??;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = worker_id.clone();
     // The suspended status is committed, but its forced cache flush holds the runtime
     // before unload. Completion must activate this stopping generation, not a cold one.
     assert!(executor.worker_is_loaded(&owned).await);
-    let loads = executor.instance_load_count(&worker_id);
+    let loads = executor.instance_load_count(&worker_id.agent_id);
     let completion = tokio::time::timeout(
         Duration::from_secs(5),
-        executor.complete_promise(&promise_id_from_value(&promise_id), vec![2, 7, 1, 8]),
+        executor.complete_promise(
+            &context.default_environment_id,
+            &promise_id_from_value(&promise_id),
+            vec![2, 7, 1, 8],
+        ),
     )
     .await;
     gate.release();
@@ -851,7 +856,7 @@ async fn promise_completion_during_suspend_handoff_is_not_lost(
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
-    assert!(executor.instance_load_count(&worker_id) > loads);
+    assert!(executor.instance_load_count(&worker_id.agent_id) > loads);
     assert_eq!(
         executor
             .invoke_and_await_agent_with_key(&component, &agent_id, &key, "await_promise", params)
@@ -884,7 +889,7 @@ async fn promise_completion_after_unload_resumes_with_exact_data(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "promise-completion-after-unload");
+    let agent_id = agent_key!("GolemHostApi", "promise-completion-after-unload");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -901,7 +906,7 @@ async fn promise_completion_after_unload_resumes_with_exact_data(
     executor
         .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = worker_id.clone();
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_is_loaded(&owned).await {
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -910,7 +915,11 @@ async fn promise_completion_after_unload_resumes_with_exact_data(
     .await?;
     assert!(!executor.worker_is_loaded(&owned).await);
     executor
-        .complete_promise(&promise_id_from_value(&promise_id), vec![9, 2, 6, 5])
+        .complete_promise(
+            &context.default_environment_id,
+            &promise_id_from_value(&promise_id),
+            vec![9, 2, 6, 5],
+        )
         .await?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))

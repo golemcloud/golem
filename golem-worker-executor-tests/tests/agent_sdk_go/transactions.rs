@@ -24,7 +24,7 @@ use golem_common::model::oplog::payload::{
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::retry_policy::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
 use golem_common::schema::FromSchema;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -59,7 +59,7 @@ async fn go_transaction_commits(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("SagaAgent", "go-saga-ok");
+    let agent_id = agent_key!("SagaAgent", "go-saga-ok");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -100,7 +100,7 @@ async fn go_transaction_rolls_back_with_compensation(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("SagaAgent", "go-saga-fail");
+    let agent_id = agent_key!("SagaAgent", "go-saga-fail");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -151,7 +151,12 @@ async fn go_infallible_saga_exhausts_after_durable_waits(
     }
 
     let context = TestContext::new(last_unique_id);
-    let agent_id = agent_id!("SagaAgent", "go-saga-exhaustion");
+    let agent_id = agent_key!("SagaAgent", "go-saga-exhaustion");
+    let saga_agent = crate::agent::keyed_agent_id(context.default_environment_id, &agent_id);
+    let noun_uri = format!(
+        "urn:agent:{}/{}",
+        saga_agent.environment_id, saga_agent.agent_id
+    );
     let delay = Duration::from_millis(50);
     let executor = start_with_overrides(
         deps,
@@ -168,7 +173,7 @@ async fn go_infallible_saga_exhausts_after_durable_waits(
                         }),
                         Box::new(Predicate::PropMatches {
                             property: "noun-uri".to_string(),
-                            pattern: format!("urn:worker:*/{agent_id}"),
+                            pattern: noun_uri.clone(),
                         }),
                     ),
                     policy: RetryPolicy::CountBox {
@@ -229,10 +234,7 @@ async fn go_infallible_saga_exhausts_after_durable_waits(
             start.request.as_ref().expect("retry request").value(),
         )?;
         assert_eq!(request.verb, "saga");
-        assert_eq!(
-            request.noun_uri,
-            format!("urn:worker:{}/{agent_id}", component.id)
-        );
+        assert_eq!(request.noun_uri, noun_uri);
         assert_eq!(request.state, state);
         let (end_index, end) = oplog
             .iter()

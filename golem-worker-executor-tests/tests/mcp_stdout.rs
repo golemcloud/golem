@@ -8,12 +8,12 @@
 
 use crate::Tracing;
 use crate::tool_discovery::deployment_state;
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::data_value;
+use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::mcp_import::{McpImport, McpImportSource};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::{IdempotencyKey, OwnedAgentId};
 use golem_mcp_import::tool::{Limits, ProjectedTool};
 use golem_service_base::clients::registry::McpRuntimeCredential;
 use golem_service_base::model::mcp_import::McpImportObservation;
@@ -204,7 +204,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
             },
         );
     }
-    let agent_id = agent_id!("GolemHostApi", "mcp-stdout");
+    let agent_id = agent_key!("GolemHostApi", "mcp-stdout");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -216,7 +216,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let key = IdempotencyKey::fresh();
     let waiter = {
         let executor = executor.clone();
@@ -460,7 +460,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
             panic!("completed MCP replay stalled; active entity: {active:?}");
         }
     };
-    assert_eq!(replayed, Ok(agent_id.to_string()));
+    assert_eq!(replayed, Ok(owned_agent_id.agent_id.to_string()));
     assert_eq!(
         calls.lock().unwrap().len(),
         call_count,

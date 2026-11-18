@@ -28,12 +28,12 @@ use golem_common::model::oplog::{
     PublicSnapshotData,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId,
+    AgentFingerprint, AgentId, AgentInvocationPayload, IdempotencyKey, OplogIndex, OwnedAgentId,
 };
-use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::schema::{SchemaValue, TypedSchemaValue};
+use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::filesystem_snapshot_testing::{
     TestFilesystemSnapshotStore, with_snapshot_store,
@@ -209,11 +209,12 @@ impl Operation {
     }
 }
 
-/// The agent under test, with its component.
+/// The agent under test, with its component. A keyed agent is invoked by its key, and a fork
+/// target, which has no key, by its ID.
 struct Agent {
     component: ComponentDto,
-    agent: ParsedAgentKey,
-    worker_id: AgentId,
+    agent: Option<ParsedAgentKey>,
+    worker_id: OwnedAgentId,
 }
 
 impl Agent {
@@ -231,17 +232,56 @@ impl Agent {
             .with_files(AGENT_TYPE, files)
             .store()
             .await?;
-        let agent = agent_id!(AGENT_TYPE, name);
+        let agent = agent_key!(AGENT_TYPE, name);
         let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
         Ok(Self {
             component,
-            agent,
+            agent: Some(agent),
             worker_id,
         })
     }
 
-    fn owned(&self, context: &TestContext) -> OwnedAgentId {
-        OwnedAgentId::new(context.default_environment_id, &self.worker_id)
+    fn owned(&self, _context: &TestContext) -> OwnedAgentId {
+        self.worker_id.clone()
+    }
+
+    /// Invokes `method_name` on the agent and awaits its result.
+    async fn invoke(
+        &self,
+        executor: &TestWorkerExecutor,
+        idempotency_key: Option<&IdempotencyKey>,
+        method_name: &str,
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
+        match (&self.agent, idempotency_key) {
+            (Some(agent), None) => {
+                executor
+                    .invoke_and_await_agent(&self.component, agent, method_name, params)
+                    .await
+            }
+            (Some(agent), Some(key)) => {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &self.component,
+                        agent,
+                        key,
+                        method_name,
+                        params,
+                    )
+                    .await
+            }
+            (None, key) => {
+                executor
+                    .invoke_and_await_agent_by_id(
+                        &self.component,
+                        &self.worker_id,
+                        key,
+                        method_name,
+                        params,
+                    )
+                    .await
+            }
+        }
     }
 
     /// The agent and the fingerprint of its incarnation, which the `Create` entry of its oplog
@@ -275,10 +315,10 @@ impl Agent {
             path.to_string(),
             argument.to_string(),
         );
-        match executor
-            .invoke_and_await_agent(
-                &self.component,
-                &self.agent,
+        match self
+            .invoke(
+                executor,
+                None,
                 "apply",
                 data_value!(operation, path, argument),
             )
@@ -310,8 +350,8 @@ impl Agent {
     }
 
     async fn describe(&self, executor: &TestWorkerExecutor) -> anyhow::Result<Vec<String>> {
-        match executor
-            .invoke_and_await_agent(&self.component, &self.agent, "describe", data_value!())
+        match self
+            .invoke(executor, None, "describe", data_value!())
             .await?
             .into_return_value()
         {
@@ -327,8 +367,7 @@ impl Agent {
     }
 
     async fn applied(&self, executor: &TestWorkerExecutor) -> anyhow::Result<u32> {
-        executor
-            .invoke_and_await_agent(&self.component, &self.agent, "applied", data_value!())
+        self.invoke(executor, None, "applied", data_value!())
             .await?
             .into_typed::<u32>()
     }
@@ -1232,7 +1271,7 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
             let restored = store.restored_names()[restores..].to_vec();
             let records = agent.records(&restarted).await?;
 
-            let shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
+            let shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id.agent_id).await);
 
             assert_eq!(newest.as_ref(), Some(&blocked));
             assert!(
@@ -1639,9 +1678,9 @@ async fn a_changed_file_at_a_changed_declaration_fails_both_updates_the_same_way
             Agent::start(&executor, &context, initial_file_system, "manual", &files).await?;
         let automatic = Agent {
             worker_id: executor
-                .start_agent(&manual.component.id, agent_id!(AGENT_TYPE, "automatic"))
+                .start_agent(&manual.component.id, agent_key!(AGENT_TYPE, "automatic"))
                 .await?,
-            agent: agent_id!(AGENT_TYPE, "automatic"),
+            agent: Some(agent_key!(AGENT_TYPE, "automatic")),
             component: manual.component.clone(),
         };
         manual
@@ -1876,10 +1915,10 @@ async fn a_newer_and_an_older_record_that_both_fail_to_load_end_in_a_full_replay
         let (older, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
         let (newer, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
         executor
-            .return_empty_snapshot_payload(&agent.worker_id, newer)
+            .return_empty_snapshot_payload(&agent.worker_id.agent_id, newer)
             .await?;
         executor
-            .return_empty_snapshot_payload(&agent.worker_id, older)
+            .return_empty_snapshot_payload(&agent.worker_id.agent_id, older)
             .await?;
         let restores = store.restored_names().len();
 
@@ -1940,7 +1979,7 @@ async fn a_record_that_reuses_a_name_and_fails_to_load_falls_back_to_the_record_
         })
         .await?;
         executor
-            .return_empty_snapshot_payload(&agent.worker_id, reused)
+            .return_empty_snapshot_payload(&agent.worker_id.agent_id, reused)
             .await?;
         let restores = store.restored_names().len();
 
@@ -1972,9 +2011,9 @@ async fn a_failed_snapshot_load_preserves_the_recovered_calls_and_tree(
             Agent::start(&executor, &context, initial_file_system, "failing", &[]).await?;
         let clean = Agent {
             worker_id: executor
-                .start_agent(&failing.component.id, agent_id!(AGENT_TYPE, "clean"))
+                .start_agent(&failing.component.id, agent_key!(AGENT_TYPE, "clean"))
                 .await?,
-            agent: agent_id!(AGENT_TYPE, "clean"),
+            agent: Some(agent_key!(AGENT_TYPE, "clean")),
             component: failing.component.clone(),
         };
         let operations = [
@@ -1992,7 +2031,7 @@ async fn a_failed_snapshot_load_preserves_the_recovered_calls_and_tree(
         clean.apply_and_confirm(&executor, operations[0]).await?;
         clean.apply_and_confirm(&executor, operations[1]).await?;
         executor
-            .return_empty_snapshot_payload(&failing.worker_id, newer)
+            .return_empty_snapshot_payload(&failing.worker_id.agent_id, newer)
             .await?;
 
         let (mut failing_kinds, failing_tree) =
@@ -2038,7 +2077,7 @@ async fn a_rejected_record_stays_rejected_after_a_restart_and_the_older_record_s
         let (_, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
         let (newer, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
         executor
-            .return_empty_snapshot_payload(&agent.worker_id, newer)
+            .return_empty_snapshot_payload(&agent.worker_id.agent_id, newer)
             .await?;
         agent.stop(&executor, &context).await?;
         let restores = store.restored_names().len();
@@ -2243,7 +2282,7 @@ async fn run_history(
                 .map(|entry| entry.oplog_index)
                 .collect::<Vec<_>>();
             executor
-                .reject_automatic_snapshots(&agent.worker_id, periodic_records)
+                .reject_automatic_snapshots(&agent.worker_id.agent_id, periodic_records)
                 .await?;
         }
         let (owned, fingerprint) = agent.incarnation(&executor, &context).await?;
@@ -2274,7 +2313,7 @@ async fn run_history(
                 .map(|name| name.as_str().into())
                 .collect(),
             automatic_reads: restarted
-                .oplog_service_call_count(&agent.worker_id, "read_automatic_snapshot"),
+                .oplog_service_call_count(&agent.worker_id.agent_id, "read_automatic_snapshot"),
         };
         let (agent, after_results) = agent.run_steps(&restarted, after).await?;
         results.extend(after_results);
@@ -2590,11 +2629,11 @@ where
     let mut events = restarted.capture_output(&agent.worker_id).await?;
     let restored = agent.describe(&restarted).await?;
     assert_snapshot_recovery_loaded(&mut events).await;
-    let restored_shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
+    let restored_shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id.agent_id).await);
     restarted.release().await?;
     let replaying = start(FilesystemSnapshotsConfig::default()).await?;
     let replayed = agent.describe(&replaying).await?;
-    let replayed_shape = invocation_shape(&replaying.stored_oplog(&agent.worker_id).await);
+    let replayed_shape = invocation_shape(&replaying.stored_oplog(&agent.worker_id.agent_id).await);
 
     assert_eq!(restored, live);
     assert_eq!(replayed, live);
@@ -3215,7 +3254,7 @@ async fn interrupt_a_held_manual_update(
     let (failed, took) = timed(async {
         executor
             .interrupt_loaded_worker(
-                &agent.worker_id,
+                &agent.worker_id.agent_id,
                 golem_service_base::error::worker_executor::InterruptKind::Interrupt(
                     golem_common::model::Timestamp::now_utc(),
                 ),
@@ -3381,7 +3420,7 @@ async fn a_lost_shard_ends_a_manual_update_that_waits_for_an_upload_without_a_fa
         })
         .await?;
         store.set_save_delay(Duration::ZERO);
-        let oplog = executor.stored_oplog(&agent.worker_id).await;
+        let oplog = executor.stored_oplog(&agent.worker_id.agent_id).await;
 
         let target = updated.revision;
         let requested = oplog
@@ -3476,7 +3515,7 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
 /// and no snapshot record is waiting for its upload when the wait ends.
 pub(crate) async fn newest_snapshot_confirmed(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<()> {
     eventually(Duration::from_secs(30), || async {
         let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
@@ -3539,7 +3578,7 @@ async fn ts_sqlite_snapshot_keeps_in_memory_databases_and_restores_file_database
             .component_dep(&context.default_environment_id, constructor_parameter_echo)
             .store()
             .await?;
-        let agent = agent_id!("SqliteSnapshotAgent", "sqlite-recovery");
+        let agent = agent_key!("SqliteSnapshotAgent", "sqlite-recovery");
         let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
         executor
@@ -3635,7 +3674,7 @@ async fn ts_sqlite_snapshot_keeps_in_memory_databases_and_restores_file_database
         );
         executor.check_oplog_is_queryable(&worker_id).await?;
         assert_eq!(
-            invocation_shape(&executor.stored_oplog(&worker_id).await),
+            invocation_shape(&executor.stored_oplog(&worker_id.agent_id).await),
             InvocationShape::settled()
         );
         Ok(())
@@ -3664,7 +3703,7 @@ async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
             .component_dep(&context.default_environment_id, constructor_parameter_echo)
             .store()
             .await?;
-        let agent = agent_id!("SqliteSnapshotAgent", "sqlite-tail-replay");
+        let agent = agent_key!("SqliteSnapshotAgent", "sqlite-tail-replay");
         let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
         executor
@@ -3715,7 +3754,7 @@ async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
         );
         executor.check_oplog_is_queryable(&worker_id).await?;
         assert_eq!(
-            invocation_shape(&executor.stored_oplog(&worker_id).await),
+            invocation_shape(&executor.stored_oplog(&worker_id.agent_id).await),
             InvocationShape::settled()
         );
         Ok(())
@@ -3740,7 +3779,7 @@ async fn effect_sqlite_snapshots_restore_files_and_replay_the_suffix_in_both_mod
                 .component_dep(&context.default_environment_id, snapshot_sqlite_effect)
                 .store()
                 .await?;
-            let agent = agent_id!(agent_type, "effect-sqlite");
+            let agent = agent_key!(agent_type, "effect-sqlite");
             let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
             executor
                 .invoke_and_await_agent(&component, &agent, "append", data_value!(17.0f64))
@@ -3851,7 +3890,7 @@ async fn effect_sqlite_snapshots_restore_files_and_replay_the_suffix_in_both_mod
             );
             executor.check_oplog_is_queryable(&worker_id).await?;
             assert_eq!(
-                invocation_shape(&executor.stored_oplog(&worker_id).await),
+                invocation_shape(&executor.stored_oplog(&worker_id.agent_id).await),
                 InvocationShape::settled()
             );
             executor.release().await?;
@@ -4181,18 +4220,9 @@ async fn a_fork_target_restores_the_copied_snapshot_of_the_source(
             )
             .await?;
         let tree = source.describe(&executor).await?;
-        let target_agent =
-            golem_common::phantom_agent_id!(AGENT_TYPE, uuid::Uuid::new_v4(), "fork-source");
-        let target = Agent {
-            component: source.component.clone(),
-            worker_id: AgentId::from_agent_id(source.component.id, &target_agent)
-                .map_err(anyhow::Error::msg)?,
-            agent: target_agent,
-        };
+        let target = source.fork_target("fork-source")?;
 
-        executor
-            .fork_worker(&source.worker_id, &target.agent.to_string(), cut)
-            .await?;
+        source.fork_into(&executor, &target, cut).await?;
         let target_incarnation = target.incarnation(&executor, &context).await?;
         let copied = store_holds(&store, &target_incarnation, &[name.as_str()]).await?;
         let restores = store.restored_names().len();
@@ -4240,7 +4270,12 @@ async fn a_fork_after_the_delete_of_an_old_target_incarnation_keeps_its_baseline
         let tree = source.describe(&executor).await?;
         let target = source.fork_target("old-target")?;
         executor
-            .start_agent(&target.component.id, target.agent.clone())
+            .create_unkeyed_agent(
+                &target.component.id,
+                Some(&target.worker_id.agent_id),
+                agent_key!(AGENT_TYPE, "old-target"),
+                std::collections::HashMap::new(),
+            )
             .await?;
         target
             .apply_and_confirm(
@@ -4258,9 +4293,7 @@ async fn a_fork_after_the_delete_of_an_old_target_incarnation_keeps_its_baseline
             .await
             .context("the delete of the old incarnation did not start")?;
 
-        executor
-            .fork_worker(&source.worker_id, &target.agent.to_string(), cut)
-            .await?;
+        source.fork_into(&executor, &target, cut).await?;
         let new_incarnation = target.incarnation(&executor, &context).await?;
         held.release();
         store_holds(&store, &old_incarnation, &[]).await?;
@@ -4278,15 +4311,31 @@ async fn a_fork_after_the_delete_of_an_old_target_incarnation_keeps_its_baseline
 }
 
 impl Agent {
-    /// A target of a fork of this agent, which does not exist yet.
-    fn fork_target(&self, name: &str) -> anyhow::Result<Agent> {
-        let agent = golem_common::phantom_agent_id!(AGENT_TYPE, uuid::Uuid::new_v4(), name);
+    /// A target of a fork of this agent, which does not exist yet: an agent without a key, at a
+    /// fresh ID with the type tag of this agent. `_name` only labels the target in the test.
+    fn fork_target(&self, _name: &str) -> anyhow::Result<Agent> {
+        let type_id = self
+            .worker_id
+            .agent_id
+            .type_id()
+            .ok_or_else(|| anyhow!("the agent has no agent type"))?;
         Ok(Agent {
             component: self.component.clone(),
-            worker_id: AgentId::from_agent_id(self.component.id, &agent)
-                .map_err(anyhow::Error::msg)?,
-            agent,
+            worker_id: OwnedAgentId::new(self.worker_id.environment_id, &AgentId::random(type_id)),
+            agent: None,
         })
+    }
+
+    /// Forks `self` at `cut` into `target`.
+    async fn fork_into(
+        &self,
+        executor: &TestWorkerExecutor,
+        target: &Agent,
+        cut: OplogIndex,
+    ) -> anyhow::Result<OwnedAgentId> {
+        executor
+            .fork_worker_to(&self.worker_id, &target.worker_id.agent_id, cut)
+            .await
     }
 
     /// The index of the oldest oplog entry that `matches`.
@@ -4514,9 +4563,7 @@ async fn a_fork_whose_cut_lies_in_a_region_a_later_revert_dropped_is_refused(
         .await?;
         let target = agent.fork_target("fork-dropped-region")?;
 
-        let forked = executor
-            .fork_worker(&agent.worker_id, &target.agent.to_string(), third_update)
-            .await;
+        let forked = agent.fork_into(&executor, &target, third_update).await;
         let target_oplog = executor
             .get_oplog(&target.worker_id, OplogIndex::INITIAL)
             .await
@@ -4566,9 +4613,7 @@ async fn a_fork_whose_snapshot_copy_fails_fails_and_publishes_no_target(
         let target = source.fork_target("copy-fails")?;
         store.fail_next_copies(1);
 
-        let forked = executor
-            .fork_worker(&source.worker_id, &target.agent.to_string(), cut)
-            .await;
+        let forked = source.fork_into(&executor, &target, cut).await;
         let target_oplog = executor
             .get_oplog(&target.worker_id, OplogIndex::INITIAL)
             .await
@@ -4617,8 +4662,7 @@ async fn concurrent_attempts_of_one_fork_copy_once_and_both_succeed(
             .await?;
         let target = source.fork_target("one-flight")?;
         let held = store.hold_next_copy();
-        let target_name = target.agent.to_string();
-        let fork = || executor.fork_worker(&source.worker_id, &target_name, cut);
+        let fork = || source.fork_into(&executor, &target, cut);
 
         let (first, second, ()) = futures::join!(fork(), fork(), async move {
             eventually(Duration::from_secs(30), || async {
@@ -4674,14 +4718,10 @@ async fn a_retry_of_a_published_fork_succeeds_after_the_source_lost_its_baseline
             .map(|entry| entry.oplog_index)
             .ok_or_else(|| anyhow!("the oplog of the source is empty"))?;
         let target = agent.fork_target("fork-retry")?;
-        executor
-            .fork_worker(&agent.worker_id, &target.agent.to_string(), cut)
-            .await?;
+        agent.fork_into(&executor, &target, cut).await?;
         store.lose(&incarnation.0, incarnation.1, &names[2]).await;
 
-        let retried = executor
-            .fork_worker(&agent.worker_id, &target.agent.to_string(), cut)
-            .await;
+        let retried = agent.fork_into(&executor, &target, cut).await;
 
         assert!(retried.is_ok(), "{retried:?}");
         assert_eq!(store.copy_count(), 1);
@@ -4709,7 +4749,7 @@ async fn an_ephemeral_agent_with_a_snapshot_policy_makes_no_store_call(
             .component_dep(&context.default_environment_id, constructor_parameter_echo)
             .store()
             .await?;
-        let agent = agent_id!("EphemeralEchoAgent", "ephemeral-snapshots");
+        let agent = agent_key!("EphemeralEchoAgent", "ephemeral-snapshots");
 
         let answers = futures::stream::iter(0..3)
             .then(|_| async {
@@ -5090,7 +5130,7 @@ async fn the_snapshot_of_an_assisted_update_stays_after_later_periodic_snapshots
             .await?;
         let after_confirmations = store_keeps(&store, &incarnation, &selected, 3).await?;
         let checkpoint = executor
-            .status_checkpoint(&updated.worker_id)
+            .status_checkpoint(&updated.worker_id.agent_id)
             .await?
             .ok_or_else(|| anyhow!("the agent has no status checkpoint"))?;
         let tree = updated.describe(&executor).await?;
@@ -5098,7 +5138,9 @@ async fn the_snapshot_of_an_assisted_update_stays_after_later_periodic_snapshots
 
         let restarted =
             start_with_overrides(deps, &context, snapshotting_with_checkpoints(&store)).await?;
-        restarted.remove_cached_status(&updated.worker_id).await?;
+        restarted
+            .remove_cached_status(&updated.worker_id.agent_id)
+            .await?;
         let after_restart = [
             Operation::Write {
                 path: "fourth.txt",
@@ -5239,13 +5281,16 @@ async fn assert_a_fork_before_a_manual_update_is_paired_cancels_the_update(
                 vec![],
             )
             .await?;
-        let before_update = executor.stored_oplog(&source.worker_id).await.len();
+        let before_update = executor
+            .stored_oplog(&source.worker_id.agent_id)
+            .await
+            .len();
         executor
             .manual_update_worker(&source.worker_id, updated.revision, false)
             .await?;
         let admission = eventually(Duration::from_secs(30), || async {
             Ok(executor
-                .stored_oplog(&source.worker_id)
+                .stored_oplog(&source.worker_id.agent_id)
                 .await
                 .iter()
                 .enumerate()
@@ -5254,28 +5299,16 @@ async fn assert_a_fork_before_a_manual_update_is_paired_cancels_the_update(
                 .map(|(position, _)| OplogIndex::from_u64(position as u64 + 1)))
         })
         .await?;
-        let target_agent = golem_common::phantom_agent_id!(
-            AGENT_TYPE,
-            uuid::Uuid::new_v4(),
-            "fork-manual-admission"
-        );
-        let target = Agent {
-            component: source.component.clone(),
-            worker_id: AgentId::from_agent_id(source.component.id, &target_agent)
-                .map_err(anyhow::Error::msg)?,
-            agent: target_agent,
-        };
+        let target = source.fork_target("fork-manual-admission")?;
 
         // The cut ends at the invocation, so the entries that the update writes later are not in
         // the prefix of the fork.
         store.set_save_delay(Duration::ZERO);
-        executor
-            .fork_worker(&source.worker_id, &target.agent.to_string(), admission)
-            .await?;
+        source.fork_into(&executor, &target, admission).await?;
         let tree = target.describe(&executor).await?;
         let metadata = executor.get_worker_metadata(&target.worker_id).await?;
         let cancellations = executor
-            .stored_oplog(&target.worker_id)
+            .stored_oplog(&target.worker_id.agent_id)
             .await
             .into_iter()
             .filter_map(|entry| match entry {
@@ -5353,36 +5386,26 @@ async fn a_fork_after_an_assisted_update_restores_its_snapshot_and_is_refused_wi
             )
             .await?;
         let (updated, restored_from) = source.automatic_update(&executor).await?;
-        let cut =
-            OplogIndex::from_u64(executor.stored_oplog(&updated.worker_id).await.len() as u64);
+        let cut = OplogIndex::from_u64(
+            executor
+                .stored_oplog(&updated.worker_id.agent_id)
+                .await
+                .len() as u64,
+        );
         let tree = updated.describe(&executor).await?;
         let source_incarnation = updated.incarnation(&executor, &context).await?;
-        let target_of = || -> anyhow::Result<Agent> {
-            let target_agent = golem_common::phantom_agent_id!(
-                AGENT_TYPE,
-                uuid::Uuid::new_v4(),
-                "fork-assisted-source"
-            );
-            Ok(Agent {
-                component: updated.component.clone(),
-                worker_id: AgentId::from_agent_id(updated.component.id, &target_agent)
-                    .map_err(anyhow::Error::msg)?,
-                agent: target_agent,
-            })
-        };
+        let target_of = || updated.fork_target("fork-assisted-source");
         let target = target_of()?;
 
-        executor
-            .fork_worker(&updated.worker_id, &target.agent.to_string(), cut)
-            .await?;
+        updated.fork_into(&executor, &target, cut).await?;
         let restores = store.restored_names().len();
         let (_, restored) = target.restart_and_describe(&executor, &context).await?;
         store
             .lose(&source_incarnation.0, source_incarnation.1, &selected)
             .await;
         let refused = target_of()?;
-        let refusal = executor
-            .fork_worker(&updated.worker_id, &refused.agent.to_string(), cut)
+        let refusal = updated
+            .fork_into(&executor, &refused, cut)
             .await
             .err()
             .map(|error| error.to_string());
@@ -6008,8 +6031,12 @@ async fn an_executor_shutdown_while_an_assisted_update_restores_its_record_write
 
         let restarted =
             start_with_overrides(deps, &context, snapshotting_with_checkpoints(&store)).await?;
-        let checkpoint = restarted.status_checkpoint(&agent.worker_id).await?;
-        restarted.remove_cached_status(&agent.worker_id).await?;
+        let checkpoint = restarted
+            .status_checkpoint(&agent.worker_id.agent_id)
+            .await?;
+        restarted
+            .remove_cached_status(&agent.worker_id.agent_id)
+            .await?;
         restarted.resume(&agent.worker_id, false).await?;
         restarted
             .wait_for_component_revision(&agent.worker_id, target.revision, Duration::from_secs(60))
@@ -6098,10 +6125,10 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
                 agent.stop(executor, context).await?;
                 let key = golem_common::model::IdempotencyKey::fresh();
                 let invocation_id = executor
-                    .external_invocation_key(&agent.worker_id, &key, "apply")
+                    .external_invocation_key(&agent.worker_id.agent_id, &key, "apply")
                     .await?;
-                let rename = || executor.invoke_and_await_agent_with_key(
-                    &agent.component, &agent.agent, &key, "apply",
+                let rename = || agent.invoke(
+                    executor, Some(&key), "apply",
                     data_value!("rename".to_string(), "before.txt".to_string(), "after.txt".to_string()),
                 );
                 let result = tokio::time::timeout(Duration::from_secs(60), rename())
@@ -6278,7 +6305,7 @@ async fn run_automatic_history(
                                     (UpdateStrategy::Assisted, false) => Vec::new(),
                                 };
                                 executor
-                                    .reject_automatic_snapshots(&agent.worker_id, rejected)
+                                    .reject_automatic_snapshots(&agent.worker_id.agent_id, rejected)
                                     .await?;
                                 let target = executor
                                     .update_component_with_files(

@@ -90,22 +90,19 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("Networking", "monthly-active-scoped-entity");
+    let name = agent_key!("Networking", "monthly-active-scoped-entity");
     let owned = OwnedAgentId::new(
         context.default_environment_id,
-        &golem_common::model::AgentId {
-            component_id: component.id,
-            agent_id: name.to_string(),
-        },
+        &crate::agent::keyed_agent_id(component.environment_id, &name).agent_id,
     );
     let id = executor.start_agent(&component.id, name.clone()).await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let active = executor.production_active_agent(&owned).await.unwrap();
     let worker = active.primary();
     let authority_wallet = worker.get_wallet_cards().await?;
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&id, &key, "tcp_collect_p3")
+        .external_invocation_key(&id.agent_id, &key, "tcp_collect_p3")
         .await?;
     let primary_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let entity_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -176,7 +173,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     let before_entity = worker.oplog().current_oplog_index().await;
     let scope_index = before_entity.next();
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: id.clone(),
+        agent_id: id.agent_id,
     });
     // Like the instance-layer tests, install an in-memory scope without a tool dispatcher.
     // The index identifies the scope only; this test does not create a durable entity root.
@@ -285,8 +282,10 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         "[monthly-entity] primary calls={primary_calls:?}, entity calls={entity_calls:?}, registration={registered:?}"
     );
 
-    let committed_prefix = executor.stored_oplog(&id).await;
-    let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
+    let committed_prefix = executor.stored_oplog(&id.agent_id).await;
+    let (selected, release_outcome) = executor
+        .gate_next_invocation_outcome_append(&id.agent_id)
+        .await;
     let mut raw = worker.raw_interrupt_for_test();
     let mut exhausted = policy;
     exhausted.available_memory_gb_seconds = 0;
@@ -372,7 +371,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             worker.oplog().current_oplog_index().await.as_u64(),
         )
         .await?;
-    let raw_after_stop = executor.stored_oplog(&id).await;
+    let raw_after_stop = executor.stored_oplog(&id.agent_id).await;
     assert!(raw_after_stop.len() >= committed_prefix.len());
     assert_eq!(
         &raw_after_stop[..committed_prefix.len()],

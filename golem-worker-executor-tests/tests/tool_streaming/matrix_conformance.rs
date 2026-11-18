@@ -258,11 +258,14 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
                 )),
             );
 
-            let agent_id = agent_id!(
+            let agent_id = agent_key!(
                 caller.agent_type,
                 format!("matrix-{}-{}", caller.language, provider.language)
             );
-            let owner_agent_id = agent_id.to_string();
+            let owner_agent_id =
+                crate::agent::keyed_agent_id(caller_component.environment_id, &agent_id)
+                    .agent_id
+                    .to_string();
             let observation: MatrixObservation = executor
                 .invoke_and_await_agent_as_principal(
                     caller_component,
@@ -373,7 +376,7 @@ async fn go_caller_closes_the_stdin_a_tool_does_not_read(
         )),
     );
 
-    let agent_id = agent_id!("GoToolStreamingCaller", "stdin-released");
+    let agent_id = agent_key!("GoToolStreamingCaller", "stdin-released");
     let released: bool = executor
         .invoke_and_await_agent(&caller, &agent_id, "stdin_released", data_value!())
         .await?

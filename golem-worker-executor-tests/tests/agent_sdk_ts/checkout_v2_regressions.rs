@@ -16,7 +16,7 @@ use crate::Tracing;
 use axum::Router;
 use axum::routing::post;
 use golem_common::model::AgentStatus;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -462,7 +462,7 @@ async fn ts_v2_s1_payment_failure_then_reset(
         .store()
         .await?;
 
-    let agent_id = agent_id!("CheckoutAgentV2", "ord-s1-v2");
+    let agent_id = agent_key!("CheckoutAgentV2", "ord-s1-v2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -564,7 +564,7 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
         .store()
         .await?;
 
-    let agent_id = agent_id!("CheckoutAgentV2", "ord-s2-v2");
+    let agent_id = agent_key!("CheckoutAgentV2", "ord-s2-v2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -725,7 +725,7 @@ async fn ts_v2_s3_process_crash_mid_workflow(
         .store()
         .await?;
 
-    let agent_id = agent_id!("CheckoutAgentV2", "ord-s3-v2");
+    let agent_id = agent_key!("CheckoutAgentV2", "ord-s3-v2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -847,7 +847,7 @@ async fn ts_v2_s4_sustained_70_percent_chaos(
         .store()
         .await?;
 
-    let agent_id = agent_id!("CheckoutAgentV2", "ord-s4-v2");
+    let agent_id = agent_key!("CheckoutAgentV2", "ord-s4-v2");
     let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

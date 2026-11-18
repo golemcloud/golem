@@ -121,6 +121,18 @@ pub fn raw_params(
     build_input_record(elements).expect("raw_params: build_input_record failed")
 }
 
+/// A fresh agent ID of type tag 7 in a fresh environment, for storage tests that need an agent
+/// namespace no other test shares.
+pub fn fresh_owned_agent_id() -> golem_common::model::OwnedAgentId {
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::type_id::TypeId;
+    use golem_common::model::{AgentId, OwnedAgentId};
+    OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId::random(TypeId::try_from(7u32).expect("7 is a valid type tag")),
+    )
+}
+
 tag_suite!(api, group1);
 tag_suite!(scheduled_durable, group1);
 tag_suite!(scheduled_ephemeral, group1);

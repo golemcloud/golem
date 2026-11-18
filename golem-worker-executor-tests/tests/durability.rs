@@ -25,8 +25,8 @@ use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
     PublicOplogPageEntry, PublicSnapshotData,
 };
-use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
-use golem_common::{agent_id, data_value, phantom_agent_id};
+use golem_common::model::{AgentEvent, AgentStatus};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
@@ -195,7 +195,7 @@ struct SnapshotLoadProbeStatus {
     mode: String,
     principal: String,
     agent_type: String,
-    phantom_id: Option<String>,
+    agent_id: Option<String>,
     config_marker: String,
     read_bytes: usize,
     constructor_calls_at_restore: u32,
@@ -256,7 +256,7 @@ async fn custom_durability_1(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurability", "custom-durability-1");
+    let agent_id = agent_key!("CustomDurability", "custom-durability-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -405,7 +405,7 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurability", "counter-invocation-ids");
+    let agent_id = agent_key!("CustomDurability", "counter-invocation-ids");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -597,7 +597,7 @@ async fn custom_durability_cancelled_finish_drops_result_in_its_scope(
             .component_dep(&context.default_environment_id, host_api_tests)
             .store()
             .await?;
-        let agent_id = agent_id!("CustomDurability", format!("cancel-result-{fallible}"));
+        let agent_id = agent_key!("CustomDurability", format!("cancel-result-{fallible}"));
         let worker_id = executor
             .start_agent_with(
                 &component.id,
@@ -611,7 +611,7 @@ async fn custom_durability_cancelled_finish_drops_result_in_its_scope(
             .await?;
         let mut events = executor.capture_output(&worker_id).await?;
         let (accepted, release) = executor.gate_next_oplog_function_end(
-            &worker_id,
+            &worker_id.agent_id,
             golem_common::model::oplog::host_functions::HostFunctionName::Custom(
                 "golem-it::cancel-result".to_string(),
             ),
@@ -766,7 +766,7 @@ async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurability", "partial-concurrent-recovery");
+    let agent_id = agent_key!("CustomDurability", "partial-concurrent-recovery");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -795,7 +795,7 @@ async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling
         .in_current_span()
     });
     tokio::time::timeout(Duration::from_secs(20), checkpoint.notified()).await?;
-    executor.commit_oplog(&worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
     let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let anchor = before
         .iter()
@@ -978,7 +978,7 @@ async fn custom_durability_scopes_follow_poll_and_drop_execution(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurability", "poll-and-drop-scopes");
+    let agent_id = agent_key!("CustomDurability", "poll-and-drop-scopes");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -1299,7 +1299,7 @@ async fn custom_durability_scopes_follow_poll_and_drop_execution(
             "belongs to another invocation",
         ),
     ] {
-        let probe_agent = agent_id!("CustomDurability", name);
+        let probe_agent = agent_key!("CustomDurability", name);
         executor
             .start_agent_with(
                 &component.id,
@@ -1398,7 +1398,7 @@ async fn custom_durability_crash_mid_live_invocation_reexecutes_whole_body(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurability", "custom-durability-mid-block");
+    let agent_id = agent_key!("CustomDurability", "custom-durability-mid-block");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -1502,7 +1502,7 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
     // core initializer runs the constructors, so the growth happens while the component is
     // instantiated.
     const INSTANTIATION_GROWTH_BYTES: u64 = 16 * 65536;
-    let control_id = agent_id!("Counter", "memory-growth-control");
+    let control_id = agent_key!("Counter", "memory-growth-control");
     let control_worker_id = executor
         .start_agent(&component.id, control_id.clone())
         .await?;
@@ -1510,17 +1510,14 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
         .invoke_and_await_agent(&component, &control_id, "increment", data_value!())
         .await?;
     let control_bytes = executor
-        .worker_memory_requirement(&OwnedAgentId::new(
-            context.default_environment_id,
-            &control_worker_id,
-        ))
+        .worker_memory_requirement(&control_worker_id.clone())
         .await?;
 
-    let agent_id = agent_id!("InstantiationGrowthCounter", "memory-growth-recovery");
+    let agent_id = agent_key!("InstantiationGrowthCounter", "memory-growth-recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
@@ -1606,7 +1603,7 @@ async fn automatic_snapshot_disabled(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("JsonSnapshotCounter", "disabled");
+    let agent_id = agent_key!("JsonSnapshotCounter", "disabled");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1652,7 +1649,7 @@ async fn automatic_snapshot_every_2nd_invocation(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("JsonSnapshotCounter", "every-2nd");
+    let agent_id = agent_key!("JsonSnapshotCounter", "every-2nd");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1807,7 +1804,7 @@ async fn a_periodic_snapshot_whose_bootstrap_block_holds_a_write_is_rejected(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "initializer-write");
+    let agent_id = agent_key!("SnapshotCounter", "initializer-write");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1875,7 +1872,9 @@ async fn a_periodic_snapshot_whose_bootstrap_block_holds_a_write_is_rejected(
         .await?
         .into_typed::<u32>()?;
     // The start stores the rejected records before it publishes readiness.
-    let rejected = executor.rejected_automatic_snapshots(&worker_id).await?;
+    let rejected = executor
+        .rejected_automatic_snapshots(&worker_id.agent_id)
+        .await?;
     let initializer_seed_hash_after_restart = executor
         .invoke_and_await_agent(
             &component,
@@ -1922,7 +1921,7 @@ async fn automatic_snapshot_periodic(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("JsonSnapshotCounter", "periodic");
+    let agent_id = agent_key!("JsonSnapshotCounter", "periodic");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2010,7 +2009,7 @@ async fn automatic_snapshot_periodic_skips_idle_and_read_only_periods(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("JsonSnapshotCounter", "periodic-idle");
+    let agent_id = agent_key!("JsonSnapshotCounter", "periodic-idle");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2077,7 +2076,7 @@ async fn automatic_snapshot_periodic_takes_pending_snapshot_after_restart(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("JsonSnapshotCounter", "periodic-restart");
+    let agent_id = agent_key!("JsonSnapshotCounter", "periodic-restart");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2134,7 +2133,7 @@ async fn snapshot_based_recovery(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "recovery");
+    let agent_id = agent_key!("SnapshotCounter", "recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2215,7 +2214,7 @@ async fn oplog_returns_snapshots_larger_than_the_grpc_message_limit(
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("LargeOplogEntryAgent", "large-snapshot");
+    let agent_id = agent_key!("LargeOplogEntryAgent", "large-snapshot");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2279,7 +2278,7 @@ async fn oplog_returns_host_call_entries_larger_than_the_page_entry_limit(
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("LargeOplogEntryAgent", "large-host-call");
+    let agent_id = agent_key!("LargeOplogEntryAgent", "large-host-call");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2330,7 +2329,7 @@ async fn oplog_returns_host_call_entries_larger_than_the_page_entry_limit(
         .clone()
         .get_oplog(
             golem_api_grpc::proto::golem::workerexecutor::v1::GetOplogRequest {
-                agent_id: Some(worker_id.clone().into()),
+                agent_id: Some(worker_id.agent_id.into()),
                 from_oplog_index: random_bytes_end.oplog_index.into(),
                 cursor: None,
                 count: 1,
@@ -2373,7 +2372,7 @@ async fn oplog_returns_host_call_entries_larger_than_the_page_entry_limit(
     for component_revision in [Some(omitted.component_revision), None] {
         let entry = executor
             .get_oplog_entry(
-                &worker_id,
+                &worker_id.agent_id,
                 component.environment_id,
                 omitted.oplog_index,
                 component_revision,
@@ -2415,12 +2414,8 @@ async fn snapshot_load_restores_without_initialization_and_replays_only_the_suff
         )
         .store()
         .await?;
-    let phantom_id = uuid::Uuid::new_v4();
-    let agent_id = phantom_agent_id!("SnapshotLoadProbe", phantom_id, "read");
-    let worker_id = AgentId {
-        component_id: component.id,
-        agent_id: agent_id.to_string(),
-    };
+    let agent_id = agent_key!("SnapshotLoadProbe", "read");
+    let worker_id = executor.keyed_agent_id(component.environment_id, &agent_id)?;
     let principal = Principal::GolemUser(GolemUserPrincipal {
         account_id: AccountId::new(),
     });
@@ -2514,11 +2509,8 @@ async fn snapshot_load_restores_without_initialization_and_replays_only_the_suff
     assert_eq!(status.origin, "restored");
     assert_eq!(status.mode, "read");
     assert_eq!(status.agent_type, "SnapshotLoadProbe");
-    let expected_phantom_id = phantom_id.to_string();
-    assert_eq!(
-        status.phantom_id.as_deref(),
-        Some(expected_phantom_id.as_str())
-    );
+    let expected_agent_id = worker_id.agent_id.to_string();
+    assert_eq!(status.agent_id.as_deref(), Some(expected_agent_id.as_str()));
     assert_eq!(status.config_marker, config_marker);
     assert_eq!(status.read_bytes, 4, "local reads should remain available");
     assert_eq!(status.constructor_calls_at_restore, 0);
@@ -2587,11 +2579,8 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_sn
     let mut probes = Vec::new();
 
     for mode in ["write", "http", "rpc"] {
-        let agent_id = phantom_agent_id!("SnapshotLoadProbe", uuid::Uuid::new_v4(), mode);
-        let worker_id = AgentId {
-            component_id: component.id,
-            agent_id: agent_id.to_string(),
-        };
+        let agent_id = agent_key!("SnapshotLoadProbe", mode);
+        let worker_id = executor.keyed_agent_id(component.environment_id, &agent_id)?;
         for expected in 1..=2 {
             let result = executor
                 .invoke_and_await_agent_as_principal(
@@ -2738,7 +2727,7 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "multi-restart");
+    let agent_id = agent_key!("SnapshotCounter", "multi-restart");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2802,7 +2791,7 @@ async fn ts_default_json_snapshot_recovery(
         .component_dep(&context.default_environment_id, constructor_parameter_echo)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounterAgent", "ts-recovery");
+    let agent_id = agent_key!("SnapshotCounterAgent", "ts-recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2910,7 +2899,7 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
         .component_dep(&context.default_environment_id, constructor_parameter_echo)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounterAgent", "ts-multi-restart");
+    let agent_id = agent_key!("SnapshotCounterAgent", "ts-multi-restart");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3023,7 +3012,7 @@ async fn rust_default_json_snapshot_recovery(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("JsonSnapshotCounter", "rust-recovery");
+    let agent_id = agent_key!("JsonSnapshotCounter", "rust-recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3141,7 +3130,7 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("JsonSnapshotCounter", "rust-multi-restart");
+    let agent_id = agent_key!("JsonSnapshotCounter", "rust-multi-restart");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3265,7 +3254,7 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_takes_no_snapshot_
         .component_dep(&context.default_environment_id, constructor_parameter_echo)
         .store()
         .await?;
-    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-no-filesystem-snapshots");
+    let agent_id = agent_key!("SqliteSnapshotAgent", "sqlite-no-filesystem-snapshots");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3340,7 +3329,7 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_takes_no_snapshot_
     assert!(recoveries.is_empty(), "{recoveries:?}");
     executor.check_oplog_is_queryable(&worker_id).await?;
     assert_eq!(
-        invocation_shape(&executor.stored_oplog(&worker_id).await),
+        invocation_shape(&executor.stored_oplog(&worker_id.agent_id).await),
         InvocationShape::settled()
     );
     drop(executor);
@@ -3350,7 +3339,7 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_takes_no_snapshot_
 /// The snapshot entries in the oplog of `agent_id`.
 async fn snapshot_count(
     executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
-    agent_id: &AgentId,
+    agent_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<usize> {
     Ok(executor
         .get_oplog(agent_id, OplogIndex::INITIAL)
@@ -3389,9 +3378,9 @@ async fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_does(
             .into_iter()
             .sum::<u64>()
     };
-    let ephemeral = agent_id!("EphemeralSnapshotCounter", "no-snapshot");
+    let ephemeral = agent_key!("EphemeralSnapshotCounter", "no-snapshot");
     executor
-        .start_agent(&component.id, ephemeral.clone())
+        .create_unkeyed_agent(&component.id, None, ephemeral.clone(), HashMap::new())
         .await?;
 
     executor
@@ -3403,7 +3392,7 @@ async fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_does(
     // The snapshot after an invocation runs after the invocation returned to the caller.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let ephemeral_checks = checks();
-    let durable = agent_id!("SnapshotCounter", "snapshots");
+    let durable = agent_key!("SnapshotCounter", "snapshots");
     let durable_id = executor.start_agent(&component.id, durable.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &durable, "increment", data_value!())
@@ -3435,7 +3424,7 @@ async fn monotonic_clock_now_replay_parity(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("MonotonicClockState", "monotonic-replay-parity-1");
+    let agent_id = agent_key!("MonotonicClockState", "monotonic-replay-parity-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

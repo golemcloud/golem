@@ -15,10 +15,8 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
-use golem_common::model::AgentId;
 use golem_common::model::ShardEpoch;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::redis::RedisPool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::redis::Redis;
@@ -367,17 +365,11 @@ struct IndexedStorageNamespaces {
 fn ns() -> IndexedStorageNamespaces {
     IndexedStorageNamespaces {
         ns: IndexedStorageNamespace::OpLog {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test".to_string(),
-            },
+            owned_agent_id: crate::fresh_owned_agent_id(),
             agent_mode: AgentMode::Durable,
         },
         ns_other: IndexedStorageNamespace::OpLog {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test2".to_string(),
-            },
+            owned_agent_id: crate::fresh_owned_agent_id(),
             agent_mode: AgentMode::Durable,
         },
         meta: IndexedStorageMetaNamespace::Oplog {
@@ -390,18 +382,12 @@ fn ns() -> IndexedStorageNamespaces {
 fn ns2() -> IndexedStorageNamespaces {
     IndexedStorageNamespaces {
         ns: IndexedStorageNamespace::CompressedOpLog {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test".to_string(),
-            },
+            owned_agent_id: crate::fresh_owned_agent_id(),
             agent_mode: AgentMode::Durable,
             level: 1,
         },
         ns_other: IndexedStorageNamespace::CompressedOpLog {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test2".to_string(),
-            },
+            owned_agent_id: crate::fresh_owned_agent_id(),
             agent_mode: AgentMode::Durable,
             level: 1,
         },
@@ -422,17 +408,14 @@ async fn staged_publication_preserves_atomic_visibility(
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
 ) {
     let storage = is.get_indexed_storage().await;
-    let agent = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "fork-publication".into(),
-    };
+    let agent = crate::fresh_owned_agent_id();
     let mode = AgentMode::Durable;
     let staged = IndexedStorageNamespace::StagedOpLog {
-        agent_id: agent.clone(),
+        owned_agent_id: agent.clone(),
         agent_mode: mode,
     };
     let visible = IndexedStorageNamespace::OpLog {
-        agent_id: agent.clone(),
+        owned_agent_id: agent.clone(),
         agent_mode: mode,
     };
     for (key, ids, expected) in [
@@ -1477,20 +1460,14 @@ async fn scan_stable_resumes_past_deleted_keys(
     // One agent per key, so a backend that shards by agent has six shards to walk.
     let planted: Vec<(IndexedStorageNamespace, IndexedStorageNamespace, String)> = (0..6)
         .map(|i| {
-            let component_id = ComponentId::new();
+            let agent = crate::fresh_owned_agent_id();
             let swept = IndexedStorageNamespace::CompressedOpLog {
-                agent_id: AgentId {
-                    component_id,
-                    agent_id: format!("stable-{i}"),
-                },
+                owned_agent_id: agent.clone(),
                 agent_mode: AgentMode::Durable,
                 level: SCAN_STABLE_LEVEL,
             };
             let below = IndexedStorageNamespace::CompressedOpLog {
-                agent_id: AgentId {
-                    component_id,
-                    agent_id: format!("stable-{i}"),
-                },
+                owned_agent_id: agent,
                 agent_mode: AgentMode::Durable,
                 level: SCAN_STABLE_LEVEL + 1,
             };
@@ -1606,10 +1583,7 @@ async fn multi_sqlite_scan_stable_does_not_reopen_drained_files() {
     let planted: Vec<(IndexedStorageNamespace, String)> = (0..5)
         .map(|i| {
             let namespace = IndexedStorageNamespace::OpLog {
-                agent_id: AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: format!("file-{i}"),
-                },
+                owned_agent_id: crate::fresh_owned_agent_id(),
                 agent_mode: AgentMode::Durable,
             };
             (namespace, format!("key-{i}"))
@@ -1689,10 +1663,7 @@ async fn multi_sqlite_scan_stable_sees_files_created_after_a_walk() {
 
     async fn plant(is: &MultiSqliteIndexedStorage, name: &str) -> String {
         let namespace = IndexedStorageNamespace::OpLog {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: name.to_string(),
-            },
+            owned_agent_id: crate::fresh_owned_agent_id(),
             agent_mode: AgentMode::Durable,
         };
         let key = format!("key-{name}");
@@ -3244,10 +3215,7 @@ async fn a_repeated_id_in_a_staged_batch_is_a_conflict(
     // re-sent after an indeterminate write collides on its first id.
     let is = is.get_indexed_storage().await;
     let staged = IndexedStorageNamespace::StagedOpLog {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "staged-conflict".into(),
-        },
+        owned_agent_id: crate::fresh_owned_agent_id(),
         agent_mode: AgentMode::Durable,
     };
     let key = "staged-conflict";
@@ -3275,10 +3243,7 @@ async fn a_held_index_in_the_blob_manifest_is_a_conflict(
     // entry as for a batch.
     let is = is.get_indexed_storage().await;
     let manifest = IndexedStorageNamespace::BlobOplogManifest {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "manifest-conflict".into(),
-        },
+        owned_agent_id: crate::fresh_owned_agent_id(),
         agent_mode: AgentMode::Durable,
         level: BLOB_MANIFEST_LEVEL,
     };
@@ -3662,17 +3627,14 @@ async fn the_blob_manifest_is_fenced_apart_from_the_compressed_level(
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
 ) {
     let is = is.get_indexed_storage().await;
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "blob-manifest".to_string(),
-    };
+    let agent_id = crate::fresh_owned_agent_id();
     let manifest = IndexedStorageNamespace::BlobOplogManifest {
-        agent_id: agent_id.clone(),
+        owned_agent_id: agent_id.clone(),
         agent_mode: AgentMode::Durable,
         level: BLOB_MANIFEST_LEVEL,
     };
     let compressed = IndexedStorageNamespace::CompressedOpLog {
-        agent_id,
+        owned_agent_id: agent_id,
         agent_mode: AgentMode::Durable,
         level: BLOB_MANIFEST_LEVEL,
     };

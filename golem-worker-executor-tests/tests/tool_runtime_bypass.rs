@@ -18,7 +18,7 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{AgentTypeName, GolemUserPrincipal, Principal};
@@ -142,9 +142,9 @@ impl QuotaService for RecordingQuotaService {
 struct Fixture {
     executor: TestWorkerExecutor,
     owner_component: golem_common::model::component::ComponentDto,
-    owner_id: golem_common::model::AgentId,
-    other_owner_id: golem_common::model::AgentId,
-    cross_environment_owner_id: golem_common::model::AgentId,
+    owner_id: golem_common::model::OwnedAgentId,
+    other_owner_id: golem_common::model::OwnedAgentId,
+    cross_environment_owner_id: golem_common::model::OwnedAgentId,
     account_id: AccountId,
     environment_id: EnvironmentId,
     other_environment_id: EnvironmentId,
@@ -280,7 +280,7 @@ async fn fixture(
             Some(deployment),
         );
     }
-    let agent_id = agent_id!("ToolRuntimeBypassOwner", "e2-owner");
+    let agent_id = agent_key!("ToolRuntimeBypassOwner", "e2-owner");
     let owner_id = executor
         .start_agent_with(
             &owner_component.id,
@@ -296,7 +296,7 @@ async fn fixture(
     let other_owner_id = executor
         .start_agent_with(
             &owner_component.id,
-            agent_id!("ToolRuntimeBypassOwner", "e2-other"),
+            agent_key!("ToolRuntimeBypassOwner", "e2-other"),
             HashMap::from([
                 ("OWNER_MARKER".to_string(), "caller-one-config".to_string()),
                 ("EFFECT_PORT".to_string(), effect_port.to_string()),
@@ -311,7 +311,7 @@ async fn fixture(
     let cross_environment_owner_id = executor
         .start_agent_with(
             &other_owner_component.id,
-            agent_id!("ToolRuntimeBypassOwner", "e2-cross-environment"),
+            agent_key!("ToolRuntimeBypassOwner", "e2-cross-environment"),
             HashMap::from([
                 ("OWNER_MARKER".to_string(), "caller-two-config".to_string()),
                 ("EFFECT_PORT".to_string(), effect_port.to_string()),
@@ -436,7 +436,7 @@ async fn calling_owner_context_isolated_across_environments(
     let first = invoke_chain(&fixture, "first-forged-principal", "first").await?;
     let second = invoke_chain_for(
         &fixture,
-        &fixture.cross_environment_owner_id,
+        &fixture.cross_environment_owner_id.agent_id,
         fixture.cross_environment_fingerprint,
         "second-forged-principal",
         "second",
@@ -515,7 +515,7 @@ async fn underlying_handle_is_revoked_after_return_and_cannot_cross_invocations(
 
     let fresh = invoke_chain_for(
         &fixture,
-        &fixture.other_owner_id,
+        &fixture.other_owner_id.agent_id,
         fixture.other_fingerprint,
         "fresh",
         "normal",
@@ -527,8 +527,9 @@ async fn underlying_handle_is_revoked_after_return_and_cannot_cross_invocations(
     fixture
         .executor
         .complete_promise(
+            &fixture.owner_id.environment_id,
             &golem_common::model::PromiseId {
-                agent_id: fixture.owner_id.clone(),
+                agent_id: fixture.owner_id.agent_id,
                 fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint),
             },
@@ -590,7 +591,7 @@ async fn universal_results_are_validated_and_valid_stream_transformation_survive
         assert_entity_cleanup(&fixture).await;
     }
 
-    let agent_id = agent_id!("ToolRuntimeBypassOwner", "e2-owner");
+    let agent_id = agent_key!("ToolRuntimeBypassOwner", "e2-owner");
     let valid: ValidationEvidence = fixture
         .executor
         .invoke_and_await_agent(
@@ -642,7 +643,7 @@ async fn invoke_chain(
 ) -> anyhow::Result<ChainEvidence> {
     invoke_chain_for(
         fixture,
-        &fixture.owner_id,
+        &fixture.owner_id.agent_id,
         fixture.fingerprint,
         claimed,
         mode,
@@ -687,7 +688,7 @@ fn leaf_effect_count(fixture: &Fixture) -> usize {
 }
 
 async fn assert_entity_cleanup(fixture: &Fixture) {
-    let owner = OwnedAgentId::new(fixture.environment_id, &fixture.owner_id);
+    let owner = OwnedAgentId::new(fixture.environment_id, &fixture.owner_id.agent_id);
     if let Some(active) = fixture.executor.active_entity_metadata(&owner).await {
         assert!(
             active.tool_operations.operations.is_empty(),
@@ -711,7 +712,7 @@ async fn invoke_tool(
 ) -> anyhow::Result<AgentInvocationResult> {
     invoke_tool_for(
         fixture,
-        &fixture.owner_id,
+        &fixture.owner_id.agent_id,
         fixture.fingerprint,
         name,
         fields,
@@ -737,7 +738,7 @@ async fn invoke_tool_for(
         .command_index_by_path(&command_path)
         .ok_or_else(|| anyhow::anyhow!("tool `{name}` has no inspect command"))?;
     let schema = definition.canonical_input_record_schema(command)?;
-    let environment_id = if owner_id == &fixture.cross_environment_owner_id {
+    let environment_id = if owner_id == &fixture.cross_environment_owner_id.agent_id {
         fixture.other_environment_id
     } else {
         fixture.environment_id

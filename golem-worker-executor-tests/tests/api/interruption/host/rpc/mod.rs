@@ -209,8 +209,9 @@ async fn pending_rpc_scenario(
         .store()
         .await?;
     let target_name = "monthly-rpc-target";
-    let target_name_id = agent_id!("RpcBlockingCounter", target_name);
-    let expected_target_id = AgentId::from_agent_id(component.id, &target_name_id).unwrap();
+    let target_name_id = agent_key!("RpcBlockingCounter", target_name);
+    let expected_target_id =
+        crate::agent::keyed_agent_id(component.environment_id, &target_name_id).agent_id;
     let mut target_growth = if held_growth || hold_target_acceptance {
         Some(
             executor
@@ -223,12 +224,9 @@ async fn pending_rpc_scenario(
     let target_id = executor
         .start_agent(&component.id, target_name_id.clone())
         .await?;
-    ensure!(target_id == expected_target_id);
+    ensure!(target_id.agent_id == expected_target_id);
     let target = executor
-        .production_active_agent(&OwnedAgentId::new(
-            context.default_environment_id,
-            &target_id,
-        ))
+        .production_active_agent(&target_id.clone())
         .await
         .unwrap()
         .primary();
@@ -255,19 +253,19 @@ async fn pending_rpc_scenario(
     }
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("CancelTester", "monthly-rpc-caller")
+        agent_key!("CancelTester", "monthly-rpc-caller")
     } else {
-        agent_id!("EphemeralRpcCaller", "monthly-rpc-caller")
+        agent_key!("EphemeralRpcCaller", "monthly-rpc-caller")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, METHOD))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        METHOD,
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let mut caller_growth = if held_growth {
         Some(executor.gate_next_memory_growth_append(&id).await)
@@ -275,20 +273,18 @@ async fn pending_rpc_scenario(
         None
     };
     if held_growth {
-        let started = executor
-            .start_agent(&component.id, physical.clone())
-            .await?;
-        ensure!(started == id);
+        let started = executor.start_agent(&component.id, name.clone()).await?;
+        ensure!(started.agent_id == id);
         wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
         executor
             .invoke_and_await_agent(&component, &name, "grow_memory", data_value!())
             .await?;
         executor
-            .wait_for_status(&id, AgentStatus::Idle, Duration::from_secs(10))
+            .wait_for_status(&owned, AgentStatus::Idle, Duration::from_secs(10))
             .await?;
     }
     let caller_invocations = if held_growth { 3 } else { 2 };
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         target.all(),
         &owned,
         None,
@@ -297,6 +293,8 @@ async fn pending_rpc_scenario(
         None,
         &InvocationContextStack::fresh(),
         Principal::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(&executor, component.id, &name, durable, &key, METHOD),
     )
     .await?;
     let stored_key = executor.external_invocation_key(&id, &key, METHOD).await?;
@@ -325,11 +323,11 @@ async fn pending_rpc_scenario(
         let (original, target_wait, target_key) = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                executor.commit_oplog(&target_id).await?;
-                let caller_entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                executor.commit_oplog(&target_id.agent_id).await?;
+                let caller_entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
-                if let Some(call) = history::caller(&caller_entries, &stored_key, &target_id, asynchronous, false, 0)? {
-                    let target_key = executor.finalized_invocation_key(&target_id, &golem_common::model::InvocationRequestKey::Internal(call.target_key.clone()), "inc_after_promise").await?;
+                if let Some(call) = history::caller(&caller_entries, &stored_key, &target_id.agent_id, asynchronous, false, 0)? {
+                    let target_key = executor.finalized_invocation_key(&target_id.agent_id, &golem_common::model::InvocationRequestKey::Internal(call.target_key.clone()), "inc_after_promise").await?;
                     if let Some(wait) = history::target(&target_entries, &target_key, false)? {
                     ensure!(count_agent_invocation_pair_since(&caller_entries, OplogIndex::INITIAL) == (caller_invocations, caller_invocations - 1));
                     ensure!(count_agent_invocation_pair_since(&target_entries, OplogIndex::INITIAL) == (target_invocations, target_invocations - 1));
@@ -349,7 +347,7 @@ async fn pending_rpc_scenario(
         ensure!(initial.exhaustion.is_none());
         ensure!(worker.is_loaded().await && !invocation.is_finished());
         let promises = worker.all().promise_service();
-        let pending = promises.poll(promise.clone()).await?;
+        let pending = promises.poll(context.default_environment_id, promise.clone()).await?;
         ensure!(!pending.is_ready().await && pending.get().await.is_none());
         {
             let dispatches = dispatches.lock().unwrap();
@@ -395,11 +393,11 @@ async fn pending_rpc_scenario(
         }
         let release_result = if completion_first {
             let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
-            ensure!(promises.complete(promise.clone(), vec![]).await?);
+            ensure!(promises.complete(context.default_environment_id, promise.clone(), vec![]).await?);
             tokio::time::timeout(Duration::from_secs(10), selected).await??;
             executor.commit_oplog(&id).await?;
-            executor.commit_oplog(&target_id).await?;
-            ensure!(history::caller(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &stored_key, &target_id, asynchronous, true, 0)? == Some(original.clone()));
+            executor.commit_oplog(&target_id.agent_id).await?;
+            ensure!(history::caller(&executor.get_oplog(&owned, OplogIndex::INITIAL).await?, &stored_key, &target_id.agent_id, asynchronous, true, 0)? == Some(original.clone()));
             ensure!(history::target(&executor.get_oplog(&target_id, OplogIndex::INITIAL).await?, &target_key, true)? == Some(target_wait));
             Some(release)
         } else { None };
@@ -519,8 +517,8 @@ async fn pending_rpc_scenario(
         if completion_first {
             ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7);
         }
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(history::caller(&stopped, &stored_key, &target_id, asynchronous, completion_first, usize::from(completion_first))? == Some(original.clone()));
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+        ensure!(history::caller(&stopped, &stored_key, &target_id.agent_id, asynchronous, completion_first, usize::from(completion_first))? == Some(original.clone()));
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         let mut errors = Vec::new();
         let mut suspends = 0;
@@ -563,7 +561,7 @@ async fn pending_rpc_scenario(
         };
         ensure!(dispatches.lock().unwrap().as_slice() == [Some(original.target_key.clone())]);
         if !completion_first {
-            executor.commit_oplog(&target_id).await?;
+            executor.commit_oplog(&target_id.agent_id).await?;
             ensure!(history::target(&executor.get_oplog(&target_id, OplogIndex::INITIAL).await?, &target_key, false)? == Some(target_wait));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -597,7 +595,7 @@ async fn pending_rpc_scenario(
         } else if resource != Resource::Compute {
             check_accounting(&updates, resource, durable, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
         }
-        if !completion_first { ensure!(promises.complete(promise.clone(), vec![]).await?); }
+        if !completion_first { ensure!(promises.complete(context.default_environment_id, promise.clone(), vec![]).await?); }
         // A target continuation and a caller continuation are independent. Completion of
         // the target promise wakes the target, while caller demand repairs its RPC Start.
         let target_value = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent(&component, &target_name_id, "get_value", data_value!())).await??.into_typed::<u64>()?;
@@ -632,13 +630,13 @@ async fn pending_rpc_scenario(
         history::settled(&target_entries)?;
         if durable {
             if !completion_first {
-                if caller_user_stop { executor.resume(&id, false).await?; }
+                if caller_user_stop { executor.resume(&owned, false).await?; }
                 let resumed = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone(), asynchronous))).await??;
                 ensure!(resumed.into_typed::<u64>()? == 7);
                 if !caller_user_stop { ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7); }
             }
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::caller(&recovered, &stored_key, &target_id, asynchronous, true, 1)? == Some(original.clone()));
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+            ensure!(history::caller(&recovered, &stored_key, &target_id.agent_id, asynchronous, true, 1)? == Some(original.clone()));
             if let Some(index) = user_interrupt_index {
                 history::settled_after_user_interrupt(&recovered, index)?;
             } else { history::settled(&recovered)?; }
@@ -658,7 +656,7 @@ async fn pending_rpc_scenario(
             ensure!(after.len() == attempts_before.len() + 1 && after[..attempts_before.len()] == attempts_before);
             let fresh_target_key = after.last().unwrap().as_ref().context("fresh RPC key")?;
             ensure!(fresh_target_key != &original.target_key);
-            let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let replayed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             history::invocation(&replayed, &stored_key, METHOD, 1)?;
             let stored_fresh_key = executor.external_invocation_key(&id, &fresh_key, METHOD).await?;
             history::invocation(&replayed, &stored_fresh_key, METHOD, 1)?;
@@ -670,7 +668,7 @@ async fn pending_rpc_scenario(
             ensure!(value == 14, "completed history must not repeat its target increment");
             let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
             history::invocation(&target_entries, &target_key, "inc_after_promise", 1)?;
-            let fresh_target_stored_key = executor.finalized_invocation_key(&target_id, &golem_common::model::InvocationRequestKey::Internal(fresh_target_key.clone()), "inc_after_promise").await?;
+            let fresh_target_stored_key = executor.finalized_invocation_key(&target_id.agent_id, &golem_common::model::InvocationRequestKey::Internal(fresh_target_key.clone()), "inc_after_promise").await?;
             history::invocation(&target_entries, &fresh_target_stored_key, "inc_after_promise", 1)?;
             history::settled(&target_entries)?;
             info!(?original, ?attempts_before, ?after, value, "Caller repaired one RPC Start; completed reconstruction dispatched only the fresh logical increment");
@@ -682,8 +680,8 @@ async fn pending_rpc_scenario(
             }).await.context("terminal ephemeral caller must leave the active-agent cache")?;
             ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
             ensure!(tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone(), asynchronous))).await?.is_err());
-            let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::caller(&failed, &stored_key, &target_id, asynchronous, false, 0)? == Some(original.clone()));
+            let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+            ensure!(history::caller(&failed, &stored_key, &target_id.agent_id, asynchronous, false, 0)? == Some(original.clone()));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
             ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
@@ -700,7 +698,8 @@ async fn pending_rpc_scenario(
     {
         let mut cleanup_errors = Vec::new();
         if let Err(error) =
-            refund_ordering::cleanup(&executor, [&worker, &target], [&id, &target_id]).await
+            refund_ordering::cleanup(&executor, [&worker, &target], [&id, &target_id.agent_id])
+                .await
         {
             cleanup_errors.push(format!("{error:#}"));
         }
@@ -743,8 +742,15 @@ async fn pending_rpc_scenario(
         eprintln!(
             "RPC case failed before test cleanup: resource={resource:?}, mode={mode:?}, asynchronous={asynchronous}, completion_first={completion_first}: {error:#}"
         );
-        for (id, worker) in [(&id, &worker), (&target_id, &target)] {
-            let _ = tokio::time::timeout(Duration::from_secs(5), executor.interrupt(id)).await;
+        for (id, worker) in [(&id, &worker), (&target_id.agent_id, &target)] {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(5),
+                executor.interrupt(&OwnedAgentId::new(
+                    executor.context.default_environment_id,
+                    id,
+                )),
+            )
+            .await;
             let _ = tokio::time::timeout(
                 Duration::from_secs(5),
                 worker.join_accepted_stops_for_test(),

@@ -155,6 +155,11 @@ pub trait GolemHostApi {
         constructor: String,
         method: String,
     ) -> Result<(), String>;
+    async fn outbound_agent_rpc_create_unkeyed_result(
+        &self,
+        agent_type: String,
+        constructor: String,
+    ) -> Result<String, String>;
     fn outbound_agent_rpc_schedule_result(
         &self,
         agent_type: String,
@@ -689,6 +694,25 @@ impl GolemHostApi for GolemHostApiImpl {
         rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn outbound_agent_rpc_create_unkeyed_result(
+        &self,
+        agent_type: String,
+        constructor: String,
+    ) -> Result<String, String> {
+        let created = WasmRpc::create(
+            agent_type,
+            encode_parameters(vec![SchemaValue::String(constructor)])?,
+            golem_rust::bindings::golem::agent::host::CreateOptions {
+                keyed: false,
+                agent_config: Vec::new(),
+                env: Vec::new(),
+            },
+        )
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+        Ok(golem_rust::Uuid::from(created.agent_id.uuid).to_string())
     }
 
     fn outbound_agent_rpc_schedule_result(

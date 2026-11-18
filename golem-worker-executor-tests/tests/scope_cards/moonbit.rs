@@ -23,7 +23,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::card::ScopeCard;
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{
@@ -31,6 +31,7 @@ use golem_common::model::{
 };
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use golem_worker_executor::worker::target::ResolvedTarget;
 use std::sync::Mutex;
 use test_r::{test, timeout};
 
@@ -57,7 +58,7 @@ struct LocalCardTransferProxy {
 impl WorkerProxy for LocalCardTransferProxy {
     async fn prepare(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: &ResolvedTarget,
         method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
@@ -70,7 +71,7 @@ impl WorkerProxy for LocalCardTransferProxy {
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
             .prepare(
-                owned_agent_id,
+                target,
                 method_name,
                 caller_agent_id,
                 caller_env,
@@ -86,7 +87,8 @@ impl WorkerProxy for LocalCardTransferProxy {
 
     async fn create(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: &ResolvedTarget,
+        exclusive: bool,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -97,7 +99,8 @@ impl WorkerProxy for LocalCardTransferProxy {
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
             .create(
-                owned_agent_id,
+                target,
+                exclusive,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -111,7 +114,7 @@ impl WorkerProxy for LocalCardTransferProxy {
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        target: &ResolvedTarget,
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
@@ -130,7 +133,7 @@ impl WorkerProxy for LocalCardTransferProxy {
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         self.inner
             .invoke_agent(
-                agent_id,
+                target,
                 method_name,
                 method_parameters,
                 mode,
@@ -164,7 +167,7 @@ impl WorkerProxy for LocalCardTransferProxy {
             ))
         })?;
         delivery(
-            target_agent_id.clone(),
+            *target_agent_id,
             environment_id,
             transfer_id,
             source_card_id,
@@ -194,7 +197,7 @@ impl WorkerProxy for LocalCardTransferProxy {
 
     async fn resume(
         &self,
-        owned_agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         force: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
@@ -203,7 +206,7 @@ impl WorkerProxy for LocalCardTransferProxy {
 
     async fn fork_worker(
         &self,
-        source_agent_id: &AgentId,
+        source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         principal: Principal,
@@ -222,35 +225,36 @@ impl WorkerProxy for LocalCardTransferProxy {
 
     async fn revert(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
-            .revert(agent_id, target, resolved_revert, auth_ctx)
+            .revert(owned_agent_id, target, resolved_revert, auth_ctx)
             .await
     }
 
     async fn complete_promise(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .complete_promise(promise_id, data, auth_ctx)
+            .complete_promise(environment_id, promise_id, data, auth_ctx)
             .await
     }
 
     async fn cancel_invocation(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: golem_common::model::InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_invocation(agent_id, idempotency_key, auth_ctx)
+            .cancel_invocation(owned_agent_id, idempotency_key, auth_ctx)
             .await
     }
 
@@ -283,6 +287,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         &self,
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
@@ -296,6 +301,7 @@ impl WorkerProxy for LocalCardTransferProxy {
             .process_oplog_entries(
                 target_agent_id,
                 environment_id,
+                component_id,
                 component_revision,
                 idempotency_key,
                 account_id,
@@ -454,11 +460,11 @@ async fn moonbit_sdk_derives_inspects_and_rejects_permission_cards(
         tool_streaming_moonbit,
     )
     .await?;
-    let caller = agent_id!(AGENT_TYPE, "derive-caller");
-    let target = agent_id!(AGENT_TYPE, "derive-target");
+    let caller = agent_key!(AGENT_TYPE, "derive-caller");
+    let target = agent_key!(AGENT_TYPE, "derive-target");
     configure_scope_card_root(&authority, &component, &caller)?;
     executor.start_agent(&component.id, caller.clone()).await?;
-    executor.start_agent(&component.id, target.clone()).await?;
+    let target_id = executor.start_agent(&component.id, target.clone()).await?;
 
     let observations = invoke(
         &executor,
@@ -494,7 +500,7 @@ async fn moonbit_sdk_derives_inspects_and_rejects_permission_cards(
         &component,
         &caller,
         "negative_cases",
-        data_value!(target.to_string()),
+        data_value!(target_id.agent_id.to_string()),
     )
     .await?
     .into_typed::<Result<Vec<String>, String>>()?
@@ -557,32 +563,28 @@ async fn moonbit_sdk_lends_scope_cards_installs_and_revokes(
         tool_streaming_moonbit,
     )
     .await?;
-    let caller = agent_id!(AGENT_TYPE, "scope-caller");
+    let caller = agent_key!(AGENT_TYPE, "scope-caller");
     let scope_target_name = "scope-target";
-    let scope_target = agent_id!(AGENT_TYPE, scope_target_name);
-    let install_target = agent_id!(AGENT_TYPE, "install-target");
+    let scope_target = agent_key!(AGENT_TYPE, scope_target_name);
+    let install_target = agent_key!(AGENT_TYPE, "install-target");
     configure_scope_card_root(&authority, &component, &caller)?;
-    executor.start_agent(&component.id, caller.clone()).await?;
+    let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
     executor
         .start_agent(&component.id, scope_target.clone())
         .await?;
-    executor
+    let install_target_id = executor
         .start_agent(&component.id, install_target.clone())
         .await?;
 
     // A requested grant must be concrete, so the caller gets its own owner
     // path. The test executor stores every component under the application
-    // `test-app` and the environment `test-env`; an agent name escapes `%`,
-    // `/` and `?`.
+    // `test-app` and the environment `test-env`; the agent segment is the
+    // agent ID.
     let caller_owner = format!(
         "{}/test-app/test-env/{}/{}",
         executor.account_email().as_str(),
         component.component_name.0,
-        caller
-            .to_string()
-            .replace('%', "%25")
-            .replace('/', "%2F")
-            .replace('?', "%3F")
+        caller_id.agent_id
     );
 
     // Step 4: the callee sees the scope card only during awaited calls that
@@ -625,7 +627,7 @@ async fn moonbit_sdk_lends_scope_cards_installs_and_revokes(
 
     // Step 5: installing a card adds it to the target's wallet, and with it
     // the authority to read the caller's oplog.
-    let caller_name = caller.to_string();
+    let caller_name = caller_id.agent_id.to_string();
     let can_read_caller_oplog = async || -> anyhow::Result<bool> {
         invoke(
             &executor,
@@ -658,7 +660,7 @@ async fn moonbit_sdk_lends_scope_cards_installs_and_revokes(
         &component,
         &caller,
         "install_on",
-        data_value!(install_target.to_string(), caller_owner.clone()),
+        data_value!(install_target_id.agent_id.to_string(), caller_owner.clone()),
     )
     .await?
     .into_typed::<Result<bool, String>>()?
@@ -728,7 +730,7 @@ async fn moonbit_sdk_derive_from_wallet_reports_permission_errors(
         tool_streaming_moonbit,
     )
     .await?;
-    let caller = agent_id!(AGENT_TYPE, "wallet-errors-caller");
+    let caller = agent_key!(AGENT_TYPE, "wallet-errors-caller");
     configure_scope_card_root(&authority, &component, &caller)?;
     executor.start_agent(&component.id, caller.clone()).await?;
 

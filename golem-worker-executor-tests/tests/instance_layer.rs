@@ -63,7 +63,7 @@ use golem_common::model::{AgentInvocation, AgentInvocationResult, InvocationId, 
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::{SchemaGraph, SecretValuePayload};
-use golem_common::{agent_id, data_value, widen_infallible};
+use golem_common::{agent_key, data_value, widen_infallible};
 use golem_schema::schema::wit::{SecretResolver, decode_value, decode_value_with, encode_graph};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
@@ -249,12 +249,12 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
         })
         .store()
         .await?;
-    let agent = agent_id!("RpcCounter", "derivation-namespace");
+    let agent = agent_key!("RpcCounter", "derivation-namespace");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active = executor.active_agent(&owner_id).await.unwrap();
     let canonical = owner_component_metadata(&active, component.id, component.revision).await?;
     let mut pinned = (*canonical).clone();
@@ -299,7 +299,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
             .acquire()
             .await?;
         let principal = Principal::Agent(AgentPrincipal {
-            agent_id: worker_id.clone(),
+            agent_id: worker_id.agent_id,
         });
         let scope = if historical {
             replay_invocation_scope(
@@ -660,12 +660,23 @@ async fn cross_store_wallet_change(
         })
         .store()
         .await?;
-    let agent = agent_id!("RpcCounter", format!("cross-store-{change:?}"));
+    let agent = agent_key!("RpcCounter", format!("cross-store-{change:?}"));
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    // A card transfer installs the card on an agent that exists.
+    let transfer_target = if matches!(change, WalletChange::Transfer) {
+        Some(
+            executor
+                .start_agent(&component.id, agent_key!("RpcCounter", "card-recipient"))
+                .await?
+                .agent_id,
+        )
+    } else {
+        None
+    };
+    let owner_id = worker_id.clone();
     let active = executor.active_agent(&owner_id).await.unwrap();
     let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
     let grant = parse_permission_fields("config", "*/*/*/*/*", "*", "read", "target").unwrap();
@@ -694,7 +705,7 @@ async fn cross_store_wallet_change(
             card.clone(),
             CardManagedByRuntimeDerived {
                 environment_id: context.default_environment_id,
-                agent_id: worker_id.clone(),
+                agent_id: worker_id.agent_id,
                 invocation_key: InvocationId(uuid::Uuid::new_v4()),
                 oplog_index: OplogIndex::INITIAL,
             },
@@ -702,7 +713,7 @@ async fn cross_store_wallet_change(
         .await?;
     if matches!(change, WalletChange::Transfer) {
         executor
-            .queue_card_install(&worker_id, card.clone())
+            .queue_card_install(&worker_id.agent_id, card.clone())
             .await?;
     }
     // Read the wallet before either entity starts. Never ask the primary to serve a wallet
@@ -732,7 +743,7 @@ async fn cross_store_wallet_change(
         .acquire()
         .await?;
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: worker_id.clone(),
+        agent_id: worker_id.agent_id,
     });
     let entity =
         AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("wallet-observer").unwrap());
@@ -806,7 +817,7 @@ async fn cross_store_wallet_change(
         WalletChange::Restriction | WalletChange::Grant | WalletChange::SiblingScope
     ) {
         executor
-            .queue_card_install(&worker_id, card.clone())
+            .queue_card_install(&worker_id.agent_id, card.clone())
             .await?;
     }
     let consumer_scope = invocation_scope(
@@ -818,9 +829,9 @@ async fn cross_store_wallet_change(
         principal,
     )
     .with_authority_wallet(wallet);
-    let transfer_target = agent_id!("RpcCounter", "card-recipient").to_string();
     let card_id = card.card_id();
-    let commit_gate = cancel_consumer.then(|| executor.gate_next_wallet_install_commit(&worker_id));
+    let commit_gate =
+        cancel_consumer.then(|| executor.gate_next_wallet_install_commit(&worker_id.agent_id));
     let consumer = active.start_entity_invocation(
         parent_id.clone(),
         consumer_scope,
@@ -846,10 +857,9 @@ async fn cross_store_wallet_change(
                         ctx,
                         source.expect("source is in the wallet"),
                         types::Holder::Agent(
-                            golem_worker_executor::preview2::golem::agent::common::AgentId {
-                                component_id: component.id.into(),
-                                agent_id: transfer_target,
-                            },
+                            transfer_target
+                                .expect("a transfer has a started target")
+                                .into(),
                         ),
                     )
                     .await?;
@@ -1053,15 +1063,12 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("RpcCounter", "replay-preparation-help");
-        let worker_id = golem_common::model::AgentId {
-            component_id: component.id,
-            agent_id: agent.to_string(),
-        };
+        let agent = agent_key!("RpcCounter", "replay-preparation-help");
+        let worker_id = executor.keyed_agent_id(context.default_environment_id, &agent)?;
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
         let (updated, updated_rx) = tokio::sync::oneshot::channel();
         let checked = executor.probe_next_primary_context(
-            &worker_id,
+            &worker_id.agent_id,
             move |ctx| Box::pin(async move {
                 ctx.process_pending_replay_events().await?;
                 let _ = entered.send(());
@@ -1147,10 +1154,10 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
             tokio::spawn(async move { startup_executor.start_agent(&component.id, agent).await });
         tokio::time::timeout(Duration::from_secs(10), entered_rx).await??;
         let first_target = executor
-            .update_component(&worker_id.component_id, &fixture.wasm_name)
+            .update_component(&component.id, &fixture.wasm_name)
             .await?;
         let target = executor
-            .update_component(&worker_id.component_id, &fixture.wasm_name)
+            .update_component(&component.id, &fixture.wasm_name)
             .await?;
         updated
             .send((first_target, target))
@@ -1450,7 +1457,7 @@ where
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let scope = invocation_scope(
         owner_id,
@@ -1777,7 +1784,7 @@ async fn completed_entity_replay_rejects_positional_calls(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "completed-positional-tail");
+    let agent_id = agent_key!("RpcCounter", "completed-positional-tail");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1785,14 +1792,14 @@ async fn completed_entity_replay_rejects_positional_calls(
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active = executor.active_agent(&owner_id).await.unwrap();
     let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
     let entity = AgentEntity::ToolMiddleware(
         ToolMiddlewareName::try_from("completed-positional-tail").unwrap(),
     );
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let activation = Arc::new(middleware_activation(
         ExecutableTarget::new(component.id, component.revision),
@@ -1944,20 +1951,20 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "retry-decisions");
+    let agent_id = agent_key!("RpcCounter", "retry-decisions");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active = executor.active_agent(&owner_id).await.unwrap();
     let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
     let name = ToolMiddlewareName::try_from("retry-decisions").unwrap();
     let entity = AgentEntity::ToolMiddleware(name.clone());
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let activation = Arc::new(middleware_activation(
         ExecutableTarget::new(component.id, component.revision),
@@ -2212,7 +2219,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         })
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "config-tail-authorization");
+    let agent_id = agent_key!("RpcCounter", "config-tail-authorization");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2220,14 +2227,14 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor.active_agent(&owner_id).await.unwrap();
     let owner_metadata =
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let middleware_name = ToolMiddlewareName::try_from("config-tail-authorization").unwrap();
     let entity = AgentEntity::ToolMiddleware(middleware_name.clone());
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let activation = Arc::new(middleware_activation(
         ExecutableTarget::new(component.id, component.revision),
@@ -2496,7 +2503,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         })
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "reveal-tail-authorization");
+    let agent_id = agent_key!("RpcCounter", "reveal-tail-authorization");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2504,14 +2511,14 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor.active_agent(&owner_id).await.unwrap();
     let owner_metadata =
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let middleware_name = ToolMiddlewareName::try_from("reveal-tail-authorization").unwrap();
     let entity = AgentEntity::ToolMiddleware(middleware_name.clone());
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let activation = Arc::new(middleware_activation(
         ExecutableTarget::new(component.id, component.revision),
@@ -2620,7 +2627,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         .await?;
     if fail_authority_check {
         executor
-            .queue_card_install(&worker_id, registry_test_card())
+            .queue_card_install(&worker_id.agent_id, registry_test_card())
             .await?;
     }
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
@@ -2715,12 +2722,12 @@ async fn gol838_retained_entity_roots_survive_body_cleanup_and_detached_settleme
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent = agent_id!("Clock", "retained-scope-interest");
+    let agent = agent_key!("Clock", "retained-scope-interest");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "healthcheck", data_value!())
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owner = worker.clone();
     let active = executor.active_agent(&owner).await.unwrap();
     let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
     let tool = ToolName::try_from("retained-interest").unwrap();
@@ -2758,7 +2765,7 @@ async fn gol838_retained_entity_roots_survive_body_cleanup_and_detached_settleme
             start,
             activation.clone(),
             Principal::Agent(AgentPrincipal {
-                agent_id: worker.clone(),
+                agent_id: worker.agent_id,
             }),
         )
         .with_invocation_scope_card(Some(ScopeCard {
@@ -2855,7 +2862,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "entity-owner");
+    let agent_id = agent_key!("Clock", "entity-owner");
     let worker_id = executor
         .start_agent(&owner_component.id, agent_id.clone())
         .await?;
@@ -2863,7 +2870,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         .invoke_and_await_agent(&owner_component, &agent_id, "healthcheck", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -2922,7 +2929,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
     )
     .unwrap();
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let scope = EntityInvocationScope::new(
         invocation_id,
@@ -3188,7 +3195,7 @@ async fn entity_slots_lane_and_all_live_call_modes(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "phase-three-owner");
+    let agent_id = agent_key!("Clock", "phase-three-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3196,7 +3203,7 @@ async fn entity_slots_lane_and_all_live_call_modes(
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -3205,7 +3212,7 @@ async fn entity_slots_lane_and_all_live_call_modes(
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let entity = AgentEntity::Tool(ToolName::try_from("phase-three-tool").unwrap());
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let incapable_activation = Arc::new(activation(
         ExecutableTarget::new(component.id, component.revision),
@@ -3623,7 +3630,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "middleware-owner");
+    let agent_id = agent_key!("Clock", "middleware-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3631,7 +3638,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -3658,7 +3665,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         FilesystemCapability::Incapable,
     ));
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     // No guest call makes these staged scopes, so the owner cannot reconstruct them. Owner
     // restart and interrupt of nested entity bodies are covered with real guest tool calls by
@@ -3801,7 +3808,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         delete_parent_start,
         tool_activation.clone(),
         Principal::Agent(AgentPrincipal {
-            agent_id: owner_id.agent_id.clone(),
+            agent_id: owner_id.agent_id,
         }),
     );
     stage_entity_boundary(&active_agent, &delete_scope).await?;
@@ -3849,7 +3856,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         delete_start,
         tool_activation,
         Principal::Agent(AgentPrincipal {
-            agent_id: owner_id.agent_id.clone(),
+            agent_id: owner_id.agent_id,
         }),
     );
     let rejected = active_agent.start_entity_invocation(
@@ -3892,7 +3899,7 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "entity-filesystem-owner");
+    let agent_id = agent_key!("FileSystem", "entity-filesystem-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3900,7 +3907,7 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
         .invoke_and_await_agent(&component, &agent_id, "run_directories", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -3910,7 +3917,7 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
     let tool_name = ToolName::try_from("filesystem-stream-tool").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let activation = Arc::new(activation(
         ExecutableTarget::new(component.id, component.revision),
@@ -4015,14 +4022,14 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "entity-filesystem-replay-owner");
+    let agent_id = agent_key!("FileSystem", "entity-filesystem-replay-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "run_directories", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -4032,7 +4039,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
     let tool_name = ToolName::try_from("filesystem-replay-tool").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let activation = Arc::new(activation(
         ExecutableTarget::new(component.id, component.revision),
@@ -4201,7 +4208,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "entity-provision-owner");
+    let agent_id = agent_key!("FileSystem", "entity-provision-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4246,7 +4253,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         size: conflicting_contents.len() as u64,
     };
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -4256,7 +4263,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
     let tool_name = ToolName::try_from("provisioning-tool").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
     let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
+        agent_id: owner_id.agent_id,
     });
     let activation = Arc::new(activation_with_provision(
         ExecutableTarget::new(component.id, component.revision),
@@ -4340,7 +4347,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         root_start,
         activation,
         Principal::Agent(AgentPrincipal {
-            agent_id: owner_id.agent_id.clone(),
+            agent_id: owner_id.agent_id,
         }),
     )
     .with_authority_wallet(authority_wallet.clone());
@@ -4361,7 +4368,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         root_start,
         conflicting_activation,
         Principal::Agent(AgentPrincipal {
-            agent_id: owner_id.agent_id.clone(),
+            agent_id: owner_id.agent_id,
         }),
     )
     .with_authority_wallet(authority_wallet);
@@ -4472,7 +4479,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("ConfigAgent", "entity-secret-owner");
+    let agent_id = agent_key!("ConfigAgent", "entity-secret-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4480,7 +4487,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         .invoke_and_await_agent(&component, &agent_id, "echo_local_config", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -4609,7 +4616,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             before_denial,
             permissive_activation,
             Principal::Agent(AgentPrincipal {
-                agent_id: owner_id.agent_id.clone(),
+                agent_id: owner_id.agent_id,
             }),
         ),
         owner_metadata.clone(),
@@ -4645,14 +4652,14 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
 
     // A replay generation retires the primary Store's live wallet. Record the reveal cases on
     // a fresh owner instead of asking that stale primary Store to admit another live body.
-    let agent_id = agent_id!("ConfigAgent", "entity-secret-reveal-owner");
+    let agent_id = agent_key!("ConfigAgent", "entity-secret-reveal-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "echo_local_config", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -4800,7 +4807,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             before_reveal_denial,
             permissive_activation.clone(),
             Principal::Agent(AgentPrincipal {
-                agent_id: owner_id.agent_id.clone(),
+                agent_id: owner_id.agent_id,
             }),
         ),
         owner_metadata.clone(),
@@ -4870,7 +4877,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         before_reveal_denial,
         reveal_activation,
         Principal::Agent(AgentPrincipal {
-            agent_id: owner_id.agent_id.clone(),
+            agent_id: owner_id.agent_id,
         }),
         InvocationExecutionMode::ReplayingIncomplete,
         InvocationId(uuid::Uuid::from_u128(17)),
@@ -4993,7 +5000,7 @@ async fn entity_agent_config_uses_owner_component_declarations(
         .await?;
     assert_ne!(owner_component.id, entity_component.id);
     assert_ne!(owner_component.revision, entity_component.revision);
-    let agent_id = agent_id!("LocalConfigAgent", "entity-owner-config");
+    let agent_id = agent_key!("LocalConfigAgent", "entity-owner-config");
     let worker_id = executor
         .start_agent(&owner_component.id, agent_id.clone())
         .await?;
@@ -5008,7 +5015,7 @@ async fn entity_agent_config_uses_owner_component_declarations(
         )
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await

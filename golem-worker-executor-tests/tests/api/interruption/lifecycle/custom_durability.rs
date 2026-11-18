@@ -200,7 +200,7 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let name = agent_id!("CustomDurability", "custom-promise-auto-suspend");
+    let name = agent_key!("CustomDurability", "custom-promise-auto-suspend");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     let first = executor
         .invoke_and_await_agent(&component, &name, "create_promise", data_value!())
@@ -210,16 +210,16 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
         .invoke_and_await_agent(&component, &name, "create_promise", data_value!())
         .await?
         .into_typed::<PromiseId>()?;
-    assert_eq!(first.agent_id, id);
-    assert_eq!(second.agent_id, id);
+    assert_eq!(first.agent_id, id.agent_id);
+    assert_eq!(second.agent_id, id.agent_id);
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .context("custom owner not cached")?
         .primary();
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&id, &key, "concurrent_promises")
+        .external_invocation_key(&id.agent_id, &key, "concurrent_promises")
         .await?;
     let inputs = (first.clone(), second.clone());
     let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
@@ -260,10 +260,20 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
             |entry| matches!(entry, OplogEntry::End { start_index, .. } if start_index == start)
         ));
     }
-    let prefix = executor.stored_oplog(&id).await;
-    executor.complete_promise(&first, b"first".to_vec()).await?;
+    let prefix = executor.stored_oplog(&id.agent_id).await;
     executor
-        .complete_promise(&second, b"second".to_vec())
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &first,
+            b"first".to_vec(),
+        )
+        .await?;
+    executor
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &second,
+            b"second".to_vec(),
+        )
         .await?;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(20), invocation)
@@ -272,7 +282,7 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
         vec!["first", "second"]
     );
     assert_completed(&history(&worker).await?, &original, &stored_key);
-    let after = executor.stored_oplog(&id).await;
+    let after = executor.stored_oplog(&id.agent_id).await;
     assert!(after.len() >= prefix.len());
     assert_eq!(&after[..prefix.len()], prefix.as_slice());
     Ok(())
@@ -337,7 +347,7 @@ async fn quota_custom_finish(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let name = agent_id!("CustomDurability", "custom-promise-quota-finish");
+    let name = agent_key!("CustomDurability", "custom-promise-quota-finish");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     let first = executor
         .invoke_and_await_agent(&component, &name, "create_promise", data_value!())
@@ -348,13 +358,13 @@ async fn quota_custom_finish(
         .await?
         .into_typed::<PromiseId>()?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .context("custom owner not cached")?
         .primary();
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&id, &key, "concurrent_promises")
+        .external_invocation_key(&id.agent_id, &key, "concurrent_promises")
         .await?;
     let inputs = (first.clone(), second.clone());
     let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
@@ -389,20 +399,22 @@ async fn quota_custom_finish(
         }
     }).await.context("both scoped promise waits must enter before quota exhaustion")??;
     let (accepted, release) = executor.gate_oplog_function_end_at(
-        &id,
+        &id.agent_id,
         golem_common::model::oplog::host_functions::HostFunctionName::Custom(
             CUSTOM_WAIT.to_string(),
         ),
         original[completing_sibling].0,
         false,
     );
-    let prefix = executor.stored_oplog(&id).await;
+    let prefix = executor.stored_oplog(&id.agent_id).await;
     let (completing, waiting, value, remaining) = if completing_sibling == 0 {
         (&first, &second, b"first".to_vec(), b"second".to_vec())
     } else {
         (&second, &first, b"second".to_vec(), b"first".to_vec())
     };
-    executor.complete_promise(completing, value).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, completing, value)
+        .await?;
     tokio::time::timeout(Duration::from_secs(20), accepted)
         .await
         .context(
@@ -443,7 +455,7 @@ async fn quota_custom_finish(
         1
     );
     assert!(finished_for_key(&stopped, &stored_key).is_empty());
-    let stopped_prefix = executor.stored_oplog(&id).await;
+    let stopped_prefix = executor.stored_oplog(&id.agent_id).await;
     assert!(stopped_prefix.len() >= prefix.len());
     assert_eq!(&stopped_prefix[..prefix.len()], prefix.as_slice());
     limits.run_batch_for_test().await;
@@ -454,7 +466,9 @@ async fn quota_custom_finish(
     registry.set_policy(available);
     limits.run_batch_for_test().await;
     executor.resume(&id, false).await?;
-    executor.complete_promise(waiting, remaining).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, waiting, remaining)
+        .await?;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(20), invocation)
             .await
@@ -469,7 +483,7 @@ async fn quota_custom_finish(
         observations(&stopped, completed[0]),
         "completed custom replay must not execute its promise body again"
     );
-    let raw = executor.stored_oplog(&id).await;
+    let raw = executor.stored_oplog(&id.agent_id).await;
     assert!(raw.len() >= stopped_prefix.len());
     assert_eq!(&raw[..stopped_prefix.len()], stopped_prefix.as_slice());
     Ok(())

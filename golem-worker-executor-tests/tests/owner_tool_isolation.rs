@@ -20,7 +20,7 @@ use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::entity::{AgentEntity, ExecutableTarget, FilesystemCapability};
 use golem_common::model::tool::ToolName;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::DurableWorkerCtxView;
 use golem_worker_executor_test_utils::{
@@ -61,8 +61,8 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
         .store()
         .await?;
     let owners = [
-        agent_id!("Clock", "tool-owner-a"),
-        agent_id!("Clock", "tool-owner-b"),
+        agent_key!("Clock", "tool-owner-a"),
+        agent_key!("Clock", "tool-owner-b"),
     ];
     let mut owner_ids = Vec::new();
     let mut oplog_before_reconstruction = Vec::new();
@@ -72,7 +72,7 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
         executor
             .invoke_and_await_agent(&component, owner, "healthcheck", data_value!())
             .await?;
-        let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owner_id = worker_id.clone();
         let active = executor
             .active_agent(&owner_id)
             .await
@@ -159,19 +159,23 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
     for call in first_calls {
         observations.push(call.await??);
     }
-    observations.sort_by_key(|observation| observation.owner.agent_name());
+    observations.sort_by_key(|observation| {
+        owner_ids
+            .iter()
+            .position(|owner_id| *owner_id == observation.owner)
+    });
     assert_eq!(observations[0].owner, owner_ids[0]);
     assert_eq!(observations[1].owner, owner_ids[1]);
     assert_eq!(
         observations[0].principal,
         Principal::Agent(AgentPrincipal {
-            agent_id: owner_ids[0].agent_id.clone(),
+            agent_id: owner_ids[0].agent_id,
         })
     );
     assert_eq!(
         observations[1].principal,
         Principal::Agent(AgentPrincipal {
-            agent_id: owner_ids[1].agent_id.clone(),
+            agent_id: owner_ids[1].agent_id,
         })
     );
     assert_ne!(observations[0].store_address, observations[1].store_address);

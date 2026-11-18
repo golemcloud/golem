@@ -22,7 +22,7 @@ use golem_common::model::agent::{RevertLastInvocations, RevertToOplogIndex, Reve
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::{AgentStatus, OplogIndex};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -68,7 +68,7 @@ async fn self_revert_is_rejected_without_stopping_the_agent(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent = agent_id!("GolemHostApi", "self-revert");
+    let agent = agent_key!("GolemHostApi", "self-revert");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
     for (method, target) in [
@@ -82,7 +82,7 @@ async fn self_revert_is_rejected_without_stopping_the_agent(
                 &component,
                 &agent,
                 method,
-                data_value!(worker.clone(), target),
+                data_value!(worker.agent_id, target),
             ),
         )
         .await??
@@ -100,7 +100,7 @@ async fn self_revert_is_rejected_without_stopping_the_agent(
             )
             .await?
             .into_typed::<Result<String, String>>()?;
-        assert_eq!(metadata, Ok(agent.to_string()));
+        assert_eq!(metadata, Ok(worker.agent_id.to_string()));
     }
 
     executor.simulated_crash(&worker).await?;
@@ -113,7 +113,7 @@ async fn self_revert_is_rejected_without_stopping_the_agent(
         )
         .await?
         .into_typed::<Result<String, String>>()?;
-    assert_eq!(metadata, Ok(agent.to_string()));
+    assert_eq!(metadata, Ok(worker.agent_id.to_string()));
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     assert!(
         !oplog
@@ -140,13 +140,13 @@ async fn revert_successful_invocations(
         .store()
         .await?;
 
-    let agent_id1 = agent_id!("RpcCounter", "counter1");
+    let agent_id1 = agent_key!("RpcCounter", "counter1");
     let worker_id1 = executor
         .start_agent(&component.id, agent_id1.clone())
         .await?;
     executor.log_output(&worker_id1).await?;
 
-    let agent_id2 = agent_id!("RpcCounter", "counter2");
+    let agent_id2 = agent_key!("RpcCounter", "counter2");
     let worker_id2 = executor
         .start_agent(&component.id, agent_id2.clone())
         .await?;
@@ -250,7 +250,7 @@ async fn count_based_revert_rejects_a_stale_resolution_without_writing(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "stale-revert");
+    let agent_id = agent_key!("RpcCounter", "stale-revert");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -263,7 +263,7 @@ async fn count_based_revert_rejects_a_stale_resolution_without_writing(
         .client
         .clone()
         .resolve_revert_last_invocations(ResolveRevertLastInvocationsRequest {
-            agent_id: Some(worker_id.clone().into()),
+            agent_id: Some(worker_id.agent_id.into()),
             number_of_invocations: 1,
             environment_id: Some(context.default_environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -284,7 +284,7 @@ async fn count_based_revert_rejects_a_stale_resolution_without_writing(
         .client
         .clone()
         .revert_worker(RevertWorkerRequest {
-            agent_id: Some(worker_id.clone().into()),
+            agent_id: Some(worker_id.agent_id.into()),
             target: Some(
                 RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
                     number_of_invocations: 1,
@@ -336,7 +336,7 @@ async fn revert_failed_worker(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("FailingCounter", "revert_failed_worker");
+    let agent_id = agent_key!("FailingCounter", "revert_failed_worker");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -397,7 +397,7 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("FailingCounter", "revert_failed_worker");
+    let agent_id = agent_key!("FailingCounter", "revert_failed_worker");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -471,7 +471,7 @@ async fn revert_auto_update(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -554,7 +554,7 @@ async fn revert_across_two_successful_manual_updates(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -793,7 +793,7 @@ async fn revert_to_an_automatic_update_without_a_strategy_ignores_its_unavailabl
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
