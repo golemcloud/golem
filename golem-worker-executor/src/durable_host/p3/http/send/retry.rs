@@ -65,6 +65,10 @@ where
         agent_config_retry_policies,
         runtime_retry_policy_mutations,
         max_in_function_retry_delay,
+        durable_wait: crate::durable_host::durability::retry_backoff_waits_durably(
+            store,
+            crate::durable_host::p3::durable_worker_ctx::<Ctx, U>,
+        ),
         current_retry_policy_state,
         retry_properties,
         worker,

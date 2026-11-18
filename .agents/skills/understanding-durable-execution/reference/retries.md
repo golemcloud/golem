@@ -26,8 +26,38 @@ elapsed, and `elapsed >= limit` gives up.
 1. The call type is `ReadLocal`, `ReadRemote`, `WriteLocal`, or `WriteRemote`.
    Batched/transactional children require their owner's recovery rules.
 2. A named policy matches the available `RetryProperties` and returns `Retry(delay)`.
-3. The delay is at most `max_in_function_retry_delay`. Longer waits fall back to reconstruction
-   rather than holding an idle Store.
+3. The delay is at most `max_in_function_retry_delay`, or the call waits durably
+   (`DurableExecutionState::durable_wait`). Longer waits of other calls fall back to
+   reconstruction rather than holding an idle Store.
+
+## Durable backoff wait
+
+A call waits durably when it runs through an accessor with a runtime activity, on a durable
+agent outside snapshotting mode. Such a call waits out a backoff of any length in-function
+(`wait_retry_backoff`): the wait is a runtime timer of the call's activity, as a guest sleep is.
+Sibling tasks keep running, and the suspension coordinator sees the wait as passive, so it can
+suspend the agent and schedule its wakeup at the deadline instead of holding an idle Store. The
+direct `&mut ctx` path, ephemeral agents and snapshot mode keep the threshold and the trap
+fallback. P3 HTTP sends, response-body resumption, accessor host calls and asynchronous agent
+RPC (`rpc/future.rs::get`, which re-sends with the same idempotency key) wait durably; streaming
+RPC and DNS lookups do not. A P3 HTTP send waits durably only while its request body can be
+resent in-function (`can_replay_after_send_failure`); otherwise a long delay keeps the trap
+fallback, whose reconstruction rebuilds the body from its recording.
+
+Every in-function retry `Error` carries `retry_at`, the wall-clock deadline of its backoff, and
+the status fold keeps the furthest one per `retry_from` (`AgentStatusRecord::current_retry_at`,
+cleared at invocation boundaries). Concurrent calls of one entity body share its retry point,
+so neither a sibling's shorter backoff nor its trap can shorten a longer one; a sibling may
+instead wait for the longest deadline on repair. When a suspension, interrupt or crash ends the wait,
+the call's `Start` stays incomplete. Repair of that `Start` first waits `retry_at − now`
+(`wait_recorded_retry_backoff`), so a restart or a sibling's wakeup does not shorten the
+backoff, and a deadline that passed during the outage retries at once. Recomputing the delay
+on repair would not do: jitter makes it nondeterministic.
+
+| Call | Delay ≤ threshold | Delay > threshold |
+|------|-------------------|-------------------|
+| Accessor call with runtime activity, durable agent, not snapshotting | inline, runtime timer | inline, runtime timer |
+| Direct `&mut ctx` call, ephemeral agent, snapshot mode | inline, `tokio` sleep | `FallBackToTrap` |
 
 An exhausted or absent policy does not authorize an unsafe effect. The failure is persisted and
 returned when the host path has no applicable retry. External peers must deduplicate ambiguous

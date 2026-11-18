@@ -318,6 +318,7 @@ message RawErrorParameters {
   optional bytes retry_policy_state = 4;
   OplogErrorKind kind = 5;
   optional golem.common.UUID invocation_id = 6;
+  google.protobuf.Timestamp retry_at = 7;
 }
 
 message RawJumpParameters {

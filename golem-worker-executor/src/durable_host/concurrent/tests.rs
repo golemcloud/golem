@@ -38,6 +38,7 @@ fn durable_execution_state() -> DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
         max_in_function_retry_delay: Duration::from_secs(20),
+        durable_wait: false,
     }
 }
 
@@ -2132,6 +2133,7 @@ impl InFunctionRetryHost for RetryHostProbe {
         &mut self,
         retry_from: OplogIndex,
         _retry_policy_state: Option<golem_common::model::RetryPolicyState>,
+        _retry_at: golem_common::model::Timestamp,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.appended_retry_from.push(retry_from);
         Ok(())
@@ -2474,6 +2476,7 @@ fn can_reexecute_matches_internal_retry_eligibility() {
                 is_live: true,
                 snapshotting_mode: false,
                 max_in_function_retry_delay: Duration::ZERO,
+                durable_wait: false,
             },
             "test:fn",
         )

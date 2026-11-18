@@ -1420,6 +1420,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
             None,
+            None,
         ))
         .await
         .unwrap();

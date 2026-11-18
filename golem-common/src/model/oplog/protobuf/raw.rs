@@ -599,6 +599,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 error,
                 retry_from,
                 retry_policy_state,
+                retry_at,
                 ..
             } => Entry::Error(RawErrorParameters {
                 error: Some(error.into()),
@@ -608,6 +609,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 retry_policy_state: retry_policy_state
                     .map(|s| crate::serialization::serialize(&s))
                     .transpose()?,
+                retry_at: retry_at.map(Into::into),
             }),
             OplogEntry::RecoverySucceeded { .. } => Entry::RecoverySucceeded(RawTimestampOnly {}),
             OplogEntry::Jump { jump, .. } => Entry::Jump(RawJumpParameters {
@@ -1267,6 +1269,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     error,
                     retry_from,
                     retry_policy_state,
+                    retry_at: p.retry_at.map(Into::into),
                 };
                 entry.check_well_formed()?;
                 Ok(entry)

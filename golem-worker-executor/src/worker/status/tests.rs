@@ -1114,6 +1114,7 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
                 AgentError::TransientError("failed".to_string()),
                 retry_from,
                 None,
+                None,
             ),
             |mut status| {
                 status.status = AgentStatus::Failed;
@@ -1157,6 +1158,7 @@ async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 Some(retry_state.clone()),
+                None,
             ),
             move |mut status| {
                 status.status = AgentStatus::Retrying;
@@ -1196,6 +1198,7 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 Some(retry_state.clone()),
+                None,
             ),
             move |mut status| {
                 status.status = AgentStatus::Failed;
@@ -1228,6 +1231,7 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
+                None,
             ),
             move |mut status| {
                 status.status = AgentStatus::Failed;
@@ -1262,6 +1266,7 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
                 AgentError::TransientError("semantic failure".to_string()),
                 retry_from,
                 Some(exhausted.clone()),
+                None,
             ),
             {
                 let exhausted = exhausted.clone();
@@ -1280,6 +1285,7 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
                 None,
                 AgentError::Unknown("payload backend unavailable".to_string()),
                 retry_from,
+                None,
                 None,
             ),
             move |mut status| {
@@ -1307,6 +1313,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
+                None,
             ),
             move |mut status| {
                 status.status = AgentStatus::Failed;
@@ -1386,6 +1393,7 @@ async fn stale_recovery_success_must_not_clear_a_later_interrupt() {
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
+                None,
             ),
             move |mut status| {
                 status.status = AgentStatus::Failed;
@@ -1423,6 +1431,7 @@ fn recovery_success_in_deleted_region_must_not_clear_failure() {
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
+                None,
             ),
         ),
         (OplogIndex::from_u64(2), OplogEntry::recovery_succeeded()),
@@ -1433,9 +1442,10 @@ fn recovery_success_in_deleted_region_must_not_clear_failure() {
     }])
     .build();
 
-    let (status, last_error_kind, retry_state, _) = calculate_latest_worker_status(
+    let (status, last_error_kind, retry_state, _, _) = calculate_latest_worker_status(
         AgentStatus::Idle,
         None,
+        HashMap::new(),
         HashMap::new(),
         None,
         &RetryConfig::default(),
@@ -1466,6 +1476,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
                 AgentError::TransientError("invocation attempt failed".to_string()),
                 invocation_retry_from,
                 Some(RetryPolicyState::Counter(3)),
+                None,
             ),
         ),
         (
@@ -1477,6 +1488,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
                 AgentError::InternalError("replay diverged".to_string()),
                 recovery_retry_from,
                 Some(RetryPolicyState::Terminal),
+                None,
             ),
         ),
         (OplogIndex::from_u64(3), OplogEntry::recovery_succeeded()),
@@ -1487,9 +1499,10 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
     }])
     .build();
 
-    let (_, _, retry_state, _) = calculate_latest_worker_status(
+    let (_, _, retry_state, _, _) = calculate_latest_worker_status(
         AgentStatus::Idle,
         None,
+        HashMap::new(),
         HashMap::new(),
         None,
         &RetryConfig::default(),
@@ -1502,6 +1515,63 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
         retry_state.get(&invocation_retry_from),
         Some(&RetryPolicyState::Counter(3)),
         "retry state from skipped history is needed by subsequent attempts"
+    );
+}
+
+#[test]
+fn retry_deadline_keeps_the_furthest_backoff_of_its_retry_point() {
+    let waiting = OplogIndex::from_u64(10);
+    let trapped = OplogIndex::from_u64(20);
+    let retry_error = |retry_from, retry_at| {
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            None,
+            AgentError::TransientError("retry".to_string()),
+            retry_from,
+            Some(RetryPolicyState::Counter(1)),
+            retry_at,
+        )
+    };
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(1),
+            retry_error(waiting, Some(Timestamp::from(5_000))),
+        ),
+        (
+            OplogIndex::from_u64(2),
+            retry_error(waiting, Some(Timestamp::from(61_000))),
+        ),
+        (
+            OplogIndex::from_u64(3),
+            retry_error(waiting, Some(Timestamp::from(9_000))),
+        ),
+        (
+            OplogIndex::from_u64(4),
+            retry_error(trapped, Some(Timestamp::from(7_000))),
+        ),
+        (OplogIndex::from_u64(5), retry_error(trapped, None)),
+    ]);
+
+    let (_, _, _, retry_at, _) = calculate_latest_worker_status(
+        AgentStatus::Running,
+        None,
+        HashMap::new(),
+        HashMap::new(),
+        None,
+        &RetryConfig::default(),
+        &DeletedRegions::default(),
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(
+        retry_at,
+        HashMap::from([
+            (waiting, Timestamp::from(61_000)),
+            (trapped, Timestamp::from(7_000)),
+        ]),
+        "neither a sibling's shorter backoff nor its trap shortens the longer deadline"
     );
 }
 
@@ -1521,12 +1591,14 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
                 AgentError::Unknown("component service unavailable".to_string()),
                 recovery_retry_from,
                 None,
+                None,
             ),
         )]);
-        let (status, kind, updated_retry_state, _) = calculate_latest_worker_status(
+        let (status, kind, updated_retry_state, _, _) = calculate_latest_worker_status(
             AgentStatus::Retrying,
             Some(OplogErrorKind::Recovery),
             retry_state,
+            HashMap::new(),
             None,
             &RetryConfig::default(),
             &DeletedRegions::default(),
@@ -1558,6 +1630,7 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
                 AgentError::PermanentError("application failed".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
+                None,
             ),
             move |mut status| {
                 status.status = AgentStatus::Failed;
@@ -1585,6 +1658,7 @@ async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() 
                 AgentError::PermissionDenied("startup denied".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
+                None,
             ),
             move |mut status| {
                 status.status = AgentStatus::Failed;
@@ -1674,7 +1748,7 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
         ),
     )]);
     for recovery in [false, true] {
-        let (status, kind, retries, _) = calculate_latest_worker_status(
+        let (status, kind, retries, _, _) = calculate_latest_worker_status(
             AgentStatus::Retrying,
             Some(if recovery {
                 OplogErrorKind::Recovery
@@ -1682,6 +1756,7 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
                 OplogErrorKind::Invocation
             }),
             HashMap::from([(anchor, RetryPolicyState::Counter(2))]),
+            HashMap::new(),
             None,
             &RetryConfig::default(),
             &DeletedRegions::default(),
@@ -1762,6 +1837,7 @@ fn recovery_errors_are_not_invocation_results() {
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
+                None,
             ),
         ),
     ]);
@@ -1861,6 +1937,7 @@ fn invocation_error(invocation_id: &InvocationId) -> OplogEntry {
         AgentError::TransientError("failed".to_string()),
         OplogIndex::INITIAL,
         None,
+        None,
     )
 }
 
@@ -1920,6 +1997,7 @@ fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_anoth
             Some(denied),
             AgentError::PermissionDenied("permission denied".to_string()),
             OplogIndex::INITIAL,
+            None,
             None,
         ),
     ]);
@@ -5134,6 +5212,7 @@ impl TestCaseBuilder {
                 Some(idempotency_key),
                 AgentError::PermissionDenied("permission denied".to_string()),
                 OplogIndex::INITIAL,
+                None,
                 None,
             ),
             move |mut status| {

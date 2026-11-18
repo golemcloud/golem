@@ -39,6 +39,7 @@ use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::SchemaGraph;
 use golem_schema::schema::SchemaType;
+use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -221,6 +222,8 @@ enum FutureInvokeResultState {
         expected_callee_fingerprint: Option<AgentFingerprint>,
         span_id: SpanId,
         cancel_token: tokio_util::sync::CancellationToken,
+        /// The agent authority of a live scalar call, for a dispatch after a retry backoff.
+        retry_auth_ctx: Option<AuthCtx>,
     },
     /// A deterministic validation failure or an already recorded local denial.
     /// `span_id` retains an opening only when its owner has not already closed it.

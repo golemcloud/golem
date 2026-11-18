@@ -17,6 +17,7 @@ use super::{
     SemanticTrapRetryOverrideMarker, SemanticTrapRetryVerdict,
 };
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::DurableAccess;
 use crate::metrics::wasm::record_in_function_retry;
 use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
@@ -24,6 +25,7 @@ use crate::services::oplog::OplogError;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::{
@@ -38,6 +40,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
+use wasmtime::component::HasData;
 
 /// Result of `try_trigger_retry_or_loop`: tells the host function caller what to do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,8 +67,29 @@ pub enum AsyncRetryDecision {
 pub struct DurableExecutionState {
     pub is_live: bool,
     pub snapshotting_mode: bool,
-    /// Maximum delay for in-function retries. Delays exceeding this fall back to trap+replay.
+    /// Maximum delay for in-function retries. Delays exceeding this fall back to trap+replay,
+    /// unless `durable_wait` holds.
     pub max_in_function_retry_delay: Duration,
+    /// The call waits out its backoff through a runtime timer: it has a runtime activity on a
+    /// durable agent outside snapshotting mode. The suspension coordinator can then suspend the
+    /// agent during the wait, so a delay of any length retries in-function instead of trapping.
+    pub durable_wait: bool,
+}
+
+/// The longest backoff a durable wait waits out in-function. A longer policy delay, such as a
+/// saturated exponential backoff, keeps the trap fallback: its deadline would not fit a timestamp
+/// or a timer.
+pub(crate) const MAX_DURABLE_RETRY_WAIT: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
+
+/// The wall-clock time a retry that waits `delay` from now runs at.
+pub(crate) fn retry_at_after(delay: Duration) -> Timestamp {
+    let delay = delay.min(MAX_DURABLE_RETRY_WAIT);
+    Timestamp::from(Timestamp::now_utc().to_millis() + delay.as_millis() as u64)
+}
+
+/// The part of the backoff that ends at `retry_at` and is still left at `now`.
+pub(crate) fn remaining_backoff(retry_at: Timestamp, now: Timestamp) -> Duration {
+    Duration::from_millis(retry_at.to_millis().saturating_sub(now.to_millis()))
 }
 
 /// Subset of `DurabilityHost` needed by `InFunctionRetryState::decide_retry`.
@@ -88,13 +112,15 @@ pub trait InFunctionRetryHost {
     /// Returns the current durable execution state.
     fn durable_execution_state(&self) -> DurableExecutionState;
 
-    /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
+    /// Writes an `OplogEntry::Error` entry for an in-function retry attempt that runs at
+    /// `retry_at`, and commits.
     ///
     /// A refusal is returned: the retry must not run again for an attempt that was never recorded.
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
         retry_policy_state: Option<RetryPolicyState>,
+        retry_at: Timestamp,
     ) -> Result<(), OplogError>;
 }
 
@@ -407,7 +433,9 @@ impl InFunctionRetryState {
         };
 
         let state = ctx.durable_execution_state();
-        if delay > state.max_in_function_retry_delay {
+        if delay > state.max_in_function_retry_delay
+            && !(state.durable_wait && delay <= MAX_DURABLE_RETRY_WAIT)
+        {
             let semantic_override =
                 named_policy
                     .policy
@@ -425,7 +453,7 @@ impl InFunctionRetryState {
         // Refused, the shard has a new owner: the failure is returned instead of retried, and the
         // trap it becomes is classified as the lost shard.
         if ctx
-            .append_retry_error_entry(retry_point, retry_policy_state)
+            .append_retry_error_entry(retry_point, retry_policy_state, retry_at_after(delay))
             .await
             .is_err()
         {
@@ -566,6 +594,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             is_live: self.state.durable_call_is_live() || self.state.durability_is_suppressed(),
             snapshotting_mode: self.state.snapshotting_mode,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
+            durable_wait: false,
         }
     }
 
@@ -573,6 +602,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         &mut self,
         retry_from: OplogIndex,
         retry_policy_state: Option<RetryPolicyState>,
+        retry_at: Timestamp,
     ) -> Result<(), OplogError> {
         if self.state.durability_is_suppressed() {
             return Ok(());
@@ -586,6 +616,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             retry_policy_state,
+            Some(retry_at),
         );
         self.public_state
             .worker()
@@ -735,19 +766,19 @@ impl InFunctionRetryController {
             result,
             classify,
             properties,
-            |ctx| ctx.create_interrupt_signal(),
+            |ctx, delay| sleep_unless_interrupted(delay, ctx.create_interrupt_signal()),
             |ctx, failure, properties| ctx.try_trigger_retry(failure, properties),
         )
         .await
     }
 
-    pub(crate) async fn try_trigger_retry_or_loop_with_capabilities<H, Ok, Err: Display>(
+    pub(crate) async fn try_trigger_retry_or_loop_with_capabilities<H, W, Ok, Err: Display>(
         &mut self,
         ctx: &mut H,
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
         properties: RetryProperties,
-        interrupt: impl FnOnce(&H) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>>,
+        wait: impl FnOnce(&H, Duration) -> W,
         fallback: impl for<'a> FnOnce(
             &'a mut H,
             Error,
@@ -757,6 +788,7 @@ impl InFunctionRetryController {
     ) -> anyhow::Result<InternalRetryResult>
     where
         H: InFunctionRetryHost + Sync,
+        W: Future<Output = Result<(), InterruptKind>>,
     {
         let err = match result {
             Ok(_) => return Ok(InternalRetryResult::Persist),
@@ -791,21 +823,10 @@ impl InFunctionRetryController {
             .await;
 
         match decision {
-            AsyncRetryDecision::RetryAfterDelay(delay) => {
-                // Interrupt-aware sleep
-                let interrupt = interrupt(ctx);
-                let sleep = tokio::time::sleep(delay);
-                tokio::pin!(sleep);
-
-                match futures::future::select(sleep, interrupt).await {
-                    futures::future::Either::Left((_done, _)) => {
-                        Ok(InternalRetryResult::RetryInternally)
-                    }
-                    futures::future::Either::Right((interrupt_kind, _)) => {
-                        Err(anyhow::Error::from(interrupt_kind))
-                    }
-                }
-            }
+            AsyncRetryDecision::RetryAfterDelay(delay) => match wait(ctx, delay).await {
+                Ok(()) => Ok(InternalRetryResult::RetryInternally),
+                Err(interrupt_kind) => Err(anyhow::Error::from(interrupt_kind)),
+            },
             AsyncRetryDecision::Exhausted => Ok(InternalRetryResult::Persist),
             AsyncRetryDecision::FallBackToTrap(semantic_override) => {
                 let message = err.to_string();
@@ -837,6 +858,113 @@ impl InFunctionRetryController {
     /// whether that decision re-executes an effect or records typed resource loss.
     pub fn can_reexecute_on_incomplete_replay(&self) -> bool {
         self.parent_start_index.is_none() || self.incomplete_repair_authorized_by_scope
+    }
+}
+
+/// Whether the backoff of a host call made through `store` can wait through a runtime timer;
+/// see [`DurableExecutionState::durable_wait`].
+pub(crate) fn retry_backoff_waits_durably<T, D, Ctx>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> bool
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    store.runtime_activity().is_some()
+        && store.with(|mut access| durable_wait_runtime(get_ctx(access.data_mut())).is_some())
+}
+
+fn durable_wait_runtime<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> Option<Arc<crate::worker::suspension::RuntimeStore>> {
+    (ctx.agent_mode() == AgentMode::Durable && !ctx.state.durability_is_suppressed())
+        .then(|| ctx.runtime_suspension.clone())
+        .flatten()
+}
+
+/// Waits out a retry backoff of `delay` for a host call made through `store`, or returns the
+/// interrupt that ends the wait first.
+///
+/// When the backoff can wait durably, the wait is a runtime timer of the call's activity, as a
+/// guest sleep is: the suspension coordinator sees it as passive, so it can suspend the agent
+/// and schedule its wakeup at the deadline, and siblings keep running meanwhile. A suspension
+/// returns `InterruptKind::Suspend`; repair of the incomplete call then waits the rest of the
+/// backoff that its `Error` entry recorded.
+pub(crate) async fn wait_retry_backoff<T, D, Ctx>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    delay: Duration,
+) -> Result<(), InterruptKind>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let delay = delay.min(MAX_DURABLE_RETRY_WAIT);
+    let deadline = std::time::Instant::now() + delay;
+    let activity = store.runtime_activity();
+    let (timer, interrupt) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        let timer = activity.and_then(|activity| {
+            durable_wait_runtime(ctx).and_then(|runtime| runtime.timer(activity, deadline))
+        });
+        (timer, ctx.create_interrupt_signal())
+    });
+    match timer {
+        Some(timer) => {
+            timer
+                .wait(tokio::time::sleep_until(deadline.into()), interrupt)
+                .await
+        }
+        None => sleep_unless_interrupted(delay, interrupt).await,
+    }
+}
+
+/// Waits the rest of the backoff that the latest in-function retry of `retry_point` recorded in
+/// its `Error` entry, before repair of the incomplete call runs it again. A restart, or a wakeup
+/// that a sibling caused, therefore does not shorten the backoff; a deadline that has passed
+/// waits nothing.
+pub(crate) async fn wait_recorded_retry_backoff<T, D, Ctx>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    retry_point: OplogIndex,
+) -> Result<(), InterruptKind>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let worker = store.with(|mut access| get_ctx(access.data_mut()).public_state.worker());
+    let retry_at = worker
+        .get_last_known_status()
+        .await
+        .current_retry_at
+        .get(&retry_point)
+        .copied();
+    match retry_at.map(|retry_at| remaining_backoff(retry_at, Timestamp::now_utc())) {
+        Some(remaining) if !remaining.is_zero() => {
+            debug!(
+                %retry_point,
+                ?remaining,
+                "Repair waits the rest of the recorded retry backoff"
+            );
+            wait_retry_backoff(store, get_ctx, remaining).await
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Waits `delay`, or returns the interrupt that arrives first. The backoff of a call without a
+/// runtime activity, which the suspension coordinator cannot see.
+pub(crate) async fn sleep_unless_interrupted(
+    delay: Duration,
+    interrupt: impl Future<Output = InterruptKind>,
+) -> Result<(), InterruptKind> {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => Ok(()),
+        kind = interrupt => Err(kind),
     }
 }
 
@@ -891,8 +1019,12 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
     pub agent_config_retry_policies: Vec<NamedRetryPolicy>,
     /// Runtime overlay mutations (set/remove via guest API)
     pub runtime_retry_policy_mutations: BTreeMap<String, Option<NamedRetryPolicy>>,
-    /// Maximum delay for in-function retries; delays exceeding this fall back to trap+replay.
+    /// Maximum delay for in-function retries; delays exceeding this fall back to trap+replay
+    /// unless `durable_wait` holds.
     pub max_in_function_retry_delay: Duration,
+    /// The caller waits out the backoff through a runtime timer; see
+    /// [`DurableExecutionState::durable_wait`].
+    pub durable_wait: bool,
     /// The current semantic retry policy state, if a named policy was previously selected.
     pub current_retry_policy_state: Option<RetryPolicyState>,
     /// Properties describing the error context (verb, URI, status code, etc.) for predicate evaluation.
@@ -935,6 +1067,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
             is_live: true,
             snapshotting_mode: false,
             max_in_function_retry_delay: self.max_in_function_retry_delay,
+            durable_wait: self.durable_wait,
         }
     }
 
@@ -942,6 +1075,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         &mut self,
         retry_from: OplogIndex,
         retry_policy_state: Option<RetryPolicyState>,
+        retry_at: Timestamp,
     ) -> Result<(), OplogError> {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
@@ -951,6 +1085,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             retry_policy_state.clone(),
+            Some(retry_at),
         );
         self.worker.add_and_commit_oplog(entry).await?;
 

@@ -264,6 +264,9 @@ oplog_entry! {
             /// Optional semantic retry state. When present, this allows exact reconstruction
             /// of semantic retry policies without count-based replay.
             retry_policy_state: Option<RetryPolicyState>,
+            /// The wall-clock time the failed host call retries at, for an in-function retry.
+            /// Repair of the call's incomplete `Start` waits until this time before it runs again.
+            retry_at: Option<Timestamp>,
         }
         public {
             kind: OplogErrorKind,
@@ -271,6 +274,7 @@ oplog_entry! {
             error: String,
             retry_from: OplogIndex,
             retry_policy_state: Option<PublicRetryPolicyState>,
+            retry_at: Option<Timestamp>,
         }
     },
     /// A previously failed startup or replay completed successfully.

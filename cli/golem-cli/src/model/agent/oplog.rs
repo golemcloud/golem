@@ -466,6 +466,9 @@ impl TextOutput for PublicOplogEntry {
                     ));
                 }
                 logln(format!("{pad}retry from:        {}", params.retry_from));
+                if let Some(retry_at) = &params.retry_at {
+                    logln(format!("{pad}retry at:          {}", format_id(retry_at)));
+                }
                 logln(format!(
                     "{pad}error:             {}",
                     format_error(&params.error)

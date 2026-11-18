@@ -1420,6 +1420,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     expected_callee_fingerprint: None,
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: None,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1596,10 +1597,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 deferred_activation.clone(),
                 expected_callee_fingerprint,
                 span.span_id(),
-                handle.start_index(),
+                handle.trap_context().retry_from,
                 initial_freshness_disposition,
                 scope_card,
-                auth_ctx,
+                auth_ctx.clone(),
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -1616,6 +1617,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     expected_callee_fingerprint,
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: Some(auth_ctx),
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1644,6 +1646,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     expected_callee_fingerprint,
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: None,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,

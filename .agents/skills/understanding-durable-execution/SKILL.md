@@ -3982,8 +3982,12 @@ A failed durable call has two recovery paths (`durable_host/durability.rs`):
 - **In-function retry** re-runs the effect inside the same host call under the same `Start`.
   `InFunctionRetryState::decide_retry_with_properties` allows it only when the function type is
   `is_eligible_for_internal_retry` (`ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote`), the resolved
-  `NamedRetryPolicy` still permits an attempt, and the delay is ≤ `max_in_function_retry_delay`.
-  Each attempt appends and commits an `OplogEntry::Error { retry_from, .. }` hint.
+  `NamedRetryPolicy` still permits an attempt, and the delay is ≤ `max_in_function_retry_delay`
+  or the call waits durably (an accessor call with a runtime activity on a durable agent outside
+  snapshotting mode, which waits on a runtime timer that the suspension coordinator treats as
+  passive). Each attempt appends and commits an `OplogEntry::Error { retry_from, retry_at, .. }`
+  hint; repair of a `Start` left incomplete during the wait first waits the rest of the backoff
+  until `retry_at`.
   RDBMS transaction statements bypass this loop: transaction membership and statement retry
   refusal belong to the RDBMS protocol, independently of incomplete-repair authorization.
 - **Trap-based retry** is the fallback (`FallBackToTrap`/`Exhausted` →

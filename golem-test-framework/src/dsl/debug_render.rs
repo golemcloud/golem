@@ -199,6 +199,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             }
             let _ = writeln!(result, "{pad}error:             {}", params.error);
             let _ = writeln!(result, "{pad}retry from:        {}", params.retry_from);
+            if let Some(retry_at) = &params.retry_at {
+                let _ = writeln!(result, "{pad}retry at:          {retry_at}");
+            }
         }
         PublicOplogEntry::RecoverySucceeded(params) => {
             let _ = writeln!(result, "RECOVERY SUCCEEDED");

@@ -314,6 +314,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 error,
                 retry_from,
                 retry_policy_state,
+                None,
             ))
             .await;
     }

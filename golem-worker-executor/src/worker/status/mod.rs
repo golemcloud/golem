@@ -18,7 +18,8 @@ use golem_common::model::{
     ExportForkAdmissions, FailedUpdateRecord, InvocationResultMembership, InvocationResultPosition,
     OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
     PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
+    UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -258,11 +259,12 @@ fn update_status_with_precomputed_regions(
     let skipped_regions = &skipped;
     let active_plugins = last_known.active_plugins.clone();
     let requests = InvocationRequests::of_status(&last_known);
-    let (status, last_error_kind, current_retry_state, overridden_retry_config) =
+    let (status, last_error_kind, current_retry_state, current_retry_at, overridden_retry_config) =
         calculate_latest_worker_status(
             last_known.status,
             last_known.last_error_kind,
             last_known.current_retry_state,
+            last_known.current_retry_at,
             last_known.overridden_retry_config,
             default_retry_policy,
             skipped_regions,
@@ -439,6 +441,7 @@ fn update_status_with_precomputed_regions(
         component_revision_for_replay,
         component_revision_start_index,
         current_retry_state,
+        current_retry_at,
         authoritative_snapshot,
         last_automatic_snapshot,
         previous_usable_automatic_snapshot,

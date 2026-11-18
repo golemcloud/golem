@@ -6877,7 +6877,8 @@
         "invocationId": { "type": ["string", "null"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
-        "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] }
+        "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] },
+        "retryAt": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },

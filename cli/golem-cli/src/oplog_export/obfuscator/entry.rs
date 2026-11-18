@@ -962,6 +962,7 @@ impl Walker<'_, '_> {
                 error,
                 retry_from,
                 retry_policy_state,
+                retry_at: _,
                 invocation_id,
             }) => Fields::new()
                 .add("kind", name(kind))

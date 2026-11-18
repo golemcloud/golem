@@ -594,6 +594,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                         agent_config_retry_policies: retry_params.agent_config_retry_policies,
                         runtime_retry_policy_mutations: retry_params.runtime_retry_policy_mutations,
                         max_in_function_retry_delay: retry_params.max_in_function_retry_delay,
+                        durable_wait: false,
                         current_retry_policy_state,
                         retry_properties: retry_params.retry_properties,
                         worker: retry_params.worker,

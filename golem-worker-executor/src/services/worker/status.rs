@@ -99,6 +99,7 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         component_revision_for_replay: status.component_revision_for_replay,
         component_revision_start_index: status.component_revision_start_index,
         current_retry_state: status.current_retry_state.clone(),
+        current_retry_at: status.current_retry_at.clone(),
         authoritative_snapshot: status.authoritative_snapshot.clone(),
         last_automatic_snapshot: status.last_automatic_snapshot.clone(),
         previous_usable_automatic_snapshot: status.previous_usable_automatic_snapshot.clone(),
