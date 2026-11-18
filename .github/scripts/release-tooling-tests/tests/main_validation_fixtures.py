@@ -152,19 +152,23 @@ class FixtureCacheTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.root), "rm", "--cached", str(extra)], check=True, capture_output=True)
         self.assertEqual(baseline, self.key())
 
-    def test_cli_transitive_libraries_and_sibling_component_references_invalidate(self):
+    def test_cli_transitive_libraries_invalidate_but_independent_fixture_originals_do_not(self):
         self.write("cli/golem-cli/Cargo.toml", '[dependencies]\nshared={path="../../shared"}\n')
         self.write("shared/Cargo.toml", '[package]\nname="shared"\nversion="1.0.0"\n')
         shared = self.write("shared/src/lib.rs", "shared")
-        manifest = self.write("test-components/example/golem.yaml", "dir: ../other\n")
+        self.write("test-components/example/golem.yaml", "dir: local-provider\n# copied from ../other\n")
+        copied = self.write("test-components/example/local-provider/source", "local implementation")
+        self.write("builtin-tools/example/source", "production implementation")
         self.track()
         baseline = self.key()
         shared.write_text("new shared CLI behavior")
         self.assertNotEqual(baseline, self.key())
         shared.write_text("shared")
         self.write("test-components/other/source", "changed sibling")
+        self.write("builtin-tools/example/source", "changed production implementation")
+        self.assertEqual(baseline, self.key())
+        copied.write_text("changed local implementation")
         self.assertNotEqual(baseline, self.key())
-        manifest.write_text("dir: ../other\n")
 
     def test_corrupt_incomplete_unsafe_and_symlink_bundles_are_misses_before_copy(self):
         key = self.bundle()

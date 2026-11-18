@@ -268,7 +268,8 @@ def observe(directory, command):
                 print("[validation] Missing Actions identity; dashboard publication skipped", flush=True)
             last_heartbeat = time.monotonic()
 
-    # The workload never receives the dashboard write credential.
+    # Omit the credential from the child environment, but this is not isolation:
+    # a same-user workload can still read the observer's environment.
     environment = {key: value for key, value in os.environ.items() if key != "CI_DASHBOARD_PROGRESS_TOKEN"}
     with (directory / "logs/controller.log").open("wb") as output:
         process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,

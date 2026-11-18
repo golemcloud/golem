@@ -1,12 +1,13 @@
 # Main validation
 
 Merging this cutover activates scheduled main validation and the exact-source
-release gate without repository activation variables. Ordinary main pushes and
-PRs no longer run the full platform or heavy built-in Bash workflows. Maintenance
-branches (`N.N.x`) retain full CI. Manual and reusable CI entry points remain.
-Docs, billing, CLA and Vouch workflows remain unchanged; inexpensive path-filtered
-skill-harness build, format and unit checks remain on main PRs. This does not add
-optional full PR validation or paid LLM scenarios.
+release gate without repository activation variables. Main PRs run no tests.
+Ordinary main pushes no longer run full platform CI or heavy built-in Bash CI.
+Maintenance branches (`N.N.x`) retain full CI. Manual and reusable CI entry points remain.
+Docs, CLA and Vouch checks remain. Billing tests and Bash oracle checks retain
+their main-push paths but no longer run on main PRs. Skill-harness checks run in
+Main validation and maintenance CI, not main PRs. This does not add optional PR
+tests or paid LLM scenarios.
 
 The merge requires coordinated protection changes, not performed by this code.
 See [OPERATIONS.md](OPERATIONS.md) before merging: main and maintenance currently
@@ -60,10 +61,17 @@ A green Linux job alone is not a green validation result.
 Completed WASMs are cached per application for every language, including benchmark
 builds. There is no separate application or output allowlist. Each successful build
 records the WASMs it exports. The key hashes the application's checked-in directory,
-referenced sibling fixture directories, SDK and WIT sources, the CLI and its local
-dependencies, shared build recipes and the build preset. Unrelated component and
+SDK and WIT sources, the CLI and its local dependencies, shared build recipes and
+the build preset. Unrelated component and
 executor changes do not invalidate that application's entry. CLI binary Git-version
 strings are not input identities.
+
+Fixture applications keep their implementation sources inside their own directory.
+Copied providers, middleware and transport helpers evolve independently; changing
+the originals does not invalidate their copies. The Git and bounded-stream probes
+exercise fixture implementations, not the latest built-in tool sources. Copies use
+distinct component identities and exported Wasm names so cache restores cannot
+overwrite another application's output. SDKs, WIT and common recipes remain shared.
 
 This is a source-based reuse policy: external dependency or compiler updates alone
 do not refresh unchanged WASMs. Only exported WASMs are restored, not compiler
@@ -193,7 +201,9 @@ the evidence artifact and is not sent to the public dashboard.
 Optional live dashboard publication uses the repository variable
 `CI_DASHBOARD_URL` and the separate secret `CI_DASHBOARD_PROGRESS_TOKEN`, also
 configured on the dashboard host. The workflow does not receive the observer's
-write token. The workload child does not inherit the progress token. Publication
+write token. The workload child does not inherit the progress token, but same-user
+processes are not a credential isolation boundary. Progress is untrusted telemetry;
+only observer evidence establishes the source for commit comparisons. Publication
 uses a bounded HTTPS request every 30 seconds and once at completion; a failed
 publication does not change the command result. Without these settings, local
 progress, the job summary and retained artifacts still work. The observer keeps

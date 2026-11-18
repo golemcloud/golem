@@ -196,12 +196,15 @@ class Store:
                 for old in runs:
                     if (old["run_id"], old["attempt"]) == key:
                         existing = old
+                identity_fields = ("source", "workflow_sha", "branch", "event", "context")
                 if progress:
+                    identity = {field: run[field] for field in identity_fields}
                     latest = run.pop("progress")
                     if existing:
-                        for field in ("source", "workflow_sha", "branch", "event", "context"):
-                            if existing.get(field) and existing[field] != run[field]:
-                                raise ValueError("progress identity changed")
+                        for known in (existing, existing.get("_progress_identity", {})):
+                            for field in identity_fields:
+                                if known.get(field) and known[field] != run[field]:
+                                    raise ValueError("progress identity changed")
                         previous = existing.get("progress")
                         if previous:
                             if instant(latest["updated_at"]) < instant(previous["updated_at"]) or (
@@ -222,22 +225,24 @@ class Store:
                                     raise ValueError("task log name changed")
                                 if task["started_at"] and (new["started_at"] != task["started_at"] or new["status"] == "pending"):
                                     raise ValueError("task interval changed")
-                        run = {**existing, **{field: existing.get(field) or run[field]
-                                             for field in ("source", "workflow_sha", "branch", "event", "context")}}
+                        run = dict(existing)
                     else:
-                        run = {**public_run({**run, "updated_at": run["created_at"],
+                        run = {**public_run({**run, "source": "", "context": "", "updated_at": run["created_at"],
                                              "status": "in_progress", "selected": True}), "_progress_only": True}
                     run["progress"] = latest
+                    # Runner identity constrains telemetry, not observer evidence.
+                    run["_progress_identity"] = identity
                 elif existing:
                     if (existing["status"] == "completed" and run["status"] != "completed") or (
                         not existing.get("_progress_only") and instant(run["updated_at"]) < instant(existing["updated_at"])
                     ):
                         raise ValueError("refusing an older observation of this attempt")
-                    if "progress" in existing:
+                    identity = existing.get("_progress_identity", {})
+                    if "progress" in existing and not any(
+                        run.get(field) and run[field] != identity.get(field) for field in identity_fields
+                    ):
                         run["progress"] = existing["progress"]
-                        for field in ("source", "context"):
-                            if not run.get(field):
-                                run[field] = existing.get(field, "")
+                        run["_progress_identity"] = identity
                 runs = [old for old in runs if (old["run_id"], old["attempt"]) != key] + [run]
             runs.sort(key=lambda item: (item["run_id"], item["attempt"]), reverse=True)
             data = {"updated_at": self.data["updated_at"] if progress else timestamp(), "runs": runs[:200]}

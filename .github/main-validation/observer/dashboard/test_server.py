@@ -13,7 +13,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from server import Store, ThreadingHTTPServer, handler
+from server import Store, ThreadingHTTPServer, handler, public_progress
 
 
 class DashboardTest(unittest.TestCase):
@@ -114,20 +114,86 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(run["progress"], self.progress()["progress"])
         self.assertNotIn("raw_logs", run)
         self.assertNotIn("_progress_only", run)
+        self.assertNotIn("_progress_identity", run)
+        self.assertEqual((run["source"], run["context"]), ("", ""))
         self.assertEqual(json.loads(Store(self.directory.name).snapshot())["runs"][0], run)
 
-    def test_runner_identity_fills_unknown_source_and_survives_observer_refresh(self):
+    def test_unknown_source_refreshes_preserve_live_progress_without_verifying_identity(self):
         self.run.update(status="in_progress", conclusion="", source="", context="")
         self.assertEqual(self.publish(self.run)[0], 200)
         analysis = self.record()["analysis"]
         progress = self.progress()
         self.assertEqual(self.publish_progress(progress)[0], 200)
-        self.assertEqual(self.record()["source"], progress["source"])
-        self.assertEqual(self.record()["context"], progress["context"])
+        for minute in (6, 7, 8):
+            self.assertEqual(self.publish(self.run)[0], 200)
+            progress["progress"]["updated_at"] = f"2026-11-17T08:0{minute}:00Z"
+            self.assertEqual(self.publish_progress(progress)[0], 200)
+            self.assertEqual((self.record()["source"], self.record()["context"]), ("", ""))
+            self.assertEqual(self.record()["progress"], progress["progress"])
+            self.assertEqual(self.record()["analysis"], analysis)
+        restarted = Store(self.directory.name)
+        wrong = copy.deepcopy(progress)
+        wrong["source"] = "d" * 40
+        with self.assertRaisesRegex(ValueError, "progress identity changed"):
+            restarted.update(public_progress(wrong), progress=True)
+
+    def test_progress_first_unknown_observations_then_matching_final_keep_progress(self):
+        progress = self.progress()
+        self.assertEqual(self.publish_progress(progress)[0], 200)
+        final = copy.deepcopy(self.run)
+        self.run.update(status="in_progress", conclusion="", source="", context="")
+        for _ in range(3):
+            self.assertEqual(self.publish(self.run)[0], 200)
+            self.assertEqual(self.record()["source"], "")
+            self.assertEqual(self.record()["progress"], progress["progress"])
+        self.assertEqual(self.publish(final)[0], 200)
+        self.assertEqual(self.record()["source"], final["source"])
+        self.assertEqual(self.record()["context"], final["context"])
+        self.assertEqual(self.record()["progress"], progress["progress"])
+
+    def test_verified_observation_corrects_progress_identity_and_drops_conflicting_tasks(self):
+        progress = self.progress()
+        self.assertEqual(self.publish_progress(progress)[0], 200)
+        self.run.update(status="in_progress", conclusion="", source="")
         self.assertEqual(self.publish(self.run)[0], 200)
-        self.assertEqual(self.record()["source"], progress["source"])
-        self.assertEqual(self.record()["context"], progress["context"])
-        self.assertEqual(self.record()["analysis"], analysis)
+        self.assertEqual(self.record()["progress"], progress["progress"])
+        self.run["source"] = "d" * 40
+        self.assertEqual(self.publish(self.run)[0], 200)
+        self.assertEqual(self.record()["source"], "d" * 40)
+        self.assertNotIn("progress", self.record())
+        before = self.store.snapshot()
+        self.assertEqual(self.publish_progress(progress)[0], 400)
+        self.assertEqual(self.store.snapshot(), before)
+        progress["source"] = "d" * 40
+        self.assertEqual(self.publish_progress(progress)[0], 200)
+        self.assertEqual(self.record()["progress"], progress["progress"])
+
+    def test_observation_first_rejects_wrong_source_progress(self):
+        self.assertEqual(self.publish(self.run)[0], 200)
+        progress = self.progress()
+        progress["source"] = "d" * 40
+        self.assertEqual(self.publish_progress(progress)[0], 400)
+        self.assertNotIn("progress", self.record())
+        progress["source"] = self.run["source"]
+        self.assertEqual(self.publish_progress(progress)[0], 200)
+        self.assertEqual(self.record()["progress"], progress["progress"])
+
+    def test_observer_can_correct_each_progress_only_identity_field(self):
+        for index, (field, corrected) in enumerate((
+            ("source", "d" * 40), ("workflow_sha", "e" * 40),
+            ("branch", "acceptance"), ("event", "workflow_dispatch"),
+            ("context", "Main validation (acceptance)"),
+        )):
+            with self.subTest(field=field):
+                progress = self.progress()
+                progress["run_id"] += index
+                self.assertEqual(self.publish_progress(progress)[0], 200)
+                observation = {**self.run, **{name: progress[name] for name in (
+                    "run_id", "source", "workflow_sha", "branch", "event", "context")}, field: corrected}
+                self.assertEqual(self.publish(observation)[0], 200)
+                self.assertEqual(self.record()[field], corrected)
+                self.assertNotIn("progress", self.record())
+                self.assertEqual(self.publish_progress(progress)[0], 400)
 
     def test_observer_and_progress_merge_with_independent_clocks_in_both_orders(self):
         value = self.progress()
@@ -331,6 +397,41 @@ class DashboardTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "refusing to publish a credential"):
                 runpy.run_path(str(Path(__file__).resolve().parents[1] / "publish-dashboard.py"), run_name="__main__")
             network.assert_not_called()
+
+    def test_publisher_never_uses_public_progress_to_verify_source_comparison(self):
+        progress = self.progress()
+        self.assertEqual(self.publish_progress(progress)[0], 200)
+        facts, analysis = Path(self.directory.name) / "facts.json", Path(self.directory.name) / "analysis.json"
+        analysis.write_text(json.dumps({"classification": "running", "analysis": {"summary": "Observing"}}))
+
+        def send(request, timeout):
+            self.assertEqual(request.get_method(), "POST")
+            self.assertEqual(request.full_url, "https://ci.example.invalid/api/run")
+            payload = json.loads(request.data)
+            self.assertEqual((payload["source"], payload["context"]), (self.run["source"], self.run["context"]))
+            self.assertFalse(payload["changes"]["available"])
+            self.assertEqual(payload["changes"]["baseline"], "")
+            self.assertEqual(payload["changes"]["commits"], [])
+            self.assertIn("not yet verified", payload["changes"]["note"])
+            self.assertEqual(self.publish(payload)[0], 200)
+            response = io.BytesIO(b'{"status":"stored"}')
+            response.status = 200
+            return response
+
+        for source, context in (("", ""), ("", "Main validation"), ("a" * 40, "")):
+            with self.subTest(source=source, context=context):
+                self.run.update(status="in_progress", conclusion="", source=source, context=context)
+                facts.write_text(json.dumps(self.run))
+                with patch.dict("os.environ", {"CI_DASHBOARD_URL": "https://ci.example.invalid", "CI_DASHBOARD_TOKEN": self.token}), \
+                        patch.object(sys, "argv", ["publish-dashboard.py", str(facts), str(analysis)]), \
+                        patch("urllib.request.urlopen", side_effect=send) as network, \
+                        patch("subprocess.run") as git, contextlib.redirect_stdout(io.StringIO()):
+                    runpy.run_path(str(Path(__file__).resolve().parents[1] / "publish-dashboard.py"), run_name="__main__")
+                    network.assert_called_once()
+                    git.assert_not_called()
+                self.assertEqual(self.record()["progress"], progress["progress"])
+                self.assertEqual((self.record()["source"], self.record()["context"]), (source, context))
+                self.assertFalse(self.record()["changes"]["available"])
 
     def test_malformed_report_cannot_hide_valid_report_or_contribute_partial_totals(self):
         directory = Path(self.directory.name)

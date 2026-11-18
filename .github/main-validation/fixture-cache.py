@@ -60,22 +60,8 @@ def fingerprint(root, app, variant):
     component = f"test-components/{app}"
     if not any(path.startswith(component + "/") for path in tracked):
         raise ValueError("application has no checked-in source")
-    components, pending = set(), [component]
-    while pending:
-        directory = pending.pop()
-        if directory in components:
-            continue
-        components.add(directory)
-        for relative in tracked:
-            if relative.startswith(directory + "/"):
-                # Shared fixture applications can be referenced by relative paths.
-                text = (root / relative).read_bytes().decode("utf-8", errors="ignore")
-                for sibling in re.findall(r"(?<![./])\.\./([A-Za-z0-9_-]+)", text):
-                    candidate = root / "test-components" / sibling
-                    if candidate.is_dir():
-                        pending.append(f"test-components/{sibling}")
     roots = {"sdks", "wit", "cli", "golem-skills/skills", "openapi", ".cargo",
-             ".github/actions", *components, *cli_source_roots(root)}
+             ".github/actions", component, *cli_source_roots(root)}
     paths = [path for path in tracked if path and (
         path in ("Cargo.toml", "Cargo.lock") or path.startswith("Makefile")
         or any(path.startswith(prefix + "/") for prefix in roots)

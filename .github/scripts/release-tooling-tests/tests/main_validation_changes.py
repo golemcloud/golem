@@ -89,25 +89,39 @@ class ChangesTests(unittest.TestCase):
         self.assertTrue(result["available"])
         self.assertEqual(result["commits"], [])
 
-    def test_running_publication_uses_only_matching_runner_progress_identity(self):
+    def test_running_publication_compares_only_observer_verified_source_and_context(self):
         self.seen(40, self.base, "06:00")
         facts = self.directory / "facts.json"
-        facts.write_text(json.dumps({**self.run, "source": "", "context": "", "status": "in_progress", "attempt": 1}))
         analysis = self.directory / "analysis.json"
         analysis.write_text(json.dumps({"classification": "running", "analysis": {"summary": "In progress"}}))
-        for fields, expected in (({}, True), ({"attempt": 2}, False), ({"progress": None}, False),
-                                 ({"context": "unknown"}, False)):
+        for fields, expected in (({}, True), ({"source": ""}, False), ({"context": ""}, False),
+                                 ({"source": "", "context": ""}, False)):
             with self.subTest(fields=fields):
-                live = {**self.run, "attempt": 1, "progress": {"mode": "parallel"}, **fields}
-                responses = [io.BytesIO(json.dumps({"runs": [live]}).encode()), io.BytesIO(b'{"status":"stored"}')]
-                responses[1].status = 200
+                observation = {**self.run, "status": "in_progress", "attempt": 1, **fields}
+                facts.write_text(json.dumps(observation))
+                response = io.BytesIO(b'{"status":"stored"}')
+                response.status = 200
                 with patch.object(sys, "argv", [str(HELPER), str(facts), str(analysis)]), \
-                        patch("urllib.request.urlopen", side_effect=responses) as network, \
+                        patch("urllib.request.urlopen", return_value=response) as network, \
                         contextlib.redirect_stdout(io.StringIO()):
                     runpy.run_path(str(HELPER))
-                published = json.loads(network.call_args_list[-1].args[0].data)
+                network.assert_called_once()
+                request = network.call_args.args[0]
+                self.assertEqual(request.get_method(), "POST")
+                self.assertEqual(request.full_url, "https://dashboard.example.invalid/api/run")
+                published = json.loads(request.data)
+                self.assertEqual(published["source"], observation["source"])
+                self.assertEqual(published["context"], observation["context"])
                 self.assertEqual(published["changes"]["available"], expected)
-                self.assertEqual(published["source"], self.second if expected else "")
+                if expected:
+                    self.assertEqual(published["changes"]["baseline"], self.base)
+                    self.assertEqual(published["changes"]["commits"], [
+                        {"sha": self.first, "subject": "First change <safe> & literal"},
+                        {"sha": self.second, "subject": "Second change"}])
+                else:
+                    self.assertEqual(published["changes"]["baseline"], "")
+                    self.assertEqual(published["changes"]["commits"], [])
+                    self.assertIn("not yet verified", published["changes"]["note"])
 
     def test_missing_baseline_or_unknown_source_is_not_an_empty_range(self):
         self.assertFalse(self.collect(self.run)["available"])

@@ -90,15 +90,16 @@ Split main protection from release/maintenance protection, or make an equivalent
 scoped ruleset update. Main must no longer require jobs removed by the cutover;
 release and maintenance protection must not lose their existing full-CI checks.
 Preserve reviews, CLA, bypass policy, deletion restrictions and non-force-push
-safeguards. Keep Vouch and the existing docs/billing preview and deployment rules.
+safeguards. Keep Vouch, docs previews and billing deployment safeguards.
 Do not require `Main validation` on each PR: it samples main after merge and does
-not validate every PR or intermediate main commit. Do not add the path-filtered
-skill check as an unconditional requirement for unrelated PRs.
+not validate every PR or intermediate main commit. Remove main PR requirements
+for skill-harness, billing tests and Bash oracle checks; those do not run on main PRs.
 
 The merged code activates the ten-minute schedule without a variable update and
 stops automatic full-platform/heavy Bash checks on ordinary main PRs and pushes.
-It retains manual/reusable CI, maintenance full CI and the cheap path-filtered
-main PR skill-harness workflow. No optional full PR validation is introduced.
+Main PRs run no tests, including skill-harness, billing and Bash oracle tests.
+It retains manual/reusable CI, maintenance full CI and the existing main-push
+billing and Bash oracle paths. No optional PR tests are introduced.
 Release preparation always requires the exact-source production result and
 release-only prerequisites. Existing activation variables no longer control it.
 

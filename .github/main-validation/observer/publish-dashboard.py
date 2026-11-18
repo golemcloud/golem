@@ -1,7 +1,6 @@
 """Publish an observation and its analysis, or a heartbeat, without running workload code."""
 
 import datetime
-import http.client
 import json
 import os
 from pathlib import Path
@@ -79,20 +78,6 @@ elif len(sys.argv) == 3:
     report = json.loads(Path(sys.argv[2]).read_text())
     payload["classification"] = report["classification"]
     payload["analysis"] = report["analysis"]
-    if payload.get("status") == "in_progress" and (not payload.get("source") or not payload.get("context")):
-        try:
-            with urllib.request.urlopen(url + "/data.json", timeout=30) as response:
-                live = json.load(response)
-            for run in live.get("runs", []):
-                if ((run.get("run_id"), run.get("attempt")) == (payload["run_id"], payload["attempt"])
-                        and run.get("progress") and re.fullmatch(r"[0-9a-f]{40}", run.get("source", ""))
-                        and all(not payload.get(field) or payload[field] == run.get(field) for field in ("source", "context"))
-                        and run.get("context") in ("Main validation", "Main validation (acceptance)")):
-                    for field in ("source", "context"):
-                        if not payload.get(field):
-                            payload[field] = run[field]
-        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
-            print("Runner source unavailable; publishing without a verified source range", file=sys.stderr)
     payload["changes"] = changes_since_previous_run(payload)
     endpoint = "/api/run"
     link = f'{url}/#run-{payload["run_id"]}-a{payload["attempt"]}'

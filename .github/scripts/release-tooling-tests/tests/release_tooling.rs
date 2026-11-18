@@ -210,7 +210,7 @@ for (const value of cases) {
 }
 
 #[test]
-fn cutover_keeps_maintenance_ci_and_only_cheap_skill_checks_on_main_prs() {
+fn cutover_keeps_maintenance_ci_without_main_pr_tests() {
     let load = |name: &str| -> serde_yaml::Value {
         serde_yaml::from_str(
             &fs::read_to_string(workspace_path().join(".github/workflows").join(name)).unwrap(),
@@ -253,32 +253,26 @@ fn cutover_keeps_maintenance_ci_and_only_cheap_skill_checks_on_main_prs() {
             .unwrap()
         );
     }
-    let skills = load("skill-harness-pr.yaml");
-    assert_eq!(skills["on"].as_mapping().unwrap().len(), 1);
-    assert_eq!(
-        skills["on"]["pull_request"]["branches"],
-        serde_yaml::to_value(["main"]).unwrap()
+    assert!(
+        !workspace_path()
+            .join(".github/workflows/skill-harness-pr.yaml")
+            .exists()
     );
-    assert_eq!(
-        skills["on"]["pull_request"]["paths"],
-        serde_yaml::to_value(["golem-skills/**", ".github/workflows/skill-harness-pr.yaml"])
-            .unwrap()
-    );
-    assert_eq!(skills["jobs"].as_mapping().unwrap().len(), 1);
-    let commands: Vec<_> = skills["jobs"]["unit-tests"]["steps"]
-        .as_sequence()
-        .unwrap()
-        .iter()
-        .filter_map(|step| step["run"].as_str())
-        .collect();
-    assert_eq!(
-        commands,
-        [
-            "npm install\nnpm run build\n",
-            "npm run format:check",
-            "npm test"
-        ]
-    );
+    assert!(ci["jobs"].get("skill-harness-unit-tests").is_some());
+    for name in ["builtin-bash-oracle-drift.yaml", "golem-cloud-billing.yaml"] {
+        let workflow = load(name);
+        assert_eq!(
+            workflow["on"]["pull_request"]["branches"],
+            serde_yaml::to_value(["[0-9]+.[0-9]+.x"]).unwrap()
+        );
+        assert!(
+            workflow["on"]["push"]["branches"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .any(|branch| branch == "main")
+        );
+    }
 }
 
 #[test]
