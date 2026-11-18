@@ -435,10 +435,12 @@ class DashboardTest(unittest.TestCase):
 
     def test_malformed_report_cannot_hide_valid_report_or_contribute_partial_totals(self):
         directory = Path(self.directory.name)
-        (directory / "a-bad.json").write_text(json.dumps({"results": {"tests": None}}))
-        (directory / "b-partial.json").write_text(json.dumps({"results": {"tests": [
+        (directory / "progress.json").write_text(json.dumps({"tasks": []}))
+        (directory / "executor-binaries.json").write_text("not a CTRF report")
+        (directory / "ctrf-a-bad.json").write_text(json.dumps({"results": {"tests": None}}))
+        (directory / "ctrf-b-partial.json").write_text(json.dumps({"results": {"tests": [
             {"name": "must_not_count", "status": "passed"}, {"status": "failed", "extra": 17}]}}))
-        (directory / "c-valid.json").write_text(json.dumps({"results": {"tests": [
+        (directory / "ctrf.json").write_text(json.dumps({"results": {"tests": [
             {"name": "actual_failure", "status": "failed", "message": "assertion failed"}]}}))
         output = io.StringIO()
         with patch.object(sys, "argv", ["ctrf-summary.py", str(directory)]), contextlib.redirect_stdout(output):
@@ -446,7 +448,7 @@ class DashboardTest(unittest.TestCase):
         summary = json.loads(output.getvalue())
         self.assertEqual(summary["totals"]["tests"], 1)
         self.assertEqual([test["name"] for test in summary["failed"]], ["actual_failure"])
-        self.assertEqual([report["file"] for report in summary["unreadable"]], ["a-bad.json", "b-partial.json"])
+        self.assertEqual([report["file"] for report in summary["unreadable"]], ["ctrf-a-bad.json", "ctrf-b-partial.json"])
 
     def test_dashboard_shows_only_running_and_non_cancelled_completed_attempts(self):
         states = [("in_progress", ""), ("completed", "success"), ("completed", "failure"),
