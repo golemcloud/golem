@@ -143,7 +143,10 @@ object Guest {
     !js.isUndefined(typed) && typed != null && holdsStream(typed.selectDynamic("value"))
   }
 
-  /** Whether an encoded value tree holds a stream, whose producer runs after the call returns. */
+  /**
+   * Whether an encoded value tree holds a stream, whose producer runs after the
+   * call returns.
+   */
   private[runtime] def holdsStream(tree: js.Any): Boolean =
     !js.isUndefined(tree) && tree != null && {
       val nodes = tree.asInstanceOf[js.Dynamic].selectDynamic("valueNodes")
