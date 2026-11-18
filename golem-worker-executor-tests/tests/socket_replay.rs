@@ -1334,6 +1334,49 @@ async fn p3_tcp_send_survives_dropping_the_socket(
     session.finish().await
 }
 
+/// The guest drops a P3 TCP socket right after it opens the receive stream, before the receive
+/// task runs. The stream owns the connection, so it still delivers the peer's bytes, and the
+/// completed receive replays without the dropped socket.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_receive_survives_dropping_the_socket(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"drop-7a3f", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-receive-dropped-socket",
+    )
+    .await?;
+    let received: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_receive_after_dropping_socket",
+            data_value!(peer.port, 9u32),
+        )
+        .await?;
+    assert_eq!(received, Ok(b"drop-7a3f".to_vec()));
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the receive after the socket drop failed"
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not reconnect");
+    session.finish().await
+}
+
 /// A revert cut inside an open send parent. The cut keeps the send `Start` and its first write,
 /// and deletes the invocation of the second write. Recovery replays the retained write, the
 /// next write after the cut is refused instead of being sent, and the send parent completes

@@ -1469,8 +1469,50 @@ fn deserialize_tcp_send_chunk(
     result.map_err(Into::into)
 }
 
+/// The native socket's receive stream, owned by a receive that started live in this Store.
+struct TcpReceiveSource {
+    bytes: mpsc::Receiver<Vec<u8>>,
+    permits: mpsc::Sender<()>,
+    result: Option<oneshot::Receiver<Result<(), types::ErrorCode>>>,
+}
+
+impl TcpReceiveSource {
+    /// Takes the native receive stream of `socket`. The native stream owns the connection from
+    /// then on, so the guest may drop the socket. The upstream stream is piped into a
+    /// demand-gated consumer: it forwards a chunk only after the receive task grants a permit,
+    /// so nothing is read from the socket before a durable demand.
+    async fn take<Ctx, U>(
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+        socket: Resource<TcpSocket>,
+    ) -> wasmtime::Result<Self>
+    where
+        Ctx: WorkerCtx,
+        U: Send + 'static,
+    {
+        let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+        let (socket_stream, result_future) =
+            <WasiSockets as types::HostTcpSocketWithStore<U>>::receive(&sockets, socket).await?;
+        let (chunk_tx, bytes) = mpsc::channel::<Vec<u8>>(1);
+        let (permits, permit_rx) = mpsc::channel::<()>(1);
+        let (result_tx, result) = oneshot::channel();
+        accessor.with(|mut store| -> wasmtime::Result<()> {
+            socket_stream.pipe(
+                &mut store,
+                TcpReceiveForwardConsumer::new(PollSender::new(chunk_tx), permit_rx),
+            )?;
+            result_future.pipe(&mut store, TcpSocketResultConsumer::new(result_tx))?;
+            Ok(())
+        })?;
+        Ok(Self {
+            bytes,
+            permits,
+            result: Some(result),
+        })
+    }
+}
+
 struct TcpSocketReceiveTask<Ctx> {
-    socket: Resource<TcpSocket>,
+    source: Option<TcpReceiveSource>,
     demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpStreamResolution>,
     observational_owner: Option<OplogIndex>,
@@ -1482,7 +1524,7 @@ struct TcpSocketReceiveTask<Ctx> {
 
 impl<Ctx> TcpSocketReceiveTask<Ctx> {
     fn new(
-        socket: Resource<TcpSocket>,
+        source: Option<TcpReceiveSource>,
         demand_rx: mpsc::Receiver<TcpReceiveDemand>,
         result_tx: oneshot::Sender<TcpStreamResolution>,
         observational_owner: Option<OplogIndex>,
@@ -1490,7 +1532,7 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
         activity: TailActivity,
     ) -> Self {
         Self {
-            socket,
+            source,
             demand_rx,
             result_tx,
             observational_owner,
@@ -1519,7 +1561,7 @@ where
             scope,
             run_tcp_socket_receive::<Ctx, U>(
                 accessor,
-                self.socket,
+                self.source,
                 self.demand_rx,
                 self.result_tx,
                 self.observational_owner,
@@ -1586,7 +1628,7 @@ fn fail_tcp_stream_task(
 /// in the same order — no whole-stream buffering, bounded memory.
 async fn run_tcp_socket_receive<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    socket: Resource<TcpSocket>,
+    source: Option<TcpReceiveSource>,
     demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpStreamResolution>,
     observational_owner: Option<OplogIndex>,
@@ -1628,54 +1670,22 @@ where
         }
     };
 
-    // Live upstream wiring: only touch the socket when the parent call is live.
-    // The upstream stream is piped into a demand-gated consumer over a bounded
-    // channel; the consumer forwards a chunk only after the task grants a permit,
-    // so nothing is read into the Golem channel before a durable demand.
-    let mut bytes_rx: Option<mpsc::Receiver<Vec<u8>>> = None;
-    let mut permit_tx: Option<mpsc::Sender<()>> = None;
-    let mut socket_result_rx: Option<oneshot::Receiver<Result<(), types::ErrorCode>>> = None;
-    if stream.is_live() {
-        let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-        match <WasiSockets as types::HostTcpSocketWithStore<U>>::receive(&sockets, socket).await {
-            Ok((socket_stream, result_future)) => {
-                let (chunk_tx, chunk_rx) = mpsc::channel::<Vec<u8>>(1);
-                let (demand_permit_tx, demand_permit_rx) = mpsc::channel::<()>(1);
-                let (inner_result_tx, inner_result_rx) = oneshot::channel();
-                if let Err(error) = accessor.with(|mut store| -> wasmtime::Result<()> {
-                    socket_stream.pipe(
-                        &mut store,
-                        TcpReceiveForwardConsumer::new(PollSender::new(chunk_tx), demand_permit_rx),
-                    )?;
-                    result_future
-                        .pipe(&mut store, TcpSocketResultConsumer::new(inner_result_tx))?;
-                    Ok(())
-                }) {
-                    let trap_context = stream.trap_context();
-                    return fail_tcp_stream_task(
-                        result_tx,
-                        wasmtime::Error::from_anyhow(stream.trap(error)),
-                        Some(trap_context),
-                    );
-                }
-                bytes_rx = Some(chunk_rx);
-                permit_tx = Some(demand_permit_tx);
-                socket_result_rx = Some(inner_result_rx);
-            }
-            Err(error) => {
-                let trap_context = stream.trap_context();
-                return fail_tcp_stream_task(
-                    result_tx,
-                    wasmtime::Error::from_anyhow(stream.trap(error)),
-                    Some(trap_context),
-                );
-            }
-        }
-    }
+    // The parent `Start` is committed by `start`, before the source forwards a byte. A Store
+    // moves from replay to live only once, so a source taken by the import belongs to a parent
+    // that starts live; a parent that becomes live at the replay tail has no source.
+    let source = source.filter(|_| stream.is_live());
+    let (mut bytes_rx, permit_tx, mut socket_result_rx) = match source {
+        Some(TcpReceiveSource {
+            bytes,
+            permits,
+            result,
+        }) => (Some(bytes), Some(permits), result),
+        None => (None, None, None),
+    };
 
-    // A completed parent supplies its recorded result. If the crash followed the final
-    // child but preceded the parent terminal, the missing result must still report loss.
-    let mut terminal = if stream.is_live() {
+    // A parent that did not start live in this Store lost its connection, including one whose
+    // crash followed the final child but preceded the parent terminal.
+    let mut terminal = if bytes_rx.is_some() {
         Ok(())
     } else {
         Err(types::ErrorCode::ConnectionBroken)
@@ -2325,6 +2335,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                     return Ok(handles);
                 }
 
+                // Take the native receive stream while this import still holds the socket
+                // borrow: the guest may drop the socket as soon as the import returns, before
+                // the task has committed the `receive` `Start`.
+                let live = accessor
+                    .with(|mut store| durable_worker_ctx::<Ctx, U>(store.data_mut()).is_live());
+                let source = if live {
+                    Some(TcpReceiveSource::take::<Ctx, U>(accessor, socket).await?)
+                } else {
+                    None
+                };
                 // Capacity 1 suffices (and bounds memory as defense in depth): the
                 // producer keeps at most one demand in flight at a time.
                 let (demand_tx, demand_rx) = demand_channel();
@@ -2349,7 +2369,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                         .tail_work_tracker()
                         .activity();
                     let task = TcpSocketReceiveTask::<Ctx>::new(
-                        socket,
+                        source,
                         demand_rx,
                         result_tx,
                         observational_owner,

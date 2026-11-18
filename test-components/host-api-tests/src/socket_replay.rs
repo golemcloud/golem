@@ -195,6 +195,13 @@ pub trait SocketSession {
         slot: String,
         data: Vec<u8>,
     ) -> Result<(), String>;
+    /// Connects a P3 TCP socket, opens its receive stream, drops the socket and then reads up
+    /// to `len` bytes from the stream.
+    async fn p3_tcp_receive_after_dropping_socket(
+        &self,
+        port: u16,
+        len: u32,
+    ) -> Result<Vec<u8>, String>;
     /// Connects a P3 TCP socket and drops it, in a read-only method.
     #[read_only]
     async fn p3_tcp_connect_read_only(&self, port: u16) -> Result<(), String>;
@@ -461,6 +468,23 @@ impl SocketSession for SocketSessionImpl {
                 remaining.len()
             ))
         }
+    }
+
+    async fn p3_tcp_receive_after_dropping_socket(
+        &self,
+        port: u16,
+        len: u32,
+    ) -> Result<Vec<u8>, String> {
+        let socket = p3::TcpSocket::create(p3::IpAddressFamily::Ipv4).map_err(error)?;
+        socket.connect(p3_loopback(port)).await.map_err(error)?;
+        let (mut stream, result) = socket.receive();
+        // The stream owns the connection: dropping the socket does not end it.
+        drop(socket);
+        let (data, ended) = p3_read(&mut stream, len as usize).await?;
+        if ended {
+            result.await.map_err(error)?;
+        }
+        Ok(data)
     }
 
     async fn p3_tcp_connect_read_only(&self, port: u16) -> Result<(), String> {
