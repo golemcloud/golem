@@ -27,8 +27,8 @@ use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use golem_common::model::oplog::host_functions::{
-    P3SocketsTypesUdpSocketBind, P3SocketsTypesUdpSocketConnect, P3SocketsTypesUdpSocketReceive,
-    P3SocketsTypesUdpSocketSend,
+    P3SocketsTypesUdpSocketBind, P3SocketsTypesUdpSocketConnect, P3SocketsTypesUdpSocketDisconnect,
+    P3SocketsTypesUdpSocketReceive, P3SocketsTypesUdpSocketSend,
 };
 use golem_common::model::oplog::types::{
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
@@ -37,7 +37,8 @@ use golem_common::model::oplog::types::{
 use golem_common::model::oplog::{
     DeniablePair, DurableFunctionType, HostRequestNoInput, HostRequestP3SocketsBind,
     HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostResponseP3SocketsBind,
-    HostResponseP3SocketsUdpConnect, HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend,
+    HostResponseP3SocketsUdpConnect, HostResponseP3SocketsUdpDisconnect,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::future::Future;
@@ -81,13 +82,6 @@ fn apply_endpoint(entry: &mut SocketEntry, endpoint: &Option<SerializableP3UdpEn
                 entry.phase = SocketPhase::Bound;
             }
         }
-        Some(SerializableP3UdpEndpoint::Rebound(local_address)) => {
-            entry.bind_request = Some(local_address.clone());
-            entry.local_address = Some(local_address.clone());
-            if entry.phase == SocketPhase::Created {
-                entry.phase = SocketPhase::Bound;
-            }
-        }
         Some(SerializableP3UdpEndpoint::Lost) => entry.phase = SocketPhase::Lost,
         None => {}
     }
@@ -121,17 +115,20 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     }
     // The native socket is bound on its recorded interface address, or as the guest bound it
     // when that address is unspecified (see `SocketEntry::udp_rebuild_bind_address`).
-    let unspecified = entry.unspecified_address();
-    let bind_address = entry.udp_rebuild_bind_address();
-    let mut rebound = false;
-    let restored = match bind_address {
-        // No endpoint, or one that a disconnect released: the next send binds implicitly.
+    let restored = match entry.udp_rebuild_bind_address() {
+        // No endpoint yet: the next send binds implicitly.
         None => Ok(()),
-        Some(bind_address) if bind_address == unspecified => Ok(()),
+        // A port that a disconnect released. The native socket stays bound without a port, as
+        // after the disconnect: `receive` waits and the next send selects a port.
+        Some(bind_address) if bind_address.port == 0 => {
+            let mut wasi = ctx.as_wasi_view();
+            let view = wasi.sockets();
+            view.table
+                .get_mut(&Resource::<UdpSocket>::new_borrow(rep))?
+                .assume_bound_after_disconnect();
+            Ok(())
+        }
         Some(bind_address) => {
-            // A bind on a fixed port keeps that port on a disconnect, unlike the implicit bind or
-            // the bind on port 0 that selected it, so the next endpoint change records it.
-            rebound = bind_address.port != 0;
             let remote_address = entry.remote_address.clone();
             let mut wasi = ctx.as_wasi_view();
             let mut view = wasi.sockets();
@@ -154,7 +151,6 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     match restored {
         Ok(()) => {
             entry.native_bound = true;
-            entry.native_rebound = rebound;
             Ok(true)
         }
         Err(error) => {
@@ -167,9 +163,8 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
 }
 
 /// The new local address of the native socket after a live connect, send or receive, when it
-/// differs from the entry: an implicit bind, the interface address that a connect selects for a
-/// wildcard bind, or the port that a rebuild on port 0 selected. After a rebuild on a fixed port
-/// it is always `Rebound`.
+/// differs from the entry: an implicit bind, or the interface address that a connect selects for
+/// a wildcard bind.
 fn endpoint_change<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     rep: u32,
@@ -182,12 +177,10 @@ fn endpoint_change<Ctx: WorkerCtx>(
             .map(SerializableP3IpSocketAddress::from)
     };
     let entry = udp_entry(ctx, rep)?;
-    let rebound = std::mem::take(&mut entry.native_rebound);
-    Ok(match native {
-        Some(address) if rebound => Some(SerializableP3UdpEndpoint::Rebound(address)),
-        native => SocketEntry::udp_local_address_change(entry.local_address.as_ref(), native)
+    Ok(
+        SocketEntry::udp_local_address_change(entry.local_address.as_ref(), native)
             .map(SerializableP3UdpEndpoint::Bound),
-    })
+    )
 }
 
 /// Updates the entry from a connect result, live and on replay.
@@ -474,14 +467,13 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         Ok(socket)
     }
 
-    fn disconnect(&mut self, socket: Resource<UdpSocket>) -> SocketResult<()> {
+    async fn disconnect(&mut self, socket: Resource<UdpSocket>) -> SocketResult<()> {
         observe_function_call(&*self.0, "sockets::types::udp-socket", "disconnect");
-        // Not recorded: the entry decides the result, live and on replay. The native socket is
-        // disconnected only when it holds the entry's endpoint; otherwise the endpoint rebuild
-        // binds it without connecting. Linux keeps only the address and port that a native bind
-        // named, so the local address goes back to the bind request (with the port of a recorded
-        // rebuild), or to the unspecified address and port 0 after an implicit bind. The next send
-        // records its new endpoint.
+        // The entry decides the errors without a recorded call. A disconnect records the native
+        // local address it leaves when the entry cannot derive it: Linux keeps the address and
+        // port that a native bind named, and the endpoint rebuild binds a fixed port that the
+        // guest's own bind may not have named. A native socket without the entry's endpoint is
+        // not disconnected; the rebuild binds it later without connecting.
         let rep = socket.rep();
         let entry = udp_entry(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?;
         if entry.phase == SocketPhase::Lost {
@@ -490,11 +482,55 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         if entry.remote_address.is_none() {
             return Err(types::ErrorCode::InvalidState.into());
         }
-        if entry.native_bound {
-            types::HostUdpSocket::disconnect(&mut WasiSocketsView::sockets(self.0), socket)?;
-        }
+        let response =
+            DurableCallSession::<P3SocketsTypesUdpSocketDisconnect, NotCancellable>::invoke(
+                self.0.durable_ctx_mut(),
+                HostRequestNoInput {},
+                DurableFunctionType::WriteLocal,
+                async |ctx| -> wasmtime::Result<_> {
+                    if !udp_entry(ctx, rep)?.native_bound {
+                        return Ok(HostResponseP3SocketsUdpDisconnect {
+                            result: Ok(()),
+                            local_address: None,
+                        });
+                    }
+                    let (result, native) = {
+                        let mut wasi = ctx.as_wasi_view();
+                        let mut view = wasi.sockets();
+                        let result =
+                            types::HostUdpSocket::disconnect(&mut view, Resource::new_borrow(rep))
+                                .await;
+                        let native = types::HostUdpSocket::get_local_address(
+                            &mut view,
+                            Resource::new_borrow(rep),
+                        )
+                        .ok()
+                        .map(SerializableP3IpSocketAddress::from);
+                        (result, native)
+                    };
+                    let expected = udp_entry(ctx, rep)?.udp_local_address_after_disconnect();
+                    Ok(HostResponseP3SocketsUdpDisconnect {
+                        result: match result {
+                            Ok(()) => Ok(()),
+                            Err(error) => Err(serialize_socket_error(error)?),
+                        },
+                        local_address: SocketEntry::udp_local_address_change(
+                            Some(&expected),
+                            native,
+                        ),
+                    })
+                },
+            )
+            .await
+            .map_err(SocketError::trap)?;
+        response
+            .result
+            .map_err(|error| SocketError::from(types::ErrorCode::from(error)))?;
         let entry = udp_entry(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?;
         entry.udp_disconnect();
+        if let Some(local_address) = response.local_address {
+            entry.local_address = Some(local_address);
+        }
         Ok(())
     }
 

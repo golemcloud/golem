@@ -2231,3 +2231,114 @@ async fn p2_udp_check_send_records_the_port_a_rebuild_on_port_zero_selects(
     assert_eq!(other.receive().await?.1.to_string(), local);
     session.finish().await
 }
+
+/// The rebuild that a live receive performs binds the recorded port, and Linux keeps that port on
+/// a later disconnect. The guest drops the receive before it completes, so only the disconnect can
+/// record the port: the getter and the source of the next datagram agree with the native socket,
+/// live and after a second reconstruction.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_disconnect_after_an_abandoned_receive_keeps_the_rebuilt_port(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-abandoned").await?;
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let local = local_address(&session, "u").await?;
+    assert!(local.starts_with("127.0.0.1:"), "{local}");
+
+    session.restart_executor().await?;
+    let abandoned: Result<bool, String> = session
+        .call(
+            "p3_udp_receive_abandoned",
+            data_value!("u".to_string(), 200u64),
+        )
+        .await?;
+    assert_eq!(abandoned, Ok(true));
+    // The rebuild bound the recorded port before the guest dropped the receive.
+    let taken = std::net::UdpSocket::bind(local.as_str());
+    assert_eq!(
+        taken.map(|_| ()).map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::AddrInUse)
+    );
+    let disconnected: Result<(), String> = session
+        .call("p3_udp_disconnect", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(disconnected, Ok(()));
+    assert_eq!(local_address(&session, "u").await?, local);
+    send_to(&session, "u", Some(other.port()), b"live").await?;
+    assert_eq!(other.receive().await?.1.to_string(), local);
+
+    session.restart_executor().await?;
+    assert_eq!(local_address(&session, "u").await?, local);
+    send_to(&session, "u", Some(other.port()), b"replayed").await?;
+    assert_eq!(other.receive().await?.1.to_string(), local);
+    session.finish().await
+}
+
+/// A disconnect after an implicit bind releases the port, and the socket stays bound without one:
+/// a receive waits. The rebuild after a reconstruction restores that state instead of leaving an
+/// unbound socket, whose receive fails with `invalid-state`.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_receive_after_a_released_disconnect_waits_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-released").await?;
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let disconnected: Result<(), String> = session
+        .call("p3_udp_disconnect", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(disconnected, Ok(()));
+    assert_eq!(local_address(&session, "u").await?, "0.0.0.0:0");
+    let live: Result<bool, String> = session
+        .call(
+            "p3_udp_receive_abandoned",
+            data_value!("u".to_string(), 200u64),
+        )
+        .await?;
+    assert_eq!(live, Ok(true));
+
+    session.restart_executor().await?;
+    let replayed: Result<bool, String> = session
+        .call(
+            "p3_udp_receive_abandoned",
+            data_value!("u".to_string(), 200u64),
+        )
+        .await?;
+    assert_eq!(replayed, Ok(true));
+    send_to(&session, "u", Some(peer.port()), b"after").await?;
+    let (data, source) = peer.receive().await?;
+    assert_eq!(data, b"after".to_vec());
+    assert_eq!(
+        local_address(&session, "u").await?,
+        format!("0.0.0.0:{}", source.port())
+    );
+    session.finish().await
+}

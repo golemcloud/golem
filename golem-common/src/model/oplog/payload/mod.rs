@@ -791,6 +791,12 @@ oplog_payload! {
             endpoint: Option<SerializableP3UdpEndpoint>,
             disconnected: bool,
         },
+        /// `local_address` is the native local address that the disconnect left, when it is not
+        /// the one the entry derives: a rebuilt socket keeps the port it was bound on.
+        P3SocketsUdpDisconnect {
+            result: Result<(), SerializableP3SocketErrorCode>,
+            local_address: Option<SerializableP3IpSocketAddress>,
+        },
         P3SocketsTcpConnect {
             result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableP3SocketErrorCode>,
             closed: bool,
@@ -1136,6 +1142,7 @@ pub mod host_functions {
         (P3SocketsTypesTcpSocketBind => "sockets::types::tcp-socket", "bind", P3SocketsBind, P3SocketsBind),
         (P3SocketsTypesUdpSocketConnect => "sockets::types::udp-socket", "connect", P3SocketsConnect, P3SocketsUdpConnect, denied = denied::sockets::p3_udp_connect),
         (P3SocketsTypesUdpSocketBind => "sockets::types::udp-socket", "bind", P3SocketsBind, P3SocketsBind),
+        (P3SocketsTypesUdpSocketDisconnect => "sockets::types::udp-socket", "disconnect", NoInput, P3SocketsUdpDisconnect),
         (GolemToolRpcInvokeAndAwait => "golem::tool::host::tool-rpc", "invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemToolRpcInvoke => "golem::tool::host::tool-rpc", "invoke", GolemToolInvoke, GolemToolUnitOrFailure),
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),

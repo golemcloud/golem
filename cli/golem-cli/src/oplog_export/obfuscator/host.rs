@@ -577,6 +577,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsTypesUdpSocketBind => {
             pair::<host_functions::P3SocketsTypesUdpSocketBind>(Bare::Neither)
         }
+        HostFunctionName::P3SocketsTypesUdpSocketDisconnect => {
+            pair::<host_functions::P3SocketsTypesUdpSocketDisconnect>(Bare::Neither)
+        }
         HostFunctionName::GolemToolRpcInvokeAndAwait => {
             pair::<host_functions::GolemToolRpcInvokeAndAwait>(Bare::Neither)
         }

@@ -1585,7 +1585,14 @@ fn p3_udp_socket_host_payload_pairs_roundtrip() {
                 data: b"incoming udp bytes".to_vec(),
                 remote_address: remote_address.clone(),
             }),
-            endpoint: Some(SerializableP3UdpEndpoint::Rebound(remote_address)),
+            endpoint: None,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketDisconnect>(
+        HostRequestNoInput {},
+        super::HostResponseP3SocketsUdpDisconnect {
+            result: Ok(()),
+            local_address: Some(remote_address),
         },
     );
 }

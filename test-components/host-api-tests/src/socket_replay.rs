@@ -1,6 +1,7 @@
 //! A durable agent that keeps P2 and P3 sockets in named slots across invocations, for the
 //! socket crash-and-replay tests. Every connect and bind goes to `127.0.0.1`.
 
+use futures_concurrency::future::Race;
 use golem_rust::{agent_definition, agent_implementation, read_only};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -180,7 +181,9 @@ enum Slot {
         socket: p2::UdpSocket,
     },
     /// A P2 UDP socket whose last `stream` call failed, so it has no streams.
-    P2UdpWithoutStreams { socket: p2::UdpSocket },
+    P2UdpWithoutStreams {
+        socket: p2::UdpSocket,
+    },
 }
 
 #[agent_definition(snapshotting = "enabled")]
@@ -251,6 +254,9 @@ pub trait SocketSession {
     ) -> Result<(), String>;
     /// Receives one datagram. Returns its data and source address.
     async fn p3_udp_receive(&self, slot: String) -> Result<(Vec<u8>, String), String>;
+    /// Starts a receive and drops it after `wait_ms` milliseconds. Returns `true` when the timer
+    /// won, `false` when a datagram arrived first, and the receive error when it failed.
+    async fn p3_udp_receive_abandoned(&self, slot: String, wait_ms: u64) -> Result<bool, String>;
     fn p3_udp_local_address(&self, slot: String) -> Result<String, String>;
     fn p3_udp_remote_address(&self, slot: String) -> Result<String, String>;
 
@@ -748,6 +754,33 @@ impl SocketSession for SocketSessionImpl {
         let (data, source) = result?;
         self.record(&slot, &data);
         Ok((data, p3_address(source)))
+    }
+
+    async fn p3_udp_receive_abandoned(&self, slot: String, wait_ms: u64) -> Result<bool, String> {
+        let removed = self.slots.borrow_mut().remove(&slot);
+        let socket = match removed {
+            Some(Slot::P3Udp { socket }) => socket,
+            Some(other) => {
+                self.slots.borrow_mut().insert(slot.clone(), other);
+                return Err(format!("slot {slot} holds no P3 UDP socket"));
+            }
+            None => return Err(format!("slot {slot} is empty")),
+        };
+        let receive = async { Some(socket.receive().await.map_err(error)) };
+        let timer = async {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(wait_ms * 1_000_000).await;
+            None
+        };
+        let result = (receive, timer).race().await;
+        self.insert(slot.clone(), Slot::P3Udp { socket });
+        match result {
+            None => Ok(true),
+            Some(received) => {
+                let (data, _) = received?;
+                self.record(&slot, &data);
+                Ok(false)
+            }
+        }
     }
 
     fn p3_udp_local_address(&self, slot: String) -> Result<String, String> {

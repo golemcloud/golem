@@ -1073,24 +1073,27 @@ address (`P3SocketsBind`, also for port 0) and keeps the bind request in the ent
 and receive record every local-address change, such as an implicit bind or a wildcard bind that
 connect narrows to an interface address, or a loss as `SerializableP3UdpEndpoint` in their
 response. On Linux a connect that fails with `EINVAL` dissolves the old association before it tries
-again, so the connect response also records when a failed connect left the socket disconnected,
-and the entry then loses its remote address. Replay updates the entry and touches no native socket; `disconnect` and the address
-getters are not recorded and use only the entry. `disconnect` resets the local address to the bind
-request, or to the unspecified address with port 0 after an implicit bind, because the native
-socket releases an implicitly bound port. At the first live operation, `ensure_native_endpoint`
-binds the native socket on the address that `SocketEntry::udp_rebuild_bind_address` selects and
-connects it again when the entry is connected, without sending a packet. A local address that
-names an interface, such as the one a connect selected, is bound as it is; an unspecified one is
-bound on the bind request's address with the recorded port, and with port 0 it stays unbound until
-the next send binds it implicitly. The socket address policy allows a fixed port only on a loopback
-address, so an unconnected wildcard or implicit endpoint with a fixed port cannot be rebuilt and
-is lost. A rebuild on a fixed port is recorded as `Rebound` in the response of the call that
-performed it, because Linux then keeps that address on a disconnect; the entry takes it as its bind
-request. Receive records the endpoint change of its rebuild too. When the rebuild
-fails, the entry becomes `Lost` and every later operation returns `connection-broken`; the rebuild
-is not checked against grants again, each datagram still is. Send records only the target and the
-result, never the datagram. An incomplete send completes with `connection-broken` and is not sent
-again; an incomplete receive re-executes after the rebuild.
+again, so the connect response also records when a failed connect left the socket disconnected, and
+the entry then loses its remote address. Replay updates the entry and touches no native socket; the
+address getters are not recorded and use only the entry. `disconnect` (`WriteLocal`,
+`P3SocketsUdpDisconnect`) resets the local address to the bind request, or to the unspecified
+address with port 0 after an implicit bind, because the native socket releases an implicitly bound
+port, and records the native local address when it differs: the endpoint rebuild binds a fixed port
+that Linux then keeps on the disconnect. Recording it at the disconnect, not at the call that
+rebuilt the endpoint, keeps it when the guest dropped that call. At the first live operation,
+`ensure_native_endpoint` binds the native socket on the address that
+`SocketEntry::udp_rebuild_bind_address` selects and connects it again when the entry is connected,
+without sending a packet. A local address that names an interface, such as the one a connect
+selected, is bound as it is; an unspecified one is bound on the bind request's address with the
+recorded port. A local address with port 0, which only a disconnect leaves, is not bound:
+`UdpSocket::assume_bound_after_disconnect` marks the new native socket bound, as the disconnect
+left the old one, so receive waits and the next send selects a port. The socket address policy
+allows a fixed port only on a loopback address, so an unconnected wildcard or implicit endpoint
+with a fixed port cannot be rebuilt and is lost. When the rebuild fails, the entry becomes `Lost`
+and every later operation returns `connection-broken`; the rebuild is not checked against grants
+again, each datagram still is. Send records only the target and the result, never the datagram. An
+incomplete send completes with `connection-broken` and is not sent again; an incomplete receive
+re-executes after the rebuild.
 
 P2 UDP (`durable_host/sockets/udp.rs`) uses the same entry and the same lazy rebuild.
 `start-bind` (`WriteLocal`) records the selected local address, `stream` (`WriteRemote`) the
@@ -1100,8 +1103,8 @@ The local address follows the P3 rules through the shared `SocketEntry` helpers:
 the bind request, `stream(none)` on a connected socket resets the local address to it as P3
 `disconnect` does, and `stream`, `send`, `receive` and `check-send` record every other change of
 the native local address (`udp_local_address_change`), such as the port that a rebuild on port 0
-selects. P2 needs no `Rebound`: its disconnect is a live `stream(none)` that records the native
-local address it leaves, so a rebuilt fixed port is recorded where it stays. A failed `stream` records `disconnected`, as P3 connect does, when
+selects. Its disconnect is a live `stream(none)` that records the native local address it leaves, as
+P3 `disconnect` does, so a rebuilt fixed port is recorded where it stays. A failed `stream` records `disconnected`, as P3 connect does, when
 it left the socket disconnected (Linux dissolves the old association on `EINVAL` before it tries
 again); the entry then loses its remote address, live and on replay.
 The guest's datagram streams are `DurableIncomingDatagramStream` and
