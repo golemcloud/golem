@@ -14,16 +14,61 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
+import * as vb from 'valibot';
 import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import * as http from '../src/http';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { s } from '../src/schema/markers';
+import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
 describe('agent HTTP routing (Phase 6)', () => {
+  it('validates query wire shapes when concrete schema types are erased', () => {
+    const cases = [
+      [z.array(z.string().readonly()), true],
+      [z.string().pipe(z.string()), true],
+      [s.option(z.array(z.number())), true],
+      [z.string().nullish(), true],
+      [s.option(s.option(z.array(z.string()))), true],
+      [z.record(z.enum(['env', 'region']), z.string()), true],
+      [s.option(z.tuple([z.string(), z.number()])), false],
+      [vb.tuple([vb.string(), vb.number()]), false],
+      [vb.union([vb.string(), vb.number()]), false],
+      [z.array(z.array(z.string())), false],
+      [s.text(), false],
+    ] as const;
+    for (const [i, [schema, accepted]] of cases.entries()) {
+      for (const explicit of [false, true]) {
+        const name = `queryShapeCase${i}_${explicit}`;
+        defineAgent({
+          name,
+          id: {},
+          http: http.mount('/query-shapes'),
+          methods: {
+            read: method({
+              input: { value: schema as StandardSchemaV1 },
+              returns: z.string(),
+              http: explicit ? http.post('/read?q={value}') : http.get('/read'),
+            }),
+          },
+        });
+        if (accepted) {
+          expect(get(name), name).toBeDefined();
+          // Inference belongs to the host compiler, not the SDK template.
+          expect(get(name)!.methods[0].httpEndpoint[0].queryVars).toHaveLength(explicit ? 1 : 0);
+        } else {
+          expect(get(name), name).toBeUndefined();
+          expect(AgentTypeRegistry.getRegistrationError(name)?.join('\n')).toContain(
+            'cannot bind from query',
+          );
+        }
+      }
+    }
+  });
+
   it('validates public route mode spellings before emitting WIT metadata', () => {
     for (const [mode, expected] of [
       ['durableStreams', 'durable-streams'],

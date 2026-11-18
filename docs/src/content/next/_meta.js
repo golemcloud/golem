@@ -6,6 +6,7 @@ export default {
   },
   "what-is-golem": "What is Golem?",
   quickstart: "Quickstart",
+  "migrating-from-1-6": "Migrating from 1.6",
   concepts: {
     title: "Concepts",
   },

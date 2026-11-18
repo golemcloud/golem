@@ -16,11 +16,13 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
@@ -266,9 +268,8 @@ func ToolHTTPDeclaration(opts ...MethodOpt) (toolCommon.CommandHttp, error) {
 }
 
 // GET builds a GET endpoint; like the other verb constructors below it names an
-// HTTP method plus a path suffix. GET and HEAD are bodyless (they must bind
-// every input field, since there is no request body to carry the rest); the
-// other verbs carry unbound fields in the body.
+// HTTP method plus a path suffix. GET, HEAD and DELETE read remaining input
+// fields from the query string; other verbs read them from the body.
 func GET(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("GET", path, opts) }
 
 // HEAD builds a HEAD endpoint, bodyless like GET.
@@ -466,7 +467,7 @@ func validVarName(n string) string {
 
 func isBodyless(verb string) bool {
 	switch strings.ToUpper(verb) {
-	case "GET", "HEAD":
+	case "GET", "HEAD", "DELETE":
 		return true
 	}
 	return false
@@ -483,6 +484,30 @@ func bindableKind(k reflect.Kind) bool {
 		return true
 	}
 	return false
+}
+
+func queryBindableType(t reflect.Type) bool {
+	switch t {
+	case reflect.TypeFor[values.Text](), reflect.TypeFor[values.Binary](),
+		reflect.TypeFor[values.URL](), reflect.TypeFor[values.Path](), reflect.TypeFor[values.UUID](),
+		reflect.TypeFor[time.Duration]():
+		return false
+	}
+	if t.Kind() == reflect.Pointer {
+		return queryBindableType(t.Elem())
+	}
+	if elem, ok := values.OptionElem(reflect.Zero(t).Interface()); ok {
+		return queryBindableType(elem)
+	}
+	switch t.Kind() {
+	case reflect.Slice:
+		return bindableKind(t.Elem().Kind()) && queryBindableType(t.Elem())
+	case reflect.Map:
+		return bindableKind(t.Key().Kind()) && queryBindableType(t.Key()) &&
+			bindableKind(t.Elem().Kind()) && queryBindableType(t.Elem())
+	default:
+		return bindableKind(t.Kind())
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -598,10 +623,10 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	for _, name := range e.order {
 		m := e.methods[name]
 		inNames := fieldNameSet(userFields(m.inFields))
-		inKind := fieldKindMap(userFields(m.inFields))
+		inTypes := fieldTypeMap(userFields(m.inFields))
 		principals := fieldNameSet(principalFields(m.inFields))
 		for _, ep := range m.endpoints {
-			det, eerrs := validateAndCompileEndpoint(ep, inNames, inKind, principals, mountVars, methodStreamSlots(m.inFields, m.outType))
+			det, eerrs := validateAndCompileEndpoint(ep, inNames, inTypes, principals, mountVars, methodStreamSlots(m.inFields, m.outType))
 			for _, ee := range eerrs {
 				rec(name, "%s", ee)
 			}
@@ -678,7 +703,7 @@ func phantomSelectorConflict(sel PhantomSelector, det common.HttpEndpointDetails
 	return ""
 }
 
-func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map[string]reflect.Kind, principals map[string]bool, mountVars map[string]bool, slots streamSlots) (common.HttpEndpointDetails, []string) {
+func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inTypes map[string]reflect.Type, principals map[string]bool, mountVars map[string]bool, slots streamSlots) (common.HttpEndpointDetails, []string) {
 	var errs []string
 	if ep.prefix || ep.routeID != nil || len(ep.responseHeaders) != 0 {
 		errs = append(errs, "prefix, RouteID and ResponseHeaders are tool HTTP declarations")
@@ -702,8 +727,8 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 			return
 		}
 		if inNames[field] {
-			if k, ok := inKind[field]; ok && !bindableKind(k) {
-				errs = append(errs, fmt.Sprintf("%s cannot bind input field %q (kind %s); only scalar fields decode from a URL", where, field, k))
+			if typ, ok := inTypes[field]; ok && ((where == "query" && !queryBindableType(typ)) || (where != "query" && !bindableKind(typ.Kind()))) {
+				errs = append(errs, fmt.Sprintf("%s cannot bind input field %q (kind %s); only scalar fields or query collections decode from a URL", where, field, typ.Kind()))
 			}
 		}
 		bound[field]++
@@ -748,8 +773,16 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 
 	if isBodyless(ep.method) {
 		for _, f := range sortedKeys(inNames) {
+			if _, stream := slots.inputs[f]; stream {
+				continue
+			}
 			if bound[f] == 0 {
-				errs = append(errs, fmt.Sprintf("%s endpoint must bind every input field, but %q is unbound (a bodyless verb carries no request body)", ep.method, f))
+				if !queryBindableType(inTypes[f]) {
+					errs = append(errs, fmt.Sprintf("%s cannot bind implicit query input %q; records and rich payloads require a body method", ep.method, f))
+				}
+				if queryWire[f] {
+					errs = append(errs, fmt.Sprintf("implicit query input %q conflicts with an explicit query binding", f))
+				}
 			}
 		}
 	}
@@ -926,10 +959,10 @@ func fieldNameSet(fs []engine.Field) map[string]bool {
 	return m
 }
 
-func fieldKindMap(fs []engine.Field) map[string]reflect.Kind {
-	m := make(map[string]reflect.Kind, len(fs))
+func fieldTypeMap(fs []engine.Field) map[string]reflect.Type {
+	m := make(map[string]reflect.Type, len(fs))
 	for _, f := range fs {
-		m[f.Name] = f.Typ.Kind()
+		m[f.Name] = f.Typ
 	}
 	return m
 }

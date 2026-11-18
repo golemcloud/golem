@@ -72,6 +72,17 @@ if ! command -v limactl >/dev/null 2>&1; then
   exit 1
 fi
 
+# Lima uses os.UserCacheDir()/lima for downloads (XDG_CACHE_HOME on Linux).
+# Resolve inherited images too: the same URL with a new digest must get a new
+# cache namespace, rather than fail Lima's cached-digest comparison.
+# Keep LIMA_HOME unchanged so VM disks never enter the persistent image cache.
+if [[ $(uname -s) == Linux ]]; then
+  images=$(limactl template yq "${template}" '.images')
+  image_key=$(printf '%s' "${images}" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  export XDG_CACHE_HOME="${repo_root}/.validation-cache/lima-images-v1/${image_key}"
+  mkdir -p "${XDG_CACHE_HOME}"
+fi
+
 exists=false
 while read -r name; do
   if [[ ${name} == "${instance}" ]]; then

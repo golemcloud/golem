@@ -73,3 +73,23 @@ tools checkout with `moon -C <tools-path> run cmd --` instead.
 For an ordinary registry dependency, run `moon check --target wasm` and `golem build --yes`. Confirm that the
 dependency supports the component's `wasm` target; native-only and JavaScript-only packages cannot
 be linked into a Golem agent.
+
+## Files that only one preset compiles
+
+The `debug` preset builds with `moon build --target wasm` and the `release` preset with
+`moon build --target wasm --release`. A `debug` or `release` condition in a package's `targets`
+option makes `moon` compile that file only into the matching build:
+
+```moonbit
+options(
+  targets: {
+    "checks_debug.mbt": [ "debug" ],
+    "checks_release.mbt": [ "release" ],
+  },
+)
+```
+
+The two presets then compile different files, so the agent can behave differently in `debug` and
+in `release`. Golem does not check or warn about these conditions. Test such a package with both
+presets, for example with `golem build --yes -P release`. Load [`golem-profiles-and-environments`](/next/how-to-guides/common/golem-profiles-and-environments) for
+how the presets of each SDK differ.

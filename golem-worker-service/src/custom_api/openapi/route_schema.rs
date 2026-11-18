@@ -30,15 +30,15 @@
 //! backs `components/schemas` emission.
 
 use super::call_agent;
-use golem_common::schema::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::merge_agent_graphs;
 use golem_common::schema::multimodal::is_multimodal_schema_type;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
+use golem_common::schema::{FieldSource, OutputSchema};
 use golem_service_base::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledOutputSchema, DurableStreamRepresentation,
-    PathSegment, PhantomSelection, QueryOrHeaderType, RequestBodySchema,
+    MethodParameter, PathSegment, PhantomSelection, QueryOrHeaderType, RequestBodySchema,
 };
 
 /// Schema-model view of an entire set of compiled routes, ready for the
@@ -237,10 +237,55 @@ fn lower_call_agent(
     })
     .collect::<Result<Vec<_>, String>>()?;
 
-    let mut query_params = call_agent::get_query_variable_and_types(&inner.method_parameters)
-        .into_iter()
-        .map(|(name, qoht)| lower_named_param(name, qoht))
+    // Compiled parameters follow user input order, excluding injected fields
+    // and stream resource slots, just as runtime argument resolution does.
+    let fields: Vec<_> = inner
+        .method_input
+        .input_schema
+        .fields()
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .filter(|field| {
+            !matches!(
+                inner.method_input.graph.resolve_ref(&field.schema),
+                Ok(SchemaType::Stream { .. })
+            )
+        })
+        .collect();
+    let mut query_params = inner
+        .method_parameters
+        .iter()
+        .enumerate()
+        .filter_map(|(index, parameter)| match parameter {
+            MethodParameter::Query {
+                query_parameter_name,
+                parameter_type,
+            } => Some((index, query_parameter_name, parameter_type)),
+            _ => None,
+        })
+        .map(|(index, name, parameter_type)| {
+            let field = fields
+                .get(index)
+                .ok_or("Query parameter has no input field")?;
+            let mut schema = field.schema.clone();
+            let metadata = schema.metadata_mut();
+            if field.metadata.doc.is_some() {
+                metadata.doc.clone_from(&field.metadata.doc);
+            }
+            if !field.metadata.examples.is_empty() {
+                metadata.examples.clone_from(&field.metadata.examples);
+            }
+            if field.metadata.deprecated.is_some() {
+                metadata.deprecated.clone_from(&field.metadata.deprecated);
+            }
+            Ok(NamedParamSchema {
+                name: name.clone(),
+                schema,
+                required: !matches!(parameter_type, QueryOrHeaderType::Option { .. }),
+            })
+        })
         .collect::<Result<Vec<_>, String>>()?;
+    graphs.push(inner.method_input.graph.clone());
     if let PhantomSelection::Query { name, optional } = &inner.phantom_selection {
         query_params.push(NamedParamSchema {
             name: name.clone(),
@@ -255,7 +300,6 @@ fn lower_call_agent(
         .collect::<Result<Vec<_>, String>>()?;
 
     let (response, stream_slots) = if inner.route_mode == AgentRouteMode::DurableStreams {
-        graphs.push(inner.method_input.graph.clone());
         graphs.push(inner.expected_agent_response.graph.clone());
         (ResponseModel::Unit, Some(lower_stream_slots(inner)?))
     } else {

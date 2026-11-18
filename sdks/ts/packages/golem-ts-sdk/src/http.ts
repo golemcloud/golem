@@ -210,10 +210,10 @@ declare const endpointBoundBrand: unique symbol;
 declare const endpointHeaderNamesBrand: unique symbol;
 
 /**
- * Whether an endpoint's HTTP verb permits a request body. `get` / `head` are
+ * Whether an endpoint's HTTP verb permits a request body. `get` / `head` / `del` are
  * `"bodyless"`; every other verb (and `custom`) is `"bodyful"`. Used as a
- * phantom on {@link HttpEndpointSpec} so `method({...})` can statically reject a
- * bodyless endpoint whose bindings do not cover every method parameter.
+ * phantom on {@link HttpEndpointSpec} so `method({...})` can check the types of
+ * inputs implicitly bound from the query string.
  */
 export type EndpointKind = 'bodyless' | 'bodyful';
 
@@ -401,8 +401,8 @@ export const head = verbShorthand('head') as unknown as VerbFactory<'bodyless'>;
 export const post = verbShorthand('post') as unknown as VerbFactory<'bodyful'>;
 /** Shorthand for `{ method: 'put', path, ...opts }`. Bodyful. */
 export const put = verbShorthand('put') as unknown as VerbFactory<'bodyful'>;
-/** Shorthand for `{ method: 'delete', path, ...opts }`. Bodyful. */
-export const del = verbShorthand('delete') as unknown as VerbFactory<'bodyful'>;
+/** Shorthand for `{ method: 'delete', path, ...opts }`. Bodyless. */
+export const del = verbShorthand('delete') as unknown as VerbFactory<'bodyless'>;
 export { del as delete };
 /** Shorthand for `{ method: 'patch', path, ...opts }`. Bodyful. */
 export const patch = verbShorthand('patch') as unknown as VerbFactory<'bodyful'>;

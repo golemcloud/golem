@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
