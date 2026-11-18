@@ -334,6 +334,7 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         attempt_id: Some(uuid::Uuid::new_v4().into()),
         expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
         request_key: Some(request_key.into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let mut failure = Box::pin(executor.invoke_agent_session(invocation));
@@ -1088,6 +1089,7 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
                 freshness_disposition:
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                         as i32,
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             })
             .await
