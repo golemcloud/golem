@@ -15,7 +15,7 @@ on:
       parallel:
         description: 'Acceptance only: exercise the three overlapping subflows'
         type: boolean
-        default: false
+        default: true
 
 # Only one cycle runs. Replaced pending wake-ups lose no exact-source requests:
 # those requests remain open issues until their cycle finishes.
@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   select:
-    if: github.repository == 'golemcloud/golem' && (github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && vars.MAIN_VALIDATION_ENABLED == 'true'))
+    if: github.repository == 'golemcloud/golem' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -47,7 +47,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ACCEPTANCE: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance }}
           REQUESTED_SOURCE: ${{ inputs.source }}
-          ENABLED: ${{ vars.MAIN_VALIDATION_ENABLED }}
         shell: bash
         run: |
           set -euo pipefail
@@ -61,7 +60,7 @@ jobs:
             [[ "$source" =~ ^[a-f0-9]{40}$ ]]
             gh api "$repository/commits/$source" --silent
           else
-            [[ "$ENABLED" == true && "$GITHUB_REF" == refs/heads/main && -z "$REQUESTED_SOURCE" ]]
+            [[ "$GITHUB_REF" == refs/heads/main && -z "$REQUESTED_SOURCE" ]]
             main=$(gh api "$repository/git/ref/heads/main" --jq .object.sha)
             gh api --paginate --slurp "$repository/issues?state=open&labels=main-validation-request&sort=created&direction=asc&per_page=100" > "$RUNNER_TEMP/requests.json"
             while IFS= read -r issue; do
@@ -118,10 +117,12 @@ jobs:
     timeout-minutes: 330
     permissions:
       contents: read
+    outputs:
+      workload_exit_code: ${{ steps.workload.outputs.exit_code }}
     env:
       CARGO_BUILD_JOBS: 20
       WASI_SDK_PATH: /opt/wasi-sdk
-      MAIN_VALIDATION_PARALLEL: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance && inputs.parallel }}
+      MAIN_VALIDATION_PARALLEL: ${{ !(github.event_name == 'workflow_dispatch' && inputs.acceptance) || inputs.parallel }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -158,8 +159,20 @@ jobs:
           echo "SBT_OPTS=-Dsbt.ivy.home=$PWD/.validation-cache/ivy -Dsbt.global.base=$PWD/.validation-cache/sbt-global -Dsbt.boot.directory=$PWD/.validation-cache/sbt-boot" >> "$GITHUB_ENV"
       - uses: ./.validation-control/.github/actions/setup-main-validation
       - name: Validate the selected source
+        id: workload
         timeout-minutes: 300
-        run: cargo make --profile ci main-validation
+        env:
+          CI_DASHBOARD_URL: ${{ vars.CI_DASHBOARD_URL }}
+          CI_DASHBOARD_PROGRESS_TOKEN: ${{ secrets.CI_DASHBOARD_PROGRESS_TOKEN }}
+          MAIN_VALIDATION_SOURCE: ${{ needs.select.outputs.source }}
+          MAIN_VALIDATION_CONTEXT: ${{ needs.select.outputs.context }}
+        shell: bash
+        run: |
+          # Keep ordinary workload failures out of the cache-owning job's status.
+          # The result job requires this exit code as well as successful cache/report delivery.
+          status=0
+          python3 .validation-control/.github/main-validation/progress.py observe -- cargo make --profile ci main-validation || status=$?
+          printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
       - name: Retain Linux reports even after failure
         if: always()
         uses: actions/upload-artifact@v6
@@ -173,7 +186,7 @@ jobs:
   apfs:
     needs: select
     if: needs.select.outputs.selected == 'true'
-    runs-on: macos-15
+    runs-on: blacksmith-6vcpu-macos-latest
     timeout-minutes: 90
     permissions:
       contents: read
@@ -185,6 +198,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-shared-key: main-validation-apfs
+          cache-save-if: 'true'
       - name: Execute same-source native APFS coverage
         env:
           MAIN_VALIDATION_REPORT_DIR: ${{ runner.temp }}/main-validation-apfs
@@ -233,7 +247,7 @@ jobs:
         with:
           artifact-name: main-validation-test-report
           github-token: ${{ github.token }}
-          report-path: evidence/linux/ctrf-*.json
+          report-path: evidence/**/ctrf-*.json
       - name: Publish the exact-source result
         if: always()
         env:
@@ -241,7 +255,7 @@ jobs:
           SOURCE: ${{ needs.select.outputs.source }}
           REQUEST: ${{ needs.select.outputs.request }}
           CONTEXT: ${{ needs.select.outputs.context }}
-          PASSED: ${{ needs.linux.result == 'success' && needs.apfs.result == 'success' && steps.linux-reports.outcome == 'success' && steps.apfs-reports.outcome == 'success' && steps.report.outcome == 'success' }}
+          PASSED: ${{ needs.linux.result == 'success' && needs.linux.outputs.workload_exit_code == '0' && needs.apfs.result == 'success' && steps.linux-reports.outcome == 'success' && steps.apfs-reports.outcome == 'success' && steps.report.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail

@@ -16,7 +16,6 @@ use bytes::Bytes;
 use wasmtime::component::Resource;
 
 use crate::durable_host::concurrent::ResolvedCall;
-use crate::durable_host::sockets::policy::SocketPolicy;
 use crate::durable_host::sockets::{SocketEntry, SocketPhase};
 use crate::durable_host::{DurabilityHost, DurableCallSession, DurableWorkerCtx, NotCancellable};
 use crate::workerctx::WorkerCtx;
@@ -731,8 +730,7 @@ async fn authorize_connect<Ctx: WorkerCtx>(
     let response = 'resp: {
         let handle = match begun.resolve(ctx).await.map_err(SocketError::trap)? {
             ResolvedCall::Live(begun) => {
-                let target = SocketPolicy::new(&ctx.state.config)
-                    .target(std::net::SocketAddr::from(*remote_address));
+                let target = ctx.socket_target(std::net::SocketAddr::from(*remote_address));
                 let denial = match target {
                     Ok(target) => ctx
                         .authorize_live_permission(&target)

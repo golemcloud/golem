@@ -691,6 +691,7 @@ pub enum LookupResult {
     Complete(Result<AgentInvocationOutput, WorkerExecutorError>),
 }
 
+#[derive(Clone)]
 pub struct InvocationContext {
     pub trace_id: TraceId,
     pub spans: HashMap<SpanId, Arc<InvocationContextSpan>>,
