@@ -101,7 +101,7 @@ fn apply_endpoint(entry: &mut SocketEntry, endpoint: &Option<SerializableP3UdpEn
                 ..entry
                     .bind_request
                     .clone()
-                    .unwrap_or_else(|| unspecified_address(entry.family))
+                    .unwrap_or_else(|| entry.unspecified_address())
             });
             entry.local_address = Some(local_address.clone());
             if entry.phase == SocketPhase::Created {
@@ -142,15 +142,8 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     // The native socket is bound as the guest bound it: on the address of its bind request, or
     // the unspecified address after an implicit bind, with the recorded port. A connect then
     // selects the same interface address again.
-    let unspecified = unspecified_address(entry.family);
-    let bind_address =
-        entry
-            .local_address
-            .clone()
-            .map(|local_address| SerializableP3IpSocketAddress {
-                port: local_address.port,
-                ..entry.bind_request.clone().unwrap_or(unspecified.clone())
-            });
+    let unspecified = entry.unspecified_address();
+    let bind_address = entry.udp_rebuild_bind_address();
     let mut rebound = false;
     let restored = match bind_address {
         // No endpoint, or one that a disconnect released: the next send binds implicitly.
@@ -213,27 +206,9 @@ fn endpoint_change<Ctx: WorkerCtx>(
     let rebound = std::mem::take(&mut entry.native_rebound);
     Ok(match native {
         Some(address) if rebound => Some(SerializableP3UdpEndpoint::Rebound(address)),
-        Some(address) if entry.local_address.as_ref() != Some(&address) => {
-            Some(SerializableP3UdpEndpoint::Bound(address))
-        }
-        _ => None,
+        native => SocketEntry::udp_local_address_change(entry.local_address.as_ref(), native)
+            .map(SerializableP3UdpEndpoint::Bound),
     })
-}
-
-fn unspecified_address(family: types::IpAddressFamily) -> SerializableP3IpSocketAddress {
-    match family {
-        types::IpAddressFamily::Ipv4 => types::IpSocketAddress::Ipv4(types::Ipv4SocketAddress {
-            address: (0, 0, 0, 0),
-            port: 0,
-        }),
-        types::IpAddressFamily::Ipv6 => types::IpSocketAddress::Ipv6(types::Ipv6SocketAddress {
-            address: (0, 0, 0, 0, 0, 0, 0, 0),
-            port: 0,
-            flow_info: 0,
-            scope_id: 0,
-        }),
-    }
-    .into()
 }
 
 /// Updates the entry from a connect result, live and on replay.
@@ -536,14 +511,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
             types::HostUdpSocket::disconnect(&mut WasiSocketsView::sockets(self.0), socket)?;
         }
         let entry = udp_entry(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?;
-        entry.remote_address = None;
-        entry.local_address = Some(
-            entry
-                .bind_request
-                .clone()
-                .unwrap_or_else(|| unspecified_address(entry.family)),
-        );
-        entry.phase = SocketPhase::Bound;
+        entry.udp_disconnect();
         Ok(())
     }
 

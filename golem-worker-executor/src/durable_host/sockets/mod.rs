@@ -25,7 +25,9 @@ use golem_common::model::oplog::types::{
 };
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use wasmtime_wasi::p3::bindings::sockets::types::IpAddressFamily;
+use wasmtime_wasi::p3::bindings::sockets::types::{
+    IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, Ipv6SocketAddress,
+};
 
 /// Store-local socket state, reconstructed from recorded bind, connect and acquire results.
 pub(crate) type SocketEntries = HashMap<u32, SocketEntry>;
@@ -54,6 +56,8 @@ pub(crate) struct SocketEntry {
     pub send_taken: bool,
     pub receive_taken: bool,
     pub native_bound: bool,
+    /// P2: `start-bind` succeeded and `finish-bind` has not completed it yet.
+    pub bind_pending: bool,
     /// The endpoint rebuild bound the native UDP socket on a fixed port, and no recorded
     /// endpoint change reported it yet.
     pub native_rebound: bool,
@@ -71,9 +75,69 @@ impl SocketEntry {
             send_taken: false,
             receive_taken: false,
             native_bound: false,
+            bind_pending: false,
             native_rebound: false,
             options: TcpSocketOptions::default(),
         }
+    }
+
+    /// The unspecified address of the socket's family, with port 0.
+    pub fn unspecified_address(&self) -> SerializableP3IpSocketAddress {
+        match self.family {
+            IpAddressFamily::Ipv4 => IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (0, 0, 0, 0),
+                port: 0,
+            }),
+            IpAddressFamily::Ipv6 => IpSocketAddress::Ipv6(Ipv6SocketAddress {
+                address: (0, 0, 0, 0, 0, 0, 0, 0),
+                port: 0,
+                flow_info: 0,
+                scope_id: 0,
+            }),
+        }
+        .into()
+    }
+
+    /// The UDP local address after a disconnect. Linux keeps only the address and port that an
+    /// explicit bind named, so this is the bind request, or the unspecified address and port 0
+    /// after an implicit bind.
+    pub fn udp_local_address_after_disconnect(&self) -> SerializableP3IpSocketAddress {
+        self.bind_request
+            .clone()
+            .unwrap_or_else(|| self.unspecified_address())
+    }
+
+    /// Disconnects the UDP entry: no remote address, and the local address after a disconnect.
+    pub fn udp_disconnect(&mut self) {
+        self.remote_address = None;
+        self.local_address = Some(self.udp_local_address_after_disconnect());
+        self.phase = SocketPhase::Bound;
+    }
+
+    /// The address a UDP endpoint rebuild binds the native socket on: the address of the bind
+    /// request, or the unspecified address after an implicit bind, with the recorded port. A
+    /// connect then selects the same interface address again. `None` when the socket has no
+    /// local address.
+    pub fn udp_rebuild_bind_address(&self) -> Option<SerializableP3IpSocketAddress> {
+        self.local_address
+            .as_ref()
+            .map(|local_address| SerializableP3IpSocketAddress {
+                port: local_address.port,
+                ..self
+                    .bind_request
+                    .clone()
+                    .unwrap_or_else(|| self.unspecified_address())
+            })
+    }
+
+    /// The native UDP local address after a live connect or send when it differs from
+    /// `expected`: an implicit bind, or the interface address that a connect selects for a
+    /// wildcard bind. Every such change is recorded.
+    pub fn udp_local_address_change(
+        expected: Option<&SerializableP3IpSocketAddress>,
+        native: Option<SerializableP3IpSocketAddress>,
+    ) -> Option<SerializableP3IpSocketAddress> {
+        native.filter(|address| expected != Some(address))
     }
 }
 

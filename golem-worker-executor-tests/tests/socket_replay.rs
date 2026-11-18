@@ -1322,6 +1322,458 @@ async fn p3_udp_disconnect_replays_from_the_entry(
     session.finish().await
 }
 
+/// A completed P2 UDP exchange is not repeated by replay: the peer gets no second datagram, the
+/// received datagram comes from the oplog, and no sent bytes are stored. `start-bind`, `stream`,
+/// `check-send`, `send` and `receive` are recorded once each.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_completed_exchange_replays_without_contacting_the_peer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-exchange").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p2_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(peer.port()), b"p2-7a1f".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(peer.receive().await?, (b"p2-7a1f".to_vec(), local));
+
+    let (receive, answer) = tokio::join!(
+        session.call::<Result<(Vec<u8>, String), String>>(
+            "p2_udp_receive",
+            data_value!("u".to_string())
+        ),
+        peer.socket.send_to(b"world", local)
+    );
+    answer?;
+    assert_eq!(
+        receive?,
+        Ok((b"world".to_vec(), format!("127.0.0.1:{}", peer.port())))
+    );
+    let receives_before = session.starts("sockets::udp::receive").await?;
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert_eq!(log, vec![received("u", b"world")]);
+    assert_eq!(
+        peer.received_soon().await,
+        Vec::<Vec<u8>>::new(),
+        "replay sends no datagram"
+    );
+    assert_eq!(session.starts("sockets::udp::start_bind").await?, 1);
+    assert_eq!(session.starts("sockets::udp::stream").await?, 1);
+    assert_eq!(session.starts("sockets::udp::send").await?, 1);
+    assert_eq!(session.starts("sockets::udp::check_send").await?, 1);
+    assert_eq!(
+        session.starts("sockets::udp::receive").await?,
+        receives_before
+    );
+    assert!(!oplog_shows(&session, b"p2-7a1f").await?);
+    session.finish().await
+}
+
+/// A connected P2 UDP socket gets its endpoint back after replay: the getters answer from the
+/// entry, and a connected `send` with no address reaches the peer from the recorded local port.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_connected_stream_survives_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-conn").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), local.port(), Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), None::<u16>, b"before".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(peer.receive().await?, (b"before".to_vec(), local));
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    let remote_after: Result<String, String> = session
+        .call("p2_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), None::<u16>, b"after".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        (local_after, remote_after, sent),
+        (
+            Ok(local.to_string()),
+            Ok(format!("127.0.0.1:{}", peer.port())),
+            Ok(1)
+        )
+    );
+    assert_eq!(peer.receive().await?, (b"after".to_vec(), local));
+
+    // A live receive after the rebuild reads the native socket.
+    let (receive, answer) = tokio::join!(
+        session.call::<Result<(Vec<u8>, String), String>>(
+            "p2_udp_receive",
+            data_value!("u".to_string())
+        ),
+        peer.socket.send_to(b"reply", local)
+    );
+    answer?;
+    assert_eq!(
+        receive?,
+        Ok((b"reply".to_vec(), format!("127.0.0.1:{}", peer.port())))
+    );
+    session.finish().await
+}
+
+/// A bind to port 0 records the port the OS chose, so the rebuilt socket sends from it.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_ephemeral_bind_keeps_its_port_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-eph").await?;
+    let bound: Result<(), String> = session
+        .call("p2_udp_bind", data_value!("u".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let local: String = session
+        .call::<Result<String, String>>("p2_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    assert!(!local.ends_with(":0"), "{local}");
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local_after, Ok(local.clone()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(peer.port()), b"eph".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    let (data, source) = peer.receive().await?;
+    assert_eq!((data, source.to_string()), (b"eph".to_vec(), local));
+    session.finish().await
+}
+
+/// The P2 `error-code` values as the fixture renders them with `Debug`.
+const P2_CONNECTION_RESET: &str = "ErrorCode { code: 15, name: \"connection-reset\", message: \"The TCP connection was reset.\" }";
+const P2_INVALID_STATE: &str = "ErrorCode { code: 9, name: \"invalid-state\", message: \"The operation is not valid in the socket's current state.\" }";
+
+/// When the recorded local port is taken after the crash, the first live operation fails with
+/// `connection-reset`, every later one does too, and the loss is recorded.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_taken_port_after_replay_reports_connection_reset(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-taken").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p2_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+
+    drop(session.executor.take());
+    let squatter = tokio::time::timeout(WAIT, async {
+        loop {
+            match UdpSocket::bind(local).await {
+                Ok(socket) => break socket,
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(50)).await
+                }
+                Err(error) => panic!("binding the recorded port failed: {error}"),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the old executor never released {local}"))?;
+    session.restart_executor().await?;
+    let checked: Result<u64, String> = session
+        .call("p2_udp_check_send", data_value!("u".to_string()))
+        .await?;
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(peer.port()), b"lost".to_vec()),
+        )
+        .await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(
+        (checked, sent, local_after),
+        (
+            Err(P2_CONNECTION_RESET.to_string()),
+            Err(P2_CONNECTION_RESET.to_string()),
+            Ok(local.to_string())
+        )
+    );
+    assert_eq!(peer.received_soon().await, Vec::<Vec<u8>>::new());
+
+    drop(squatter);
+    session.restart_executor().await?;
+    let sent_later: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(peer.port()), b"lost".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent_later, Err(P2_CONNECTION_RESET.to_string()));
+    assert_eq!(peer.received_soon().await, Vec::<Vec<u8>>::new());
+    session.finish().await
+}
+
+/// A `stream(None)` after a connected `stream` replays from the entry: the rebuilt socket is
+/// bound and not connected, and sends to another peer.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_restream_unconnected_replays_from_the_entry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-disc").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), local.port(), Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let restreamed: Result<(), String> = session
+        .call("p2_udp_restream", data_value!("u".to_string(), None::<u16>))
+        .await?;
+    assert_eq!(restreamed, Ok(()));
+
+    session.restart_executor().await?;
+    let remote: Result<String, String> = session
+        .call("p2_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"free".to_vec()),
+        )
+        .await?;
+    assert_eq!((remote, sent), (Err(P2_INVALID_STATE.to_string()), Ok(1)));
+    assert_eq!(other.receive().await?, (b"free".to_vec(), local));
+    session.finish().await
+}
+
+/// A connect fixes a wildcard local address. The entry takes the connected local address, so the
+/// getter answers the same after replay and the rebuilt socket sends from the same address.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_wildcard_bind_records_the_connected_local_address(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-wild").await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams_at",
+            data_value!(
+                "u".to_string(),
+                "0.0.0.0:0".to_string(),
+                Some(format!("127.0.0.1:{}", peer.port()))
+            ),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let local: String = session
+        .call::<Result<String, String>>("p2_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        local.starts_with("127.0.0.1:") && !local.ends_with(":0"),
+        "{local}"
+    );
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local_after, Ok(local.clone()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), None::<u16>, b"wild".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    let (data, source) = peer.receive().await?;
+    assert_eq!((data, source.to_string()), (b"wild".to_vec(), local));
+    session.finish().await
+}
+
+/// A failed connect of a connected socket leaves the native socket disconnected. The entry
+/// records the state the call left, so the getters answer the same after replay.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_failed_restream_records_the_state_it_leaves(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-fail").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), local.port(), Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let restreamed: Result<(), String> = session
+        .call(
+            "p2_udp_restream_to",
+            data_value!("u".to_string(), Some("240.0.0.1:12345".to_string())),
+        )
+        .await?;
+    assert!(
+        restreamed
+            .as_ref()
+            .is_err_and(|error| error.contains("invalid-argument")),
+        "{restreamed:?}"
+    );
+    let live_local: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    let live_remote: Result<String, String> = session
+        .call("p2_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(
+        (live_local.clone(), live_remote.clone()),
+        (Ok(local.to_string()), Err(P2_INVALID_STATE.to_string()))
+    );
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    let remote_after: Result<String, String> = session
+        .call("p2_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!((local_after, remote_after), (live_local, live_remote));
+    session.finish().await
+}
+
+/// A disconnect can release an ephemeral port, and the next send binds a new one. The entry
+/// records the port that send used, so the rebuilt socket sends from it after replay.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_send_after_disconnect_records_its_local_address(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-rel").await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), 0u16, Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let restreamed: Result<(), String> = session
+        .call("p2_udp_restream", data_value!("u".to_string(), None::<u16>))
+        .await?;
+    assert_eq!(restreamed, Ok(()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"one".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    let (_, source) = other.receive().await?;
+    let local: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local, Ok(source.to_string()));
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local_after, Ok(source.to_string()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"two".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?, (b"two".to_vec(), source));
+    session.finish().await
+}
+
 async fn local_address(session: &Session<'_>, slot: &str) -> anyhow::Result<String> {
     session
         .call::<Result<String, String>>("p3_udp_local_address", data_value!(slot.to_string()))
@@ -1594,5 +2046,154 @@ async fn p3_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
         let (_, source) = other.receive().await?;
         assert_eq!(source.to_string(), format!("127.0.0.1:{port}"));
     }
+    session.finish().await
+}
+
+/// P2 disconnects with a live `stream(none)`, which records the native local address it leaves.
+/// After an endpoint rebuild on the recorded port, the native socket keeps that port on the
+/// disconnect, and the entry records it, live and after replay.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-rebuilt").await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams_at",
+            data_value!(
+                "u".to_string(),
+                "0.0.0.0:0".to_string(),
+                Some(format!("127.0.0.1:{}", peer.port()))
+            ),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let local: String = session
+        .call::<Result<String, String>>("p2_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    let port = local
+        .strip_prefix("127.0.0.1:")
+        .expect("interface address")
+        .to_string();
+
+    session.restart_executor().await?;
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), None::<u16>, b"rebuilt".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(peer.receive().await?.1.to_string(), local);
+    let restreamed: Result<(), String> = session
+        .call("p2_udp_restream", data_value!("u".to_string(), None::<u16>))
+        .await?;
+    assert_eq!(restreamed, Ok(()));
+    let after_disconnect: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(after_disconnect, Ok(format!("0.0.0.0:{port}")));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"live".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?.1.to_string(), local);
+
+    session.restart_executor().await?;
+    let replayed: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(replayed, Ok(format!("0.0.0.0:{port}")));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"again".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?.1.to_string(), local);
+    session.finish().await
+}
+
+/// A disconnect releases a port that a bind on port 0 selected, so the entry keeps the bind
+/// address with port 0. A rebuild then selects a new port at the first live operation, here
+/// `check-send`, which records it, so the getter and the source the peer sees agree, live and
+/// after replay.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_check_send_records_the_port_a_rebuild_on_port_zero_selects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-zero").await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), 0u16, Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let restreamed: Result<(), String> = session
+        .call("p2_udp_restream", data_value!("u".to_string(), None::<u16>))
+        .await?;
+    assert_eq!(restreamed, Ok(()));
+    let released: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(released, Ok("127.0.0.1:0".to_string()));
+
+    session.restart_executor().await?;
+    let permit: Result<u64, String> = session
+        .call("p2_udp_check_send", data_value!("u".to_string()))
+        .await?;
+    assert!(permit.is_ok(), "{permit:?}");
+    let local: String = session
+        .call::<Result<String, String>>("p2_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        local.starts_with("127.0.0.1:") && !local.ends_with(":0"),
+        "{local}"
+    );
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"one".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?.1.to_string(), local);
+
+    session.restart_executor().await?;
+    let replayed: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(replayed, Ok(local.clone()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"two".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?.1.to_string(), local);
     session.finish().await
 }

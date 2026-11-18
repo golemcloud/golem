@@ -1959,6 +1959,73 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
     );
 }
 
+#[test]
+fn p2_udp_socket_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::types::SerializableSocketError;
+    use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+    let local = SerializableP3IpSocketAddress {
+        address: SerializableIpAddress::IPv4 {
+            address: [127, 0, 0, 1],
+        },
+        port: 40123,
+        flow_info: None,
+        scope_id: None,
+    };
+    let remote = SerializableP3IpSocketAddress {
+        port: 5353,
+        ..local.clone()
+    };
+    let reset = || SerializableSocketError::from_result(Ok(ErrorCode::ConnectionReset));
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpStartBind>(
+        super::HostRequestSocketsUdpBind {
+            local_address: local.clone(),
+        },
+        super::HostResponseSocketsUdpBind {
+            result: Ok(local.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpStream>(
+        super::HostRequestSocketsUdpStream {
+            remote_address: Some(remote.clone()),
+        },
+        super::HostResponseSocketsUdpStream {
+            result: Err(reset()),
+            lost: false,
+            local_address: Some(local.clone()),
+            disconnected: true,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpReceive>(
+        super::HostRequestSocketsUdpReceive { max_results: 16 },
+        super::HostResponseSocketsUdpReceive {
+            result: Ok(vec![SerializableP3UdpDatagram {
+                data: b"incoming".to_vec(),
+                remote_address: remote.clone(),
+            }]),
+            lost: false,
+            local_address: Some(local.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpCheckSend>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsUdpCheckSend {
+            result: Ok(16),
+            lost: false,
+            local_address: None,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpSend>(
+        super::HostRequestSocketsUdpSend {
+            remote_addresses: vec![Some(remote), None],
+        },
+        super::HostResponseSocketsUdpSend {
+            result: Ok(2),
+            lost: false,
+            local_address: Some(local),
+        },
+    );
+}
+
 fn assert_host_payload_pair_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
 where
     Pair: HostPayloadPair,

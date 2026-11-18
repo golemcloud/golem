@@ -1071,6 +1071,28 @@ is not checked against grants again, each datagram still is. Send records only t
 result, never the datagram. An incomplete send completes with `connection-broken` and is not sent
 again; an incomplete receive re-executes after the rebuild.
 
+P2 UDP (`durable_host/sockets/udp.rs`) uses the same entry and the same lazy rebuild.
+`start-bind` (`WriteLocal`) records the selected local address, `stream` (`WriteRemote`) the
+result, `receive` (`ReadRemote`) the datagrams and their sources, `check-send` (`ReadLocal`) the
+permit, and `send` (`WriteRemote`) the destinations, the result and the count, never the bytes.
+The local address follows the P3 rules through the shared `SocketEntry` helpers: the entry keeps
+the bind request, `stream(none)` on a connected socket resets the local address to it as P3
+`disconnect` does, and `stream`, `send`, `receive` and `check-send` record every other change of
+the native local address (`udp_local_address_change`), such as the port that a rebuild on port 0
+selects. P2 needs no `Rebound`: its disconnect is a live `stream(none)` that records the native
+local address it leaves, so a rebuilt fixed port is recorded where it stays. A failed `stream` records `disconnected`, as P3 connect does, when
+it left the socket disconnected (Linux dissolves the old association on `EINVAL` before it tries
+again); the entry then loses its remote address, live and on replay.
+The guest's datagram streams are `DurableIncomingDatagramStream` and
+`DurableOutgoingDatagramStream`; a replayed `stream` pushes them without native streams, in the
+native order, so later resource reps do not change. At the first live operation the host binds the
+native socket on the bind request's address with the recorded port (`udp_rebuild_bind_address`,
+as P3) and calls native `stream` again with the recorded remote
+address when the guest holds streams. A loss is recorded as `lost: true` and reported as
+`connection-reset`, the code P2 TCP also uses for a lost connection (P2 has no
+`connection-broken`). An incomplete send completes with `connection-reset` and is never sent
+again.
+
 WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
 Start before acquiring the executor-wide connection-pool permit. The live pool acquisition
 selects the existing typed interrupt signal without a Store lock. An interrupted acquisition

@@ -392,6 +392,19 @@ oplog_payload! {
         P3SocketsBind {
             local_address: SerializableP3IpSocketAddress
         },
+        SocketsUdpBind {
+            local_address: SerializableP3IpSocketAddress
+        },
+        SocketsUdpStream {
+            remote_address: Option<SerializableP3IpSocketAddress>
+        },
+        SocketsUdpReceive {
+            max_results: u64
+        },
+        SocketsUdpSend {
+            /// The destination of each datagram; the datagrams themselves are never stored.
+            remote_addresses: Vec<Option<SerializableP3IpSocketAddress>>
+        },
         GolemToolInvoke {
             tool_name: String,
             command_path: Vec<String>,
@@ -779,6 +792,41 @@ oplog_payload! {
         P3SocketsBind {
             result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
         },
+        SocketsUdpBind {
+            result: Result<SerializableP3IpSocketAddress, SerializableSocketError>
+        },
+        /// `lost` is set when the call found that the socket could not get its recorded local
+        /// address back after a reconstruction.
+        /// `local_address` is the new native local address when the call changed it, as P3 UDP
+        /// records an endpoint change: the interface address that a connect selects for a
+        /// wildcard bind, or a port that a failed connect released. `disconnected` is set, as in
+        /// `P3SocketsUdpConnect`, when a failed call left the socket disconnected.
+        SocketsUdpStream {
+            result: Result<(), SerializableSocketError>,
+            lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
+            disconnected: bool,
+        },
+        /// `local_address` is the new native local address when the call changed it: the port
+        /// that an endpoint rebuild on port 0 selected.
+        SocketsUdpReceive {
+            result: Result<Vec<SerializableP3UdpDatagram>, SerializableSocketError>,
+            lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
+        },
+        /// `local_address` is as in `SocketsUdpReceive`.
+        SocketsUdpCheckSend {
+            result: Result<u64, SerializableSocketError>,
+            lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
+        },
+        /// The number of datagrams sent. `local_address` is the new native local address when
+        /// the send changed it: after a disconnect released the port, the send binds a new one.
+        SocketsUdpSend {
+            result: Result<u64, SerializableSocketError>,
+            lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
+        },
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
         },
@@ -1107,6 +1155,11 @@ pub mod host_functions {
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsUdpPermissionCheck => "sockets::udp::permissions", "check", SocketsUdpPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (SocketsUdpStartBind => "sockets::udp", "start_bind", SocketsUdpBind, SocketsUdpBind),
+        (SocketsUdpStream => "sockets::udp", "stream", SocketsUdpStream, SocketsUdpStream),
+        (SocketsUdpReceive => "sockets::udp", "receive", SocketsUdpReceive, SocketsUdpReceive),
+        (SocketsUdpCheckSend => "sockets::udp", "check_send", NoInput, SocketsUdpCheckSend),
+        (SocketsUdpSend => "sockets::udp", "send", SocketsUdpSend, SocketsUdpSend),
         (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
         (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }

@@ -651,6 +651,19 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::SocketsUdpPermissionCheck => {
             pair::<host_functions::SocketsUdpPermissionCheck>(Bare::Neither)
         }
+        HostFunctionName::SocketsUdpStartBind => {
+            pair::<host_functions::SocketsUdpStartBind>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpStream => {
+            pair::<host_functions::SocketsUdpStream>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpReceive => {
+            pair::<host_functions::SocketsUdpReceive>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpCheckSend => {
+            pair::<host_functions::SocketsUdpCheckSend>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpSend => pair::<host_functions::SocketsUdpSend>(Bare::Neither),
         HostFunctionName::GolemPermissionsSelfWallet => {
             pair::<host_functions::GolemPermissionsSelfWallet>(Bare::Neither)
         }
