@@ -456,6 +456,19 @@ impl desert_rust::BinaryDeserializer for Caller {
     }
 }
 
+#[cfg(feature = "full")]
+impl Caller {
+    /// A digest of the whole caller record, claims and tokens included, over its stored
+    /// encoding. Two callers have the same digest only when they are the same record. The
+    /// executor's read-only result cache and the worker service's HTTP validators both use it, so
+    /// a cached result and a validator always belong to the same caller.
+    pub fn digest(&self) -> [u8; 32] {
+        let bytes =
+            desert_rust::serialize_to_byte_vec(self).expect("Caller serialization is infallible");
+        *blake3::hash(&bytes).as_bytes()
+    }
+}
+
 impl Caller {
     /// The caller at an entry point: one principal in both roles, and no tokens.
     pub fn entry(principal: Principal) -> Self {

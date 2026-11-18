@@ -224,11 +224,19 @@ impl CallAgentHandler {
             return Ok(None);
         };
 
-        if !if_none_match_hits(&entries, agent_id, current_fingerprint, current_oplog) {
+        // The validator names the caller it was issued to, so only the same caller's request
+        // revalidates: a cache may send the ETag of another caller's stored response.
+        let caller = caller_from_request(request)?;
+        if !if_none_match_hits(
+            &entries,
+            agent_id,
+            current_fingerprint,
+            &caller,
+            current_oplog,
+        ) {
             return Ok(None);
         }
 
-        let caller = caller_from_request(request)?;
         let mut headers = http::HeaderMap::new();
         add_read_only_cache_headers(
             &mut headers,
@@ -539,7 +547,7 @@ fn add_read_only_cache_headers(
     {
         headers.insert(
             cache_header::ETAG,
-            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, idx)).unwrap(),
+            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, caller, idx)).unwrap(),
         );
     }
 
@@ -960,8 +968,8 @@ mod tests {
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .all(|name| ana_request.get(name) == ben_request.get(name));
-            // Ben's conditional request with Ana's ETag: the validator holds no caller, so the
-            // worker service answers 304 without invoking the agent for Ben.
+            // Ben's conditional request with Ana's ETag: the validator names Ana, so the worker
+            // service does not answer 304 for Ben, and the agent runs for him.
             let etag = ana_response
                 .get(http::header::ETAG)
                 .unwrap()
@@ -972,6 +980,7 @@ mod tests {
                 &parse_if_none_match_entries(&etag),
                 &agent_id,
                 fingerprint,
+                &user("ben"),
                 index,
             );
             println!(
@@ -980,7 +989,18 @@ mod tests {
                 ana_response.get(http::header::CACHE_CONTROL),
             );
             if reusable_for_ben {
-                failures.push(format!("{:?}", read_only.cache_policy));
+                failures.push(format!(
+                    "{:?}: Ana's stored response",
+                    read_only.cache_policy
+                ));
+            }
+            // A cache may send the ETag of a stored response that Vary does not select, and
+            // reuse that response when the answer is 304.
+            if ben_gets_304 {
+                failures.push(format!(
+                    "{:?}: Ben's revalidation with Ana's ETag",
+                    read_only.cache_policy
+                ));
             }
 
             // A public answer (anonymous, no credential) and a private one name the same
@@ -1016,5 +1036,140 @@ mod tests {
             failures.is_empty(),
             "Ana's private response can be served to Ben by the browser cache for {failures:?}"
         );
+    }
+
+    /// The route, the agent and the validator inputs of one read-only response, for the ETag
+    /// tests below.
+    async fn read_only_profile_route() -> (
+        crate::custom_api::route_resolver::ResolvedRouteEntry,
+        AgentId,
+        AgentFingerprint,
+        OplogIndex,
+        ReadOnlyConfig,
+    ) {
+        use golem_common::model::agent::{CachePolicy, CachePolicyTtl};
+        use golem_service_base::custom_api::{RouteSecurity, SessionFromHeaderRouteSecurity};
+
+        let mut route = test_route(1, "/profile", Some("GET"), "typed");
+        route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+            header_name: "X-Session".into(),
+        });
+        let resolver = test_resolver(vec![route]);
+        let request = poem::Request::builder()
+            .uri("/profile".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let resolved = resolver.resolve_matching_route(&request).await.unwrap();
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(behaviour) =
+            &resolved.route.behavior
+        else {
+            panic!("expected an agent route");
+        };
+        let agent_id = AgentId {
+            component_id: behaviour.component_id,
+            agent_id: "agent1()".to_string(),
+        };
+        let read_only = ReadOnlyConfig {
+            cache_policy: CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 60_000_000_000,
+            }),
+        };
+        (
+            resolved,
+            agent_id,
+            AgentFingerprint(Uuid::nil()),
+            OplogIndex::from_u64(7),
+            read_only,
+        )
+    }
+
+    fn signed_in_user(subject: &str) -> Caller {
+        Caller::entry(Principal::User(UserPrincipal {
+            pair: Pair::new(
+                "https://login.acme.example/".to_string(),
+                subject.to_string(),
+            ),
+            claims: Claims::from_json("{}".to_string()).unwrap(),
+            authenticated_at: Timestamp::from(0u64),
+        }))
+    }
+
+    /// The ETag that a read-only response to `caller` carries.
+    fn etag_for(
+        resolved: &crate::custom_api::route_resolver::ResolvedRouteEntry,
+        agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
+        index: OplogIndex,
+        read_only: &ReadOnlyConfig,
+        caller: &Caller,
+    ) -> String {
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(behaviour) =
+            &resolved.route.behavior
+        else {
+            panic!("expected an agent route");
+        };
+        let mut response = http::HeaderMap::new();
+        add_read_only_cache_headers(
+            &mut response,
+            agent_id,
+            Some(index),
+            Some(fingerprint),
+            read_only,
+            behaviour,
+            resolved,
+            caller,
+            &http::HeaderMap::new(),
+        );
+        response[http::header::ETAG].to_str().unwrap().to_string()
+    }
+
+    /// Ana reads a read-only method and gets an ETag. Ben, another session, then sends a
+    /// conditional request with Ana's ETag, as a cache may do for a stored response that `Vary`
+    /// does not select. A read-only call appends nothing to the oplog, so the index is the same:
+    /// the validator must still not match, or the 304 lets the cache show Ana's body to Ben.
+    #[test]
+    async fn another_callers_etag_never_revalidates_a_request() {
+        let (resolved, agent_id, fingerprint, index, read_only) = read_only_profile_route().await;
+        let ana_etag = etag_for(
+            &resolved,
+            &agent_id,
+            fingerprint,
+            index,
+            &read_only,
+            &signed_in_user("ana"),
+        );
+        let ben_gets_304 = if_none_match_hits(
+            &parse_if_none_match_entries(&ana_etag),
+            &agent_id,
+            fingerprint,
+            &signed_in_user("ben"),
+            index,
+        );
+        assert!(
+            !ben_gets_304,
+            "Ana's ETag {ana_etag} revalidates Ben's request: 304 for another caller"
+        );
+    }
+
+    /// The ETag of a response still revalidates the same caller's next request while the agent's
+    /// oplog has not moved.
+    #[test]
+    async fn the_same_callers_etag_still_revalidates() {
+        let (resolved, agent_id, fingerprint, index, read_only) = read_only_profile_route().await;
+        let ana_etag = etag_for(
+            &resolved,
+            &agent_id,
+            fingerprint,
+            index,
+            &read_only,
+            &signed_in_user("ana"),
+        );
+        assert!(if_none_match_hits(
+            &parse_if_none_match_entries(&ana_etag),
+            &agent_id,
+            fingerprint,
+            &signed_in_user("ana"),
+            index,
+        ));
     }
 }
