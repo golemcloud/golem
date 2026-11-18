@@ -177,6 +177,10 @@ pub fn reconcile_command_inherited_globals<S: ToolSchemaRepr>(
 /// subtree command (the model places them on a command body), so a non-`None`
 /// `override_annotations` is rejected rather than silently dropped.
 ///
+/// The parent's mount owns the final tree: the child's standalone mount is
+/// discarded. An explicit HTTP override replaces the child root declaration;
+/// otherwise that declaration and all descendant declarations are preserved.
+///
 /// Command indices are returned unchanged (graft-local); the final offset into
 /// the parent's command tree is applied by [`append_grafted_subtree`].
 pub fn graft_subtree<S: ToolSchemaRepr>(
@@ -188,6 +192,7 @@ pub fn graft_subtree<S: ToolSchemaRepr>(
     override_doc: Option<Doc>,
     override_aliases: Option<Vec<String>>,
     override_annotations: Option<CommandAnnotations>,
+    override_http: Option<CommandHttp>,
 ) -> Result<Vec<ExtendedCommandNode<S>>, ToolBuildError> {
     let mut nodes = child.commands;
     let root = nodes.first_mut().ok_or(ToolBuildError::EmptyCommandTree)?;
@@ -212,6 +217,9 @@ pub fn graft_subtree<S: ToolSchemaRepr>(
     }
     if let Some(aliases) = override_aliases {
         root.aliases = aliases;
+    }
+    if let Some(http) = override_http {
+        root.http = Some(http);
     }
 
     let command_name = root.name.clone();

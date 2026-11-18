@@ -261,6 +261,9 @@ mod context {
     impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
         fn drop(&mut self) {
             self.begin_stream_runtime_teardown();
+            if let Some(initiations) = &self.host_initiations {
+                initiations.close();
+            }
             self.linear_memory.clear_limit_exceeded_callback();
         }
     }

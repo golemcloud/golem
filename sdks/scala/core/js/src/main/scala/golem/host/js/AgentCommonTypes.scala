@@ -253,13 +253,20 @@ sealed trait JsHttpEndpointDetails extends js.Object {
 }
 
 @js.native
-sealed trait JsDurableStreamSlotSource extends js.Object
+sealed trait JsDurableStreamSlotSource extends js.Object {
+  def tag: String                  = js.native
+  @JSName("val") def value: String = js.native
+}
 object JsDurableStreamSlotSource {
   def input(slot: String): JsDurableStreamSlotSource  = JsShape.tagged("input", slot.asInstanceOf[js.Any])
   def output(slot: String): JsDurableStreamSlotSource = JsShape.tagged("output", slot.asInstanceOf[js.Any])
 }
 @js.native
-sealed trait JsDurableStreamSlotOptions extends js.Object
+sealed trait JsDurableStreamSlotOptions extends js.Object {
+  def source: JsDurableStreamSlotSource = js.native
+  def name: js.UndefOr[String]          = js.native
+  def contentType: js.UndefOr[String]   = js.native
+}
 object JsDurableStreamSlotOptions {
   def apply(
     source: JsDurableStreamSlotSource,
@@ -272,7 +279,10 @@ object JsDurableStreamSlotOptions {
   }
 }
 @js.native
-sealed trait JsDurableStreamRouteLoadOptions extends js.Object
+sealed trait JsDurableStreamRouteLoadOptions extends js.Object {
+  def maxConcurrentReadersPerStream: js.UndefOr[Int]       = js.native
+  def maxAppendRequestsPerSecondPerStream: js.UndefOr[Int] = js.native
+}
 object JsDurableStreamRouteLoadOptions {
   def apply(readers: js.UndefOr[Int], appends: js.UndefOr[Int]): JsDurableStreamRouteLoadOptions = {
     val obj = js.Dynamic.literal(); readers.foreach(v => obj.updateDynamic("maxConcurrentReadersPerStream")(v))
@@ -281,7 +291,10 @@ object JsDurableStreamRouteLoadOptions {
   }
 }
 @js.native
-sealed trait JsDurableStreamRouteOptions extends js.Object
+sealed trait JsDurableStreamRouteOptions extends js.Object {
+  def slots: js.Array[JsDurableStreamSlotOptions]       = js.native
+  def load: js.UndefOr[JsDurableStreamRouteLoadOptions] = js.native
+}
 object JsDurableStreamRouteOptions {
   def apply(
     slots: js.Array[JsDurableStreamSlotOptions],

@@ -154,10 +154,12 @@ mod tests {
         Tool {
             version: "0.1.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
                     aliases: vec![],
+                    http: None,
                     doc: Doc {
                         summary: String::new(),
                         description: String::new(),

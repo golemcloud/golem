@@ -52,11 +52,13 @@ fn tool(name: &str, error: ErrorCase, schema: SchemaGraph) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
                 aliases: Vec::new(),
                 doc: Doc::default(),
+                http: None,
                 globals: Globals::default(),
                 subcommands: Vec::new(),
                 body: Some(CommandBody {
@@ -107,6 +109,7 @@ fn command(name: &str, errors: Vec<ErrorCase>) -> CommandNode {
         name: name.to_string(),
         aliases: Vec::new(),
         doc: Doc::default(),
+        http: None,
         globals: Globals::default(),
         subcommands: Vec::new(),
         body: Some(CommandBody {
@@ -128,6 +131,7 @@ fn simple_tool(name: &str) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![command(name, Vec::new())],
         },
@@ -435,6 +439,7 @@ fn registry_is_validated_without_bindings() {
     let invalid = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: Vec::new() },
         schema: SchemaGraph::empty(),
     };

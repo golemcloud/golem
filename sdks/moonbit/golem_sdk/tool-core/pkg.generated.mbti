@@ -216,6 +216,7 @@ pub(all) struct CommandNodeDef {
   globals : GlobalsDef
   subcommands : Array[Int32]
   body : CommandBodyDef?
+  http : @common.CommandHttp?
 }
 
 pub(all) enum ConstraintDef {
@@ -338,13 +339,14 @@ pub(all) struct TailPositionalDef {
 pub(all) struct ToolDef {
   version : String
   requires_filesystem : Bool
+  http_mount : @common.ToolHttpMount?
   commands : Array[CommandNodeDef]
 }
 pub fn ToolDef::canonical_input_fields(Self, Int32) -> Array[CanonicalInputField] raise ToolBuildError
 pub fn ToolDef::canonical_input_model(Self, Int32) -> CanonicalInputModel raise ToolBuildError
 pub fn ToolDef::command_index_by_path(Self, Array[String]) -> Int32?
 pub fn ToolDef::from_wire(@common.Tool) -> Self raise ToolBuildError
-pub fn ToolDef::graft_subtree(Self, Self, String, GlobalsDef, String?, @common.Doc?, Array[String]?) -> Self raise ToolBuildError
+pub fn ToolDef::graft_subtree(Self, Self, String, GlobalsDef, String?, @common.Doc?, Array[String]?, override_http? : @common.CommandHttp) -> Self raise ToolBuildError
 pub fn ToolDef::normalize_inherited_globals(Self) -> Self raise ToolBuildError
 pub fn ToolDef::to_tool(Self) -> @common.Tool raise ToolBuildError
 pub fn ToolDef::tool_name(Self) -> Result[String, ToolBuildError]

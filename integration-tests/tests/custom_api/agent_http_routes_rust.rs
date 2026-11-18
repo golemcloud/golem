@@ -79,6 +79,12 @@ async fn test_context_sqlite(
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
 #[test]
+#[test_r::timeout("120s")]
+async fn query_binding_forms(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
+    super::assert_query_bindings(agent).await
+}
+
+#[test]
 #[tracing::instrument]
 async fn string_path_var(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent

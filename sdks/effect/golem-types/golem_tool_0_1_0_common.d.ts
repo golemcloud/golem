@@ -73,16 +73,49 @@
  * filesystem access.
  */
 declare module 'golem:tool/common@0.1.0' {
+  import * as golemCore200Http from 'golem:core/http@2.0.0';
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ToolError = golemCore200Types.ToolError;
+  export type HttpMethod = golemCore200Http.HttpMethod;
+  export type PathSegment = golemCore200Http.PathSegment;
+  export type QueryVariable = golemCore200Http.QueryVariable;
+  export type HeaderVariable = golemCore200Http.HeaderVariable;
+  export type FileResponseHeader = golemCore200Http.FileResponseHeader;
+  export type HttpRouteMode = golemCore200Http.HttpRouteMode;
+  export type DurableStreamRouteOptions = golemCore200Http.DurableStreamRouteOptions;
   /**
    * Command tree
    */
   export type CommandIndex = number;
+  export type ToolHttpMount = {
+    pathPrefix: PathSegment[];
+  };
+  export type ToolHttpPrefix = {
+    pathSuffix: PathSegment[];
+  };
+  export type ToolHttpEndpoint = {
+    routeId?: string;
+    httpMethod: HttpMethod;
+    pathSuffix: PathSegment[];
+    queryVars: QueryVariable[];
+    headerVars: HeaderVariable[];
+    responseHeaders: FileResponseHeader[];
+    mode?: HttpRouteMode;
+    durableStreams?: DurableStreamRouteOptions;
+  };
+  export type CommandHttp =
+  {
+    tag: 'endpoint'
+    val: ToolHttpEndpoint
+  } |
+  {
+    tag: 'prefix'
+    val: ToolHttpPrefix
+  };
   /**
    * Behavioral hints surfaced to MCP and other LLM-facing
    * surfaces. All four follow the MCP convention. When absent
@@ -378,6 +411,7 @@ declare module 'golem:tool/common@0.1.0' {
     name: string;
     aliases: string[];
     doc: Doc;
+    http?: CommandHttp;
     globals: Globals;
     subcommands: CommandIndex[];
     body?: CommandBody;
@@ -392,6 +426,7 @@ declare module 'golem:tool/common@0.1.0' {
   export type Tool = {
     version: string;
     requiresFilesystem: boolean;
+    httpMount?: ToolHttpMount;
     commands: CommandTree;
     /**
      * Self-contained type-node pool holding every type referenced from

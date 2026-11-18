@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
@@ -392,7 +393,7 @@ func ExpiresAt(c *golem_core_types.PermissionCard) witTypes.Option[Timestamp] {
 
 		option = witTypes.None[Timestamp]()
 	case 1:
-		result := wasm_lift_1_t947(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t966(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		option = witTypes.Some[Timestamp](result)
 	default:
@@ -411,7 +412,7 @@ func wasm_lift_1_t12(src unsafe.Pointer) golem_core_types.CardId {
 }
 
 //go:noinline
-func wasm_lift_1_t947(src unsafe.Pointer) Timestamp {
+func wasm_lift_1_t966(src unsafe.Pointer) Timestamp {
 
 	return Timestamp{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(src), 0)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8)))}
 }

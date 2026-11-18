@@ -240,6 +240,7 @@ impl CustomBeginLifecycle {
                     .send(DropEvent::SettleCustomInvocationBegin {
                         lifecycle: self.clone(),
                         terminal: Some(terminal),
+                        cancelled_start: None,
                     });
             }
         } else {

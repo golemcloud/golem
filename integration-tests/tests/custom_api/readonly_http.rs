@@ -185,6 +185,15 @@ async fn h2_if_none_match_returns_304(
     let body = revalidate.text().await?;
     assert!(body.is_empty(), "304 response body must be empty");
 
+    let unknown_query = agent
+        .client
+        .get(agent.base_url.join(&format!("{path}?v=3"))?)
+        .header(IF_NONE_MATCH, etag)
+        .send()
+        .await?;
+    assert_eq!(unknown_query.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(unknown_query.text().await?.contains("v"));
+
     Ok(())
 }
 

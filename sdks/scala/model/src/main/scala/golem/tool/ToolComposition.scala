@@ -85,7 +85,8 @@ object ToolComposition {
     overrideName: Option[String],
     overrideDoc: Option[Doc],
     overrideAliases: Option[List[String]],
-    overrideAnnotations: Option[CommandAnnotations]
+    overrideAnnotations: Option[CommandAnnotations],
+    overrideHttp: Option[CommandHttp] = None
   ): Either[ToolBuildError, Vector[ExtendedCommandNode]] =
     try {
       val nodes = child.commands
@@ -101,6 +102,7 @@ object ToolComposition {
       overrideName.foreach(name => root = root.copy(name = name))
       overrideDoc.foreach(doc => root = root.copy(doc = doc))
       overrideAliases.foreach(aliases => root = root.copy(aliases = aliases))
+      overrideHttp.foreach(http => root = root.copy(http = Some(http)))
 
       val commandName = root.name
 

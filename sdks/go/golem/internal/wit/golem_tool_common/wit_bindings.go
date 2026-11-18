@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
@@ -33,6 +34,7 @@
 package golem_tool_common
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
@@ -42,9 +44,69 @@ type TypeNodeIndex = int32
 type SchemaValueTree = golem_core_types.SchemaValueTree
 type TypedSchemaValue = golem_core_types.TypedSchemaValue
 type ToolError = golem_core_types.ToolError
+type HttpMethod = golem_core_http.HttpMethod
+type PathSegment = golem_core_http.PathSegment
+type QueryVariable = golem_core_http.QueryVariable
+type HeaderVariable = golem_core_http.HeaderVariable
+type FileResponseHeader = golem_core_http.FileResponseHeader
+type HttpRouteMode = golem_core_http.HttpRouteMode
+type DurableStreamRouteOptions = golem_core_http.DurableStreamRouteOptions
 
 // Command tree
 type CommandIndex = int32
+
+type ToolHttpMount struct {
+	PathPrefix []golem_core_http.PathSegment
+}
+
+type ToolHttpPrefix struct {
+	PathSuffix []golem_core_http.PathSegment
+}
+
+type ToolHttpEndpoint struct {
+	RouteId         witTypes.Option[string]
+	HttpMethod      golem_core_http.HttpMethod
+	PathSuffix      []golem_core_http.PathSegment
+	QueryVars       []golem_core_http.QueryVariable
+	HeaderVars      []golem_core_http.HeaderVariable
+	ResponseHeaders []golem_core_http.FileResponseHeader
+	Mode            witTypes.Option[golem_core_http.HttpRouteMode]
+	DurableStreams  witTypes.Option[golem_core_http.DurableStreamRouteOptions]
+}
+
+const (
+	CommandHttpEndpoint uint8 = 0
+	CommandHttpPrefix   uint8 = 1
+)
+
+type CommandHttp struct {
+	tag   uint8
+	value any
+}
+
+func (self CommandHttp) Tag() uint8 {
+	return self.tag
+}
+
+func (self CommandHttp) Endpoint() ToolHttpEndpoint {
+	if self.tag != CommandHttpEndpoint {
+		panic("tag mismatch")
+	}
+	return self.value.(ToolHttpEndpoint)
+}
+func (self CommandHttp) Prefix() ToolHttpPrefix {
+	if self.tag != CommandHttpPrefix {
+		panic("tag mismatch")
+	}
+	return self.value.(ToolHttpPrefix)
+}
+
+func MakeCommandHttpEndpoint(value ToolHttpEndpoint) CommandHttp {
+	return CommandHttp{CommandHttpEndpoint, value}
+}
+func MakeCommandHttpPrefix(value ToolHttpPrefix) CommandHttp {
+	return CommandHttp{CommandHttpPrefix, value}
+}
 
 // Behavioral hints surfaced to MCP and other LLM-facing
 // surfaces. All four follow the MCP convention. When absent
@@ -508,6 +570,7 @@ type CommandNode struct {
 	Name        string
 	Aliases     []string
 	Doc         Doc
+	Http        witTypes.Option[CommandHttp]
 	Globals     Globals
 	Subcommands []int32
 	Body        witTypes.Option[CommandBody]
@@ -522,6 +585,7 @@ type CommandTree struct {
 type Tool struct {
 	Version            string
 	RequiresFilesystem bool
+	HttpMount          witTypes.Option[ToolHttpMount]
 	Commands           CommandTree
 	// Self-contained type-node pool holding every type referenced from
 	// this tool's commands. Command bodies reference entries by

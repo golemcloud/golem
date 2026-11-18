@@ -1265,13 +1265,17 @@ impl TryFrom<proto::golem::customapi::QueryOrHeaderType> for QueryOrHeaderType {
             Kind::Option(opt) => Ok(QueryOrHeaderType::Option {
                 name: opt.name,
                 owner: opt.owner,
-                inner: Box::new(opt.inner.ok_or("Option.inner missing")?.try_into()?),
+                inner: Box::new((*opt.inner.ok_or("Option.inner missing")?).try_into()?),
             }),
 
             Kind::List(list) => Ok(QueryOrHeaderType::List {
                 name: list.name,
                 owner: list.owner,
                 inner: Box::new(list.inner.ok_or("List.inner missing")?.try_into()?),
+            }),
+            Kind::Map(map) => Ok(QueryOrHeaderType::Map {
+                key: map.key.ok_or("Map.key missing")?.try_into()?,
+                value: map.value.ok_or("Map.value missing")?.try_into()?,
             }),
         }
     }
@@ -1288,19 +1292,25 @@ impl From<QueryOrHeaderType> for proto::golem::customapi::QueryOrHeaderType {
                 })
             }
 
-            QueryOrHeaderType::Option { name, owner, inner } => {
-                Kind::Option(proto::golem::customapi::query_or_header_type::Option {
+            QueryOrHeaderType::Option { name, owner, inner } => Kind::Option(Box::new(
+                proto::golem::customapi::query_or_header_type::Option {
                     name,
                     owner,
-                    inner: Some((*inner).into()),
-                })
-            }
+                    inner: Some(Box::new((*inner).into())),
+                },
+            )),
 
             QueryOrHeaderType::List { name, owner, inner } => {
                 Kind::List(proto::golem::customapi::query_or_header_type::List {
                     name,
                     owner,
                     inner: Some((*inner).into()),
+                })
+            }
+            QueryOrHeaderType::Map { key, value } => {
+                Kind::Map(proto::golem::customapi::query_or_header_type::Map {
+                    key: Some(key.into()),
+                    value: Some(value.into()),
                 })
             }
         };
@@ -1341,6 +1351,133 @@ mod tests {
     use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
     use golem_schema::http::{FileMapping, FileResponseHeader};
     use test_r::test;
+
+    #[test]
+    fn query_parameter_recursive_wire_roundtrips() {
+        use prost::Message;
+
+        let scalars = [
+            PathSegmentType::Str,
+            PathSegmentType::Chr,
+            PathSegmentType::F64,
+            PathSegmentType::F32,
+            PathSegmentType::U64,
+            PathSegmentType::S64,
+            PathSegmentType::U32,
+            PathSegmentType::S32,
+            PathSegmentType::U16,
+            PathSegmentType::S16,
+            PathSegmentType::U8,
+            PathSegmentType::S8,
+            PathSegmentType::Bool,
+            PathSegmentType::Uuid,
+            PathSegmentType::Enum(vec!["a".into(), "β".into()]),
+        ];
+        for scalar in scalars {
+            for inner in [
+                QueryOrHeaderType::Primitive(scalar.clone()),
+                QueryOrHeaderType::List {
+                    name: Some("items".into()),
+                    owner: Some("owner".into()),
+                    inner: Box::new(scalar.clone()),
+                },
+                QueryOrHeaderType::Map {
+                    key: scalar.clone(),
+                    value: scalar.clone(),
+                },
+            ] {
+                let parameter = QueryOrHeaderType::Option {
+                    name: Some("optional".into()),
+                    owner: Some("owner".into()),
+                    inner: Box::new(inner),
+                };
+                let wire: proto::golem::customapi::QueryOrHeaderType = parameter.clone().into();
+                let decoded = proto::golem::customapi::QueryOrHeaderType::decode(
+                    wire.encode_to_vec().as_slice(),
+                )
+                .unwrap();
+                assert_eq!(QueryOrHeaderType::try_from(decoded).unwrap(), parameter);
+                let bytes = desert_rust::serialize_to_byte_vec(&parameter).unwrap();
+                let decoded: QueryOrHeaderType = desert_rust::deserialize(&bytes).unwrap();
+                assert_eq!(decoded, parameter);
+            }
+        }
+
+        // Missing recursive children must remain invalid after real byte transport.
+        for child in [
+            None,
+            Some(Box::new(proto::golem::customapi::QueryOrHeaderType {
+                kind: None,
+            })),
+        ] {
+            let wire = proto::golem::customapi::QueryOrHeaderType {
+                kind: Some(proto::golem::customapi::query_or_header_type::Kind::Option(
+                    Box::new(proto::golem::customapi::query_or_header_type::Option {
+                        name: None,
+                        owner: None,
+                        inner: child,
+                    }),
+                )),
+            };
+            let decoded =
+                proto::golem::customapi::QueryOrHeaderType::decode(wire.encode_to_vec().as_slice())
+                    .unwrap();
+            assert!(QueryOrHeaderType::try_from(decoded).is_err());
+        }
+    }
+
+    #[test]
+    fn query_parameter_collection_contract_roundtrips() {
+        use prost::Message;
+
+        for schema in [
+            SchemaType::list(SchemaType::u32()),
+            SchemaType::option(SchemaType::list(SchemaType::string())),
+            SchemaType::map(SchemaType::u32(), SchemaType::bool()),
+            SchemaType::option(SchemaType::map(SchemaType::string(), SchemaType::s64())),
+        ] {
+            let parameter = QueryOrHeaderType::try_from(schema.clone()).unwrap();
+            assert_eq!(SchemaType::from(parameter.clone()), schema);
+            let bytes = desert_rust::serialize_to_byte_vec(&parameter).unwrap();
+            let decoded: QueryOrHeaderType = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, parameter);
+            let wire: proto::golem::customapi::QueryOrHeaderType = parameter.clone().into();
+            let wire =
+                proto::golem::customapi::QueryOrHeaderType::decode(wire.encode_to_vec().as_slice())
+                    .unwrap();
+            assert_eq!(QueryOrHeaderType::try_from(wire).unwrap(), parameter);
+        }
+        assert!(
+            QueryOrHeaderType::try_from(SchemaType::list(SchemaType::list(SchemaType::string())))
+                .is_err()
+        );
+        assert!(
+            QueryOrHeaderType::try_from(SchemaType::map(
+                SchemaType::string(),
+                SchemaType::record(vec![])
+            ))
+            .is_err()
+        );
+        for map in [
+            proto::golem::customapi::query_or_header_type::Map {
+                key: None,
+                value: Some(PathSegmentType::Str.into()),
+            },
+            proto::golem::customapi::query_or_header_type::Map {
+                key: Some(PathSegmentType::Str.into()),
+                value: None,
+            },
+        ] {
+            assert!(
+                QueryOrHeaderType::try_from(proto::golem::customapi::QueryOrHeaderType {
+                    kind: Some(proto::golem::customapi::query_or_header_type::Kind::Map(
+                        map
+                    )),
+                })
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn phantom_selection_roundtrips_and_rejects_missing_wire_selection() {

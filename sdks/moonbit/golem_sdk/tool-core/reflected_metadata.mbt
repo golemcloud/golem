@@ -54,10 +54,12 @@ pub fn ToolDef::from_wire(
     {
       version: tool.version,
       requires_filesystem: tool.requires_filesystem,
+      http_mount: tool.http_mount,
       commands: tool.commands.nodes.map(node => CommandNodeDef::{
         name: node.name,
         aliases: node.aliases,
         doc: node.doc,
+        http: node.http,
         globals: {
           options: node.globals.options.map(option),
           flags: node.globals.flags,

@@ -1528,7 +1528,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "httpMethod": {
                 "type": "Method",
                 "value": {
-                  "type": "Patch"
+                  "type": "Get"
                 }
               },
               "pathSuffix": [
@@ -1740,7 +1740,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
                   "httpMethod": {
                     "type": "Method",
                     "value": {
-                      "type": "Patch"
+                      "type": "Get"
                     }
                   },
                   "pathSuffix": [
@@ -1954,6 +1954,14 @@ The request body is encoded as multipart/form-data containing metadata and the W
     {
       "version": "string",
       "requires_filesystem": true,
+      "http_mount": {
+        "path_prefix": [
+          {
+            "type": "Literal",
+            "value": "string"
+          }
+        ]
+      },
       "commands": {
         "nodes": [
           {
@@ -1970,6 +1978,56 @@ The request body is encoded as multipart/form-data containing metadata and the W
                   "body": "string"
                 }
               ]
+            },
+            "http": {
+              "kind": "endpoint",
+              "value": {
+                "route_id": "string",
+                "http_method": {
+                  "type": "Get"
+                },
+                "path_suffix": [
+                  {
+                    "type": "Literal",
+                    "value": "string"
+                  }
+                ],
+                "query_vars": [
+                  {
+                    "queryParamName": "string",
+                    "variableName": "string"
+                  }
+                ],
+                "header_vars": [
+                  {
+                    "headerName": "string",
+                    "variableName": "string"
+                  }
+                ],
+                "response_headers": [
+                  {
+                    "name": "string",
+                    "value": "string"
+                  }
+                ],
+                "mode": "durableStreams",
+                "durable_streams": {
+                  "slots": [
+                    {
+                      "source": {
+                        "type": "input",
+                        "name": "string"
+                      },
+                      "name": "string",
+                      "contentType": "string"
+                    }
+                  ],
+                  "load": {
+                    "maxConcurrentReadersPerStream": 0,
+                    "maxAppendRequestsPerSecondPerStream": 0
+                  }
+                }
+              }
             },
             "globals": {
               "options": [
@@ -2783,6 +2841,14 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "presented": {
             "version": "string",
             "requires_filesystem": true,
+            "http_mount": {
+              "path_prefix": [
+                {
+                  "type": "Literal",
+                  "value": "string"
+                }
+              ]
+            },
             "commands": {
               "nodes": [
                 {
@@ -2799,6 +2865,53 @@ The request body is encoded as multipart/form-data containing metadata and the W
                         "body": "string"
                       }
                     ]
+                  },
+                  "http": {
+                    "kind": "endpoint",
+                    "value": {
+                      "route_id": "string",
+                      "http_method": {
+                        "type": "Get"
+                      },
+                      "path_suffix": [
+                        {
+                          "type": "Literal",
+                          "value": "string"
+                        }
+                      ],
+                      "query_vars": [
+                        {
+                          "queryParamName": "string",
+                          "variableName": "string"
+                        }
+                      ],
+                      "header_vars": [
+                        {
+                          "headerName": "string",
+                          "variableName": "string"
+                        }
+                      ],
+                      "response_headers": [
+                        {
+                          "name": "string",
+                          "value": "string"
+                        }
+                      ],
+                      "mode": "durableStreams",
+                      "durable_streams": {
+                        "slots": [
+                          {
+                            "source": {},
+                            "name": "string",
+                            "contentType": "string"
+                          }
+                        ],
+                        "load": {
+                          "maxConcurrentReadersPerStream": 0,
+                          "maxAppendRequestsPerSecondPerStream": 0
+                        }
+                      }
+                    }
                   },
                   "globals": {
                     "options": [
@@ -3150,6 +3263,14 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "expected": {
             "version": "string",
             "requires_filesystem": true,
+            "http_mount": {
+              "path_prefix": [
+                {
+                  "type": "Literal",
+                  "value": "string"
+                }
+              ]
+            },
             "commands": {
               "nodes": [
                 {
@@ -3166,6 +3287,53 @@ The request body is encoded as multipart/form-data containing metadata and the W
                         "body": "string"
                       }
                     ]
+                  },
+                  "http": {
+                    "kind": "endpoint",
+                    "value": {
+                      "route_id": "string",
+                      "http_method": {
+                        "type": "Get"
+                      },
+                      "path_suffix": [
+                        {
+                          "type": "Literal",
+                          "value": "string"
+                        }
+                      ],
+                      "query_vars": [
+                        {
+                          "queryParamName": "string",
+                          "variableName": "string"
+                        }
+                      ],
+                      "header_vars": [
+                        {
+                          "headerName": "string",
+                          "variableName": "string"
+                        }
+                      ],
+                      "response_headers": [
+                        {
+                          "name": "string",
+                          "value": "string"
+                        }
+                      ],
+                      "mode": "durableStreams",
+                      "durable_streams": {
+                        "slots": [
+                          {
+                            "source": {},
+                            "name": "string",
+                            "contentType": "string"
+                          }
+                        ],
+                        "load": {
+                          "maxConcurrentReadersPerStream": 0,
+                          "maxAppendRequestsPerSecondPerStream": 0
+                        }
+                      }
+                    }
                   },
                   "globals": {
                     "options": [

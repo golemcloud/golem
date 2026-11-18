@@ -5619,12 +5619,66 @@
     },
     "Tool": {
       "type": "object",
-      "required": ["version", "requires_filesystem", "commands", "schema"],
+      "required": ["version", "requires_filesystem", "http_mount", "commands", "schema"],
       "properties": {
         "version": { "type": "string" },
         "requires_filesystem": { "type": "boolean" },
+        "http_mount": { "oneOf": [{ "$ref": "#/definitions/ToolHttpMount" }, { "type": "null" }] },
         "commands": { "$ref": "#/definitions/CommandTree" },
         "schema": { "$ref": "#/definitions/SchemaGraph" }
+      },
+      "additionalProperties": false
+    },
+    "ToolHttpMount": {
+      "type": "object",
+      "required": ["path_prefix"],
+      "properties": {
+        "path_prefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+      },
+      "additionalProperties": false
+    },
+    "CommandHttp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "endpoint" },
+            "value": { "$ref": "#/definitions/ToolHttpEndpoint" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "prefix" },
+            "value": { "$ref": "#/definitions/ToolHttpPrefix" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ToolHttpPrefix": {
+      "type": "object",
+      "required": ["path_suffix"],
+      "properties": {
+        "path_suffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolHttpEndpoint": {
+      "type": "object",
+      "required": ["route_id", "http_method", "path_suffix", "query_vars", "header_vars", "response_headers", "mode", "durable_streams"],
+      "properties": {
+        "route_id": { "type": ["string", "null"] },
+        "http_method": { "$ref": "#/definitions/HttpMethod" },
+        "path_suffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "query_vars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
+        "header_vars": { "type": "array", "items": { "$ref": "#/definitions/HeaderVariable" } },
+        "response_headers": { "type": "array", "items": { "$ref": "#/definitions/FileResponseHeader" } },
+        "mode": { "oneOf": [{ "$ref": "#/definitions/HttpRouteMode" }, { "type": "null" }] },
+        "durable_streams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
@@ -5638,11 +5692,12 @@
     },
     "CommandNode": {
       "type": "object",
-      "required": ["name", "aliases", "doc", "globals", "subcommands", "body"],
+      "required": ["name", "aliases", "doc", "http", "globals", "subcommands", "body"],
       "properties": {
         "name": { "type": "string" },
         "aliases": { "type": "array", "items": { "type": "string" } },
         "doc": { "$ref": "#/definitions/ToolDoc" },
+        "http": { "oneOf": [{ "$ref": "#/definitions/CommandHttp" }, { "type": "null" }] },
         "globals": { "$ref": "#/definitions/ToolGlobals" },
         "subcommands": {
           "type": "array",

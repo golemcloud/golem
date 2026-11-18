@@ -40,6 +40,7 @@ async fn cancelled_custom_begin_holds_parent_initiation_until_terminal_settles()
     let DropEvent::SettleCustomInvocationBegin {
         lifecycle,
         mut terminal,
+        ..
     } = event
     else {
         panic!("expected custom begin settlement event");
