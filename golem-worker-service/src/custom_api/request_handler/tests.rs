@@ -766,9 +766,39 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         ))),
         harness.worker_service.clone(),
     );
+    // The session of the authorized requests. Its times are fixed, so every request has the same
+    // caller: a session without them is a new sign-in on each request.
+    const SESSION: &str =
+        r#"{"issued_at":"2026-01-01T00:00:00Z","expires_at":"2100-01-01T00:00:00Z"}"#;
+    // The ETag names the caller, so take the caller of that session as the handler derives it:
+    // the session middleware, then the caller of the request.
+    let session_tag = {
+        let mut session_route = test_route(9, "/session", Some("GET"), "typed");
+        session_route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+            header_name: "x-golem-session".into(),
+        });
+        let resolver = test_resolver(vec![session_route]);
+        let request = Request::builder()
+            .uri("/session".parse().unwrap())
+            .header("host", "example.com")
+            .header("x-golem-session", SESSION)
+            .finish();
+        let selected = resolver.resolve_matching_route(&request).await.unwrap();
+        let mut request = crate::custom_api::RichRequest::new(request);
+        assert!(
+            crate::custom_api::session_from_header_security::apply_session_from_header_security_middleware(
+                &mut request,
+                &selected,
+            )
+            .unwrap()
+            .is_none()
+        );
+        let caller = crate::custom_api::call_agent::caller_from_request(&request).unwrap();
+        crate::custom_api::call_agent::cache_headers::caller_etag_tag(&caller)
+    };
     let etag = |id: &AgentId| {
         format!(
-            "\"{}/{}/{fingerprint}:17\"",
+            "\"{}/{}/{fingerprint}/{session_tag}:17\"",
             id.component_id,
             id.agent_name_encoded()
         )
@@ -808,7 +838,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
                 etag(&ids[usize::from(!query.is_empty())]),
             );
         if authorized {
-            request = request.header("x-golem-session", "{}");
+            request = request.header("x-golem-session", SESSION);
         }
         let response = match handler.handle_request(request.finish()).await {
             Ok(response) => response,
@@ -837,7 +867,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
             .method(http::Method::GET)
             .uri(uri.parse().unwrap())
             .header("host", "example.com")
-            .header("x-golem-session", "{}")
+            .header("x-golem-session", SESSION)
             .header(http::header::IF_NONE_MATCH, etag(&ids[selected]))
             .finish();
         let response = match handler.handle_request(request).await {
@@ -861,7 +891,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
             .method(http::Method::GET)
             .uri(format!("/selected?instance={q}").parse().unwrap())
             .header("host", "example.com")
-            .header("x-golem-session", "{}")
+            .header("x-golem-session", SESSION)
             .header(http::header::IF_NONE_MATCH, etag(source))
             .finish();
         let response = handler.handle_request(request).await.unwrap();

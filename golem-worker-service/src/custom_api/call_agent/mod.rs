@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod cache_headers;
+pub(super) mod cache_headers;
 mod parameter_parsing;
 mod response_mapping;
 
