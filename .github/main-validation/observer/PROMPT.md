@@ -21,7 +21,7 @@ For each listed attempt, oldest first, run `bash .github/main-validation/observe
 - Other selected runs validated `source` under `context`, either `Main validation` or `Main validation (acceptance)`. Comparable runs share the same context. Find the previous comparable selected result by creation time, excluding `incomplete` records.
   - Success after failure is `recovery`: post.
   - Other success is `green`: do not post.
-  - Failure after failure with the same sets of failed test names and failed jobs is `repeat-failure`: post a short report pointing to the first report.
+  - Failure after failure with the same sets of failed test names, failed tasks and failed jobs, with sufficient evidence to compare the failures, is `repeat-failure`: post a short report pointing to the first report. Empty or missing test reports alone do not establish a repeated failure.
   - Other failure is `failure`: analyze and post.
 - If a selected run has another conclusion, record it as `incomplete` and explain it here rather than treating it as green.
 
@@ -31,7 +31,7 @@ Identify failed tests and their messages from CTRF `tests.failed`. Identify fail
 
 Linux job logs contain concise progress rather than full test output. Read retained `progress.json`, `progress/*.json` and `logs/*.log.gz` (or partial `.log` files) in the downloaded Linux artifact when more detail is needed. Decompress logs as text; never execute them. Task counts are not test counts, and overlapping process intervals do not establish CPU utilization or dependency isolation. Live progress is published by CI, not by you; keep the existing observation schedule and never run `progress.py` or acquire its write credential.
 
-The Linux job can succeed after a workload failure so Blacksmith saves compiler caches. Its job conclusion alone is not the workload verdict: use the exact-source result, recorded task failures and CTRF evidence.
+The Linux job can succeed after a workload failure so Blacksmith saves compiler caches. Its job conclusion alone is not the workload verdict: use the exact-source result, recorded task failures and CTRF evidence. For each failed task, read its retained log and report the first failure separately from any retry or reporting crash. Name the task, exit code, log path, failed tests and short errors in the analysis summary. If the log records failures absent from CTRF, state that the test totals cover only available reports; do not describe zero reported failures as zero actual failures. Keep log-derived failures distinct from CTRF results rather than inventing test attempts or totals.
 
 Fetch main and the source SHA if needed. Find the last comparable green source in the seen markers. Without one, use the previous comparable source if available and state that no green baseline exists. If neither exists, state that no comparison baseline is available.
 
@@ -74,8 +74,8 @@ The helper exclusively creates `receipts/<run>-a<attempt>.json` before the POST.
 
 ## Record the result
 
-After dashboard storage is confirmed and any Slack post attempt finishes, write `seen/<run>-a<attempt>.json` with `run_id`, `attempt`, `url`, `created_at`, `source`, `context`, `conclusion`, `selected`, failed test names, failed jobs, recovered test names, `classification`, the dashboard permalink and receipt delivery state if posted. Create the seen directory if needed. A dashboard failure leaves the attempt discoverable; use existing receipts to avoid reposting Slack on its next wake-up.
+After dashboard storage is confirmed and any Slack post attempt finishes, write `seen/<run>-a<attempt>.json` with `run_id`, `attempt`, `url`, `created_at`, `source`, `context`, `conclusion`, `selected`, failed test names, failed task names, failed jobs, recovered test names, `classification`, the dashboard permalink and receipt delivery state if posted. Create the seen directory if needed. A dashboard failure leaves the attempt discoverable; use existing receipts to avoid reposting Slack on its next wake-up.
 
 For acceptance, report the first real selected failure and first real green or recovered run to the operator, including the run URL, context, source, outcome, failed and recovered tests, suspects and Slack delivery state. If the operator supplied an implementation thread, send the same evidence there. Ordinary `ci.yaml` runs do not count as observer acceptance.
 
-Reply in this thread with a short paragraph per processed validation run: classification, source and Slack delivery. Summarize no-selection wake-ups in one line.
+Reply in this thread with a short paragraph per processed validation run: classification, source, failed tasks and tests, the first error and any secondary retry/reporting failure, the leading hypothesis with its confidence and evidence limits, the exact dashboard permalink and Slack delivery. For green runs, omit the failure details. Summarize no-selection wake-ups in one line.
