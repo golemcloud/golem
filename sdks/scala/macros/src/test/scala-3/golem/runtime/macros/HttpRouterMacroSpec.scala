@@ -74,6 +74,74 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
   }
 
   def spec = suite("HttpRouterMacroSpec")(
+    test("agent endpoints reject tool-only declaration options") {
+      val prefix: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/clean")
+          @endpoint("POST", "/run", prefix="/ignored") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      val id: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/clean")
+          @endpoint("POST", "/run", routeId="ignored") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generate[A]
+      """)
+      val headers: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/clean")
+          @endpoint("POST", "/run", responseHeaders=Array(("X-Result", "ignored"))) def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      assertTrue(
+        prefix.exists(_.message.contains("tool-only endpoint option")),
+        id.exists(_.message.contains("tool-only endpoint option")),
+        headers.exists(_.message.contains("tool-only endpoint option"))
+      )
+    },
+    test("agent checks every endpoint in either annotation order, including explicit empty options") {
+      val prefix: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/run", prefix="")
+          @endpoint("POST", "/clean") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      val id: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/run", routeId="")
+          @endpoint("POST", "/clean") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generate[A]
+      """)
+      val headers: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/run", responseHeaders=Array.empty)
+          @endpoint("POST", "/clean") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      assertTrue(
+        prefix.exists(_.message.contains("tool-only endpoint option")),
+        id.exists(_.message.contains("tool-only endpoint option")),
+        headers.exists(_.message.contains("tool-only endpoint option"))
+      )
+    },
     test("query selector names are preserved exactly, including whitespace-only names") {
       val padded     = AgentDefinitionMacro.generateWire[PaddedQuery]
       val whitespace = AgentDefinitionMacro.generateWire[WhitespaceQuery]

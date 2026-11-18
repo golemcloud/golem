@@ -1462,11 +1462,23 @@ task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` o
 has completed `DurableStateRemoved`, because nothing committed to the generation can run after
 that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
 still fail and leave an invocation an earlier attempt with the same key committed. A failed
-deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
-worker's status before the bind, with or without a fingerprint, without panicking on a stopped
-status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
-deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
-as reads do, until a retried delete claims it. Failures after the bind keep
+deletion attempt and a lost-shard retirement keep their own errors. A failed deletion leaves its
+stopped generation cached until a retried delete claims it, so the reads that can reach a resident
+worker without a bound task scope use the fallible status reads. They include admission before the
+bind, with or without a fingerprint; local RPC reads, including the pinned status and the wait for
+an invocation result; the gRPC interrupt, resume, update, plugin activation and deactivation, and
+cancel calls; the wallet read, after the invocation loop answers it, which answers an executor
+shutdown with the routing miss so that the worker service retries it; the wait for initialization
+after create; a scheduled invocation wake; and durable stream session reads. `Worker::try_get_last_known_status` answers a stopped status actor with the
+routing miss when the shard was lost, with "Worker is being deleted" when a deletion owns the
+generation, and otherwise with the actor's runtime error. `try_lookup_invocation_result` gives the
+routing miss too but leaves the deletion's refusal to its caller, because its callers can hold the
+instance lock. A wake refused this way is not acknowledged and runs again after its lease.
+Interrupt refuses a generation whose deletion failed before `DurableStateRemoved` with "Worker is
+being deleted" even while its status actor runs, as update and plugin changes do; a running
+deletion answers as a missing agent. Only the
+deletion's `OwnedWorkJoined` stage and executor shutdown stop the status actor of a generation that
+is still reachable; a lost-shard retirement does not. Failures after the bind keep
 their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
 while it runs. External-tool sessions bind the same way after each acquisition. A call on an
 existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
@@ -3558,6 +3570,14 @@ is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
 
 P3 TCP `send` and `receive` record their one-shot stream acquisition before creating the guest-facing handles. The acquisition's `CompletionDelivery` stays deferred while the host starts the send call or spawns the receive task. `CompletionDelivery::continue_with` suppresses the token if this setup returns a host error, including while constructing handles for an acquisition error; cancelling the setup still drops the armed token and records a discard. Only a successful final host return arms its terminal observer, including when acquisition failed. Replay restores the recorded taken flag before building the handles, then delivers at that same boundary. The built-in `node:net` regression `builtin_node_tcp_replays_after_restart` checks successful traffic with sockets enabled, denial with sockets disabled, and completed tool replay without reconnecting in both cases.
+
+P3 TCP `send` is a `DurableDemandStream`, like `receive`. The host owns the reader of the guest stream (`DurableTcpSendConsumer`): each non-empty guest write, up to 64 KiB, is one demand. The durable task records it as one `send-chunk` child whose response is the write's result and the byte count the native sink accepted, never the bytes, and replies only after the child `End`, so the guest observes exactly the recorded count. The `send` parent `Start` is committed before the first byte. The parent waits for the next write at a safe park point (`TailActivity::park`), so an open send with nothing in flight leaves the agent idle and a pooled connection does not hold its invocation. Only a parent that started live in this Store owns a native sink; on replay the recorded children answer the writes, and the first write without a recorded child, or a child left incomplete by a crash, completes with `connection-broken`, closes the guest stream, and is never written. Closing the guest writer shuts the native write side down and records the parent terminal last. Tests: `p3_tcp_completed_conversation_replays_without_contacting_the_peer`, `p3_tcp_send_kept_across_invocations_is_lost_after_replay`, `p3_tcp_send_open_at_a_crash_refuses_live_writes` in `socket_replay.rs`.
+
+The `send` and `receive` imports take the native stream (`TcpSendSink::take`, `TcpReceiveSource::take`) while they still hold the socket borrow, before they spawn the durable task: the guest may drop the socket as soon as the import returns, and the native stream owns the connection from then on. Only a live Store takes it, and the task discards it unless its parent starts live. Tests: `p3_tcp_send_survives_dropping_the_socket`, `p3_tcp_receive_survives_dropping_the_socket`.
+
+The send task writes each chunk to the native `TcpSendStream` itself (`poll_write`, exposed by the Wasmtime fork). One write takes a prefix of the chunk or nothing, so the child records exactly what the kernel took. Each demand carries a cancel signal: a guest `cancel-write`, or dropping the writer, stops a write that has not taken a byte, and its child records `Ok(0)`. The guest's write then reports `Cancelled`, released at the child's delivery marker like any other chunk, so a peer that stops reading cannot hold a cancel. A recorded zero count for a write the guest did not cancel is a determinism error. Test: `p3_tcp_send_cancels_a_write_the_peer_holds_back`.
+
+Every P3 TCP `send-chunk` and `receive-chunk` child records its guest delivery (`CompletionDelivered`, or `CompletionDiscarded` when the guest dropped the stream first), like the P3 HTTP body children: `DurableDemandStream` always uses deferred child delivery. Replay releases each chunk result at its recorded boundary, at most one per blocked wait, so the order of chunk completions against other guest-visible calls (a JS event loop's idle `wait-for`, tool output writes) is the recorded one. A discarded chunk ends its stream as if the guest had closed the writer or dropped the reader. Test: `builtin_node_tcp_send_parks_between_writes_and_replays`, whose Node body interleaves reads, writes and idle waits.
 
 For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
 cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's

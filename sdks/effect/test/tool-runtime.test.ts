@@ -11,6 +11,95 @@ import {
 import { invokeRegistered } from "../src/internal/tool/runtime.js"
 import * as Durability from "../src/Durability.js"
 import * as Host from "./mocks/golem-durability.js"
+import * as Http from "../src/Http.js"
+import { compileDefinition } from "../src/internal/tool/model.js"
+import { readFileSync } from "node:fs"
+
+it("encodes the shared report HTTP declarations", () => {
+  const definition = toolDefinition("report", { http: Http.mount("/reports") })
+    .command("generate", (c) =>
+      c.http(Http.post("/generate")).body((b) => b.returns(Schema.String)),
+    )
+    .command("status", (c) =>
+      c.http(Http.get("/status/{id}")).body((b) => b.positional("id", Schema.String)),
+    )
+    .command("admin", (c) =>
+      c
+        .http(Http.prefix("/admin"))
+        .command("purge", (p) =>
+          p.http(Http.delete("/purge/{id}")).body((b) => b.positional("id", Schema.String)),
+        ),
+    )
+  const { wire } = compileDefinition(definition)
+  const path = (segments: NonNullable<typeof wire.httpMount>["pathPrefix"]) =>
+    "/" +
+    segments
+      .map((s) =>
+        s.tag === "literal"
+          ? s.val
+          : `{${s.tag === "remaining-path-variable" ? "*" : ""}${s.val.variableName}}`,
+      )
+      .join("/")
+  const commands: unknown[] = []
+  const visit = (index: number, names: string[]) => {
+    const node = wire.commands.nodes[index]!
+    if (node.http?.tag === "prefix")
+      commands.push({ command: names.join("."), prefix: path(node.http.val.pathSuffix) })
+    if (node.http?.tag === "endpoint")
+      commands.push({
+        command: names.join("."),
+        method: node.http.val.httpMethod.tag.toUpperCase(),
+        suffix: path(node.http.val.pathSuffix),
+      })
+    for (const child of node.subcommands) visit(child, [...names, wire.commands.nodes[child]!.name])
+  }
+  visit(0, [])
+  expect({ mount: path(wire.httpMount!.pathPrefix), commands }).toEqual(
+    JSON.parse(
+      readFileSync(new URL("../../../test-data/tool-http-report.json", import.meta.url), "utf8"),
+    ),
+  )
+  expect(wire.commands.nodes[1]!.http).toMatchObject({ tag: "endpoint", val: { mode: undefined } })
+})
+
+it("preserves tool endpoint options and rejects agent admission", () => {
+  const declaration = Http.post("/events?filter={filter}", {
+    routeId: "report-events",
+    mode: "durableStreams",
+    headers: { "X-Trace": "trace" },
+    responseHeaders: { "X-Report": "ready" },
+    durableStreams: {
+      slots: [{ source: "output", slot: "stdout", name: "events", contentType: "text/plain" }],
+      load: { maxConcurrentReadersPerStream: 3, maxAppendRequestsPerSecondPerStream: 7 },
+    },
+  })
+  const definition = toolDefinition("options", { http: Http.mount("/options") }).command(
+    "events",
+    (c) =>
+      c
+        .http(declaration)
+        .body((b) => b.positional("filter", Schema.String).positional("trace", Schema.String)),
+  )
+  const endpoint = compileDefinition(definition).wire.commands.nodes[1]!.http
+  expect(endpoint).toMatchObject({
+    tag: "endpoint",
+    val: {
+      routeId: "report-events",
+      mode: "durable-streams",
+      headerVars: [{ headerName: "X-Trace", variableName: "trace" }],
+      queryVars: [{ queryParamName: "filter", variableName: "filter" }],
+      responseHeaders: [{ name: "X-Report", value: "ready" }],
+      durableStreams: {
+        slots: [
+          { source: { tag: "output", val: "stdout" }, name: "events", contentType: "text/plain" },
+        ],
+        load: { maxConcurrentReadersPerStream: 3, maxAppendRequestsPerSecondPerStream: 7 },
+      },
+    },
+  })
+  expect(() => Http.compileToolHttp(Http.post("/events", { auth: true }))).toThrow("export")
+  expect(() => Http.compileToolMount(Http.mount("/{agent-type}"))).toThrow("system variables")
+})
 
 const input = () => {
   const codec = Effect.runSync(compile(Schema.Struct({})))

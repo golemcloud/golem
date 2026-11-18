@@ -978,7 +978,7 @@ object AgentDefinitionMacro {
   }
 
   /** Extract @header annotations from method parameters. */
-  private def extractHeaderVars(using Quotes)(method: quotes.reflect.Symbol): List[HeaderVariable] = {
+  private[macros] def extractHeaderVars(using Quotes)(method: quotes.reflect.Symbol): List[HeaderVariable] = {
     import quotes.reflect.*
 
     method.paramSymss.flatten.collect {
@@ -1005,7 +1005,7 @@ object AgentDefinitionMacro {
   /**
    * Extract @endpoint annotations from a method and build metadata for each.
    */
-  private def extractEndpoints(using
+  private[macros] def extractEndpoints(using
     Quotes
   )(method: quotes.reflect.Symbol, headerVars: List[HeaderVariable]): List[HttpEndpointDetails] = {
     import quotes.reflect.*
@@ -1231,6 +1231,16 @@ object AgentDefinitionMacro {
     method.annotations.foreach {
       case Apply(Select(New(tpt), _), args)
           if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.endpoint" =>
+
+        List("prefix" -> 5, "routeId" -> 6, "responseHeaders" -> 7).foreach { case (name, index) =>
+          val value = args.collectFirst { case NamedArg(`name`, value) => value }.orElse {
+            args.lift(index).collect {
+              case value if (value match { case NamedArg(_, _) => false; case _ => true }) => value
+            }
+          }
+          if (value.exists(value => !value.symbol.name.contains("$default$")))
+            report.errorAndAbort(s"@$name is a tool-only endpoint option")
+        }
 
         val methodStrOpt = args.collectFirst {
           case Literal(StringConstant(v))                     => v

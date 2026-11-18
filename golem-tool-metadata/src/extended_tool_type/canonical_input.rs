@@ -245,6 +245,7 @@ impl ExtendedToolType {
                 name: node.name.clone(),
                 aliases: node.aliases.clone(),
                 doc: native::Doc::default(),
+                http: None,
                 globals: native::Globals {
                     options: node.globals.options.iter().map(option_projection).collect(),
                     flags: node.globals.flags.iter().map(flag_projection).collect(),
@@ -302,6 +303,7 @@ impl ExtendedToolType {
         native::Tool {
             version: self.version.clone(),
             requires_filesystem: self.requires_filesystem,
+            http_mount: None,
             commands: native::CommandTree { nodes },
             schema: SchemaGraph::empty(),
         }

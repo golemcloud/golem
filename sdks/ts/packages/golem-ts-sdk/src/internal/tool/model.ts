@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import type {
+  CommandHttp,
+  ToolHttpMount,
   CommandAnnotations,
   Doc,
   DuplicateKeyPolicy,
@@ -88,6 +90,7 @@ export interface SubtreeForward {
 
 export interface ExtendedCommandNode {
   readonly name: string;
+  readonly http?: CommandHttp;
   readonly aliases: readonly string[];
   readonly doc: Doc;
   readonly globals: ExtendedGlobals;
@@ -473,6 +476,7 @@ export class ExtendedToolType {
     readonly version: string,
     readonly root: ExtendedCommandNode,
     readonly requiresFilesystem = false,
+    readonly httpMount?: ToolHttpMount,
   ) {}
 
   get toolName(): string {

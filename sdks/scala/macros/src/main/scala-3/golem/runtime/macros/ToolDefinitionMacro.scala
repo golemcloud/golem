@@ -142,7 +142,8 @@ private[macros] class ToolDefinitionAssembler(val core: ToolMacroCore) {
               ${ Expr(overrideDoc) },
               ${ Expr(overrideAliases) },
               $parentGlobals,
-              $childDesc
+              $childDesc,
+              ${ new CompiledWireMetadata[core.type](core).literal(core.commandHttp(m.sym)) }
             )
           }
         case None =>
@@ -160,7 +161,8 @@ private[macros] class ToolDefinitionAssembler(val core: ToolMacroCore) {
           ${ Expr(ir.version) },
           ${ Expr(ir.requiresFilesystem) },
           root,
-          childList
+          childList,
+          ${ new CompiledWireMetadata[core.type](core).literal(ir.httpMount) }
         )(
           ctx
         )
@@ -234,7 +236,8 @@ private[macros] class ToolDefinitionAssembler(val core: ToolMacroCore) {
           ${ Expr.ofList(c.globalOptions.map(optionBuildExpr(_, m))) },
           ${ Expr(c.globalFlags) }
         ),
-        $bodyExpr
+        $bodyExpr,
+        ${ new CompiledWireMetadata[core.type](core).literal(core.commandHttp(m.sym)) }
       )
     }
   }

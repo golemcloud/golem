@@ -188,7 +188,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
             Err(error) => return Err(error),
         };
-        let metadata = worker.get_latest_worker_metadata().await;
+        // A running deletion that already stopped the state actor answers as a missing agent.
+        let metadata = match worker.try_get_latest_worker_metadata().await {
+            Err(_) if worker.answers_as_deleted().await => return Ok(()),
+            metadata => metadata?,
+        };
+        // A deletion that failed before it removed the durable state keeps the agent, and is
+        // refused. A running deletion, or one past that stage, answers as a missing agent below;
+        // a lost shard keeps the routing miss that the read above or the retirement below gives.
+        if !worker.retired_for_lost_shard()
+            && worker.deletion_owns_retirement().await
+            && !worker.answers_as_deleted().await
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ));
+        }
 
         let decision = interrupt_decision(&metadata.last_known_status.status, recover_immediately);
         if decision == InterruptDecision::Ignore {
@@ -241,7 +256,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         worker.ensure_component_agent_ingress("resume")?;
-        let metadata = worker.get_latest_worker_metadata().await;
+        let metadata = worker.try_get_latest_worker_metadata().await?;
 
         match resume_decision(
             &metadata.last_known_status.status,
@@ -312,7 +327,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
-        let metadata = worker.get_latest_worker_metadata().await;
+        let metadata = worker.try_get_latest_worker_metadata().await?;
         if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
             return Err(WorkerExecutorError::invalid_request(
                 "update is not supported for an external tool owner",
@@ -537,7 +552,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         worker.ensure_component_agent_ingress("plugin change")?;
-        let metadata = worker.get_latest_worker_metadata().await;
+        let metadata = worker.try_get_latest_worker_metadata().await?;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
