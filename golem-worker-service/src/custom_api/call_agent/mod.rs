@@ -17,8 +17,7 @@ mod parameter_parsing;
 mod response_mapping;
 
 use self::cache_headers::{
-    CacheVisibility, add_vary_header, build_cache_control_value, build_etag_value,
-    headers as cache_header, if_none_match_hits, parse_if_none_match_entries,
+    build_etag_value, headers as cache_header, if_none_match_hits, parse_if_none_match_entries,
     supports_http_revalidation,
 };
 pub(super) use self::parameter_parsing::validate_query_parameters;
@@ -27,8 +26,9 @@ use self::parameter_parsing::{
 };
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
+use super::cache_headers::{CacheRouteKind, add_vary_headers, apply_response_cache_headers};
 use super::error::RequestHandlerError;
-use super::model::{ResponseBody, RichRouteSecurity};
+use super::model::ResponseBody;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
@@ -96,7 +96,7 @@ impl CallAgentHandler {
             && is_cacheable_method(&request_method)
             && supports_http_revalidation(read_only)
             && let Some(not_modified) = self
-                .try_handle_if_none_match(request, behaviour, &agent_id, read_only, resolved_route)
+                .try_handle_if_none_match(request, behaviour, &agent_id, read_only)
                 .await?
         {
             return Ok(not_modified);
@@ -185,9 +185,8 @@ impl CallAgentHandler {
                 agent_fingerprint,
                 read_only,
                 behaviour,
-                resolved_route,
                 &caller,
-                request.headers(),
+                request.authenticated_session().is_some(),
             );
 
             if request_method == Method::HEAD {
@@ -210,7 +209,6 @@ impl CallAgentHandler {
         behaviour: &CallAgentBehaviour,
         agent_id: &AgentId,
         read_only: &ReadOnlyConfig,
-        resolved_route: &ResolvedRouteEntry,
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
         let Some(raw) = request
             .headers()
@@ -252,9 +250,8 @@ impl CallAgentHandler {
             Some(current_fingerprint),
             read_only,
             behaviour,
-            resolved_route,
             &caller,
-            request.headers(),
+            request.authenticated_session().is_some(),
         );
 
         Ok(Some(RouteExecutionResult {
@@ -544,10 +541,9 @@ fn is_cacheable_method(method: &Method) -> bool {
 
 /// Insert the cache headers for a read-only `AgentMethod` response into the
 /// given header map: `Cache-Control`, optionally `ETag` (when the cache policy
-/// supports HTTP revalidation), and `Vary` for every header that influences
-/// the response (the headers that carry a credential, for public and private
-/// answers alike, plus any header-bound method parameters).
-#[allow(clippy::too_many_arguments)]
+/// supports HTTP revalidation, and specific to `caller`), and `Vary` for
+/// header-bound method parameters. Credential-related Vary headers are also
+/// applied at the response boundary.
 fn add_read_only_cache_headers(
     headers: &mut http::HeaderMap,
     agent_id: &AgentId,
@@ -555,21 +551,15 @@ fn add_read_only_cache_headers(
     agent_fingerprint: Option<AgentFingerprint>,
     read_only: &ReadOnlyConfig,
     behaviour: &CallAgentBehaviour,
-    resolved_route: &ResolvedRouteEntry,
     caller: &Caller,
-    request_headers: &http::HeaderMap,
+    request_authenticated: bool,
 ) {
-    let session_header = session_header_name(&resolved_route.route.security);
-    let visibility = CacheVisibility::for_request(caller, request_headers, session_header);
-    let issues_token = headers.contains_key(http::header::SET_COOKIE);
-    headers.insert(
-        cache_header::CACHE_CONTROL,
-        http::HeaderValue::from_str(&build_cache_control_value(
-            read_only,
-            visibility,
-            issues_token,
-        ))
-        .unwrap(),
+    apply_response_cache_headers(
+        CacheRouteKind::Typed(Some(&read_only.cache_policy)),
+        headers,
+        request_authenticated,
+        false,
+        false,
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
@@ -590,31 +580,10 @@ fn add_read_only_cache_headers(
         );
     }
 
-    // Every answer varies on every header that can carry a credential: a public answer may be
-    // served by a shared cache to any request, and a private answer may be kept by a browser
-    // cache that another session of the same browser then asks, so neither is selected for a
-    // request with a different credential. The headers that method parameters are bound to vary
-    // the response as well.
-    for name in ["Authorization", "Cookie", "Golem-Token"]
-        .into_iter()
-        .chain(session_header)
-    {
-        add_vary_header(headers, name);
-    }
     for param in &behaviour.method_parameters {
         if let MethodParameter::Header { header_name, .. } = param {
-            add_vary_header(headers, header_name);
+            add_vary_headers(headers, &[header_name]);
         }
-    }
-}
-
-/// The header that carries the session of a `SessionFromHeader` route.
-fn session_header_name(security: &RichRouteSecurity) -> Option<&str> {
-    match security {
-        RichRouteSecurity::SessionFromHeader(s) => Some(s.header_name.as_str()),
-        RichRouteSecurity::None
-        | RichRouteSecurity::SecurityScheme(_)
-        | RichRouteSecurity::Unavailable => None,
     }
 }
 
@@ -1251,10 +1220,12 @@ mod tests {
                 Some(fingerprint),
                 &read_only,
                 behaviour,
-                &resolved,
                 &user("ana"),
-                &ana_request,
+                true,
             );
+            // The response boundary adds the session header of a `SessionFromHeader` route to
+            // `Vary` (`request_handler::finish_selected_response`); do the same here.
+            crate::custom_api::cache_headers::add_vary_headers(&mut ana_response, &["x-session"]);
             let vary = ana_response
                 .get(http::header::VARY)
                 .and_then(|value| value.to_str().ok())
@@ -1310,9 +1281,12 @@ mod tests {
                 Some(fingerprint),
                 &read_only,
                 behaviour,
-                &resolved,
                 &Caller::anonymous(),
-                &http::HeaderMap::new(),
+                false,
+            );
+            crate::custom_api::cache_headers::add_vary_headers(
+                &mut public_response,
+                &["x-session"],
             );
             for response in [&ana_response, &public_response] {
                 let vary = response
@@ -1413,9 +1387,8 @@ mod tests {
             Some(fingerprint),
             read_only,
             behaviour,
-            resolved,
             caller,
-            &http::HeaderMap::new(),
+            false,
         );
         response[http::header::ETAG].to_str().unwrap().to_string()
     }

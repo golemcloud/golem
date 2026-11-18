@@ -14,72 +14,24 @@
 //
 //! HTTP cache-header helpers used when binding read-only `AgentMethod` HTTP routes.
 //!
-//! The worker-service emits `Cache-Control`, `ETag`, and (for a public response)
-//! `Vary: Authorization, Cookie, Golem-Token` for every cacheable HTTP method
-//! (`GET` / `HEAD`) that resolves to an `AgentMethod` whose `read-only` config
-//! is `Some(_)`.
-//!
-//! The visibility depends on the request, never on the method: a response is
-//! `private` when the caller is not anonymous or when the request carries a
-//! credential (`Authorization`, `Cookie`, `Golem-Token`, or the route's session
-//! header), and `public` otherwise. A response that issues a token is
-//! `private, no-store`.
+//! The worker-service emits ETags for eligible read-only GET/HEAD responses.
+//! Cache-Control and credential-related Vary headers use the shared response
+//! cache policy, independently of the executor's principal-aware cache key.
 //!
 //! Conversely, for `If-None-Match` revalidation requests, the worker-service
 //! can produce a `304 Not Modified` response without invoking the executor
 //! when the supplied `ETag` matches the agent's current oplog index and the
 //! caller of the request. The `ETag` holds a digest of the caller, so one
-//! caller's validator never revalidates another caller's request.
+//! caller's validator never revalidates another caller's request, even when a
+//! private response tells the browser to revalidate every time.
 //!
 //! See [#3392](https://github.com/golemcloud/golem/issues/3392) and
 //! [`read-only-agent-methods.md`](../../../../read-only-agent-methods.md) for
 //! the full design.
 
 use golem_common::model::agent::{CachePolicy, ReadOnlyConfig};
-use golem_common::model::caller::{Caller, Principal};
+use golem_common::model::caller::Caller;
 use golem_common::model::{AgentFingerprint, AgentId, OplogIndex};
-use http::header;
-
-/// The request headers that carry a credential, besides the route's session header.
-const CREDENTIAL_HEADERS: [&str; 3] = ["authorization", "cookie", "golem-token"];
-
-/// `Cache-Control` visibility for a read-only response.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheVisibility {
-    /// Caches may be shared across users (e.g. a CDN). Set when the caller is anonymous
-    /// and the request carries no credential.
-    Public,
-    /// Only per-user caches (e.g. a browser cache) may store this response.
-    Private,
-}
-
-impl CacheVisibility {
-    /// `Private` when the original caller is not anonymous, or when the request carries a
-    /// credential: `Authorization`, `Cookie`, `Golem-Token`, or the route's session header.
-    pub fn for_request(
-        caller: &Caller,
-        request_headers: &http::HeaderMap,
-        session_header: Option<&str>,
-    ) -> Self {
-        let carries_credential = CREDENTIAL_HEADERS
-            .iter()
-            .copied()
-            .chain(session_header)
-            .any(|name| request_headers.contains_key(name));
-        if matches!(caller.original, Principal::Anonymous) && !carries_credential {
-            Self::Public
-        } else {
-            Self::Private
-        }
-    }
-
-    pub fn as_token(self) -> &'static str {
-        match self {
-            Self::Public => "public",
-            Self::Private => "private",
-        }
-    }
-}
 
 /// Build the value for the `ETag` response header for a read-only invocation.
 ///
@@ -149,38 +101,6 @@ pub fn supports_http_revalidation(read_only: &ReadOnlyConfig) -> bool {
     !matches!(read_only.cache_policy, CachePolicy::NoCache(_))
 }
 
-/// Build the `Cache-Control` header value for the given read-only config.
-///
-/// Mapping:
-/// - [`CachePolicy::NoCache`] → `no-store`
-/// - a response that issues a token → `private, no-store`
-/// - [`CachePolicy::UntilWrite`] → `<vis>, no-cache`
-/// - [`CachePolicy::Ttl(d)`] → `<vis>, max-age=<floor(d, 1s)>`
-///
-/// Sub-second TTL values floor to `max-age=0`, which causes downstream caches
-/// to revalidate via `ETag` on every request. The deploy-time validator emits
-/// a warning in that case so the agent author can pick a different TTL.
-pub fn build_cache_control_value(
-    read_only: &ReadOnlyConfig,
-    visibility: CacheVisibility,
-    issues_token: bool,
-) -> String {
-    match &read_only.cache_policy {
-        CachePolicy::NoCache(_) => "no-store".to_string(),
-        _ if issues_token => "private, no-store".to_string(),
-        CachePolicy::UntilWrite(_) => format!("{}, no-cache", visibility.as_token()),
-        CachePolicy::Ttl(ttl) => {
-            let seconds = ttl_seconds_floor(ttl.duration_nanos);
-            format!("{}, max-age={}", visibility.as_token(), seconds)
-        }
-    }
-}
-
-/// Floor the TTL value (in nanoseconds) to whole seconds.
-pub fn ttl_seconds_floor(duration_nanos: u64) -> u64 {
-    duration_nanos / 1_000_000_000
-}
-
 /// Parse a header value containing one or more `If-None-Match` ETag tokens,
 /// returning the parsed (component-id, agent-name, oplog-index) tuples.
 ///
@@ -236,46 +156,14 @@ pub mod headers {
     use http::HeaderName;
 
     pub const ETAG: HeaderName = http::header::ETAG;
-    pub const CACHE_CONTROL: HeaderName = http::header::CACHE_CONTROL;
     pub const IF_NONE_MATCH: HeaderName = http::header::IF_NONE_MATCH;
-}
-
-/// Append `header_name` to the `Vary` value already present in `existing`
-/// (if any), preserving duplicates / casing of previous entries. Returns the
-/// new combined value. Match is case-insensitive, so an existing
-/// `Vary: authorization` is preserved as-is when adding `Authorization`.
-pub fn merge_vary_with_header(existing: Option<&str>, header_name: &str) -> String {
-    let mut tokens: Vec<String> = match existing {
-        Some(value) => value
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect(),
-        None => Vec::new(),
-    };
-    if !tokens.iter().any(|t| t.eq_ignore_ascii_case(header_name)) {
-        tokens.push(header_name.to_string());
-    }
-    tokens.join(", ")
-}
-
-/// Insert a `Vary: <header_name>` header into a header map, merging with any
-/// existing `Vary` value. Call repeatedly to add multiple varying headers.
-pub fn add_vary_header(headers: &mut http::HeaderMap, header_name: &str) {
-    let existing = headers
-        .get(&header::VARY)
-        .and_then(|value| value.to_str().ok());
-    let new_value = merge_vary_with_header(existing, header_name);
-    headers.insert(
-        header::VARY,
-        http::HeaderValue::from_str(&new_value).unwrap(),
-    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use golem_common::model::agent::CachePolicyTtl;
+    use golem_common::model::caller::Principal;
     use golem_common::model::component::ComponentId;
     use golem_schema::Empty;
     use test_r::test;
@@ -310,50 +198,6 @@ mod tests {
         ReadOnlyConfig {
             cache_policy: CachePolicy::NoCache(Empty {}),
         }
-    }
-
-    #[test]
-    fn cache_control_no_store_for_no_cache_policy() {
-        assert_eq!(
-            build_cache_control_value(&no_store_public(), CacheVisibility::Public, false),
-            "no-store"
-        );
-    }
-
-    #[test]
-    fn cache_control_until_write_public_for_a_public_request() {
-        assert_eq!(
-            build_cache_control_value(&public_no_cache(), CacheVisibility::Public, false),
-            "public, no-cache"
-        );
-    }
-
-    #[test]
-    fn cache_control_until_write_follows_the_request_visibility() {
-        assert_eq!(
-            build_cache_control_value(&public_no_cache(), CacheVisibility::Private, false),
-            "private, no-cache"
-        );
-        assert_eq!(
-            build_cache_control_value(&public_no_cache(), CacheVisibility::Public, false),
-            "public, no-cache"
-        );
-    }
-
-    #[test]
-    fn cache_control_ttl_floors_to_seconds() {
-        assert_eq!(
-            build_cache_control_value(&ttl_public(2_500_000_000), CacheVisibility::Public, false),
-            "public, max-age=2"
-        );
-    }
-
-    #[test]
-    fn cache_control_sub_second_ttl_renders_as_max_age_zero() {
-        assert_eq!(
-            build_cache_control_value(&ttl_public(500_000_000), CacheVisibility::Public, false),
-            "public, max-age=0"
-        );
     }
 
     #[test]
@@ -517,31 +361,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_vary_appends_header_when_missing() {
-        let merged = merge_vary_with_header(Some("Accept-Encoding"), "Authorization");
-        assert_eq!(merged, "Accept-Encoding, Authorization");
-    }
-
-    #[test]
-    fn merge_vary_keeps_header_unique_case_insensitive() {
-        let merged =
-            merge_vary_with_header(Some("Accept-Encoding, authorization"), "Authorization");
-        assert_eq!(merged, "Accept-Encoding, authorization");
-    }
-
-    #[test]
-    fn merge_vary_creates_value_when_absent() {
-        let merged = merge_vary_with_header(None, "Authorization");
-        assert_eq!(merged, "Authorization");
-    }
-
-    #[test]
-    fn merge_vary_supports_custom_header_names() {
-        let merged = merge_vary_with_header(None, "X-Tenant");
-        assert_eq!(merged, "X-Tenant");
-    }
-
-    #[test]
     fn supports_http_revalidation_is_false_for_no_cache() {
         assert!(!supports_http_revalidation(&no_store_public()));
     }
@@ -566,26 +385,6 @@ mod tests {
     // the H1..H5 behaviours and which the executor's `oplog_index` plumbing
     // is consumed by.
     // ----------------------------------------------------------------
-
-    /// H1: `GET` on a read-only method emits both `ETag` and `Cache-Control`.
-    #[test]
-    fn h1_get_returns_etag_and_cache_control_for_until_write() {
-        let read_only = public_no_cache();
-        let agent_id = agent_id_for_test();
-        let fingerprint = fingerprint_for_test();
-
-        let etag = build_etag_value(
-            &agent_id,
-            fingerprint,
-            &Caller::anonymous(),
-            OplogIndex::from_u64(42),
-        );
-        let cache_control = build_cache_control_value(&read_only, CacheVisibility::Public, false);
-
-        assert!(etag.starts_with('"') && etag.ends_with('"'));
-        assert_eq!(cache_control, "public, no-cache");
-        assert!(supports_http_revalidation(&read_only));
-    }
 
     /// H2: an `If-None-Match` whose ETag matches the agent's current oplog
     /// index revalidates with `304 Not Modified` and does not invoke the
@@ -634,110 +433,6 @@ mod tests {
         ));
     }
 
-    fn request_headers(names: &[&str]) -> http::HeaderMap {
-        let mut headers = http::HeaderMap::new();
-        for name in names {
-            headers.insert(
-                http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
-                http::HeaderValue::from_static("x"),
-            );
-        }
-        headers
-    }
-
-    fn authenticated_caller() -> Caller {
-        Caller::entry(Principal::Account(
-            golem_common::model::caller::AccountPrincipal {
-                issuer: "https://golem.example".to_string(),
-                account_id: golem_common::model::account::AccountId(uuid!(
-                    "00000000-0000-0000-0000-000000000042"
-                )),
-                authentication: golem_common::model::caller::AccountAuthentication::ApiToken,
-            },
-        ))
-    }
-
-    /// H4: an anonymous request without credentials is cacheable by shared caches (CDNs), so the
-    /// response is `public`. Its `Vary` is added by `add_read_only_cache_headers`, which the unit test
-    /// `a_private_response_is_never_reused_for_another_session` covers.
-    #[test]
-    fn h4_anonymous_request_without_credentials_is_public_with_vary() {
-        let read_only = public_no_cache();
-        let visibility =
-            CacheVisibility::for_request(&Caller::anonymous(), &request_headers(&[]), None);
-        assert_eq!(visibility, CacheVisibility::Public);
-        assert_eq!(
-            build_cache_control_value(&read_only, visibility, false),
-            "public, no-cache"
-        );
-    }
-
-    /// H4 (counterpart): a response for an authenticated caller is `private`, so a shared cache
-    /// cannot serve one user's representation for another.
-    #[test]
-    fn h4_authenticated_request_is_private_no_cache() {
-        let visibility =
-            CacheVisibility::for_request(&authenticated_caller(), &request_headers(&[]), None);
-        assert_eq!(visibility, CacheVisibility::Private);
-        assert_eq!(
-            build_cache_control_value(&public_no_cache(), visibility, false),
-            "private, no-cache"
-        );
-    }
-
-    /// H4: an anonymous caller that sends a credential (a token that did not resolve to a
-    /// session, for example) still gets a `private` response.
-    #[test]
-    fn h4_token_bearing_request_on_a_none_route_is_private_no_cache() {
-        for name in ["authorization", "cookie", "golem-token"] {
-            let visibility =
-                CacheVisibility::for_request(&Caller::anonymous(), &request_headers(&[name]), None);
-            assert_eq!(visibility, CacheVisibility::Private, "{name}");
-        }
-        let visibility = CacheVisibility::for_request(
-            &Caller::anonymous(),
-            &request_headers(&["x-session"]),
-            Some("x-session"),
-        );
-        assert_eq!(visibility, CacheVisibility::Private);
-        assert_eq!(
-            build_cache_control_value(&public_no_cache(), visibility, false),
-            "private, no-cache"
-        );
-    }
-
-    /// H4: a response that issues a token is `private, no-store`, whatever its cache policy,
-    /// unless the policy is already `no-store`.
-    #[test]
-    fn h4_response_that_issues_a_token_is_private_no_store() {
-        for read_only in [public_no_cache(), ttl_public(60_000_000_000)] {
-            assert_eq!(
-                build_cache_control_value(&read_only, CacheVisibility::Public, true),
-                "private, no-store"
-            );
-        }
-        assert_eq!(
-            build_cache_control_value(&no_store_public(), CacheVisibility::Public, true),
-            "no-store"
-        );
-    }
-
-    /// H5: a `CachePolicy::Ttl(d)` method's `Cache-Control` ends in
-    /// `max-age=<floor(d, 1s)>`.
-    #[test]
-    fn h5_ttl_method_returns_max_age_floored_to_seconds() {
-        // 2.5s -> floors to max-age=2
-        assert_eq!(
-            build_cache_control_value(&ttl_public(2_500_000_000), CacheVisibility::Public, false),
-            "public, max-age=2"
-        );
-        // exactly 1s -> max-age=1
-        assert_eq!(
-            build_cache_control_value(&ttl_public(1_000_000_000), CacheVisibility::Public, false),
-            "public, max-age=1"
-        );
-    }
-
     /// `CachePolicy::NoCache` must not emit `ETag` and must not be
     /// revalidatable via `If-None-Match`. This is what
     /// `add_read_only_cache_headers` and `try_handle_if_none_match` short
@@ -745,10 +440,6 @@ mod tests {
     #[test]
     fn no_cache_policy_opts_out_of_http_revalidation() {
         let read_only = no_store_public();
-        assert_eq!(
-            build_cache_control_value(&read_only, CacheVisibility::Public, false),
-            "no-store"
-        );
         assert!(!supports_http_revalidation(&read_only));
     }
 
