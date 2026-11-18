@@ -69,12 +69,12 @@ use arc_swap::ArcSwap;
 use chrono::Utc;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
+use golem_common::model::InvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentFingerprint, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    ScheduledAction, Timestamp,
+    AgentFingerprint, AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::any::Any;
@@ -230,11 +230,11 @@ enum StatusJob {
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-        done: oneshot::Sender<Result<bool, OplogError>>,
+        done: oneshot::Sender<Result<bool, WorkerExecutorError>>,
     },
     /// Folds the entries that the oplog committed by itself, on its commit threshold, into the
     /// published status. Commits nothing. The oplog queues it through its auto-commit listener.
@@ -283,6 +283,17 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     GrowMemory {
         worker: Arc<Worker<Ctx>>,
         growth: Arc<PendingMemoryGrowth>,
+    },
+    ReconcileMemory {
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
+    },
+    FinalizeInstantiationMemory {
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        delta: u64,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     OrderedOplogEntry {
         worker: Arc<Worker<Ctx>>,
@@ -532,6 +543,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 ) {
                                     return Ok(false);
                                 }
+                                // Acquiring the worker does not reserve admission: its constructor
+                                // may have failed since acquisition. Check health in this serialized
+                                // append job, after deduplication and before accepting new work.
+                                Worker::<Ctx>::ensure_not_failed(
+                                    &state.deps,
+                                    &state.owned_agent_id,
+                                    state.agent_mode,
+                                    &status,
+                                )
+                                .await?;
                                 drop(status);
                                 // Returned rather than reported as a moved version: the caller
                                 // retries on `false`, and a fenced oplog refuses every retry.
@@ -539,7 +560,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     if let OplogError::Fenced(fence) = &error {
                                         state.retire_fenced_agent(fence.clone());
                                     }
-                                    return Err(error);
+                                    return Err(error.into());
                                 }
                                 // The entry is only buffered until this commit, which is where a
                                 // takeover is found. The key has not reached the status, so nothing
@@ -649,6 +670,35 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     }
                     LifecycleJob::GrowMemory { worker, growth } => {
                         worker.persist_pending_memory_growth(growth).await;
+                    }
+                    LifecycleJob::ReconcileMemory {
+                        worker,
+                        bytes,
+                        done,
+                    } => {
+                        let result = worker
+                            .add_and_commit_oplog(OplogEntry::memory_size_reconciled(bytes))
+                            .await
+                            .map(|_| ())
+                            .map_err(WorkerExecutorError::from);
+                        let _ = done.send(result);
+                    }
+                    LifecycleJob::FinalizeInstantiationMemory {
+                        worker,
+                        bytes,
+                        delta,
+                        done,
+                    } => {
+                        let result = worker
+                            .add_and_commit_oplog(OplogEntry::grow_memory(delta))
+                            .await
+                            .map(|_| {
+                                worker
+                                    .startup_linear_memory_bytes
+                                    .store(bytes, Ordering::Release);
+                            })
+                            .map_err(WorkerExecutorError::from);
+                        let _ = done.send(result);
                     }
                     LifecycleJob::OrderedOplogEntry {
                         worker,
@@ -854,11 +904,11 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn append_invocation_if_version(
         &self,
         entry: OplogEntry,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-    ) -> Result<bool, OplogError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
@@ -958,6 +1008,48 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 self.owned_agent_id
             );
         }
+    }
+
+    pub fn reconcile_memory(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+    ) -> oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let (done, result) = oneshot::channel();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::ReconcileMemory {
+                worker,
+                bytes,
+                done,
+            })
+            .is_err()
+        {
+            panic!("worker lifecycle actor stopped during memory reconciliation");
+        }
+        result
+    }
+
+    pub fn finalize_instantiation_memory(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        delta: u64,
+    ) -> oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let (done, result) = oneshot::channel();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::FinalizeInstantiationMemory {
+                worker,
+                bytes,
+                delta,
+                done,
+            })
+            .is_err()
+        {
+            panic!("worker lifecycle actor stopped during instantiation finalization");
+        }
+        result
     }
 
     pub fn memory_limit_exceeded(&self, worker: Arc<Worker<Ctx>>, memory: LinearMemoryTracker) {
@@ -1546,7 +1638,7 @@ fn is_authority_state_entry(entry: &OplogEntry) -> bool {
 
 fn can_append_invocation(
     status: &AgentStatusRecord,
-    idempotency_key: &IdempotencyKey,
+    idempotency_key: &InvocationId,
     expected_result_generation: u64,
     expected_revert_generation: u64,
 ) -> bool {
@@ -1573,12 +1665,13 @@ mod tests {
     use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AgentId, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef, Timestamp,
+        AgentId, AgentStatusRecord, InvocationId, OwnedAgentId, PendingInvocationRef, Timestamp,
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use test_r::{test, timeout};
     use tokio::sync::{Notify, mpsc, oneshot};
+    use uuid::Uuid;
 
     #[test]
     #[timeout("30s")]
@@ -1766,7 +1859,7 @@ mod tests {
         );
     }
 
-    fn pending_invocation(key: IdempotencyKey) -> PendingInvocationRef {
+    fn pending_invocation(key: InvocationId) -> PendingInvocationRef {
         PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
             not_before: None,
@@ -1791,6 +1884,7 @@ mod tests {
                     }
                     (name, _) => golem_common::model::SnapshotFiles::named(name.cloned()),
                 },
+                bootstrap: None,
             }),
             ..AgentStatusRecord::default()
         }
@@ -1815,6 +1909,7 @@ mod tests {
             active_cards: Vec::new(),
             wallet_generation: 0,
             filesystem_snapshot: Some(name.clone()),
+            bootstrap: None,
         };
         let fold = |status: AgentStatusRecord, entries: Vec<(u64, OplogEntry)>| {
             crate::worker::status::update_status_with_new_entries(
@@ -2035,10 +2130,10 @@ mod tests {
 
     #[test]
     fn invocation_admission_ignores_unrelated_oplog_and_pending_changes() {
-        let key = IdempotencyKey::fresh();
+        let key = InvocationId(Uuid::new_v4());
         let mut status = AgentStatusRecord {
             oplog_idx: OplogIndex::from_u64(100),
-            pending_invocations: vec![pending_invocation(IdempotencyKey::fresh())],
+            pending_invocations: vec![pending_invocation(InvocationId(Uuid::new_v4()))],
             ..AgentStatusRecord::default()
         };
         let result_generation = status.invocation_results.change_generation();
@@ -2054,7 +2149,7 @@ mod tests {
         status.oplog_idx = OplogIndex::from_u64(1_000);
         status
             .pending_invocations
-            .push(pending_invocation(IdempotencyKey::fresh()));
+            .push(pending_invocation(InvocationId(Uuid::new_v4())));
         assert!(can_append_invocation(
             &status,
             &key,
@@ -2063,14 +2158,21 @@ mod tests {
         ));
     }
 
+    fn result_at(terminal: OplogIndex) -> golem_common::model::InvocationResultPosition {
+        golem_common::model::InvocationResultPosition {
+            terminal,
+            request: None,
+        }
+    }
+
     #[test]
     fn invocation_admission_rejects_same_key_or_result_branch_changes() {
-        let key = IdempotencyKey::fresh();
+        let key = InvocationId(Uuid::new_v4());
         let mut status = AgentStatusRecord::default();
         let result_generation = status.invocation_results.change_generation();
         let revert_generation = status.invocation_results.revert_generation();
 
-        status.pending_invocations = vec![pending_invocation(key.clone())];
+        status.pending_invocations = vec![pending_invocation(key)];
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2079,7 +2181,7 @@ mod tests {
         ));
 
         status.pending_invocations.clear();
-        status.current_idempotency_key = Some(key.clone());
+        status.current_idempotency_key = Some(key);
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2090,7 +2192,7 @@ mod tests {
         status.current_idempotency_key = None;
         status
             .invocation_results
-            .insert(IdempotencyKey::fresh(), OplogIndex::INITIAL);
+            .insert(InvocationId(Uuid::new_v4()), result_at(OplogIndex::INITIAL));
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2100,7 +2202,7 @@ mod tests {
 
         status
             .invocation_results
-            .insert(key.clone(), OplogIndex::from_u64(2));
+            .insert(key, result_at(OplogIndex::from_u64(2)));
         let key_result_generation = status.invocation_results.change_generation();
         assert!(!can_append_invocation(
             &status,

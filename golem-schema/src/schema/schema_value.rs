@@ -172,6 +172,58 @@ pub enum SchemaValue {
     Stream(SchemaValueStream),
 }
 
+impl SchemaValue {
+    /// Compares values recursively using float bits: identical NaNs compare equal,
+    /// while distinct NaN payloads and positive/negative zero remain distinct.
+    /// All other leaves retain their ordinary `PartialEq` semantics.
+    pub fn bitwise_eq(&self, other: &Self) -> bool {
+        fn seq_eq(a: &[SchemaValue], b: &[SchemaValue]) -> bool {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.bitwise_eq(b))
+        }
+
+        fn opt_eq(
+            a: std::option::Option<&SchemaValue>,
+            b: std::option::Option<&SchemaValue>,
+        ) -> bool {
+            match (a, b) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.bitwise_eq(b),
+                _ => false,
+            }
+        }
+
+        use SchemaValue::*;
+        match (self, other) {
+            (F32(a), F32(b)) => a.to_bits() == b.to_bits(),
+            (F64(a), F64(b)) => a.to_bits() == b.to_bits(),
+            (Record { fields: a }, Record { fields: b }) => seq_eq(a, b),
+            (Tuple { elements: a }, Tuple { elements: b })
+            | (List { elements: a }, List { elements: b })
+            | (FixedList { elements: a }, FixedList { elements: b }) => seq_eq(a, b),
+            (Map { entries: a }, Map { entries: b }) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b)
+                        .all(|((ak, av), (bk, bv))| ak.bitwise_eq(bk) && av.bitwise_eq(bv))
+            }
+            (Option { inner: a }, Option { inner: b }) => opt_eq(a.as_deref(), b.as_deref()),
+            (Variant(a), Variant(b)) => {
+                a.case == b.case && opt_eq(a.payload.as_deref(), b.payload.as_deref())
+            }
+            (
+                Result(ResultValuePayload::Ok { value: a }),
+                Result(ResultValuePayload::Ok { value: b }),
+            )
+            | (
+                Result(ResultValuePayload::Err { value: a }),
+                Result(ResultValuePayload::Err { value: b }),
+            ) => opt_eq(a.as_deref(), b.as_deref()),
+            (Union(a), Union(b)) => a.tag == b.tag && a.body.bitwise_eq(&b.body),
+            _ => self == other,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]

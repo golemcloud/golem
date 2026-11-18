@@ -248,8 +248,8 @@ describe('agent HTTP routing (Phase 6)', () => {
     // Mount: /counters/{name} → [literal "counters", path-variable "name"]
     expect(at.httpMount).toBeDefined();
     expect(at.httpMount!.pathPrefix).toEqual([
-      { tag: 'literal', val: 'counters' },
-      { tag: 'path-variable', val: { variableName: 'name' } },
+      { tag: 'segment', val: { tag: 'literal', val: 'counters' } },
+      { tag: 'segment', val: { tag: 'path-variable', val: { variableName: 'name' } } },
     ]);
     expect(at.httpMount!.corsOptions).toEqual({ allowedPatterns: ['*'] });
     expect(at.httpMount!.authDetails).toEqual({ required: false });
@@ -263,12 +263,22 @@ describe('agent HTTP routing (Phase 6)', () => {
 
     // GET /value
     expect(methods['value'].httpEndpoint).toHaveLength(1);
-    expect(methods['value'].httpEndpoint[0].httpMethod).toEqual({ tag: 'get' });
-    expect(methods['value'].httpEndpoint[0].pathSuffix).toEqual([{ tag: 'literal', val: 'value' }]);
+    expect(methods['value'].httpEndpoint[0].httpMethod).toEqual({
+      tag: 'method',
+      val: { tag: 'get' },
+    });
+    expect(methods['value'].httpEndpoint[0].pathSuffix).toEqual([
+      { tag: 'segment', val: { tag: 'literal', val: 'value' } },
+    ]);
 
     // POST /add
-    expect(methods['add'].httpEndpoint[0].httpMethod).toEqual({ tag: 'post' });
-    expect(methods['add'].httpEndpoint[0].pathSuffix).toEqual([{ tag: 'literal', val: 'add' }]);
+    expect(methods['add'].httpEndpoint[0].httpMethod).toEqual({
+      tag: 'method',
+      val: { tag: 'post' },
+    });
+    expect(methods['add'].httpEndpoint[0].pathSuffix).toEqual([
+      { tag: 'segment', val: { tag: 'literal', val: 'add' } },
+    ]);
   });
 
   it('binds path, query, and header variables to method parameters', () => {
@@ -290,8 +300,8 @@ describe('agent HTTP routing (Phase 6)', () => {
 
     const ep = get('httpBindings')!.methods.find((m) => m.name === 'getMessage')!.httpEndpoint[0];
     expect(ep.pathSuffix).toEqual([
-      { tag: 'literal', val: 'messages' },
-      { tag: 'path-variable', val: { variableName: 'messageId' } },
+      { tag: 'segment', val: { tag: 'literal', val: 'messages' } },
+      { tag: 'segment', val: { tag: 'path-variable', val: { variableName: 'messageId' } } },
     ]);
     expect(ep.queryVars).toEqual([{ queryParamName: 'limit', variableName: 'limit' }]);
     expect(ep.headerVars).toEqual([{ headerName: 'X-Trace', variableName: 'trace' }]);
@@ -313,8 +323,8 @@ describe('agent HTTP routing (Phase 6)', () => {
 
     const eps = get('httpMulti')!.methods.find((m) => m.name === 'add')!.httpEndpoint;
     expect(eps).toHaveLength(2);
-    expect(eps[0].httpMethod).toEqual({ tag: 'post' });
-    expect(eps[1].httpMethod).toEqual({ tag: 'get' });
+    expect(eps[0].httpMethod).toEqual({ tag: 'method', val: { tag: 'post' } });
+    expect(eps[1].httpMethod).toEqual({ tag: 'method', val: { tag: 'get' } });
     expect(eps[1].queryVars).toEqual([{ queryParamName: 'by', variableName: 'by' }]);
   });
 

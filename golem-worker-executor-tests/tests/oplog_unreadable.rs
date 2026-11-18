@@ -21,12 +21,13 @@ use crate::Tracing;
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
 use golem_common::model::{
-    AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, ShardAssignment, ShardId,
+    AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey, OwnedAgentId, ShardAssignment,
+    ShardId,
 };
 use golem_common::{agent_id, data_value};
 use golem_service_base::replayable_stream::ErasedReplayableStream;
@@ -64,6 +65,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -311,6 +316,69 @@ fn blob_archiving_config() -> OplogConfig {
     }
 }
 
+#[test]
+#[timeout("2 minutes")]
+async fn an_ephemeral_constructor_completes_while_its_archive_write_is_pending(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let release = tokio_util::sync::CancellationToken::new();
+    let _release_on_drop = release.clone().drop_guard();
+    let fault = Arc::new(ArchiveFault {
+        write_release: Some(release.clone()),
+        ..Default::default()
+    });
+    let wrapper_fault = fault.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog = blob_archiving_config();
+                config.invocation_results.recent_capacity = 0;
+                config.invocation_results.bloom_bits = 1;
+                config.invocation_results.bloom_hashes = 1;
+            })),
+            wrap_blob_storage: Some(Arc::new(move |inner| {
+                Arc::new(FlakyArchiveStorage {
+                    inner,
+                    fault: wrapper_fault.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent = agent_id!("EphemeralStreamingRpcTarget", "pending-constructor-archive")
+        .with_ephemeral_invocation_phantom(
+            &InvocationRequestKey::external(
+                executor.auth_ctx().idempotency_scope(),
+                Some(&IdempotencyKey::fresh()),
+            )
+            .owner_key("produce_gated_siblings"),
+        )
+        .map_err(anyhow::Error::msg)?;
+    let creation = executor.start_agent(&component.id, agent.clone());
+    let (created, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(creation, fault.write_blocked.notified())
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("creation did not finish with its archive write held"))?;
+    assert_eq!(
+        created?,
+        AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?
+    );
+    release.cancel();
+    Ok(())
+}
+
 const ARCHIVE_UP: u8 = 0;
 const ARCHIVE_UNAVAILABLE: u8 = 1;
 const ARCHIVE_CORRUPT: u8 = 2;
@@ -327,6 +395,8 @@ struct ArchiveFault {
     mode: AtomicU8,
     history_end: AtomicU64,
     archived_errors: AtomicUsize,
+    write_release: Option<tokio_util::sync::CancellationToken>,
+    write_blocked: tokio::sync::Notify,
 }
 
 impl ArchiveFault {
@@ -347,7 +417,7 @@ impl ArchiveFault {
         self.archived_errors.load(Ordering::SeqCst)
     }
 
-    fn observe_write(&self, namespace: &BlobStorageNamespace, data: &[u8]) {
+    async fn observe_write(&self, namespace: &BlobStorageNamespace, data: &[u8]) {
         if !matches!(namespace, BlobStorageNamespace::CompressedOplog { .. }) {
             return;
         }
@@ -355,6 +425,21 @@ impl ArchiveFault {
             .expect("the archive stores compressed oplog chunks")
             .decompress()
             .expect("an archived chunk decompresses");
+        if let Some(release) = &self.write_release
+            && matches!(
+                namespace,
+                BlobStorageNamespace::CompressedOplog {
+                    agent_mode: AgentMode::Ephemeral,
+                    ..
+                }
+            )
+            && entries
+                .iter()
+                .any(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
+        {
+            self.write_blocked.notify_one();
+            release.cancelled().await;
+        }
         let errors = entries
             .iter()
             .filter(|entry| matches!(entry, OplogEntry::Error { .. }))
@@ -489,7 +574,7 @@ impl BlobStorageBackend for FlakyArchiveStorage {
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<()> {
-        self.fault.observe_write(&namespace, data);
+        self.fault.observe_write(&namespace, data).await;
         self.inner
             .put_raw(target_label, op_label, namespace, path, data)
             .await
@@ -503,7 +588,7 @@ impl BlobStorageBackend for FlakyArchiveStorage {
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
-        self.fault.observe_write(&namespace, data);
+        self.fault.observe_write(&namespace, data).await;
         self.inner
             .put_raw_if_absent(target_label, op_label, namespace, path, data)
             .await
@@ -1005,7 +1090,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id => Some((idempotency_key.clone(), result.is_ok())),
+            } if agent_id == &agent.agent_id => Some((*idempotency_key, result.is_ok())),
             _ => None,
         })
         .await?;
@@ -1090,6 +1175,10 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
         .expect("the agent is loaded after its first invocation");
     let mut events = worker.events().subscribe();
     let queued = IdempotencyKey::fresh();
+    let stored_queued = agent
+        .executor
+        .external_invocation_key(&agent.agent_id, &queued, "get_self_metadata_result")
+        .await?;
 
     // The enqueue folds every entry before it, so the status of the first invocation does not
     // need the history.
@@ -1116,7 +1205,9 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id && idempotency_key == &queued => Some(result.clone()),
+            } if agent_id == &agent.agent_id && idempotency_key == &stored_queued => {
+                Some(result.clone())
+            }
             _ => None,
         }),
     )

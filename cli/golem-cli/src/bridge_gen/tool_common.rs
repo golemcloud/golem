@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use anyhow::{anyhow, bail};
-use golem_common::base_model::Empty;
 use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
@@ -21,6 +20,7 @@ use golem_common::schema::agent::{
 };
 use golem_common::schema::tool::canonical::{CanonicalInputField, CanonicalSurfaceRef};
 use golem_common::schema::tool::{CommandIndex, CommandNode, Tool};
+use golem_schema::Empty;
 use heck::ToUpperCamelCase;
 
 pub(crate) fn synthetic_agent_type(

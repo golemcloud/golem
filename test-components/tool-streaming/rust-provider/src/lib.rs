@@ -715,11 +715,19 @@ impl Typed for TypedImpl {
     fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Ok(Some(value)) = input.next().await {
+            while let Some(value) = input.next().await {
+                let value = match value {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = writer.finish(Err(error)).await;
+                        return;
+                    }
+                };
                 if writer.write_one(value * 3 + 1).await.is_err() {
-                    break;
+                    return;
                 }
             }
+            let _ = writer.close().await;
         });
         output
     }
@@ -1012,6 +1020,7 @@ impl TypedOutputStream for TypedOutputStreamImpl {
                 ])
                 .await
                 .expect("write remaining typed tool output items");
+            writer.close().await.expect("close typed tool output");
         });
         output
     }
@@ -1042,18 +1051,15 @@ impl TypedInputStream for TypedInputStreamImpl {
         let first = input
             .next()
             .await
-            .expect("read first typed tool input item")
-            .expect("typed tool input has a first item");
+            .expect("typed tool input has a first item")
+            .expect("read first typed tool input item");
         wait_at_promise_checkpoint("typed-input-provider-consumed-first").await;
         let mut evidence = vec![TypedInputEvidence {
             label: first.label,
             ordinal: first.ordinal,
         }];
-        while let Some(item) = input
-            .next()
-            .await
-            .expect("read remaining typed tool input item")
-        {
+        while let Some(item) = input.next().await {
+            let item = item.expect("read remaining typed tool input item");
             evidence.push(TypedInputEvidence {
                 label: item.label,
                 ordinal: item.ordinal,
@@ -1891,6 +1897,9 @@ impl Streaming for StreamingImpl {
                 | "trap-after-clean-eof"
                 | "declared-error"
                 | "explicit-stdout-failure"
+                | "explicit-stdout-cancelled"
+                | "explicit-stdout-abandoned"
+                | "explicit-stdout-resource-exhausted"
                 | "finish-failure"
                 | "writer-abandonment"
                 | "finish-after-reader-drop"
@@ -2032,13 +2041,19 @@ impl Streaming for StreamingImpl {
                 }
                 return Ok(summary);
             }
-            "explicit-stdout-failure" => {
-                stdout
-                    .fail(ByteStreamFailure::Failed(
+            "explicit-stdout-failure"
+            | "explicit-stdout-cancelled"
+            | "explicit-stdout-abandoned"
+            | "explicit-stdout-resource-exhausted" => {
+                let failure = match mode.as_str() {
+                    "explicit-stdout-cancelled" => ByteStreamFailure::Cancelled,
+                    "explicit-stdout-abandoned" => ByteStreamFailure::Abandoned,
+                    "explicit-stdout-resource-exhausted" => ByteStreamFailure::ResourceExhausted,
+                    _ => ByteStreamFailure::Failed(
                         "rust provider explicit stdout failure".to_string(),
-                    ))
-                    .await
-                    .expect("fail stdout explicitly");
+                    ),
+                };
+                stdout.fail(failure).await.expect("fail stdout explicitly");
                 return Ok(summary);
             }
             "writer-abandonment" => {

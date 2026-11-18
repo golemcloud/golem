@@ -14,6 +14,31 @@
 
 use super::*;
 
+fn stops_at_control_terminal(error: &StreamStoreError, history_pending: bool) -> bool {
+    !history_pending
+        && matches!(error, StreamStoreError::FencedByTerminal(event)
+            if event.terminal_origin == Some(StreamTerminalOrigin::Control))
+}
+
+fn result_materialization_retained_bytes(
+    value: &SchemaValue,
+    graph: &SchemaGraph,
+    root: &SchemaType,
+) -> Result<usize, SessionError> {
+    preflight_recursive_stream_value(value)?;
+    let mut next_stream_index = 0u64;
+    Ok(
+        encode_recursive_stream_value_with_schema(value, graph, root, |_stream, _path| {
+            let index = next_stream_index;
+            next_stream_index = next_stream_index
+                .checked_add(1)
+                .ok_or_else(|| "durable output handle index overflow".to_string())?;
+            Ok(index)
+        })?
+        .encoded_len(),
+    )
+}
+
 impl StreamSession {
     /// Registers result streams and replaces them with session transport mappings.
     pub async fn materialize_result(
@@ -39,17 +64,7 @@ impl StreamSession {
         component_revision: golem_common::model::component::ComponentRevision,
         preparation: Option<ExternalActivity>,
     ) -> Result<SchemaValue, SessionError> {
-        preflight_recursive_stream_value(&value)?;
-        let mut next_stream_index = 0u64;
-        let retained_bytes =
-            encode_recursive_stream_value_with_schema(&value, graph, root, |_stream, _path| {
-                let index = next_stream_index;
-                next_stream_index = next_stream_index
-                    .checked_add(1)
-                    .ok_or_else(|| "durable output handle index overflow".to_string())?;
-                Ok(index)
-            })?
-            .encoded_len();
+        let retained_bytes = result_materialization_retained_bytes(&value, graph, root)?;
         let session = self.clone();
         let graph = graph.clone();
         let drain_graph = graph.clone();
@@ -85,6 +100,7 @@ impl StreamSession {
                                 Arc::new(drain_graph),
                                 coordinator_source,
                                 coordinator_activity,
+                                false,
                             )
                             .await
                     });
@@ -93,11 +109,71 @@ impl StreamSession {
             )
             .await?;
 
-        // Drains may live for the lifetime of the guest stream, so they must not retain the
-        // producer operation permit used for the bounded durable materialization above.
+        // This response is only an observer: abandoning it does not discard accepted output.
         drain
             .await
             .map_err(|error| format!("durable output drain coordinator failed: {error}"))??;
+        Ok(result)
+    }
+
+    /// Registers invocation ownership before submitting any durable materialization work.
+    /// The returned receiver observes mappings only; dropping it does not cancel the drain.
+    pub(crate) fn spawn_materialize_result(
+        &self,
+        value: SchemaValue,
+        graph: &SchemaGraph,
+        root: &SchemaType,
+        component_revision: golem_common::model::component::ComponentRevision,
+        preparation: Option<ExternalActivity>,
+        tasks: &crate::worker::tasks::NativeReconstructionSpawner,
+    ) -> Result<oneshot::Receiver<Result<SchemaValue, WorkerExecutorError>>, WorkerExecutorError>
+    {
+        let retained_bytes = result_materialization_retained_bytes(&value, graph, root)
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        let session = self.clone();
+        let graph = graph.clone();
+        let drain_graph = Arc::new(graph.clone());
+        let root = root.clone();
+        let source = session.runtime_source.clone();
+        let activity = source.as_ref().map(RuntimeSource::external_activity);
+        let (reply, result) = oneshot::channel();
+        tasks.spawn(async move {
+            let preparation_session = session.clone();
+            let materialized = session
+                .producer
+                .run_admitted_accounted(
+                    None,
+                    retained_bytes,
+                    false,
+                    preparation,
+                    move |_, admission| async move {
+                        preparation_session
+                            .materialize_result_owned(
+                                &admission,
+                                value,
+                                graph,
+                                root,
+                                component_revision,
+                            )
+                            .await
+                    },
+                )
+                .await;
+            let MaterializedResult { value, drains } = match materialized {
+                Ok(materialized) => materialized,
+                Err(error) => {
+                    let error = error.into_worker_executor_error(WorkerExecutorError::runtime);
+                    let _ = reply.send(Err(error.clone()));
+                    return Err(error);
+                }
+            };
+            // Admission is released before either exposing mappings or waiting on output.
+            let _ = reply.send(Ok(value));
+            session
+                .drain_materialized_result(drains, drain_graph, source, activity, true)
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
+        })?;
         Ok(result)
     }
 
@@ -484,6 +560,7 @@ impl StreamSession {
         graph: Arc<SchemaGraph>,
         coordinator_source: Option<RuntimeSource>,
         mut coordinator_activity: Option<ExternalActivity>,
+        require_durable_terminal: bool,
     ) -> Result<(), SessionError> {
         if !drains.is_empty() {
             let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
@@ -496,7 +573,9 @@ impl StreamSession {
                     if streams.require_root_attachment_before_production {
                         streams.wait_for_active_attachment(&drain.handle).await?;
                     }
-                    streams.drain_output(drain, graph, nested_tx).await
+                    streams
+                        .drain_result_output(drain, graph, nested_tx, require_durable_terminal)
+                        .await
                 });
             }
             loop {
@@ -504,7 +583,11 @@ impl StreamSession {
                     let streams = self.clone();
                     let graph = graph.clone();
                     let nested_tx = nested_tx.clone();
-                    tasks.spawn(async move { streams.drain_output(drain, graph, nested_tx).await });
+                    tasks.spawn(async move {
+                        streams
+                            .drain_result_output(drain, graph, nested_tx, require_durable_terminal)
+                            .await
+                    });
                 }
                 if tasks.is_empty() {
                     break;
@@ -524,9 +607,16 @@ impl StreamSession {
                         let streams = self.clone();
                         let graph = graph.clone();
                         let nested_tx = nested_tx.clone();
-                        tasks.spawn(
-                            async move { streams.drain_output(drain, graph, nested_tx).await },
-                        );
+                        tasks.spawn(async move {
+                            streams
+                                .drain_result_output(
+                                    drain,
+                                    graph,
+                                    nested_tx,
+                                    require_durable_terminal,
+                                )
+                                .await
+                        });
                     }
                     (_, Some(result)) => {
                         let task_result = result
@@ -734,6 +824,7 @@ impl StreamSession {
             graph,
             coordinator_source,
             coordinator_activity,
+            false,
         )
         .await
     }
@@ -782,8 +873,7 @@ impl StreamSession {
     ) -> Result<(), SessionError> {
         let lifecycle = endpoint.lifecycle();
         let runtime_source = endpoint.runtime_source();
-        let mut source = endpoint.activate();
-        let cancelled = tokio_util::sync::CancellationToken::new();
+        let cancelled = lifecycle.source_cancellation();
         let registration_id = self
             .producer
             .register_source_cancellation(handle.stream_id, cancelled.clone());
@@ -798,7 +888,27 @@ impl StreamSession {
             .input_high_water(handle.stream_id)
             .await
             .map_err(SessionError::from)?;
-        let mut history = if high_water.is_some() {
+        let historical_terminal = self
+            .producer
+            .terminal_event(&handle)
+            .await
+            .map_err(SessionError::from)?;
+        lifecycle.configure_native_acceptance(
+            historical_terminal.as_ref().map_or_else(
+                || {
+                    high_water.as_ref().map_or(0, |water| {
+                        water.highest_contiguous_sequence.saturating_add(1)
+                    })
+                },
+                |terminal| terminal.producer_sequence,
+            ),
+            historical_terminal
+                .as_ref()
+                .filter(|terminal| terminal.terminal_origin == Some(StreamTerminalOrigin::Control))
+                .map(|terminal| terminal.producer_sequence),
+        );
+        let mut source = endpoint.activate();
+        let mut history = if high_water.is_some() || historical_terminal.is_some() {
             Some(
                 self.producer
                     .catch_up(handle.clone(), None)
@@ -821,20 +931,7 @@ impl StreamSession {
                 if recorded.producer_sequence != sequence {
                     return Err("byte output history has a non-contiguous sequence".into());
                 }
-                if matches!(
-                    recorded.payload,
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
-                        ..
-                    }
-                ) || (sequence == 0 && matches!(
-                    recorded.payload,
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::InputProducer,
-                        ..
-                    }
-                ))
-                {
+                if recorded.terminal_origin == Some(StreamTerminalOrigin::Control) {
                     return Ok(());
                 }
                 Some(recorded)
@@ -845,7 +942,7 @@ impl StreamSession {
                 Some(event) => event,
                 None => tokio::select! {
                     biased;
-                    _ = cancelled.cancelled() => return Ok(()),
+                    _ = cancelled.cancelled(), if history.is_none() => return Ok(()),
                     _ = lifecycle.cancelled() => return Ok(()),
                     received = async {
                         match (&mut activity, &runtime_source, recorded.is_none()) {
@@ -864,6 +961,10 @@ impl StreamSession {
             if event.offset != sequence {
                 return Err("byte output producer sequence diverged".into());
             }
+            let authored_by = match &event.payload {
+                LiveStreamEventPayload::Terminal { authored_by, .. } => *authored_by,
+                LiveStreamEventPayload::Item(_) => StreamTerminalAuthor::Guest,
+            };
             let payload = match event.payload {
                 LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
                     CommittedProducerStreamEventPayload::PackedU8(byte)
@@ -871,31 +972,22 @@ impl StreamSession {
                 LiveStreamEventPayload::Item(_) => {
                     return Err("byte output contains a non-byte value".into());
                 }
-                LiveStreamEventPayload::End => {
-                    CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+                LiveStreamEventPayload::Terminal { terminal, .. } => {
+                    CommittedProducerStreamEventPayload::Terminal(terminal)
                 }
-                LiveStreamEventPayload::Error(error) => CommittedProducerStreamEventPayload::End(
-                    StreamEndResult::ErrorContext(error.into_bytes()),
-                ),
-                LiveStreamEventPayload::ClassifiedError { kind, message } => match kind {
-                    HostFailureKind::Permanent => CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::System,
-                        reason: StreamCancelReason::SourceUnavailable,
-                        details: Some(message),
-                    },
-                    HostFailureKind::Transient => CommittedProducerStreamEventPayload::End(
-                        StreamEndResult::ErrorContext(message.into_bytes()),
-                    ),
-                },
             };
             if let Some(recorded) = recorded {
-                if recorded.payload != payload {
+                if recorded.payload != payload
+                    || (recorded.is_terminal()
+                        && (recorded.terminal_author != Some(authored_by)
+                            || recorded.terminal_origin != event.terminal_origin))
+                {
                     return Err("byte output differs from its recorded bytes or terminal".into());
                 }
                 if recorded.is_terminal() {
                     return Ok(());
                 }
-                if high_water
+                if historical_terminal.is_none() && high_water
                     .as_ref()
                     .is_some_and(|water| recorded.offset == water.resulting_offset)
                 {
@@ -906,8 +998,7 @@ impl StreamSession {
             }
             let terminal = matches!(
                 payload,
-                CommittedProducerStreamEventPayload::End(_)
-                    | CommittedProducerStreamEventPayload::Cancel { .. }
+                CommittedProducerStreamEventPayload::Terminal(_)
             );
             let written = match payload {
                 CommittedProducerStreamEventPayload::PackedU8(byte) => {
@@ -933,6 +1024,7 @@ impl StreamSession {
                                 pending = Some(crate::durable_host::stream_bus::LiveStreamEvent {
                                     offset: next.offset,
                                     payload,
+                                    terminal_origin: next.terminal_origin,
                                 });
                                 break;
                             }
@@ -949,25 +1041,22 @@ impl StreamSession {
                         .await
                         .map(|_| ())
                 }
-                CommittedProducerStreamEventPayload::End(result) => self
+                CommittedProducerStreamEventPayload::Terminal(terminal) => self
                     .producer
-                    .end(None, handle.stream_id, sequence, result)
-                    .await
-                    .map(|_| ()),
-                CommittedProducerStreamEventPayload::Cancel { role, reason, details } => self
-                    .producer
-                    .cancel(handle.stream_id, sequence, role, reason, details)
+                    .end_with_origin(
+                        None,
+                        handle.stream_id,
+                        sequence,
+                        authored_by,
+                        event.terminal_origin.expect("live terminal origin"),
+                        terminal,
+                    )
                     .await
                     .map(|_| ()),
                 _ => unreachable!("byte output produces only bytes and terminals"),
             };
             match written {
-                Err(StreamStoreError::FencedByTerminal(
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
-                        ..
-                    },
-                )) => return Ok(()),
+                Err(error) if stops_at_control_terminal(&error, history.is_some()) => return Ok(()),
                 Err(error) => return Err(error.into()),
                 Ok(()) if terminal => return Ok(()),
                 Ok(()) => {}
@@ -982,11 +1071,28 @@ impl StreamSession {
                 .end_open(
                     None,
                     handle.stream_id,
-                    StreamEndResult::ErrorContext(error.to_string().into_bytes()),
+                    StreamTerminalAuthor::Host,
+                    StreamTerminalOrigin::Source,
+                    StreamTerminal::Failed(StreamError::Interrupted(error.to_string())),
                 )
                 .await;
         }
         result
+    }
+
+    async fn drain_result_output(
+        &self,
+        drain: PendingOwnedStreamDrain,
+        graph: Arc<SchemaGraph>,
+        nested_tx: mpsc::UnboundedSender<PendingOwnedStreamDrain>,
+        require_durable_terminal: bool,
+    ) -> Result<(), SessionError> {
+        let handle = drain.handle.clone();
+        self.drain_output(drain, graph, nested_tx).await?;
+        if require_durable_terminal && self.producer.terminal_event(&handle).await?.is_none() {
+            return Err(SessionError::IncompleteOutput(handle.stream_id));
+        }
+        Ok(())
     }
 
     pub(super) async fn drain_output(
@@ -1026,8 +1132,7 @@ impl StreamSession {
         // A child returned unread to its producer is consumed locally, without an attachment.
         let lifecycle = endpoint.lifecycle();
         let runtime_source = endpoint.runtime_source();
-        let mut source = endpoint.activate();
-        let source_cancelled = tokio_util::sync::CancellationToken::new();
+        let source_cancelled = lifecycle.source_cancellation();
         let registration_id = self
             .producer
             .register_source_cancellation(handle.stream_id, source_cancelled.clone());
@@ -1037,26 +1142,44 @@ impl StreamSession {
             registration_id,
             lifecycle: lifecycle.clone(),
         };
-        if self
+        let high_water = self
             .producer
-            .stream_head(&handle)
+            .input_high_water(handle.stream_id)
             .await
-            .map_err(SessionError::from)?
-            .cancelled
-            && self
-                .producer
-                .input_high_water(handle.stream_id)
-                .await
-                .map_err(SessionError::from)?
-                .is_some_and(|water| water.highest_contiguous_sequence == 0)
-        {
-            return Ok(());
-        }
+            .map_err(SessionError::from)?;
+        let historical_terminal = self
+            .producer
+            .terminal_event(&handle)
+            .await
+            .map_err(SessionError::from)?;
+        let control_terminal = historical_terminal
+            .as_ref()
+            .filter(|event| event.terminal_origin == Some(StreamTerminalOrigin::Control));
+        lifecycle.configure_native_acceptance(
+            historical_terminal.as_ref().map_or_else(
+                || {
+                    high_water.as_ref().map_or(0, |water| {
+                        water.highest_contiguous_sequence.saturating_add(1)
+                    })
+                },
+                |terminal| terminal.producer_sequence,
+            ),
+            control_terminal.map(|terminal| terminal.producer_sequence),
+        );
+        let mut source = endpoint.activate();
+        let mut history_pending = high_water.is_some() || historical_terminal.is_some();
         let mut next_sequence = 0;
         loop {
+            // A control terminal stops the source, but cannot hide a changed replay prefix.
+            if control_terminal
+                .as_ref()
+                .is_some_and(|event| event.producer_sequence == next_sequence)
+            {
+                return Ok(());
+            }
             let received = tokio::select! {
                     biased;
-                    _ = source_cancelled.cancelled() => {
+                    _ = source_cancelled.cancelled(), if !history_pending => {
                         break;
                     },
                     _ = lifecycle.cancelled() => {
@@ -1080,21 +1203,32 @@ impl StreamSession {
                     break;
                 }
                 Err(error) => {
-                    let _ = self
+                    let result = self
                         .producer
                         .end(
                             None,
                             handle.stream_id,
                             next_sequence,
-                            StreamEndResult::ErrorContext(format!("{error:?}").into_bytes()),
+                            StreamTerminalAuthor::Host,
+                            StreamTerminal::Failed(StreamError::Interrupted(format!("{error:?}"))),
                         )
                         .await;
+                    if let Err(error) = result
+                        && !stops_at_control_terminal(&error, history_pending)
+                    {
+                        return Err(error.into());
+                    }
                     break;
                 }
             };
+            if event.offset != next_sequence {
+                return Err("durable output producer sequence diverged".into());
+            }
             let is_item = matches!(&event.payload, LiveStreamEventPayload::Item(_));
-            next_sequence = event.offset.saturating_add(1);
-            let result = match event.payload {
+            if control_terminal.is_some() && !is_item {
+                return Err("durable output ended before its recorded control terminal".into());
+            }
+            let result: Result<(), SessionError> = match event.payload {
                 LiveStreamEventPayload::Item(value) => {
                     struct NestedOutput<F> {
                         endpoint: Option<LiveStreamEndpoint>,
@@ -1121,15 +1255,21 @@ impl StreamSession {
                             "forwarded nested durable handle does not match the stream item schema",
                         )
                     }) {
-                        let _ = self
+                        let result = self
                             .producer
                             .end(
                                 None,
                                 handle.stream_id,
                                 event.offset,
-                                StreamEndResult::ErrorContext(error.into_bytes()),
+                                StreamTerminalAuthor::Protocol,
+                                StreamTerminal::Failed(StreamError::Interrupted(error)),
                             )
                             .await;
+                        if let Err(error) = result
+                            && !stops_at_control_terminal(&error, history_pending)
+                        {
+                            return Err(error.into());
+                        }
                         break;
                     }
                     let mut nested_outputs = Vec::new();
@@ -1176,15 +1316,21 @@ impl StreamSession {
                     ) {
                         Ok(value) => value,
                         Err(error) => {
-                            let _ = self
+                            let result = self
                                 .producer
                                 .end(
                                     None,
                                     handle.stream_id,
                                     event.offset,
-                                    StreamEndResult::ErrorContext(error.into_bytes()),
+                                    StreamTerminalAuthor::Protocol,
+                                    StreamTerminal::Failed(StreamError::Interrupted(error)),
                                 )
                                 .await;
+                            if let Err(error) = result
+                                && !stops_at_control_terminal(&error, history_pending)
+                            {
+                                return Err(error.into());
+                            }
                             break;
                         }
                     };
@@ -1286,10 +1432,7 @@ impl StreamSession {
                                 .await;
                             let outcome = match outcome {
                                 Ok(outcome) => Some(outcome),
-                                Err(
-                                    StreamStoreError::FencedByTerminal(_)
-                                    | StreamStoreError::SessionFinished(_),
-                                ) => None,
+                                Err(error) if stops_at_control_terminal(&error, history_pending) => None,
                                 Err(
                                     StreamStoreError::TraversalDepthLimit
                                     | StreamStoreError::ValueStreamLimit
@@ -1409,59 +1552,59 @@ impl StreamSession {
                         Err(PublicationError::Forwarding(error)) => Err(error.into()),
                     }
                 }
-                LiveStreamEventPayload::End => self
-                    .producer
-                    .end(None, handle.stream_id, event.offset, StreamEndResult::Ok)
-                    .await
-                    .map(|_| ())
-                    .map_err(SessionError::from),
-                LiveStreamEventPayload::Error(error) => self
+                payload => {
+                    let (author, terminal) = match payload {
+                        LiveStreamEventPayload::Terminal {
+                            authored_by,
+                            terminal,
+                        } => (authored_by, terminal),
+                        LiveStreamEventPayload::Item(_) => unreachable!("items are handled above"),
+                    };
+                    match self
+                        .producer
+                        .end_with_origin(
+                            None,
+                            handle.stream_id,
+                            event.offset,
+                            author,
+                            event.terminal_origin.expect("live terminal origin"),
+                            terminal,
+                        )
+                        .await
+                    {
+                        Ok(_) => Ok(()),
+                        Err(error) if stops_at_control_terminal(&error, history_pending) => Ok(()),
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            };
+            if let Err(error) = result {
+                let result = self
                     .producer
                     .end(
                         None,
                         handle.stream_id,
                         event.offset,
-                        StreamEndResult::ErrorContext(error.into_bytes()),
+                        StreamTerminalAuthor::Host,
+                        StreamTerminal::Failed(StreamError::Interrupted(error.to_string())),
                     )
-                    .await
-                    .map(|_| ())
-                    .map_err(SessionError::from),
-                LiveStreamEventPayload::ClassifiedError { kind, message } => match kind {
-                    HostFailureKind::Permanent => self
-                        .producer
-                        .cancel(
-                            handle.stream_id,
-                            event.offset,
-                            StreamCancelRole::System,
-                            StreamCancelReason::SourceUnavailable,
-                            Some(message),
-                        )
-                        .await
-                        .map(|_| ())
-                        .map_err(SessionError::from),
-                    HostFailureKind::Transient => self
-                        .producer
-                        .end(
-                            None,
-                            handle.stream_id,
-                            event.offset,
-                            StreamEndResult::ErrorContext(message.into_bytes()),
-                        )
-                        .await
-                        .map(|_| ())
-                        .map_err(SessionError::from),
-                },
-            };
-            if let Err(error) = result {
-                self.producer
-                    .end_open(
-                        None,
-                        handle.stream_id,
-                        StreamEndResult::ErrorContext(error.to_string().into_bytes()),
-                    )
-                    .await?;
+                    .await;
+                if let Err(error) = result
+                    && !stops_at_control_terminal(&error, history_pending)
+                {
+                    return Err(error.into());
+                }
                 break;
             }
+            next_sequence = event.offset.saturating_add(1);
+            history_pending = historical_terminal.as_ref().map_or_else(
+                || {
+                    high_water
+                        .as_ref()
+                        .is_some_and(|water| next_sequence <= water.highest_contiguous_sequence)
+                },
+                |terminal| next_sequence <= terminal.producer_sequence,
+            );
             if !is_item {
                 break;
             }
@@ -1472,7 +1615,8 @@ impl StreamSession {
     pub(super) async fn finish(
         &self,
         result: Result<(), Vec<u8>>,
-        input_cancel_reason: StreamCancelReason,
+        authored_by: StreamTerminalAuthor,
+        input_terminal: StreamTerminal,
     ) -> Result<(), SessionError> {
         if self.has_committed_finished().await? {
             return Ok(());
@@ -1500,7 +1644,8 @@ impl StreamSession {
                                     session_for_write.session_key.clone(),
                                     session_for_write.entity_parent_start_index,
                                     result,
-                                    input_cancel_reason,
+                                    authored_by,
+                                    input_terminal,
                                 )
                                 .await
                                 .map_err(SessionError::from)
@@ -1551,8 +1696,9 @@ impl StreamSession {
     /// Records a failed session terminal after cancelling remaining stream work.
     pub async fn fail(&self, details: String) -> Result<(), SessionError> {
         self.finish(
-            Err(details.into_bytes()),
-            StreamCancelReason::InvocationFailed,
+            Err(details.clone().into_bytes()),
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Trapped(details)),
         )
         .await
     }
@@ -1560,21 +1706,31 @@ impl StreamSession {
     /// Finalizes streams with invocation-failed semantics and records session failure.
     pub async fn fail_invocation(&self, details: String) -> Result<(), SessionError> {
         self.finish(
-            Err(details.into_bytes()),
-            StreamCancelReason::InvocationFailed,
+            Err(details.clone().into_bytes()),
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Trapped(details)),
         )
         .await
     }
 
     /// Finalizes streams with protocol-error semantics and records session failure.
     pub async fn fail_protocol(&self, details: String) -> Result<(), SessionError> {
-        self.finish(Err(details.into_bytes()), StreamCancelReason::Protocol)
-            .await
+        self.finish(
+            Err(details.clone().into_bytes()),
+            StreamTerminalAuthor::Protocol,
+            StreamTerminal::Failed(StreamError::Interrupted(details)),
+        )
+        .await
     }
 
     /// Records successful session completion once all protocol terminals are durable.
     pub async fn complete(&self) -> Result<(), SessionError> {
-        self.finish(Ok(()), StreamCancelReason::GuestDrop).await
+        self.finish(
+            Ok(()),
+            StreamTerminalAuthor::Host,
+            StreamTerminal::ConsumerCancelled { details: None },
+        )
+        .await
     }
 
     /// Completes now unless forwarded inputs still require later terminal processing.

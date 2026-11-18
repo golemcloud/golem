@@ -75,9 +75,17 @@ const PromiseIdSchema = Schema.Struct({
     }),
     agentId: Schema.String,
   }),
+  fingerprint: Schema.Struct({
+    highBits: WitTypes.Uint64,
+    lowBits: WitTypes.Uint64,
+  }),
   oplogIdx: WitTypes.Uint64,
 });
 ```
+
+The `fingerprint` UUID identifies the agent incarnation that created the promise: a deleted and
+re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs of the deleted
+incarnation do not complete the promises of the new one.
 
 Use `WitTypes.Uint64`, not `Schema.BigInt`: the UUID halves and oplog index are WIT `u64` values.
 Pass only this plain data over RPC. Do not pass an Effect, fiber, host pollable, or JavaScript
@@ -109,6 +117,10 @@ const PromiseIdSchema = Schema.Struct({
       }),
     }),
     agentId: Schema.String,
+  }),
+  fingerprint: Schema.Struct({
+    highBits: WitTypes.Uint64,
+    lowBits: WitTypes.Uint64,
   }),
   oplogIdx: WitTypes.Uint64,
 });

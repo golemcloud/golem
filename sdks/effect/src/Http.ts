@@ -43,7 +43,7 @@ export type {
  * `effect-golem` is a *metadata-only* SDK on the HTTP side: agent code
  * never sees raw HTTP requests. The Golem host owns the HTTP server —
  * it matches the request, enforces auth/CORS, decodes path/query/header
- * values, and ultimately calls `invoke(methodName, dataValue, principal)`
+ * values, and ultimately calls `invoke(methodName, dataValue)`
  * with the resulting `DataValue`. The SDK's job is to *advertise* the
  * routing structure via `discoverAgentTypes()` so the host knows how to
  * route incoming requests.
@@ -187,26 +187,26 @@ export type HttpVerb =
   | { readonly custom: string }
 
 const verbToWit = (v: HttpVerb): AgentCommon.HttpMethod => {
-  if (typeof v !== "string") return { tag: "custom", val: v.custom }
+  if (typeof v !== "string") return { tag: "method", val: { tag: "custom", val: v.custom } }
   switch (v) {
     case "GET":
-      return { tag: "get" }
+      return { tag: "method", val: { tag: "get" } }
     case "HEAD":
-      return { tag: "head" }
+      return { tag: "method", val: { tag: "head" } }
     case "POST":
-      return { tag: "post" }
+      return { tag: "method", val: { tag: "post" } }
     case "PUT":
-      return { tag: "put" }
+      return { tag: "method", val: { tag: "put" } }
     case "DELETE":
-      return { tag: "delete" }
+      return { tag: "method", val: { tag: "delete" } }
     case "CONNECT":
-      return { tag: "connect" }
+      return { tag: "method", val: { tag: "connect" } }
     case "OPTIONS":
-      return { tag: "options" }
+      return { tag: "method", val: { tag: "options" } }
     case "TRACE":
-      return { tag: "trace" }
+      return { tag: "method", val: { tag: "trace" } }
     case "PATCH":
-      return { tag: "patch" }
+      return { tag: "method", val: { tag: "patch" } }
   }
 }
 
@@ -1437,11 +1437,14 @@ export const withWebhookSuffix =
 const segmentToWit = (s: PathSegment): AgentCommon.PathSegment => {
   switch (s._tag) {
     case "Literal":
-      return { tag: "literal", val: s.value }
+      return { tag: "segment", val: { tag: "literal", val: s.value } }
     case "PathVar":
-      return { tag: "path-variable", val: { variableName: s.name } }
+      return { tag: "segment", val: { tag: "path-variable", val: { variableName: s.name } } }
     case "RestVar":
-      return { tag: "remaining-path-variable", val: { variableName: s.name } }
+      return {
+        tag: "segment",
+        val: { tag: "remaining-path-variable", val: { variableName: s.name } },
+      }
     case "SystemVar":
       return { tag: "system-variable", val: s.name }
   }

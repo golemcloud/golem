@@ -455,7 +455,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ctx.state.owned_agent_id.environment_id,
                 golem_common::model::NamedRetryPolicy::default_from_config(&ctx.state.config.retry),
                 ctx.state.agent_config_retry_policies(),
-                ctx.state.runtime_retry_policy_mutations.clone(),
+                ctx.state.retry_policy_mutations(),
                 ctx.public_state.worker(),
             )
         });
@@ -470,6 +470,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         TaskRetryContext {
             retry_point,
             entity_parent_start_index: self.execution_scope.entity_parent_start_index,
+            invocation_id: self.execution_scope.agent_invocation,
             environment_state_service,
             environment_id,
             default_retry_policy,
@@ -715,6 +716,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     AccessResultDestination::Host,
                     completed_parent,
                     None,
+                    Box::new(|| {}),
                 )
                 .await?
             {

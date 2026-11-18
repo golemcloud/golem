@@ -644,6 +644,10 @@ pub fn new_reqwest_client(
 }
 
 pub fn new_raw_reqwest_client(config: &HttpClientConfig) -> anyhow::Result<reqwest::Client> {
+    Ok(raw_reqwest_client_builder(config).build()?)
+}
+
+pub(crate) fn raw_reqwest_client_builder(config: &HttpClientConfig) -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder();
 
     if config.allow_insecure {
@@ -660,7 +664,7 @@ pub fn new_raw_reqwest_client(config: &HttpClientConfig) -> anyhow::Result<reqwe
         builder = builder.read_timeout(read_timeout);
     }
 
-    Ok(builder.connection_verbose(true).build()?)
+    builder.connection_verbose(true)
 }
 
 pub async fn check_http_response_success(

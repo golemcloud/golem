@@ -15,6 +15,7 @@
 use std::time::Duration;
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::sockets::policy::SocketPolicy;
 use crate::workerctx::WorkerCtx;
 use wasmtime::Engine;
 use wasmtime::component::{HasSelf, Linker};
@@ -219,7 +220,7 @@ pub fn create_context(
     stderr: impl StdoutStream + Sized + 'static,
     suspend_signal: impl Fn(Duration) -> wasmtime::Error + Send + Sync + 'static,
     suspend_threshold: Option<Duration>,
-    agent_sockets_enabled: bool,
+    agent_sockets: Option<SocketPolicy>,
 ) -> Result<(WasiCtx, IoCtx, ResourceTable), anyhow::Error> {
     let table = ResourceTable::new();
     let mut builder = WasiCtxBuilder::new();
@@ -232,14 +233,17 @@ pub fn create_context(
         .stdout(stdout)
         .stderr(stderr)
         .monotonic_clock(helpers::clocks::monotonic_clock());
-    // Without `inherit_network`, wasmtime's default socket address check refuses every connect,
-    // bind and outgoing datagram with `access-denied`.
-    if agent_sockets_enabled {
+    // Without a socket address check, wasmtime refuses every connect, bind and outgoing datagram
+    // with `access-denied`.
+    if let Some(policy) = agent_sockets {
         builder
             .allow_tcp(true)
             .allow_udp(true)
             .allow_ip_name_lookup(true)
-            .inherit_network();
+            .socket_addr_check(move |address, usage| {
+                let allowed = policy.allows(address, usage);
+                Box::pin(async move { allowed })
+            });
     }
     let (wasi, io_ctx) = builder.build();
 
@@ -276,7 +280,7 @@ mod tests {
                     wasmtime::Error::msg("ephemeral deadline")
                 },
                 threshold,
-                false,
+                None,
             )
             .unwrap();
             let parent = table.push(Ready).unwrap();

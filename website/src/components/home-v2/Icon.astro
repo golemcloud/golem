@@ -1,0 +1,38 @@
+---
+interface Props {
+  name: string;
+  size?: number;
+}
+const { name, size = 24 } = Astro.props;
+const paths: Record<string, string> = {
+  actor: "M12 3 3 8v8l9 5 9-5V8l-9-5ZM3 8l9 5 9-5M12 13v8",
+  function: "m8 7-5 5 5 5m8-10 5 5-5 5M14 4l-4 16",
+  shield: "M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Zm-4 9 3 3 5-6",
+  clock: "M12 8v5l3 2M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9Z",
+  arrow: "M4 12h16m-6-6 6 6-6 6",
+  check: "m5 12 4 4L19 6",
+  apps: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
+  server: "M4 3h16v7H4zM4 14h16v7H4zM7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6",
+  cloud: "M6 18a5 5 0 0 1-1-10 7 7 0 0 1 13-1 5.5 5.5 0 0 1 0 11H6Z",
+  terminal: "m5 7 4 4-4 4m7 1h7M3 3h18v18H3z",
+  journal: "M6 3h13v18H6V3ZM3 6h5M3 12h5M3 18h5M11 7h5M11 12h5M11 17h3",
+  spark: "m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z",
+  cart: "M3 4h2l3 12h10l3-9H6M9 20h.01M18 20h.01",
+  tool: "m14 6 4 4 3-3a7 7 0 0 1-8 9l-5 5-5-5 5-5a7 7 0 0 1 9-8l-3 3Z",
+  web: "M3 5h18v15H3V5ZM3 9h18M6 7h.01M9 7h.01M7 13l-2 2 2 2m10-4 2 2-2 2M13 12l-2 6",
+  plug: "M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0V8Zm6 9v4",
+  messages: "M3 4h13v9H8l-5 4V4Zm16 4h2v13l-5-4h-5",
+};
+---
+
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.5"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"><path d={paths[name] || paths.apps}></path></svg
+>

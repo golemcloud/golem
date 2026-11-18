@@ -11,9 +11,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use super::*;
 use crate::services::oplog::{DurableStreamOplogRecord, OplogFence};
 use golem_common::base_model::component_metadata::KnownExports;
+use golem_common::model::InvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{
@@ -139,6 +141,8 @@ struct RecordedSend {
     initial_oplog_index: OplogIndex,
     entry_count: usize,
     entries: Vec<OplogEntry>,
+    metadata: AgentMetadata,
+    plugin: InstalledPlugin,
 }
 
 #[derive(Debug, Clone)]
@@ -196,8 +200,8 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
 
     async fn send(
         &self,
-        _worker_metadata: AgentMetadata,
-        _plugin: &InstalledPlugin,
+        worker_metadata: AgentMetadata,
+        plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
         initial_oplog_index: OplogIndex,
         entries: Vec<OplogEntry>,
@@ -207,6 +211,8 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
             initial_oplog_index,
             entry_count: entries.len(),
             entries,
+            metadata: worker_metadata,
+            plugin: plugin.clone(),
         });
         if let Some((entered, release)) = &self.send_gate {
             entered.notify_one();
@@ -245,7 +251,7 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
         _environment_id: EnvironmentId,
         _target_agent_id: &AgentId,
         caller_account_id: AccountId,
-        _idempotency_key: &IdempotencyKey,
+        _idempotency_key: &InvocationId,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
         self.lookups
             .lock()
@@ -949,6 +955,7 @@ async fn no_committed_entries_no_send() {
                 sending_up_to: OplogIndex::NONE,
                 send_in_progress: false,
                 last_batch_start: OplogIndex::NONE,
+                delivery: None,
             },
         )]),
         pending_direct_commits: BTreeMap::new(),
@@ -1015,6 +1022,7 @@ async fn a_fenced_checkpoint_stops_later_flushes_before_they_write() {
                 sending_up_to: OplogIndex::NONE,
                 send_in_progress: false,
                 last_batch_start: OplogIndex::NONE,
+                delivery: None,
             },
         )]),
         pending_direct_commits: BTreeMap::new(),
@@ -1143,6 +1151,7 @@ async fn active_plugin_receives_buffered_entries() {
                 sending_up_to: OplogIndex::NONE,
                 send_in_progress: false,
                 last_batch_start: OplogIndex::NONE,
+                delivery: None,
             },
         )]),
         pending_direct_commits: BTreeMap::new(),
@@ -1197,6 +1206,7 @@ async fn plugin_monitor_looks_up_status_as_original_worker_owner() {
                 sending_up_to: OplogIndex::NONE,
                 send_in_progress: false,
                 last_batch_start: OplogIndex::NONE,
+                delivery: None,
             },
         )]),
         pending_direct_commits: BTreeMap::new(),
@@ -1573,6 +1583,7 @@ async fn reactivation_checkpoint_resumes_with_cached_suffix() {
                 confirmed_up_to: OplogIndex::from_u64(2),
                 sending_up_to: OplogIndex::from_u64(2),
                 last_batch_start: OplogIndex::INITIAL,
+                delivery: None,
             },
         )),
     );
@@ -1695,6 +1706,136 @@ async fn deactivated_outstanding_batch_retries_exact_range_and_target() {
         1,
         "the recorded remote target must be reused"
     );
+}
+
+#[test]
+async fn outstanding_delivery_reuses_full_snapshot_after_reconstruction() {
+    for local in [false, true] {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (oplog, inner, processor, status_writer) =
+            test_forwarding_oplog(HashSet::from([grant_id]), grant_id, 1).await;
+        processor.failed_sends_remaining.store(1, Ordering::Relaxed);
+        processor.target_is_local.store(local, Ordering::Relaxed);
+        oplog.add(grow_memory(17)).await.unwrap();
+        let committed = oplog.commit(CommitLevel::Always).await.unwrap();
+        let original = processor.sends().await.remove(0);
+        let original_source_revision = original.metadata.last_known_status.component_revision;
+        assert!(committed.values().any(|entry| matches!(entry,
+            OplogEntry::OplogProcessorCheckpoint {
+                source_component_revision, delivery: Some(_), ..
+            } if *source_component_revision == original_source_revision
+        )));
+        let mut recovered_status = crate::worker::status::update_status_with_new_entries(
+            AgentMode::Durable,
+            status_writer.load_full().as_ref().clone(),
+            committed,
+            &golem_common::model::RetryConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            recovered_status.oplog_processor_checkpoints[&grant_id]
+                .delivery
+                .is_some()
+        );
+        let shutdown = oplog.executor_shutdown_handle();
+        shutdown.fence();
+        shutdown.close_and_wait().await.unwrap();
+
+        recovered_status.status = golem_common::model::AgentStatus::Running;
+        recovered_status.component_revision = ComponentRevision::new(7).unwrap();
+        recovered_status.current_retry_state.insert(
+            OplogIndex::INITIAL,
+            golem_common::model::RetryPolicyState::Counter(9),
+        );
+        recovered_status.active_plugins.clear();
+        let mut metadata = original.metadata.clone();
+        metadata.env = vec![("NEW".into(), "environment".into())];
+        metadata.last_known_status = recovered_status.clone();
+        status_writer.store(Arc::new(recovered_status));
+        let recovered = ForwardingOplog::new(
+            inner.clone(),
+            processor.clone(),
+            Arc::new(FakeComponentService::empty()),
+            metadata,
+            read_only_lock::arc_swap::ReadOnlyView::new(status_writer),
+            inner.current_oplog_index().await,
+            Box::new(|| {}),
+            usize::MAX,
+            Duration::from_secs(3600),
+        )
+        .await;
+        recovered.tick().await;
+        let sends = processor.sends().await;
+        assert_eq!(sends.len(), 2);
+        let retried = &sends[1];
+        assert_eq!(original.target_agent_id, retried.target_agent_id);
+        assert_eq!(original.initial_oplog_index, retried.initial_oplog_index);
+        assert_eq!(original.entries, retried.entries);
+        assert_eq!(original.plugin, retried.plugin);
+        assert_eq!(
+            golem_common::model::oplog::payload::types::AgentMetadataForGuests::from(
+                original.metadata
+            ),
+            golem_common::model::oplog::payload::types::AgentMetadataForGuests::from(
+                retried.metadata.clone()
+            ),
+        );
+        let checkpoint = inner.entries.lock().unwrap().last().unwrap().clone();
+        assert!(matches!(checkpoint, OplogEntry::OplogProcessorCheckpoint {
+            confirmed_up_to, sending_up_to, source_component_revision, delivery: None, ..
+        } if confirmed_up_to == sending_up_to
+            && confirmed_up_to == OplogIndex::INITIAL
+            && source_component_revision == original_source_revision));
+    }
+}
+
+#[test]
+async fn delivery_snapshot_does_not_grow_with_host_history() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let (oplog, inner, _, status_writer) =
+        test_forwarding_oplog(HashSet::from([grant_id]), grant_id, 1).await;
+    oplog.add(grow_memory(1)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let first_delivery = inner
+        .entries
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|entry| match entry {
+            OplogEntry::OplogProcessorCheckpoint {
+                delivery: Some(delivery),
+                ..
+            } => Some(delivery.clone()),
+            _ => None,
+        })
+        .unwrap();
+
+    let mut status = status_writer.load_full().as_ref().clone();
+    for _ in 0..1000 {
+        status.source_card_transfers.insert(
+            Uuid::new_v4(),
+            golem_common::model::SourceCardTransferState::Conflict,
+        );
+    }
+    status_writer.store(Arc::new(status));
+    oplog.add(grow_memory(2)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let next_delivery = inner
+        .entries
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            OplogEntry::OplogProcessorCheckpoint {
+                delivery: Some(delivery),
+                ..
+            } => Some(delivery.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(first_delivery.len(), next_delivery.len());
 }
 
 #[test]

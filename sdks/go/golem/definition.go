@@ -76,6 +76,7 @@ func init() {
 	link.AgentError = agentErrorToGo
 	link.TrapPanic = trapRegionPanic
 	link.Principal = func(p common.Principal) any { return principalFromWit(p) }
+	link.ImmediateCaller = func() common.Principal { return immediateCaller() }
 	link.LocalAgentTypes = func() ([]common.AgentType, error) {
 		found, errs := defs.discover()
 		if len(errs) > 0 {
@@ -91,8 +92,9 @@ func init() {
 		}
 		return scopeCardHandle(card.(ScopeCard))
 	}
-	link.ScheduledInvocation = func(agentID, idempotencyKey string, token *host.CancellationToken) any {
-		return &ScheduledInvocation{ID: InvocationID{AgentID: agentID, IdempotencyKey: idempotencyKey}, token: token}
+	link.InvocationMetadata = func(m host.InvocationMetadata) any { return invocationMetadataFrom(m) }
+	link.ScheduledInvocation = func(m host.InvocationMetadata, token *host.CancellationToken) any {
+		return &ScheduledInvocation{Metadata: invocationMetadataFrom(m), token: token}
 	}
 }
 

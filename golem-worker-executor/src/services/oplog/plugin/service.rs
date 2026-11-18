@@ -448,7 +448,7 @@ impl OplogService for ForwardingOplogService {
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         self.inner
             .scan_for_component(environment_id, component_id, modes, cursor, count)
             .await

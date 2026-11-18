@@ -13,16 +13,17 @@
 // limitations under the License.
 
 pub(crate) mod invocation_session;
+mod oplog_export;
 pub mod oplog_serve;
 mod stream;
 mod stream_output;
 
 pub(crate) use stream::insecure_connector;
 
-use crate::command::shared_args::OplogViewerArgs;
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
+use crate::command::shared_args::{OplogExportArgs, OplogViewerArgs};
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
@@ -44,7 +45,7 @@ use crate::model::agent::action_result::{
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
-use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView};
 use crate::model::agent::oplog_html::{
     OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
 };
@@ -60,6 +61,7 @@ use crate::model::text_format::{log_fuzzy_match, log_text_view};
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
+use golem_common::model::invocation_session_public::PublicErrorCode;
 
 use crate::agent_id_display::SourceLanguage;
 use crate::context::GlobalEnvironmentSelector;
@@ -77,6 +79,7 @@ use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest, WorkersMetadataRequest,
 };
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::typed_constructor_parameters;
 use golem_common::model::agent::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
@@ -90,11 +93,14 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
+use golem_common::model::{
+    AgentFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
+    OplogIndex, StringFilterComparator,
+};
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
-use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
+use crate::command_handler::interactive::Ask;
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
 use crossterm::queue;
@@ -207,6 +213,7 @@ impl AgentCommandHandler {
                     mode,
                     scan_cursor,
                     max_count,
+                    page,
                     precise,
                     refresh,
                 } => {
@@ -217,6 +224,7 @@ impl AgentCommandHandler {
                         mode,
                         scan_cursor,
                         max_count,
+                        page,
                         precise,
                         refresh,
                     )
@@ -230,6 +238,7 @@ impl AgentCommandHandler {
                     agent_type_name,
                     parameters,
                     idempotency_key,
+                    method_name,
                     phantom_id,
                     stream_args,
                 } => {
@@ -237,6 +246,7 @@ impl AgentCommandHandler {
                         agent_type_name,
                         parameters,
                         idempotency_key,
+                        method_name,
                         phantom_id,
                         stream_args,
                     )
@@ -268,10 +278,18 @@ impl AgentCommandHandler {
                     from,
                     query,
                     omit_payloads,
+                    page,
+                    cursor,
                     viewer,
+                    export,
                 } => {
-                    self.cmd_oplog(agent_id, from, query, omit_payloads, viewer)
-                        .await
+                    if page {
+                        self.cmd_oplog_page(agent_id, from, cursor, query, omit_payloads)
+                            .await
+                    } else {
+                        self.cmd_oplog(agent_id, from, query, omit_payloads, viewer, export)
+                            .await
+                    }
                 }
                 AgentSubcommand::Revert {
                     agent_id,
@@ -468,14 +486,6 @@ impl AgentCommandHandler {
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
         validate_public_invocation_agent_id(&agent_id, &agent_type)?;
-        let stream_agent_id =
-            if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
-                agent_id
-                    .with_ephemeral_invocation_phantom(&idempotency_key)
-                    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?
-            } else {
-                agent_id.clone()
-            };
 
         let matched_method_name = resolve_agent_method_name(function_name, &agent_type);
         let method_name = match matched_method_name {
@@ -526,12 +536,20 @@ impl AgentCommandHandler {
             },
         };
 
+        let stream_agent_id = invocation_agent_id(
+            &agent_id,
+            &agent_type,
+            self.ctx.account_id().await?,
+            &idempotency_key,
+            &method_name,
+        )?;
+
         // Update agent_id with normalized agent id (and keep the parsed form
         // for language-specific display).
         let agent_id_match = agent_id_match
             .with_canonical_and_parsed(agent_id.to_string().into(), Some(agent_id.clone()));
 
-        let mode = if trigger {
+        if trigger {
             log_action(
                 "Triggering",
                 format!(
@@ -540,7 +558,6 @@ impl AgentCommandHandler {
                     method_name.log_color_highlight()
                 ),
             );
-            AgentInvocationMode::Schedule
         } else {
             log_action(
                 "Invoking",
@@ -550,8 +567,7 @@ impl AgentCommandHandler {
                     method_name.log_color_highlight()
                 ),
             );
-            AgentInvocationMode::Await
-        };
+        }
 
         let method_uses_streams = agent_type
             .methods
@@ -575,6 +591,7 @@ impl AgentCommandHandler {
 
         if method_uses_streams {
             let selected_agent_name = stream_agent_id.to_string();
+            let mut invocation_goal = None;
             let mut connect_handle = if !no_stream && stdout_format == InvocationStdoutFormat::Value
             {
                 let connection = AgentConnection::new(
@@ -586,9 +603,10 @@ impl AgentCommandHandler {
                     self.ctx.allow_insecure(),
                     self.ctx.format(),
                     self.ctx.agent_stream_ping_interval(),
-                    Some(idempotency_key.clone()),
+                    true,
                 )
                 .await?;
+                invocation_goal = connection.invocation_goal();
                 Some(tokio::spawn(async move { connection.run_forever().await }))
             } else {
                 None
@@ -600,7 +618,7 @@ impl AgentCommandHandler {
                     application_name: agent_id_match.environment.application_name.to_string(),
                     environment_name: agent_id_match.environment.environment_name.to_string(),
                     agent_type,
-                    parsed_agent_id: stream_agent_id,
+                    parsed_agent_id: agent_id,
                     method_name,
                     arguments,
                     config: Vec::new(),
@@ -609,6 +627,7 @@ impl AgentCommandHandler {
                     stdout_format,
                     selected_agent_name,
                     session_mode,
+                    invocation_goal,
                 },
             )
             .await;
@@ -639,21 +658,55 @@ impl AgentCommandHandler {
                 self.ctx.allow_insecure(),
                 self.ctx.format(),
                 self.ctx.agent_stream_ping_interval(),
-                if trigger {
-                    None
-                } else {
-                    Some(idempotency_key.clone())
-                },
+                !trigger,
             )
             .await?;
-            Some(tokio::task::spawn(
-                async move { connection.run_forever().await },
+            let goal = connection.invocation_goal();
+            Some((
+                goal,
+                tokio::task::spawn(async move { connection.run_forever().await }),
             ))
         } else {
             None
         };
 
         let environment = &agent_id_match.environment;
+
+        if !trigger {
+            let invocation = invocation_session::invoke_scalar(
+                self.ctx.clone(),
+                invocation_session::ScalarInvocationArgs {
+                    application_name: environment.application_name.to_string(),
+                    environment_name: environment.environment_name.to_string(),
+                    agent_type: agent_type.clone(),
+                    parsed_agent_id: agent_id,
+                    method_name: method_name.clone(),
+                    method_parameters,
+                    idempotency_key,
+                    invocation_goal: connect_handle.as_ref().and_then(|(goal, _)| goal.clone()),
+                },
+            )
+            .await;
+            if let Some((goal, handle)) = connect_handle.take() {
+                if let Some(goal) = goal {
+                    goal.set_output_written();
+                }
+                let _ = timeout(Duration::from_secs(3), handle).await;
+            }
+            let invocation = invocation.map_err(|error| {
+                self.with_previous_invocation_failed_hint(error, &agent_id_match)
+            })?;
+            logln("");
+            self.ctx
+                .log_handler()
+                .log_output(InvokeResultView::new_agent_invoke(
+                    invocation.idempotency_key,
+                    invocation.result,
+                    &agent_type,
+                    &method_name,
+                ))?;
+            return Ok(());
+        }
 
         let request = AgentInvocationRequest {
             app_name: environment.application_name.to_string(),
@@ -666,7 +719,7 @@ impl AgentCommandHandler {
             method_name: method_name.clone(),
             method_parameters: ExternalSchemaValue::try_from(method_parameters)
                 .map_err(anyhow::Error::msg)?,
-            mode,
+            mode: AgentInvocationMode::Schedule,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
             deployment_revision: None,
@@ -683,26 +736,20 @@ impl AgentCommandHandler {
                 self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
             })?;
 
-        if let Some(handle) = connect_handle.take() {
+        // The key the server accepted the invocation under, which cancels and looks it up.
+        let accepted_key = golem_common::model::InvocationId(result.idempotency_key);
+        if let Some((goal, handle)) = connect_handle.take() {
+            if let Some(goal) = goal {
+                goal.set_target(accepted_key);
+                goal.set_output_written();
+            }
             let _ = timeout(Duration::from_secs(3), handle).await;
         }
 
-        if trigger {
-            log_action("Triggered", "invocation");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_trigger(idempotency_key))?;
-        } else {
-            logln("");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_agent_invoke(
-                    idempotency_key,
-                    result,
-                    &agent_type,
-                    &method_name,
-                ))?;
-        }
+        log_action("Triggered", "invocation");
+        self.ctx
+            .log_handler()
+            .log_output(InvokeResultView::new_trigger(accepted_key))?;
 
         Ok(())
     }
@@ -731,7 +778,7 @@ impl AgentCommandHandler {
             self.ctx.allow_insecure(),
             self.ctx.format(),
             self.ctx.agent_stream_ping_interval(),
-            None,
+            false,
         )
         .await?;
 
@@ -748,6 +795,7 @@ impl AgentCommandHandler {
         agent_type_name: AgentTypeName,
         parameters: String,
         idempotency_key: IdempotencyKey,
+        method_name: String,
         phantom_id: Option<Uuid>,
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
@@ -776,11 +824,18 @@ impl AgentCommandHandler {
         })?;
         let typed_parameters =
             typed_constructor_parameters(&agent_type.agent_type, value.into_inner());
-        let agent_id = build_repl_agent_id(
-            &agent_type.agent_type,
+        let agent_id = ParsedAgentKey::try_new(
+            agent_type.agent_type.type_name.clone(),
             typed_parameters,
             phantom_id,
+        )
+        .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
+        let agent_id = invocation_agent_id(
+            &agent_id,
+            &agent_type.agent_type,
+            self.ctx.account_id().await?,
             &idempotency_key,
+            &method_name,
         )?;
         let agent_id = RawAgentId(agent_id.to_string());
 
@@ -793,11 +848,40 @@ impl AgentCommandHandler {
             self.ctx.allow_insecure(),
             self.ctx.format(),
             self.ctx.agent_stream_ping_interval(),
-            Some(idempotency_key),
+            true,
         )
         .await?;
 
-        connection.run_forever().await?;
+        // The REPL writes the accepted invocation ID to stdin once the call returns.
+        let invocation_target = connection.invocation_goal().map(|goal| async move {
+            use tokio::io::AsyncBufReadExt;
+            let stdin =
+                crate::command_handler::interactive::async_stdin("the accepted invocation ID")?;
+            let mut lines = tokio::io::BufReader::new(stdin).lines();
+            if let Ok(Some(line)) = lines.next_line().await {
+                goal.set_target(
+                    line.trim()
+                        .parse::<golem_common::model::InvocationId>()
+                        .context("stdin contains an invalid invocation ID")?,
+                );
+                goal.set_output_written();
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+
+        if let Some(target) = invocation_target {
+            let connection = connection.run_forever();
+            tokio::pin!(connection);
+            tokio::select! {
+                result = &mut connection => result?,
+                result = target => {
+                    result?;
+                    connection.await?;
+                }
+            }
+        } else {
+            connection.run_forever().await?;
+        }
 
         Ok(())
     }
@@ -836,12 +920,35 @@ impl AgentCommandHandler {
         query: Option<String>,
         omit_payloads: bool,
         viewer: OplogViewerArgs,
+        export: OplogExportArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
         let batch_size = self.ctx.http_batch_size();
+        if export.obfuscate {
+            let options = oplog_export::export_options(&export, from, query, batch_size);
+            if viewer.serve {
+                return oplog_serve::serve_oplog_export_viewer(
+                    self.ctx.clone(),
+                    component.id.0,
+                    agent_id.0.clone(),
+                    options,
+                    viewer.port,
+                    !viewer.no_open,
+                )
+                .await;
+            }
+            return oplog_export::cmd_oplog_export(
+                self.ctx.clone(),
+                component.id.0,
+                agent_id.0.clone(),
+                options,
+                viewer,
+            )
+            .await;
+        }
         let viewer_document =
             |mode: OplogViewerMode, entries: Vec<AgentOplogEntryView>| OplogViewerDocument {
                 mode,
@@ -866,6 +973,7 @@ impl AgentCommandHandler {
                     page,
                     page_size: batch_size,
                     omit_payloads,
+                    export: None,
                 },
                 viewer.port,
                 !viewer.no_open,
@@ -966,6 +1074,54 @@ impl AgentCommandHandler {
         }
 
         Ok(())
+    }
+
+    /// One server page of the oplog, as one `agent.oplog-page` document.
+    async fn cmd_oplog_page(
+        &self,
+        agent_id: AgentIdArgs,
+        from: Option<u64>,
+        cursor: Option<OplogCursor>,
+        query: Option<String>,
+        omit_payloads: bool,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        let page = self
+            .ctx
+            .golem_clients()
+            .await?
+            .worker
+            .get_oplog(
+                &component.id.0,
+                &agent_id.0,
+                from,
+                self.ctx.http_batch_size(),
+                cursor.as_ref(),
+                query.as_deref(),
+            )
+            .await
+            .map_service_error()?;
+
+        let mut entries = Vec::with_capacity(page.entries.len());
+        for entry in page.entries {
+            entries.push(
+                oplog_page_entry_view(
+                    &self.ctx,
+                    &component.id.0,
+                    &agent_id.0,
+                    entry,
+                    omit_payloads,
+                )
+                .await?,
+            );
+        }
+        self.ctx.log_handler().log_output(AgentOplogPageView {
+            entries,
+            cursor: page.next.map(|cursor| cursor.to_string()),
+        })
     }
 
     async fn cmd_revert(
@@ -1092,6 +1248,7 @@ impl AgentCommandHandler {
         mode: AgentListMode,
         scan_cursor: Option<ScanCursor>,
         max_count: Option<u64>,
+        page: bool,
         precise: bool,
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
@@ -1109,7 +1266,19 @@ impl AgentCommandHandler {
             .resolve_list_components(agent_type_name, component_name, filters)
             .await?;
 
-        if let Some(interval_ms) = refresh {
+        if page {
+            let view = self
+                .list_agents_page(
+                    components,
+                    &filters,
+                    mode_overlay.as_ref(),
+                    scan_cursor.as_ref(),
+                    max_count.unwrap_or(self.ctx.http_batch_size()),
+                    precise,
+                )
+                .await?;
+            self.ctx.log_handler().log_output(view)
+        } else if let Some(interval_ms) = refresh {
             self.list_with_refresh(
                 &components,
                 &filters,
@@ -1253,10 +1422,11 @@ impl AgentCommandHandler {
                 let mut filters = filters;
                 filters.insert(
                     0,
-                    format!(
-                        "name startswith {}(",
-                        agent_type.agent_type.type_name.0.clone()
-                    ),
+                    AgentFilter::new_name(
+                        StringFilterComparator::StartsWith,
+                        format!("{}(", agent_type.agent_type.type_name.0),
+                    )
+                    .to_string(),
                 );
 
                 Ok((
@@ -1359,61 +1529,7 @@ impl AgentCommandHandler {
                 )
                 .await?;
 
-            for agent in agents {
-                let raw_agent_id = agent.raw_agent_id().to_owned();
-
-                let agent_component = self
-                    .ctx
-                    .component_handler()
-                    .get_component_revision_by_id(&agent.component_id(), agent.component_revision)
-                    .await?;
-
-                let parsed_agent_type_name = agent.agent_type_name();
-                let component_metadata: ComponentMetadata = agent_component.metadata.into();
-
-                let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
-                    component_metadata
-                        .agent_type_provision_configs()
-                        .get(agent_type_name)
-                        .cloned()
-                });
-
-                let source_language = parsed_agent_type_name
-                    .as_ref()
-                    .and_then(|type_name| {
-                        component_metadata
-                            .agent_types()
-                            .iter()
-                            .find(|at| &at.type_name == type_name)
-                            .map(|at| SourceLanguage::from(at.source_language.as_str()))
-                    })
-                    .unwrap_or_default();
-
-                let secret_config_paths = parsed_agent_type_name
-                    .as_ref()
-                    .map(|agent_type_name| {
-                        secret_config_paths_for_agent_type(
-                            component_metadata.agent_types(),
-                            agent_type_name,
-                        )
-                    })
-                    .unwrap_or_default();
-
-                let parsed = agent.parsed_agent_id(&component_metadata);
-                let mut agent_view = AgentMetadataView::from(agent)
-                    .with_defaults(defaults)
-                    .with_secret_config_paths(secret_config_paths);
-
-                agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
-                    parsed.as_ref(),
-                    &source_language,
-                    &raw_agent_id,
-                )
-                .into();
-
-                view.agents
-                    .push(agent_view.with_source_language(source_language));
-            }
+            view.agents.extend(self.agent_views(agents).await?);
             component_scan_cursor
                 .into_iter()
                 .for_each(|component_scan_cursor| {
@@ -1433,6 +1549,110 @@ impl AgentCommandHandler {
         }
 
         Ok(view)
+    }
+
+    /// The views of listed agents, with their IDs rendered in their source language.
+    async fn agent_views(
+        &self,
+        agents: Vec<AgentMetadata>,
+    ) -> anyhow::Result<Vec<AgentMetadataView>> {
+        let mut views = Vec::with_capacity(agents.len());
+        for agent in agents {
+            let raw_agent_id = agent.raw_agent_id().to_owned();
+
+            let agent_component = self
+                .ctx
+                .component_handler()
+                .get_component_revision_by_id(&agent.component_id(), agent.component_revision)
+                .await?;
+
+            let parsed_agent_type_name = agent.agent_type_name();
+            let component_metadata: ComponentMetadata = agent_component.metadata.into();
+
+            let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
+                component_metadata
+                    .agent_type_provision_configs()
+                    .get(agent_type_name)
+                    .cloned()
+            });
+
+            let source_language = parsed_agent_type_name
+                .as_ref()
+                .and_then(|type_name| {
+                    component_metadata
+                        .agent_types()
+                        .iter()
+                        .find(|at| &at.type_name == type_name)
+                        .map(|at| SourceLanguage::from(at.source_language.as_str()))
+                })
+                .unwrap_or_default();
+
+            let secret_config_paths = parsed_agent_type_name
+                .as_ref()
+                .map(|agent_type_name| {
+                    secret_config_paths_for_agent_type(
+                        component_metadata.agent_types(),
+                        agent_type_name,
+                    )
+                })
+                .unwrap_or_default();
+
+            let parsed = agent.parsed_agent_id(&component_metadata);
+            let mut agent_view = AgentMetadataView::from(agent)
+                .with_defaults(defaults)
+                .with_secret_config_paths(secret_config_paths);
+
+            agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
+                parsed.as_ref(),
+                &source_language,
+                &raw_agent_id,
+            )
+            .into();
+
+            views.push(agent_view.with_source_language(source_language));
+        }
+        Ok(views)
+    }
+
+    /// One page of agents across `components`, in the order of their names; see [`read_page`].
+    async fn list_agents_page(
+        &self,
+        mut components: Vec<ComponentDto>,
+        filters: &[String],
+        mode_overlay: Option<&AgentFilter>,
+        cursor: Option<&ScanCursor>,
+        count: u64,
+        precise: bool,
+    ) -> anyhow::Result<AgentsMetadataResponseView> {
+        components.sort_by(|a, b| a.component_name.0.cmp(&b.component_name.0));
+        let names = components
+            .iter()
+            .map(|component| component.component_name.0.as_str())
+            .collect::<Vec<_>>();
+        let (agents, cursor) = read_page(
+            &names,
+            cursor,
+            count,
+            async |position, scan_cursor, limit| {
+                let component = &components[position];
+                self.list_component_agents(
+                    &component.component_name,
+                    &component.id,
+                    Some(filters),
+                    mode_overlay,
+                    scan_cursor.as_ref(),
+                    Some(limit),
+                    precise,
+                )
+                .await
+            },
+        )
+        .await?;
+        Ok(AgentsMetadataResponseView {
+            agents: self.agent_views(agents).await?,
+            cursors: Default::default(),
+            cursor,
+        })
     }
 
     async fn cmd_interrupt(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
@@ -2766,10 +2986,13 @@ impl AgentCommandHandler {
         error: anyhow::Error,
         agent_id_match: &AgentIdMatch,
     ) -> anyhow::Error {
-        let Some(service_error) = error.downcast_ref::<ServiceError>() else {
-            return error;
-        };
-        if !service_error.is_previous_invocation_failed() {
+        let previous_invocation_failed = error
+            .downcast_ref::<ServiceError>()
+            .is_some_and(|service_error| service_error.is_previous_invocation_failed())
+            || error
+                .downcast_ref::<invocation_session::InvocationFailure>()
+                .is_some_and(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed);
+        if !previous_invocation_failed {
             return error;
         }
 
@@ -2783,11 +3006,11 @@ impl AgentCommandHandler {
             &agent_id_match.agent_id,
         );
 
-        anyhow!(
-            "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
-            service_error.render(),
-            command,
-        )
+        // The original error stays the source, so that its code and details reach structured
+        // error reports; `{:#}` prints the hint and then the original error.
+        error.context(format!(
+            "The previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {command}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.\n\nThe error of the server"
+        ))
     }
 
     async fn interrupt_agent(
@@ -3106,7 +3329,7 @@ impl AgentCommandHandler {
             output_path.log_color_highlight()
         ))
         .with_default(false)
-        .prompt()?;
+        .ask()?;
 
         Ok(result)
     }
@@ -3325,6 +3548,65 @@ pub(super) fn parse_method_argument_schema_value(
     parsed
 }
 
+/// One page of `count` items across the components named in `component_names`, in their order,
+/// under one budget. `scan(position, scan_cursor, limit)` lists the items of the component at
+/// `position` from `scan_cursor`, and gives the scan cursor of its next items. It asks for `limit`
+/// items, but a scan of a Redis indexed storage can list more, and the page keeps all of them, so
+/// `count` is a target there and a limit elsewhere.
+/// The page ends at the first scan that gives a scan cursor, or when `count` items are listed.
+/// The cursor of the next page is `<component name>/<scan cursor>`, with an empty scan cursor
+/// when the next page starts at the beginning of that component.
+async fn read_page<T>(
+    component_names: &[&str],
+    cursor: Option<&ScanCursor>,
+    count: u64,
+    mut scan: impl AsyncFnMut(
+        usize,
+        Option<ScanCursor>,
+        u64,
+    ) -> anyhow::Result<(Vec<T>, Option<ScanCursor>)>,
+) -> anyhow::Result<(Vec<T>, Option<String>)> {
+    if count == 0 {
+        bail!("A page needs a --max-count of at least 1");
+    }
+    let (mut position, mut scan_cursor) = match cursor {
+        None => (0, None),
+        Some(cursor) => {
+            let Some((component_name, scan_cursor)) = cursor.as_str().split_once('/') else {
+                bail!("Invalid page cursor: {cursor}");
+            };
+            let Some(position) = component_names
+                .iter()
+                .position(|name| *name == component_name)
+            else {
+                bail!(
+                    "The page cursor is for the component {component_name}, which is not selected"
+                );
+            };
+            (
+                position,
+                ScanCursor::new(scan_cursor.to_string()).into_option(),
+            )
+        }
+    };
+
+    let mut items = Vec::new();
+    let mut remaining = count;
+    while let Some(component_name) = component_names.get(position) {
+        if remaining == 0 {
+            return Ok((items, Some(format!("{component_name}/"))));
+        }
+        let (listed, next_scan_cursor) = scan(position, scan_cursor.take(), remaining).await?;
+        remaining = remaining.saturating_sub(listed.len() as u64);
+        items.extend(listed);
+        if let Some(next_scan_cursor) = next_scan_cursor {
+            return Ok((items, Some(format!("{component_name}/{next_scan_cursor}"))));
+        }
+        position += 1;
+    }
+    Ok((items, None))
+}
+
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     cursor.to_string()
 }
@@ -3358,10 +3640,7 @@ fn secret_config_paths_for_agent_type(
 /// `Ephemeral`, the corresponding equality filter is prepended so the
 /// executor narrows the oplog scan to only the matching mode.
 fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
-    let user_set_mode = filters
-        .iter()
-        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()));
-    if user_set_mode {
+    if user_set_mode_filter(&filters) {
         return filters;
     }
     let mode_filter = match mode {
@@ -3375,12 +3654,15 @@ fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<Stri
     out
 }
 
-/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint,
-/// meaning the caller should not add its own mode overlay.
+/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint anywhere,
+/// also inside `and`, `or`, `not` or parentheses, meaning the caller should not add its own
+/// mode overlay. A filter that does not parse is refused later, when the list builds its
+/// structured filter.
 fn user_set_mode_filter(filters: &[String]) -> bool {
     filters
         .iter()
-        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()))
+        .filter_map(|filter| filter.parse::<AgentFilter>().ok())
+        .any(|filter| filter.mentions_mode())
 }
 
 /// Structured filter matching agents in either durability mode, used for
@@ -3518,22 +3800,27 @@ fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<
     Ok(())
 }
 
-fn build_repl_agent_id(
+/// The agent that runs a user's invocation of `method_name` with `idempotency_key`. The server
+/// derives an ephemeral agent's phantom ID from the owner key of the caller-scoped request key,
+/// so the CLI derives it the same way to stream that agent's output.
+fn invocation_agent_id(
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
-    typed_parameters: TypedSchemaValue,
-    phantom_id: Option<Uuid>,
+    account_id: AccountId,
     idempotency_key: &IdempotencyKey,
+    method_name: &str,
 ) -> anyhow::Result<ParsedAgentKey> {
-    let agent_id =
-        ParsedAgentKey::try_new(agent_type.type_name.clone(), typed_parameters, phantom_id)
-            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
-
     if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+        let owner_key = InvocationRequestKey::external(
+            Some(IdempotencyScope::User(account_id)),
+            Some(idempotency_key),
+        )
+        .owner_key(method_name);
         agent_id
-            .with_ephemeral_invocation_phantom(idempotency_key)
+            .with_ephemeral_invocation_phantom(&owner_key)
             .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
     } else {
-        Ok(agent_id)
+        Ok(agent_id.clone())
     }
 }
 
@@ -3563,20 +3850,22 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
+        AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter, invocation_agent_id,
         is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
-        parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
-        split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
+        parse_method_parameters_with_error_table, pending_update_progress, read_page,
+        render_revert_command, split_agent_id, validate_ordinary_agent_type,
+        validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
     use crate::model::agent::RawAgentId;
     use crate::model::environment::EnvironmentReference;
+    use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
+    use golem_common::model::{IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
         NamedField, OutputSchema,
@@ -3584,9 +3873,81 @@ mod tests {
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
+    use golem_schema::Empty;
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    /// Reads every page of `components` (name and item count) with pages of `count`, over a fake
+    /// scan whose scan cursor is the index of the next item. Gives each page's items and cursor,
+    /// and each scan's component position and scan cursor.
+    async fn read_all_pages(
+        components: &[(&str, usize)],
+        count: u64,
+    ) -> (
+        Vec<(Vec<String>, Option<String>)>,
+        Vec<(usize, Option<String>)>,
+    ) {
+        let names = components.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        let mut pages = Vec::new();
+        let mut scans = Vec::new();
+        let mut cursor = None::<ScanCursor>;
+        loop {
+            let (items, next) = read_page(
+                &names,
+                cursor.as_ref(),
+                count,
+                async |position, scan_cursor: Option<ScanCursor>, limit| {
+                    scans.push((position, scan_cursor.as_ref().map(ToString::to_string)));
+                    let (name, len) = components[position];
+                    let start = scan_cursor.map_or(0, |cursor| cursor.as_str().parse().unwrap());
+                    let end = (start + limit as usize).min(len);
+                    let items = (start..end).map(|item| format!("{name}#{item}")).collect();
+                    let next = (end < len).then(|| ScanCursor::new(end.to_string()));
+                    Ok((items, next))
+                },
+            )
+            .await
+            .unwrap();
+            pages.push((items, next.clone()));
+            let Some(next) = next else {
+                return (pages, scans);
+            };
+            cursor = Some(ScanCursor::new(next));
+            assert!(pages.len() < 100, "the pages do not end");
+        }
+    }
+
+    #[test]
+    async fn a_page_that_ends_a_component_at_its_limit_names_the_next_component() {
+        let (pages, scans) = read_all_pages(&[("a:x", 2), ("b:y", 3)], 2).await;
+        assert_eq!(
+            pages,
+            vec![
+                (
+                    vec!["a:x#0".to_string(), "a:x#1".to_string()],
+                    Some("b:y/".to_string())
+                ),
+                (
+                    vec!["b:y#0".to_string(), "b:y#1".to_string()],
+                    Some("b:y/2".to_string())
+                ),
+                (vec!["b:y#2".to_string()], None),
+            ]
+        );
+        // The cursor `b:y/` starts `b:y` at its beginning, and no scan asks for 0 items.
+        assert_eq!(
+            scans,
+            vec![(0, None), (1, None), (1, Some("2".to_string()))]
+        );
+
+        // The last component ending at the limit ends the pages.
+        let (pages, _) = read_all_pages(&[("a:x", 1), ("b:y", 1)], 2).await;
+        assert_eq!(
+            pages,
+            vec![(vec!["a:x#0".to_string(), "b:y#0".to_string()], None)]
+        );
+    }
 
     #[test]
     fn await_update_attempt_filter_ignores_earlier_same_target_outcomes() {
@@ -3739,9 +4100,22 @@ mod tests {
 
     #[test]
     fn apply_list_mode_filter_user_mode_filter_case_insensitive() {
-        let input = vec!["MODE == ephemeral".to_string()];
+        let input = vec!["mode == EPHEMERAL".to_string()];
         let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_finds_user_mode_filter_inside_compound_filters() {
+        for filter in [
+            "(mode == ephemeral)",
+            "status == Idle or mode == ephemeral",
+            "not mode == durable",
+        ] {
+            let input = vec!["status == Running".to_string(), filter.to_string()];
+            let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+            assert_eq!(result, input, "filter: {filter}");
+        }
     }
 
     fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
@@ -3860,53 +4234,68 @@ mod tests {
         assert_eq!(split_agent_id("a(/"), vec!["a(/"]);
     }
 
-    #[test]
-    fn repl_agent_id_derives_stable_phantom_for_ephemeral_invocation() {
-        let idempotency_key = IdempotencyKey::new("repl-invocation".to_string());
-        let first = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
+    fn logical_agent_id(
+        mode: AgentMode,
+        phantom_id: Option<Uuid>,
+    ) -> (ParsedAgentKey, AgentTypeSchema) {
+        let agent_type = test_agent_type_schema(mode);
+        let agent_id = ParsedAgentKey::try_new(
+            agent_type.type_name.clone(),
             empty_typed_parameters(),
-            None,
-            &idempotency_key,
+            phantom_id,
         )
         .unwrap();
-        let second = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
-            empty_typed_parameters(),
-            None,
-            &idempotency_key,
-        )
-        .unwrap();
-
-        assert!(first.phantom_id.is_some());
-        assert_eq!(first.phantom_id, second.phantom_id);
+        (agent_id, agent_type)
     }
 
     #[test]
-    fn repl_agent_id_keeps_durable_agents_non_phantom() {
-        let agent_id = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Durable),
-            empty_typed_parameters(),
-            None,
-            &IdempotencyKey::new("repl-invocation".to_string()),
-        )
-        .unwrap();
+    fn invocation_agent_id_scopes_the_ephemeral_phantom_like_the_server() {
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Ephemeral, None);
+        let key = IdempotencyKey::new("repl-invocation".to_string());
+        let account = AccountId(Uuid::new_v4());
+        let phantom = |account, method| {
+            invocation_agent_id(&agent_id, &agent_type, account, &key, method)
+                .unwrap()
+                .phantom_id
+                .unwrap()
+        };
 
-        assert!(agent_id.phantom_id.is_none());
+        assert_eq!(phantom(account, "run"), phantom(account, "run"));
+        assert_ne!(phantom(account, "run"), phantom(account, "other"));
+        assert_ne!(
+            phantom(account, "run"),
+            phantom(AccountId(Uuid::new_v4()), "run")
+        );
+        // The raw key alone names a different agent than the one the server runs.
+        assert_ne!(
+            Some(phantom(account, "run")),
+            agent_id
+                .with_ephemeral_invocation_phantom(&key)
+                .unwrap()
+                .phantom_id
+        );
     }
 
     #[test]
-    fn repl_agent_id_preserves_explicit_phantom_id() {
-        let explicit_phantom_id = Uuid::new_v4();
-        let agent_id = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
-            empty_typed_parameters(),
-            Some(explicit_phantom_id),
-            &IdempotencyKey::new("repl-invocation".to_string()),
-        )
-        .unwrap();
+    fn invocation_agent_id_keeps_durable_and_explicit_phantom_ids() {
+        let key = IdempotencyKey::new("repl-invocation".to_string());
+        let account = AccountId(Uuid::new_v4());
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Durable, None);
+        assert!(
+            invocation_agent_id(&agent_id, &agent_type, account, &key, "run")
+                .unwrap()
+                .phantom_id
+                .is_none()
+        );
 
-        assert_eq!(agent_id.phantom_id, Some(explicit_phantom_id));
+        let explicit = Uuid::new_v4();
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Ephemeral, Some(explicit));
+        assert_eq!(
+            invocation_agent_id(&agent_id, &agent_type, account, &key, "run")
+                .unwrap()
+                .phantom_id,
+            Some(explicit)
+        );
     }
 
     #[test]

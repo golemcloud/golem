@@ -178,6 +178,7 @@ impl From<&PromiseId> for wire::PromiseId {
     fn from(value: &PromiseId) -> Self {
         Self {
             agent_id: (&value.agent_id).into(),
+            fingerprint: uuid_to_wire(&value.fingerprint),
             oplog_idx: value.oplog_idx,
         }
     }
@@ -191,7 +192,11 @@ impl From<PromiseId> for wire::PromiseId {
 
 impl From<&wire::PromiseId> for PromiseId {
     fn from(value: &wire::PromiseId) -> Self {
-        Self::new((&value.agent_id).into(), value.oplog_idx)
+        Self::new(
+            (&value.agent_id).into(),
+            uuid_from_wire(&value.fingerprint),
+            value.oplog_idx,
+        )
     }
 }
 

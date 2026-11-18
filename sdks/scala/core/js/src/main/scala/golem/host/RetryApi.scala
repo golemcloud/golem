@@ -129,4 +129,21 @@ object RetryApi {
 
   /** Exposes the unvalidated native host facade. */
   def raw: Any = RetryModule
+
+  /**
+   * Opens a `golem:api/retry-scope@1.5.0` retry policy scope and returns the
+   * function that drops it.
+   */
+  private[golem] def openRetryPolicyScope(policy: JsNamedRetryPolicy): () => Unit = {
+    val scope = new RetryPolicyScope(policy)
+    () => {
+      val dispose = js.Dynamic.global.Symbol.selectDynamic("dispose")
+      js.Dynamic.global.Reflect.applyDynamic("get")(scope, dispose).applyDynamic("call")(scope)
+      ()
+    }
+  }
+
+  @js.native
+  @JSImport("golem:api/retry-scope@1.5.0", "RetryPolicyScope")
+  private final class RetryPolicyScope(policy: JsNamedRetryPolicy) extends js.Object
 }

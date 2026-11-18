@@ -196,11 +196,11 @@ test "unit method output encodes as OutputSchema::Unit" {
 ///|
 test "router metadata is preserved exactly" {
   let mount : @common.HttpMountDetails = {
-    path_prefix: [Literal("router")],
+    path_prefix: [Segment(Literal("router"))],
     auth_details: None,
     phantom_agent: true,
     cors_options: { allowed_patterns: ["first", "second"], },
-    webhook_suffix: [Literal("events")],
+    webhook_suffix: [Segment(Literal("events"))],
     static_bindings: [
       Exact({ public_path: ["a", "b"], file_path: "/static/a.txt", }),
       Subtree({ public_prefix: ["assets"], filesystem_root: "/srv/assets", }),
@@ -235,7 +235,7 @@ test "router metadata is preserved exactly" {
             mode: None,
           },
           {
-            http_method: Custom("ANY"),
+            http_method: Method(Custom("ANY")),
             path_suffix: [],
             header_vars: [],
             query_vars: [],
@@ -261,7 +261,10 @@ test "router metadata is preserved exactly" {
   assert_eq(agent_type.kind, HTTP_ROUTER)
   assert_eq(agent_type.http_mount, Some(mount))
   assert_eq(agent_type.methods[0].http_endpoint[0].http_method, Any)
-  assert_eq(agent_type.methods[0].http_endpoint[1].http_method, Custom("ANY"))
+  assert_eq(
+    agent_type.methods[0].http_endpoint[1].http_method,
+    Method(Custom("ANY")),
+  )
 }
 
 ///|

@@ -298,7 +298,7 @@ object QuotaApi {
     "quota token has already been transferred and can no longer be used; split the token first if " +
       "you need to both keep and send a capability"
 
-  private implicit val ec: ExecutionContext = ExecutionContext.global
+  private implicit val ec: ExecutionContext = golem.concurrent.GolemExecutionContext.global
 
   /**
    * Reserve `amount` units from `token`, run `f`, then commit the actual usage

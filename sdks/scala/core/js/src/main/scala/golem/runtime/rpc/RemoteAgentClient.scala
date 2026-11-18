@@ -22,7 +22,6 @@ import golem.config.ConfigOverride
 import golem.FutureInterop
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.JsSchemaValueTree
-import golem.runtime.rpc.host.AgentHostApi.RegisteredAgentType
 import golem.runtime.rpc.host.WasmRpcApi
 import golem.runtime.rpc.host.WasmRpcApi.WasmRpcClient
 
@@ -33,7 +32,6 @@ import scala.scalajs.js.JavaScriptException
 final case class RemoteAgentClient(
   agentTypeName: String,
   agentId: String,
-  metadata: RegisteredAgentType,
   rpc: RpcInvoker
 ) {
   def invokeAndAwait(
@@ -222,10 +220,10 @@ object RemoteAgentClient {
       try {
         FutureInterop
           .fromPromise(futureResult.get())
-          .map(_.toOption)(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+          .map(_.toOption)(golem.concurrent.GolemExecutionContext.global)
           .recoverWith { case JavaScriptException(e) =>
             Future.failed(JavaScriptException(s"async RPC failed: ${WasmRpcApi.decodeRpcError(e)}"))
-          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+          }(golem.concurrent.GolemExecutionContext.global)
       } catch {
         case JavaScriptException(e) =>
           Future.failed(JavaScriptException(s"async RPC failed: ${WasmRpcApi.decodeRpcError(e)}"))

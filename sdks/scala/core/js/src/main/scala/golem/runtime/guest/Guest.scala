@@ -38,11 +38,11 @@ import golem.schema.AgentStreamOwnership
 import golem.tool.{ToolInputStream, ToolOutputStream}
 import golem.tool.wire.WitToolError
 import golem.FutureInterop
-import golem.runtime.{MultipartSnapshot, SnapshotData, SnapshotError, SnapshotPayload}
+import golem.runtime.{AgentMethodFailure, MultipartSnapshot, SnapshotData, SnapshotError, SnapshotPayload}
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.typedarray.Uint8Array
@@ -129,7 +129,7 @@ object Guest {
       methodName.substring(start, methodName.length - 1)
     } else methodName
 
-  private def initialize(agentTypeName: String, input: js.Dynamic, principal: js.Dynamic): js.Promise[Unit] =
+  private def initialize(agentTypeName: String, input: js.Dynamic): js.Promise[Unit] =
     if (!js.isUndefined(resolved)) {
       js.Promise.reject(customError("Agent is already initialized in this container")).asInstanceOf[js.Promise[Unit]]
     } else {
@@ -137,7 +137,7 @@ object Guest {
         case None =>
           js.Promise.reject(invalidType("Invalid agent '" + agentTypeName + "'")).asInstanceOf[js.Promise[Unit]]
         case Some(defnAny) =>
-          val scalaPrincipal = PrincipalConverter.fromJs(principal)
+          val scalaPrincipal = InvocationContextHost.immediatePrincipal()
           initializationPrincipal = Some(scalaPrincipal)
           // Avoid calling `.then` directly (Scala 3 scaladoc / TASTy reader can error on it during `doc`).
           val initPromise              = defnAny.initializeAny(input.asInstanceOf[JsSchemaValueTree], scalaPrincipal)
@@ -158,28 +158,27 @@ object Guest {
       }
     }
 
-  private def invokeAgent(
-    methodName: String,
-    input: js.Dynamic,
-    principal: js.Dynamic
-  ): js.Promise[js.Any] =
+  private def invokeAgent(methodName: String, input: js.Dynamic): js.Promise[js.Any] =
     if (js.isUndefined(resolved)) {
       js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Any]]
     } else {
       val r                                                  = resolved.asInstanceOf[Resolved]
       val mn                                                 = normalizeMethodName(methodName)
-      val scalaPrincipal                                     = PrincipalConverter.fromJs(principal)
+      val scalaPrincipal                                     = InvocationContextHost.immediatePrincipal()
       val onRejected: js.Function1[Any, js.Thenable[js.Any]] =
         js.Any.fromFunction1 { (err: Any) =>
-          // Only catch SDK-level errors (JsAgentError). User code errors must propagate
-          // as unhandled rejections so they become WASM traps, enabling atomic block retries.
-          if (isJsAgentError(err))
-            js.Promise.reject(err).asInstanceOf[js.Thenable[js.Any]]
-          else
-            throw (err match {
-              case t: Throwable => t
-              case other        => js.JavaScriptException(other)
-            })
+          err match {
+            case failure: AgentMethodFailure =>
+              val cause = failure.getCause match {
+                case js.JavaScriptException(value) => value
+                case other                         => other
+              }
+              js.Promise.reject(asAgentError(cause, "custom-error")).asInstanceOf[js.Thenable[js.Any]]
+            case _ if isJsAgentError(err) =>
+              js.Promise.reject(err).asInstanceOf[js.Thenable[js.Any]]
+            case t: Throwable => throw t
+            case other        => throw js.JavaScriptException(other)
+          }
         }
       val resultPromise: js.Promise[js.Any] =
         FutureInterop.toPromise(
@@ -208,8 +207,7 @@ object Guest {
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream],
     stdout: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter],
-    stderr: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter],
-    principal: js.Dynamic
+    stderr: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter]
   ): js.Promise[JsInvocationResult] = {
     val inputOwnership = new AgentStreamOwnership
     val scalaStdin     = stdin.toOption.map(new JsToolInputStream(_))
@@ -245,7 +243,7 @@ object Guest {
                       Left(WitToolError.InvalidInput("tool invocation did not contain declared stderr stream"))
                     )
                   case Some(_) =>
-                    val scalaPrincipal = PrincipalConverter.fromJs(principal)
+                    val scalaPrincipal = InvocationContextHost.immediatePrincipal()
                     scalaStdout = stdout.toOption.map(new JsToolOutputStream(_))
                     scalaStderr = stderr.toOption.map(new JsToolOutputStream(_))
                     invoker(path, in, scalaStdin, scalaStdout, scalaStderr, scalaPrincipal)
@@ -349,12 +347,8 @@ object Guest {
 
   def golemAgent200Guest: js.Dynamic =
     js.Dynamic.literal(
-      "initialize" -> ((agentTypeName: String, input: js.Dynamic, principal: js.Dynamic) =>
-        initialize(agentTypeName, input, principal)
-      ),
-      "invoke" -> ((methodName: String, input: js.Dynamic, principal: js.Dynamic) =>
-        invokeAgent(methodName, input, principal)
-      ),
+      "initialize"         -> ((agentTypeName: String, input: js.Dynamic) => initialize(agentTypeName, input)),
+      "invoke"             -> ((methodName: String, input: js.Dynamic) => invokeAgent(methodName, input)),
       "getDefinition"      -> (() => getDefinition()),
       "discoverAgentTypes" -> (() => discoverAgentTypes())
     )
@@ -370,8 +364,7 @@ object Guest {
           input: js.Dynamic,
           stdin: js.UndefOr[js.Any],
           stdout: js.UndefOr[js.Any],
-          stderr: js.UndefOr[js.Any],
-          principal: js.Dynamic
+          stderr: js.UndefOr[js.Any]
         ) =>
           invokeTool(
             toolName,
@@ -379,8 +372,7 @@ object Guest {
             input.asInstanceOf[JsTypedSchemaValue],
             stdin.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream]],
             stdout.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter]],
-            stderr.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter]],
-            principal
+            stderr.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter]]
           )
       )
     )

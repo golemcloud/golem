@@ -1,5 +1,4 @@
 use golem_common::config::{DbConfig, DbSqliteConfig};
-use golem_common::model::Empty;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::extraction::extract_component_metadata_from_bytes;
 use golem_common::model::application::ApplicationName;
@@ -18,6 +17,7 @@ use golem_registry_service::services::builtin_tool_provisioner::{
     BuiltinExportDescriptor, BuiltinExportKind, provision_descriptors,
 };
 use golem_registry_service::startup::{StartupPhase, StartupProgress};
+use golem_schema::Empty;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;

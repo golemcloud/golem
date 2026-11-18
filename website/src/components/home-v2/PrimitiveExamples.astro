@@ -1,0 +1,121 @@
+---
+import Icon from "./Icon.astro";
+import { text as t, lines } from "../../data/home-preview/golem-2";
+const groups = [
+  { title: "Actors", key: "Actor examples", icons: ["spark", "apps", "cart"] },
+  { title: "Functions", key: "Function examples", icons: ["tool", "function", "clock"] },
+];
+---
+
+<section class="primitive-applications" aria-labelledby="primitive-examples-heading">
+  <h3 id="primitive-examples-heading">{t(2, "Examples heading")}</h3>
+  <div class="primitive-example-grid">
+    {
+      groups.map(({ title, key, icons }) => (
+        <section class="primitive-example-panel" aria-label={`${title} in practice`}>
+          <h4>{title}</h4>
+          <div class="primitive-example-rows">
+            {lines(t(2, key)).map((line, i) => {
+              const [name, description] = line.split(" | ");
+              return (
+                <article class="primitive-example-row">
+                  <Icon name={icons[i]} size={24} />
+                  <div>
+                    <h5>{name}</h5>
+                    <p>{description}</p>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ))
+    }
+  </div>
+</section>
+
+<style>
+  .primitive-applications {
+    margin-top: 36px;
+    padding: 0;
+  }
+  .primitive-applications > h3 {
+    margin: 0 0 20px;
+    font-size: 24px;
+  }
+  .primitive-example-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 48px;
+  }
+  .primitive-example-panel {
+    padding: 0;
+    border: 1px solid #cbd5c1;
+    border-radius: 5px;
+    background: #fcfcf6;
+    min-width: 0;
+  }
+  .primitive-example-panel > h4 {
+    margin: 0;
+    padding: 15px 20px;
+    background: #edf2e4;
+    font-size: 16px;
+  }
+  .primitive-example-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 17px 20px;
+    border-top: 1px solid #e0e6d9;
+  }
+  .primitive-example-row > :global(svg) {
+    flex: 0 0 24px;
+    color: #59754c;
+  }
+  .primitive-example-row > div {
+    min-width: 0;
+  }
+  .primitive-example-row h5 {
+    color: var(--ink);
+    margin: 0 0 4px;
+    font-size: 15px;
+    line-height: 1.4;
+    font-weight: 500;
+  }
+  .primitive-example-row p {
+    margin: 0;
+    color: #59664f;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  @media (max-width: 1100px) {
+    .primitive-example-grid {
+      gap: 32px;
+    }
+  }
+  @media (max-width: 800px) {
+    .primitive-example-grid {
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+  }
+  @media (max-width: 600px) {
+    .primitive-example-panel > h4 {
+      padding-inline: 16px;
+    }
+    .primitive-example-row {
+      padding: 16px;
+      gap: 12px;
+    }
+    .primitive-example-row p {
+      font-size: 12px;
+    }
+  }
+  @media (forced-colors: active) {
+    .primitive-example-panel,
+    .primitive-example-panel > h4,
+    .primitive-example-row {
+      border-color: CanvasText;
+    }
+  }
+</style>

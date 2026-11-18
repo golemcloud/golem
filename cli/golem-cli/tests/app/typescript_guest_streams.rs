@@ -24,7 +24,7 @@ async fn test_ts_native_stream_forwarding_guest_bridge_e2e() {
 #[tag(agents_guest_bridge)]
 #[timeout("5 minutes")]
 async fn test_ts_native_stream_producer_error_guest_bridge_e2e() {
-    native_stream_guest_bridge_e2e("fatalProducer", Err("Invocation Failed")).await;
+    native_stream_guest_bridge_e2e("fatalProducer", Ok("1:73:9:ready")).await;
 }
 
 #[test]
@@ -84,7 +84,8 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
     .unwrap();
     fs::write_str(ctx.cwd_path_join("provider/src/counter-agent.ts"), indoc! {r#"
         import { z } from 'zod';
-        import { AgentStream, defineAgent, method, Result, s } from '@golemcloud/golem-ts-sdk';
+        import { AgentStream, compileSchema, defineAgent, method, Result, s, StreamError } from '@golemcloud/golem-ts-sdk';
+        import { v } from '@golemcloud/golem-ts-sdk/schema';
         const item = z.object({ label: z.string(), count: z.number() });
         const itemStream = s.stream(item) as unknown as z.ZodType<AgentStream<z.infer<typeof item>>>;
         const bundle = z.object({ siblings: z.array(itemStream), optional: z.optional(itemStream) });
@@ -110,7 +111,7 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
             produce: () => AgentStream.from([{ label: 'remote', count: 9 }]),
             produceError: () => AgentStream.from((async function* () {
               yield { label: 'before-failure', count: 1 };
-              throw new Error('ts-guest-producer-failed');
+              throw StreamError.failed({ graph: compileSchema(s.u32()).graph, value: v.u32(73) });
             })()),
             results: () => AgentStream.from<Result<number, string>>([
               Result.ok(1), Result.err('recoverable'), Result.ok(2),
@@ -141,7 +142,7 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
     .unwrap();
     fs::write_str(ctx.cwd_path_join("consumer/src/counter-agent.ts"), indoc! {r#"
         import { z } from 'zod';
-        import { AgentStream, defineAgent, method } from '@golemcloud/golem-ts-sdk';
+        import { AgentStream, defineAgent, method, StreamError } from '@golemcloud/golem-ts-sdk';
         import { StreamProvider } from 'stream-provider-guest-client';
         export const StreamConsumer = defineAgent({
           name: 'StreamConsumer', id: { name: z.string() },
@@ -193,9 +194,24 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
               return `${count}:${await b.status()}`;
             },
             async fatalProducer() {
-              const stream = await StreamProvider.get('fatal').produceError();
-              for await (const _ of stream) { /* Fatal failure must reject, not reach EOF. */ }
-              return 'unexpected-clean-eof';
+              const provider = StreamProvider.get('fatal');
+              const sibling = await StreamProvider.get('sibling').produce();
+              const stream = await provider.produceError();
+              let prefix = 0;
+              let declared = 0;
+              try {
+                for await (const item of stream) prefix += item.count;
+                throw new Error('unexpected-clean-eof');
+              } catch (error) {
+                if (!(error instanceof StreamError) || error.failure.tag !== 'failed') throw error;
+                const value = error.failure.val.value;
+                if (value.tag !== 'u32') throw new Error('wrong failure type');
+                declared = value.value;
+              }
+              if (!(await stream.next()).done) throw new Error('outcome repeated');
+              let siblingCount = 0;
+              for await (const item of sibling) siblingCount += item.count;
+              return `${prefix}:${declared}:${siblingCount}:${await provider.status()}`;
             },
             async recoverableItems() {
               const provider = StreamProvider.get('recoverable');

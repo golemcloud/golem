@@ -38,6 +38,7 @@ use crate::worker::filesystem_snapshots::{
     SnapshotSlot, UpdateSnapshot, UpdateSnapshotHost, confirm_by, periodic_snapshot,
     update_snapshot,
 };
+use crate::worker::instance::PrimaryStore;
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
     InvokeResult, LoweredInvocation, invocation_uses_streams, invoke_live_observed_and_traced,
@@ -66,7 +67,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
-    IdempotencyKey, OwnedAgentId,
+    OwnedAgentId,
 };
 use golem_common::model::{
     AgentStatus, AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
@@ -76,6 +77,7 @@ use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
+use uuid::Uuid;
 
 use golem_common::model::agent::structural_format::format_structural_typed;
 use golem_common::related_span;
@@ -91,8 +93,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
-use uuid::Uuid;
-use wasmtime::Store;
+
 use wasmtime::component::Instance;
 
 /// Span for one bounded phase of a worker's lifecycle.
@@ -661,6 +662,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     if !self.active.read().await.is_empty() {
                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
                     }
+                    let last_state_change = match self.parent.snapshot_policy() {
+                        SnapshotPolicy::Periodic { .. } => agent
+                            .runtime
+                            .store
+                            .lock()
+                            .await
+                            .data()
+                            .durable_ctx()
+                            .last_state_change(),
+                        SnapshotPolicy::EveryNInvocation { .. } | SnapshotPolicy::Disabled => None,
+                    };
                     let mut inner_loop = InnerInvocationLoop {
                         start_attempt: self.start_attempt,
                         receiver: &mut self.receiver,
@@ -674,6 +686,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         filesystem: &agent.filesystem,
                         filesystem_snapshot_slot: &self.filesystem_snapshot_slot,
                         last_periodic_attempt: &mut self.last_periodic_attempt,
+                        last_state_change,
                         invocations_since_snapshot: 0,
                         idle_snapshot_task: None,
                         filesystem_turn_used: false,
@@ -1107,8 +1120,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .parent
                                             .get_last_known_status()
                                             .await
-                                            .current_idempotency_key
-                                            .clone();
+                                            .current_idempotency_key;
                                         let recorded = match kind {
                                             InterruptKind::EntityCancellation => unreachable!("entity cancellation cannot interrupt the owner"),
                                             InterruptKind::Suspend(_) => {
@@ -1238,13 +1250,19 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     waiting_for_command: Arc<AtomicBool>,
     interrupts: Arc<Interrupts>,
     instance: &'a Instance,
-    store: &'a Mutex<Store<Ctx>>,
+    store: &'a Mutex<PrimaryStore<Ctx>>,
     filesystem: &'a ResidentFilesystem,
     filesystem_snapshot_slot: &'a SnapshotSlot,
     /// When the last `SaveSnapshot` ended. Every `SaveSnapshot` sets it, and only the `Periodic`
     /// policy reads it: the next periodic snapshot waits a period from it, whether the last one
     /// wrote a record or not, and however long it took.
     last_periodic_attempt: &'a mut Option<Timestamp>,
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of the Store that
+    /// can change the state of the agent, replayed or live, as
+    /// `DurableWorkerCtx::last_state_change` gives it. Only the `Periodic` policy sets and reads
+    /// it: a periodic snapshot is needed only when it is after the automatic snapshot record that a
+    /// start would select.
+    last_state_change: Option<OplogIndex>,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     filesystem_turn_used: bool,
@@ -1317,7 +1335,7 @@ struct Invocation<'a, Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     instance: &'a Instance,
-    store: &'a mut Store<Ctx>,
+    store: &'a mut PrimaryStore<Ctx>,
     filesystem: &'a ResidentFilesystem,
     filesystem_snapshot_slot: &'a SnapshotSlot,
     uses_streams: bool,

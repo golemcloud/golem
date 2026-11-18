@@ -16,7 +16,6 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateComponentError, RegistryServiceGetComponentError,
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
 };
-use golem_common::model::Empty;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
@@ -40,6 +39,7 @@ use golem_common::schema::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, FieldSource, InputSchema,
     MetadataEnvelope, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
 };
+use golem_schema::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};

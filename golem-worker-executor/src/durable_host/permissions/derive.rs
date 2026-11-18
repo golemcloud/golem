@@ -17,9 +17,9 @@ use super::{
     CardResourcePattern, CardVerb, DateTime, DecidedScopeParent, DelegationCard, DelegationSurface,
     DerivedGrantSets, DurabilityHost, DurableWorkerCtx, EffectiveSurface,
     GolemPermissionsDeriveDecision, GolemPermissionsDeriveFromWalletDecision,
-    GolemPermissionsDerivePersist, GolemPermissionsDeriveScopeDecision, IdempotencyKey,
-    PermissionCardEntry, PermissionCardHandleRep, PermissionPattern, PersistentDerivationSource,
-    PolymorphicCard, PolymorphicPermissionPattern, Resource, ScopeCard, ScopeDerivationParent,
+    GolemPermissionsDerivePersist, GolemPermissionsDeriveScopeDecision, PermissionCardEntry,
+    PermissionCardHandleRep, PermissionPattern, PersistentDerivationSource, PolymorphicCard,
+    PolymorphicPermissionPattern, Resource, ScopeCard, ScopeDerivationParent,
     SerializablePermissionError, StoredCard, Utc, WalletDerivationParent, WorkerCtx,
     WorkerExecutorError, agent_delegation_surface_from_wallet, anyhow,
     caller_monomorphization_context, derive_expires_at, durable_now, ensure_card_permission,
@@ -275,7 +275,7 @@ pub(super) fn decide_scope_derivation_parent<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     wallet: &[StoredCard],
     handle: &Resource<PermissionCardHandleRep>,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
 ) -> DecidedScopeParent {
     match permission_card_scope_card(ctx, handle) {
         Err(error) => DecidedScopeParent::Refused(permission_error_to_serializable(
@@ -431,7 +431,7 @@ pub(super) async fn persist_derived_card<Ctx: WorkerCtx>(
         parent_expires_at,
         move |ctx| {
             ensure_persistent_derivation_repair_authority(
-                &ctx.state.agent_effective_surface,
+                ctx.state.authority().effective_surface(),
                 &ctx.state.created_by_email,
                 parent_id,
                 source,
@@ -722,7 +722,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                 &upper_positive,
                 &upper_negative,
             )?;
-            let ordinal = self.state.scope_card_mint_ordinal;
+            let ordinal = self.state.invocation_state().scope_card_mint_ordinal;
             let next_ordinal = ordinal.checked_add(1).ok_or_else(|| {
                 permissions_types::PermissionError::NotPermitted(
                     "scope-card mint ordinal exhausted".to_string(),
@@ -741,9 +741,9 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
             PermissionCardEntry::from_scope(card, invocation_key),
         ))?;
         self.state
-            .invocation_scope_handles
-            .insert(handle.rep(), root_card_ids);
-        self.state.scope_card_mint_ordinal = next_ordinal;
+            .authority_mut()
+            .hold_scope_handle(handle.rep(), root_card_ids);
+        self.state.invocation_state_mut().scope_card_mint_ordinal = next_ordinal;
         Ok(Ok(handle))
     }
 }
