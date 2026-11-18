@@ -77,6 +77,7 @@ impl ReadProducerFixture {
             0,
             AgentMode::Durable,
             false,
+            false,
             entry.clone(),
             Arc::new(std::sync::Mutex::new(MemoryGrant::inert(0))),
             Instant::now(),

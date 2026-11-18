@@ -19,7 +19,7 @@ use super::owner_wallet::{OwnerWallet, WalletBaseline};
 use super::state_actor::OwnerCommitController;
 use super::tasks::RuntimeAppendTasks;
 use super::{ObservedPrimaryStore, Worker};
-use crate::durable_host::durability::CustomInvocationContext;
+use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
@@ -37,11 +37,11 @@ use golem_common::model::entity::{
     EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
     InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::regions::DeletedRegions;
 #[cfg(any(test, feature = "test-utils"))]
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
@@ -50,7 +50,7 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
-use tracing::warn;
+use tracing::{error, warn};
 use wasmtime::component::{Component, Instance};
 use wasmtime::{AsContext, AsContextMut, CallHook, Store, StoreMemory, UpdateDeadline};
 
@@ -103,18 +103,20 @@ pub(super) enum LinearMemoryEnumerationError {
     Overflow,
 }
 
-pub(super) fn allocated_linear_memory_bytes<T>(
+/// Sums the unshared linear memories and the GC heap of the store. Golem accounts both the same
+/// way, so this is the total that the memory tracker reconciles to.
+pub(super) fn allocated_memory_bytes<T>(
     store: &Store<T>,
 ) -> Result<u64, LinearMemoryEnumerationError> {
-    store
-        .linear_memories()
-        .iter()
-        .try_fold(0u64, |allocated_bytes, memory| match memory {
+    store.linear_memories().iter().try_fold(
+        store.gc_heap_capacity() as u64,
+        |allocated_bytes, memory| match memory {
             StoreMemory::Unshared(memory) => allocated_bytes
                 .checked_add(memory.data_size(store) as u64)
                 .ok_or(LinearMemoryEnumerationError::Overflow),
             StoreMemory::Shared(_) => Err(LinearMemoryEnumerationError::Shared),
-        })
+        },
+    )
 }
 
 struct StoreFuelGuard<Ctx: crate::workerctx::FuelManagement + 'static> {
@@ -901,17 +903,25 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .as_context_mut()
             .set_runtime_observer(runtime)
             .map_err(anyhow::Error::from)?;
+        let attribution = store.data().durable_ctx().attribution.clone();
+        store.as_context_mut().task_group_hook(attribution.hook());
         let fuel_metering = store.data().fuel_metering_enabled();
         store.call_hook(move |mut store, boundary| {
             // Wasmtime reports the import's runtime activity right after `CallingHost`, before
             // the import's host code runs; see `GuestImportNumbering`.
             match boundary {
                 CallHook::CallingHost => {
+                    if attribution.resolve().is_none() {
+                        error!(
+                            agent_id = %store.data().agent_id(),
+                            "A guest host call has no attributed invocation"
+                        );
+                    }
                     let custom_invocation_scope = store
                         .as_context()
-                        .guest_task_context::<CustomInvocationContext>()?
+                        .guest_task_context::<GuestTaskContext>()?
                         .as_deref()
-                        .and_then(CustomInvocationContext::current);
+                        .and_then(GuestTaskContext::current);
                     guest_imports.number_next_import(
                         store
                             .data()
@@ -969,12 +979,38 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let instance_pre = linker
             .instantiate_pre(component)
             .map_err(|error| self.creation_error(error.into()))?;
-        let instance = instance_pre
-            .instantiate_async(&mut *store)
+        // Instantiation runs the core initializer under the invocation the Store is created for:
+        // the entity invocation of an entity Store, and no invocation for a fresh primary Store.
+        let attribution = store.data().durable_ctx().attribution.clone();
+        let invocation_key = store.data().durable_ctx().invocation_key();
+        let instance = attribution
+            .instantiating(invocation_key, instance_pre.instantiate_async(&mut *store))
             .await
-            .map_err(|error| {
-                instantiation_failure(&self.runtime, &error)
-                    .unwrap_or_else(|| self.creation_error(error.into()))
+            .map_err(|error| match instantiation_failure(&self.runtime, &error) {
+                Some(failure) => failure,
+                None if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>()
+                    || matches!(
+                        error.root_cause().downcast_ref::<GolemSpecificWasmTrap>(),
+                        Some(
+                            GolemSpecificWasmTrap::WorkerExceededMemoryLimit
+                                | GolemSpecificWasmTrap::WorkerOutOfMemory
+                        )
+                    ) =>
+                {
+                    let error = store
+                        .data()
+                        .durable_ctx()
+                        .linear_memory_tracker()
+                        .annotate_gc_heap_error(error);
+                    crate::model::TrapType::from_error::<Ctx>(
+                        &error.into(),
+                        OplogIndex::INITIAL,
+                        store.data().agent_mode(),
+                    )
+                    .as_golem_error("")
+                    .expect("memory exhaustion must classify as a memory failure")
+                }
+                None => self.creation_error(error.into()),
             })?;
 
         let current_level = store.get_fuel().unwrap_or(0);
@@ -1004,7 +1040,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let tracker = durable.linear_memory_tracker();
         let limit = durable.max_linear_memory_size();
         let allocated_bytes =
-            allocated_linear_memory_bytes(&hosted.store).map_err(|error| match error {
+            allocated_memory_bytes(&hosted.store).map_err(|error| match error {
                 LinearMemoryEnumerationError::Shared => super::shared_linear_memory_error(&owner),
                 LinearMemoryEnumerationError::Overflow => {
                     WorkerExecutorError::runtime("linear-memory allocation total overflowed")
@@ -1022,22 +1058,14 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         }
 
         let retained_grant = tracker.retained_growth_grant();
-        let (grant_is_tracked, granted_bytes) = {
-            let grant = retained_grant.lock().unwrap();
-            (grant.is_tracked(), grant.bytes())
-        };
+        let grant_is_tracked = retained_grant.lock().unwrap().is_tracked();
+        let granted_bytes = tracker.reserved_bytes();
         if grant_is_tracked && required_grant_bytes > granted_bytes {
             let additional_grant = owner
                 .active_agents()
                 .acquire_memory(required_grant_bytes - granted_bytes)
                 .await;
             retained_grant.lock().unwrap().merge(additional_grant);
-        }
-        if grant_is_tracked {
-            retained_grant
-                .lock()
-                .unwrap()
-                .shrink_to(required_grant_bytes);
         }
 
         if self.runtime == OwnerRuntime::Agent {
@@ -1046,19 +1074,24 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 .store(false, Ordering::Release);
         }
 
-        let live_instantiation_growth =
-            tracker.reconcile(allocated_bytes, std::time::Instant::now());
-        crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
-        if self.runtime == OwnerRuntime::Agent && live_instantiation_growth > 0 {
-            // Commit the growth oplog entry before publishing the primary instance. Otherwise a
-            // process crash can replay and persist the same instantiation growth again.
+        if self.runtime == OwnerRuntime::Agent {
+            // Join any earlier baseline and commit the residual before exposing the instance.
             owner
-                .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
+                .finalize_instantiation_memory(&tracker, allocated_bytes)
                 .await?;
-            owner
-                .startup_linear_memory_bytes
-                .store(allocated_bytes, Ordering::Release);
+        } else {
+            tracker.reconcile(allocated_bytes, std::time::Instant::now());
         }
+        // Preparation keeps the replay reservation floor and shrinks after reconciliation's
+        // quota callbacks and grant merge. Preserve the pre-merge tracked decision: merging
+        // can adopt a controller, while shrinking an inert grant changes its historical bytes.
+        if grant_is_tracked {
+            retained_grant
+                .lock()
+                .unwrap()
+                .shrink_to(required_grant_bytes);
+        }
+        crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
 
         Ok(())
     }

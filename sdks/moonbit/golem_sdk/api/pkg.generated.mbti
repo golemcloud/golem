@@ -197,9 +197,8 @@ pub fn Props::uri_port() -> Self
 pub fn Props::uri_scheme() -> Self
 pub fn Props::verb() -> Self
 
-pub(all) struct RetryPolicyGuard {
-  previous : @retry.NamedRetryPolicy?
-  name : String
+pub struct RetryPolicyGuard {
+  // private fields
 }
 pub fn RetryPolicyGuard::drop(Self) -> Unit
 

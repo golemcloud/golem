@@ -465,106 +465,39 @@ func MakeGetAgents(componentId golem_core_types.ComponentId, filter witTypes.Opt
 	defer pinner.Unpin()
 
 	var option int32
-	var option7 uintptr
-	var option8 uint32
+	var option0 uintptr
+	var option1 uint32
 	switch filter.Tag() {
 	case witTypes.OptionNone:
 
 		option = int32(0)
-		option7 = 0
-		option8 = 0
+		option0 = 0
+		option1 = 0
 	case witTypes.OptionSome:
 		payload := filter.Some()
-		slice4 := (payload).Filters
-		length6 := uint32(len(slice4))
-		result5 := witRuntime.Allocate(pinner, uintptr(length6*(2*4)), 4)
-		for index, element := range slice4 {
-			base := unsafe.Add(result5, index*(2*4))
-			slice := (element).Filters
-			length := uint32(len(slice))
-			result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
-			for index, element := range slice {
-				base := unsafe.Add(result, index*(16+4*4))
-
-				switch element.Tag() {
-				case AgentPropertyFilterName:
-					payload := element.Name()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Comparator))
-					utf8 := unsafe.Pointer(unsafe.StringData((payload).Value))
-					pinner.Pin(utf8)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uint32(len((payload).Value)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(utf8)))
-
-				case AgentPropertyFilterStatus:
-					payload := element.Status()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Comparator))
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 9)) = int8(int32((payload).Value))
-
-				case AgentPropertyFilterVersion:
-					payload := element.Version()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Comparator))
-					*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).Value)
-
-				case AgentPropertyFilterCreatedAt:
-					payload := element.CreatedAt()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32((payload).Comparator))
-					*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).Value)
-
-				case AgentPropertyFilterEnv:
-					payload := element.Env()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-					utf80 := unsafe.Pointer(unsafe.StringData((payload).Name))
-					pinner.Pin(utf80)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Name)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf80)))
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32((payload).Comparator))
-					utf81 := unsafe.Pointer(unsafe.StringData((payload).Value))
-					pinner.Pin(utf81)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len((payload).Value)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf81)))
-
-				case AgentPropertyFilterConfig:
-					payload := element.Config()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
-					utf82 := unsafe.Pointer(unsafe.StringData((payload).Name))
-					pinner.Pin(utf82)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Name)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf82)))
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32((payload).Comparator))
-					utf83 := unsafe.Pointer(unsafe.StringData((payload).Value))
-					pinner.Pin(utf83)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len((payload).Value)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf83)))
-
-				default:
-					panic("unreachable")
-				}
-
-			}
-
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(length)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(result)))
+		slice := (payload).Filters
+		length := uint32(len(slice))
+		result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
+		for index, element := range slice {
+			base := unsafe.Add(result, index*(2*4))
+			wasm_lower_1_t154(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 		}
 
 		option = int32(1)
-		option7 = uintptr(result5)
-		option8 = length6
+		option0 = uintptr(result)
+		option1 = length
 	default:
 		panic("unreachable")
 	}
-	var result9 int32
+	var result2 int32
 	if precise {
-		result9 = 1
+		result2 = 1
 	} else {
-		result9 = 0
+		result2 = 0
 	}
-	result10 := wasm_import_constructor_get_agents(int64(((componentId).Uuid).HighBits), int64(((componentId).Uuid).LowBits), option, option7, option8, result9)
-	return GetAgentsFromOwnHandle(int32(uintptr(result10)))
+	result3 := wasm_import_constructor_get_agents(int64(((componentId).Uuid).HighBits), int64(((componentId).Uuid).LowBits), option, option0, option1, result2)
+	return GetAgentsFromOwnHandle(int32(uintptr(result3)))
 
 }
 
@@ -577,7 +510,7 @@ func (self *GetAgents) GetNext() witTypes.Result[witTypes.Option[[]AgentMetadata
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_get_agents_get_next((self).Handle(), returnArea)
-	var result9 witTypes.Result[witTypes.Option[[]AgentMetadata], AgentOperationError]
+	var result2 witTypes.Result[witTypes.Option[[]AgentMetadata], AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		var option witTypes.Option[[]AgentMetadata]
@@ -586,67 +519,29 @@ func (self *GetAgents) GetNext() witTypes.Result[witTypes.Option[[]AgentMetadata
 
 			option = witTypes.None[[]AgentMetadata]()
 		case 1:
-			result7 := make([]AgentMetadata, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+			result0 := make([]AgentMetadata, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(56+8*4))
-				value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4))))
-				result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))), index*(2*4))
-					value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				result := wasm_lift_1_t158(unsafe.Add(unsafe.Pointer(base), 0))
 
-					result = append(result, value0)
-				}
-
-				result3 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 5*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 5*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))))), index*(4*4))
-					value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-					result3 = append(result3, witTypes.Tuple2[string, string]{F0: value1, F1: value2})
-				}
-
-				result6 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 7*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 7*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 6*4))))), index*(4*4))
-					value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-					result6 = append(result6, witTypes.Tuple2[string, string]{F0: value4, F1: value5})
-				}
-
-				result7 = append(result7, AgentMetadata{AgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))}}, AgentId: value}, Args: result, Env: result3, Config: result6, Status: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 8*4))))), ComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (24 + 8*4)))), RetryCount: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (32 + 8*4)))), EnvironmentId: EnvironmentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 8*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))}}})
+				result0 = append(result0, result)
 			}
 
-			option = witTypes.Some[[]AgentMetadata](result7)
+			option = witTypes.Some[[]AgentMetadata](result0)
 		default:
 			panic("unreachable")
 		}
 
-		result9 = witTypes.Ok[witTypes.Option[[]AgentMetadata], AgentOperationError](option)
+		result2 = witTypes.Ok[witTypes.Option[[]AgentMetadata], AgentOperationError](option)
 	case 1:
-		var variant AgentOperationError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result1 := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeAgentOperationErrorPermissionDenied()
-
-		case 1:
-			value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeAgentOperationErrorBackendError(value8)
-
-		default:
-			panic("unreachable")
-		}
-
-		result9 = witTypes.Err[witTypes.Option[[]AgentMetadata], AgentOperationError](variant)
+		result2 = witTypes.Err[witTypes.Option[[]AgentMetadata], AgentOperationError](result1)
 	default:
 		panic("unreachable")
 	}
-	result10 := result9
-	return result10
+	result3 := result2
+	return result3
 
 }
 
@@ -675,9 +570,9 @@ func CreatePromise() golem_core_types.PromiseId {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (40 + 2*4), 8))
 	wasm_import_create_promise(returnArea)
-	value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 1*4))))
-	result := golem_core_types.PromiseId{AgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8)))}}, AgentId: value}, Fingerprint: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 2*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 2*4))))}, OplogIdx: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 2*4))))}
-	return result
+	result := wasm_lift_1_t14(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
 
 }
 
@@ -742,8 +637,9 @@ func GenerateIdempotencyKey() golem_core_types.Uuid {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 16, 8))
 	wasm_import_generate_idempotency_key(returnArea)
-	result := golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8)))}
-	return result
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
 
 }
 
@@ -758,33 +654,20 @@ func UpdateAgent(agentId golem_core_types.AgentId, targetRevision uint64, mode U
 	utf8 := unsafe.Pointer(unsafe.StringData((agentId).AgentId))
 	pinner.Pin(utf8)
 	wasm_import_update_agent(int64((((agentId).ComponentId).Uuid).HighBits), int64((((agentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len((agentId).AgentId)), int64(targetRevision), int32(mode), returnArea)
-	var result witTypes.Result[witTypes.Unit, AgentOperationError]
+	var result0 witTypes.Result[witTypes.Unit, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
+		result0 = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
 	case 1:
-		var variant AgentOperationError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeAgentOperationErrorPermissionDenied()
-
-		case 1:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeAgentOperationErrorBackendError(value)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, AgentOperationError](variant)
+		result0 = witTypes.Err[witTypes.Unit, AgentOperationError](result)
 	default:
 		panic("unreachable")
 	}
-	result0 := result
-	return result0
+	result1 := result0
+	return result1
 
 }
 
@@ -797,59 +680,21 @@ func GetSelfMetadata() witTypes.Result[AgentMetadata, AgentOperationError] {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (64 + 8*4), 8))
 	wasm_import_get_self_metadata(returnArea)
-	var result8 witTypes.Result[AgentMetadata, AgentOperationError]
+	var result1 witTypes.Result[AgentMetadata, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 1*4))))
-		result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 3*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 3*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 2*4))))), index*(2*4))
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+		result := wasm_lift_1_t158(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			result = append(result, value0)
-		}
-
-		result3 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 5*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 5*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 4*4))))), index*(4*4))
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-			result3 = append(result3, witTypes.Tuple2[string, string]{F0: value1, F1: value2})
-		}
-
-		result6 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 7*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 7*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 6*4))))), index*(4*4))
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-			result6 = append(result6, witTypes.Tuple2[string, string]{F0: value4, F1: value5})
-		}
-
-		result8 = witTypes.Ok[AgentMetadata, AgentOperationError](AgentMetadata{AgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16)))}}, AgentId: value}, Args: result, Env: result3, Config: result6, Status: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 8*4))))), ComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 8*4)))), RetryCount: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 8*4)))), EnvironmentId: EnvironmentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (48 + 8*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (56 + 8*4))))}}})
+		result1 = witTypes.Ok[AgentMetadata, AgentOperationError](result)
 	case 1:
-		var variant AgentOperationError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
-		case 0:
+		result0 := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			variant = MakeAgentOperationErrorPermissionDenied()
-
-		case 1:
-			value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant = MakeAgentOperationErrorBackendError(value7)
-
-		default:
-			panic("unreachable")
-		}
-
-		result8 = witTypes.Err[AgentMetadata, AgentOperationError](variant)
+		result1 = witTypes.Err[AgentMetadata, AgentOperationError](result0)
 	default:
 		panic("unreachable")
 	}
-	result9 := result8
-	return result9
+	result2 := result1
+	return result2
 
 }
 
@@ -870,39 +715,14 @@ func GetAgentMetadata(agentId golem_core_types.AgentId) witTypes.Option[AgentMet
 
 		option = witTypes.None[AgentMetadata]()
 	case 1:
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 1*4))))
-		result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 3*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 3*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 2*4))))), index*(2*4))
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+		result := wasm_lift_1_t158(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			result = append(result, value0)
-		}
-
-		result3 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 5*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 5*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 4*4))))), index*(4*4))
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-			result3 = append(result3, witTypes.Tuple2[string, string]{F0: value1, F1: value2})
-		}
-
-		result6 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 7*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 7*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 6*4))))), index*(4*4))
-			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-			result6 = append(result6, witTypes.Tuple2[string, string]{F0: value4, F1: value5})
-		}
-
-		option = witTypes.Some[AgentMetadata](AgentMetadata{AgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16)))}}, AgentId: value}, Args: result, Env: result3, Config: result6, Status: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 8*4))))), ComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 8*4)))), RetryCount: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 8*4)))), EnvironmentId: EnvironmentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (48 + 8*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (56 + 8*4))))}}})
+		option = witTypes.Some[AgentMetadata](result)
 	default:
 		panic("unreachable")
 	}
-	result7 := option
-	return result7
+	result0 := option
+	return result0
 
 }
 
@@ -919,33 +739,20 @@ func ForkAgent(sourceAgentId golem_core_types.AgentId, targetAgentId golem_core_
 	utf80 := unsafe.Pointer(unsafe.StringData((targetAgentId).AgentId))
 	pinner.Pin(utf80)
 	wasm_import_fork_agent(int64((((sourceAgentId).ComponentId).Uuid).HighBits), int64((((sourceAgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len((sourceAgentId).AgentId)), int64((((targetAgentId).ComponentId).Uuid).HighBits), int64((((targetAgentId).ComponentId).Uuid).LowBits), uintptr(utf80), uint32(len((targetAgentId).AgentId)), int64(oplogIdxCutOff), returnArea)
-	var result witTypes.Result[witTypes.Unit, AgentOperationError]
+	var result1 witTypes.Result[witTypes.Unit, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
+		result1 = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
 	case 1:
-		var variant AgentOperationError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeAgentOperationErrorPermissionDenied()
-
-		case 1:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeAgentOperationErrorBackendError(value)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, AgentOperationError](variant)
+		result1 = witTypes.Err[witTypes.Unit, AgentOperationError](result)
 	default:
 		panic("unreachable")
 	}
-	result1 := result
-	return result1
+	result2 := result1
+	return result2
 
 }
 
@@ -978,32 +785,19 @@ func RevertAgent(agentId golem_core_types.AgentId, revertTarget RevertAgentTarge
 		panic("unreachable")
 	}
 	wasm_import_revert_agent(int64((((agentId).ComponentId).Uuid).HighBits), int64((((agentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len((agentId).AgentId)), variant, variant0, returnArea)
-	var result witTypes.Result[witTypes.Unit, AgentOperationError]
+	var result1 witTypes.Result[witTypes.Unit, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
+		result1 = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
 	case 1:
-		var variant1 AgentOperationError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
+		result := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant1 = MakeAgentOperationErrorPermissionDenied()
-
-		case 1:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant1 = MakeAgentOperationErrorBackendError(value)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Unit, AgentOperationError](variant1)
+		result1 = witTypes.Err[witTypes.Unit, AgentOperationError](result)
 	default:
 		panic("unreachable")
 	}
-	result2 := result
+	result2 := result1
 	return result2
 
 }
@@ -1025,13 +819,14 @@ func ResolveComponentId(componentReference string) witTypes.Option[golem_core_ty
 
 		option = witTypes.None[golem_core_types.ComponentId]()
 	case 1:
+		result := wasm_lift_1_t7(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		option = witTypes.Some[golem_core_types.ComponentId](golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16)))}})
+		option = witTypes.Some[golem_core_types.ComponentId](result)
 	default:
 		panic("unreachable")
 	}
-	result := option
-	return result
+	result0 := option
+	return result0
 
 }
 
@@ -1054,14 +849,14 @@ func ResolveAgentId(componentReference string, agentName string) witTypes.Option
 
 		option = witTypes.None[golem_core_types.AgentId]()
 	case 1:
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 1*4))))
+		result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		option = witTypes.Some[golem_core_types.AgentId](golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16)))}}, AgentId: value})
+		option = witTypes.Some[golem_core_types.AgentId](result)
 	default:
 		panic("unreachable")
 	}
-	result := option
-	return result
+	result1 := option
+	return result1
 
 }
 
@@ -1084,14 +879,14 @@ func ResolveAgentIdStrict(componentReference string, agentName string) witTypes.
 
 		option = witTypes.None[golem_core_types.AgentId]()
 	case 1:
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 1*4))))
+		result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		option = witTypes.Some[golem_core_types.AgentId](golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16)))}}, AgentId: value})
+		option = witTypes.Some[golem_core_types.AgentId](result)
 	default:
 		panic("unreachable")
 	}
-	result := option
-	return result
+	result1 := option
+	return result1
 
 }
 
@@ -1104,45 +899,253 @@ func Fork() witTypes.Result[ForkResult, AgentOperationError] {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 32, 8))
 	wasm_import_fork(returnArea)
-	var result witTypes.Result[ForkResult, AgentOperationError]
+	var result1 witTypes.Result[ForkResult, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		var variant ForkResult
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
-		case 0:
+		result := wasm_lift_1_t163(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			variant = MakeForkResultOriginal(ForkDetails{ForkedPhantomId: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 24)))}})
-
-		case 1:
-
-			variant = MakeForkResultForked(ForkDetails{ForkedPhantomId: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 24)))}})
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Ok[ForkResult, AgentOperationError](variant)
+		result1 = witTypes.Ok[ForkResult, AgentOperationError](result)
 	case 1:
-		var variant0 AgentOperationError
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
-		case 0:
+		result0 := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			variant0 = MakeAgentOperationErrorPermissionDenied()
-
-		case 1:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
-
-			variant0 = MakeAgentOperationErrorBackendError(value)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[ForkResult, AgentOperationError](variant0)
+		result1 = witTypes.Err[ForkResult, AgentOperationError](result0)
 	default:
 		panic("unreachable")
 	}
-	result1 := result
-	return result1
+	result2 := result1
+	return result2
+
+}
+
+//go:noinline
+func wasm_lower_1_t154(pinner *runtime.Pinner, value AgentAllFilter, dst unsafe.Pointer) {
+	slice := (value).Filters
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*(16+4*4))
+		wasm_lower_1_t152(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(result)))
+
+}
+
+//go:noinline
+func wasm_lift_1_t158(src unsafe.Pointer) AgentMetadata {
+	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
+	result1 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))), index*(2*4))
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+		result1 = append(result1, value0)
+	}
+
+	result4 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4))))), index*(4*4))
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+		result4 = append(result4, witTypes.Tuple2[string, string]{F0: value2, F1: value3})
+	}
+
+	result7 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 7*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 7*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 6*4))))), index*(4*4))
+		value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+		value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+		result7 = append(result7, witTypes.Tuple2[string, string]{F0: value5, F1: value6})
+	}
+
+	result8 := wasm_lift_1_t141(unsafe.Add(unsafe.Pointer(src), (40 + 8*4)))
+
+	return AgentMetadata{AgentId: result, Args: result1, Env: result4, Config: result7, Status: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 8*4))))), ComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (24 + 8*4)))), RetryCount: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (32 + 8*4)))), EnvironmentId: result8}
+}
+
+//go:noinline
+func wasm_lift_1_t161(src unsafe.Pointer) AgentOperationError {
+	var variant AgentOperationError
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+
+		variant = MakeAgentOperationErrorPermissionDenied()
+
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeAgentOperationErrorBackendError(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t14(src unsafe.Pointer) golem_core_types.PromiseId {
+	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))
+
+	return golem_core_types.PromiseId{AgentId: result, Fingerprint: result0, OplogIdx: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (32 + 2*4))))}
+}
+
+//go:noinline
+func wasm_lift_1_t4(src unsafe.Pointer) golem_core_types.Uuid {
+
+	return golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))}
+}
+
+//go:noinline
+func wasm_lift_1_t7(src unsafe.Pointer) golem_core_types.ComponentId {
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return golem_core_types.ComponentId{Uuid: result}
+}
+
+//go:noinline
+func wasm_lift_1_t8(src unsafe.Pointer) golem_core_types.AgentId {
+	result := wasm_lift_1_t7(unsafe.Add(unsafe.Pointer(src), 0))
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4))))
+
+	return golem_core_types.AgentId{ComponentId: result, AgentId: value0}
+}
+
+//go:noinline
+func wasm_lift_1_t163(src unsafe.Pointer) ForkResult {
+	var variant ForkResult
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		result := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeForkResultOriginal(result)
+
+	case 1:
+		result0 := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakeForkResultForked(result0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lower_1_t152(pinner *runtime.Pinner, value AgentPropertyFilter, dst unsafe.Pointer) {
+
+	switch value.Tag() {
+	case AgentPropertyFilterName:
+		payload := value.Name()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
+		wasm_lower_1_t146(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case AgentPropertyFilterStatus:
+		payload := value.Status()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
+		wasm_lower_1_t147(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case AgentPropertyFilterVersion:
+		payload := value.Version()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
+		wasm_lower_1_t148(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case AgentPropertyFilterCreatedAt:
+		payload := value.CreatedAt()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		wasm_lower_1_t149(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case AgentPropertyFilterEnv:
+		payload := value.Env()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+		wasm_lower_1_t150(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	case AgentPropertyFilterConfig:
+		payload := value.Config()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
+		wasm_lower_1_t151(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+
+	default:
+		panic("unreachable")
+	}
+
+}
+
+//go:noinline
+func wasm_lift_1_t141(src unsafe.Pointer) EnvironmentId {
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return EnvironmentId{Uuid: result}
+}
+
+//go:noinline
+func wasm_lift_1_t162(src unsafe.Pointer) ForkDetails {
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return ForkDetails{ForkedPhantomId: result}
+}
+
+//go:noinline
+func wasm_lower_1_t146(pinner *runtime.Pinner, value AgentNameFilter, dst unsafe.Pointer) {
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Comparator))
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Value))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len((value).Value)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uintptr(uintptr(utf8)))
+
+}
+
+//go:noinline
+func wasm_lower_1_t147(pinner *runtime.Pinner, value AgentStatusFilter, dst unsafe.Pointer) {
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Comparator))
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 1)) = int8(int32((value).Value))
+
+}
+
+//go:noinline
+func wasm_lower_1_t148(pinner *runtime.Pinner, value AgentVersionFilter, dst unsafe.Pointer) {
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Comparator))
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).Value)
+
+}
+
+//go:noinline
+func wasm_lower_1_t149(pinner *runtime.Pinner, value AgentCreatedAtFilter, dst unsafe.Pointer) {
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Comparator))
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).Value)
+
+}
+
+//go:noinline
+func wasm_lower_1_t150(pinner *runtime.Pinner, value AgentEnvFilter, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32((value).Comparator))
+	utf80 := unsafe.Pointer(unsafe.StringData((value).Value))
+	pinner.Pin(utf80)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uint32(len((value).Value)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uintptr(uintptr(utf80)))
+
+}
+
+//go:noinline
+func wasm_lower_1_t151(pinner *runtime.Pinner, value AgentConfigVarsFilter, dst unsafe.Pointer) {
+	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
+	pinner.Pin(utf8)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = int8(int32((value).Comparator))
+	utf80 := unsafe.Pointer(unsafe.StringData((value).Value))
+	pinner.Pin(utf80)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (4 * 4))) = uint32(uint32(len((value).Value)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (3 * 4))) = uint32(uintptr(uintptr(utf80)))
 
 }

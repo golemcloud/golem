@@ -140,6 +140,11 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_tool_invoke_session_result
     ),
     registry_entry!(
+        "ToolInvokeHelpView",
+        "tool.invoke-help",
+        arb_tool_invoke_help_result
+    ),
+    registry_entry!(
         "AgentInvocationSessionEvent",
         "agent.invoke-session",
         arb_agent_invocation_session_event
@@ -165,6 +170,11 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "AgentOplogExportCoverageView",
         "agent.oplog-export-coverage",
         arb_agent_oplog_export_coverage
+    ),
+    registry_entry!(
+        "AgentOplogPageView",
+        "agent.oplog-page",
+        arb_agent_oplog_page_result
     ),
     registry_entry!(
         "AgentPluginToggleResult",
@@ -734,6 +744,45 @@ fn cli_output_schema_export_documents_are_multi_document() {
 }
 
 #[test]
+fn cli_output_schema_commands_resolve_in_clap_tree() {
+    use crate::command::GolemCliCommand;
+    use clap::CommandFactory;
+
+    let schema = load_command_output_schema();
+    let definitions = schema_definitions(&schema);
+    let root = GolemCliCommand::command();
+    let mut unknown = BTreeSet::new();
+    for output_type in schema_output_entries(&schema).keys() {
+        let definition = &definitions[output_type];
+        let commands = definition
+            .get("x-golem-command")
+            .into_iter()
+            .chain(
+                definition
+                    .get("x-golem-commands")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            )
+            .filter_map(Value::as_str);
+        for command in commands {
+            let resolves = command
+                .split(' ')
+                .try_fold(&root, |parent, name| parent.find_subcommand(name))
+                .is_some();
+            if !resolves {
+                unknown.insert(format!("{output_type}: `{command}`"));
+            }
+        }
+    }
+    assert!(
+        unknown.is_empty(),
+        "output types name commands that are not in the CLI:\n  {}",
+        unknown.into_iter().collect::<Vec<_>>().join("\n  ")
+    );
+}
+
+#[test]
 fn cli_output_schema_focus_prunes_unrelated_definitions() {
     let schema = focused_command_output_schema(&["agent.oplog".to_string()])
         .expect("focused schema should render");
@@ -830,6 +879,7 @@ fn agent_list_structured_output_masks_secret_config_paths() {
     let output = crate::model::agent::AgentsMetadataResponseView {
         agents: vec![sample_agent_metadata_view()],
         cursors: BTreeMap::new(),
+        cursor: None,
     };
 
     let value = hidden_structured_output(output);
@@ -2693,6 +2743,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             delta: 64,
         }),
+        PublicOplogEntry::MemorySizeReconciled(MemorySizeReconciledParams {
+            timestamp: timestamp(),
+            bytes: 41,
+        }),
         PublicOplogEntry::CreateResource(CreateResourceParams {
             timestamp: timestamp(),
             id: AgentResourceId(1),
@@ -3596,6 +3650,14 @@ fn arb_agent_invoke_result() -> OutputDocumentStrategy {
         .boxed()
 }
 
+fn arb_tool_invoke_help_result() -> OutputDocumentStrategy {
+    ".*".prop_map(|help| {
+        to_structured_output_value(crate::model::tool_invoke::ToolInvokeHelpView { help })
+            .expect("generated tool invoke help should serialize")
+    })
+    .boxed()
+}
+
 fn arb_tool_invoke_result() -> OutputDocumentStrategy {
     use golem_client::model::NativeToolInvocationResponse;
     use golem_common::model::AgentId;
@@ -3677,9 +3739,14 @@ fn arb_agent_list_result() -> OutputDocumentStrategy {
     (
         proptest::collection::vec(arb_agent_metadata_view(), 0..5),
         proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
+        proptest::option::of(arb_small_string()),
     )
         .prop_map(
-            |(agents, cursors)| crate::model::agent::AgentsMetadataResponseView { agents, cursors },
+            |(agents, cursors, cursor)| crate::model::agent::AgentsMetadataResponseView {
+                agents,
+                cursors,
+                cursor,
+            },
         )
         .prop_map(|output| {
             to_structured_output_value(output).expect("generated DTO should serialize")
@@ -3697,31 +3764,32 @@ fn arb_agent_new_result() -> OutputDocumentStrategy {
 }
 
 fn arb_agent_oplog_result() -> OutputDocumentStrategy {
+    serialized_output(arb_agent_oplog_entry_view())
+}
+
+fn arb_agent_oplog_page_result() -> OutputDocumentStrategy {
     serialized_output(
         (
-            arb_small_u64(),
-            arb_public_oplog_entry_attribution(),
-            prop_oneof![
-                proptest::sample::select(sample_public_oplog_entries()).prop_map(Into::into),
-                arb_typed_value_oplog_entry().prop_map(Into::into),
-                (arb_small_u64(), "[A-Za-z]{1,24}").prop_map(|(size, entry_type)| {
-                    crate::model::agent::oplog::AgentOplogEntryContent::Omitted(
-                        crate::model::agent::oplog::OmittedOplogEntryContent::Omitted {
-                            entry_type,
-                            timestamp: golem_common::model::Timestamp::from(1_700_000_000_000),
-                            size,
-                        },
-                    )
-                }),
-            ],
+            proptest::collection::vec(arb_agent_oplog_entry_view(), 0..3),
+            proptest::option::of(
+                (arb_small_u64(), arb_small_u64(), "([0-9a-f]{16})?").prop_map(
+                    |(next_oplog_index, current_component_revision, query_hash)| {
+                        golem_common::model::oplog::OplogCursor {
+                            next_oplog_index,
+                            current_component_revision,
+                            query_hash,
+                        }
+                        .to_string()
+                    },
+                ),
+            ),
         )
-            .prop_map(|(index, attribution, entry)| {
-                crate::model::agent::oplog::AgentOplogEntryView {
-                    index,
-                    attribution,
-                    entry,
-                }
-            }),
+            .prop_map(
+                |(entries, cursor)| crate::model::agent::oplog::AgentOplogPageView {
+                    entries,
+                    cursor,
+                },
+            ),
     )
 }
 
@@ -3903,6 +3971,34 @@ fn arb_agent_oplog_export_coverage() -> OutputDocumentStrategy {
                 },
             ),
     )
+}
+
+fn arb_agent_oplog_entry_view() -> BoxedStrategy<crate::model::agent::oplog::AgentOplogEntryView> {
+    (
+        arb_small_u64(),
+        arb_public_oplog_entry_attribution(),
+        prop_oneof![
+            proptest::sample::select(sample_public_oplog_entries()).prop_map(Into::into),
+            arb_typed_value_oplog_entry().prop_map(Into::into),
+            (arb_small_u64(), "[A-Za-z]{1,24}").prop_map(|(size, entry_type)| {
+                crate::model::agent::oplog::AgentOplogEntryContent::Omitted(
+                    crate::model::agent::oplog::OmittedOplogEntryContent::Omitted {
+                        entry_type,
+                        timestamp: golem_common::model::Timestamp::from(1_700_000_000_000),
+                        size,
+                    },
+                )
+            }),
+        ],
+    )
+        .prop_map(
+            |(index, attribution, entry)| crate::model::agent::oplog::AgentOplogEntryView {
+                index,
+                attribution,
+                entry,
+            },
+        )
+        .boxed()
 }
 
 fn arb_public_oplog_entry_attribution()

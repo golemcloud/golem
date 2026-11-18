@@ -146,14 +146,6 @@ pub fn dns_target(host: &str) -> Result<PermissionTarget, NetworkTargetError> {
     network_target(host, None)
 }
 
-pub fn tcp_target(host: &str, port: u16) -> Result<PermissionTarget, NetworkTargetError> {
-    network_target(host, Some(port))
-}
-
-pub fn udp_target(host: &str, port: u16) -> Result<PermissionTarget, NetworkTargetError> {
-    network_target(host, Some(port))
-}
-
 pub fn env_target(owner: AgentOwnerPattern, name: &str) -> Result<PermissionTarget, TargetError> {
     Ok(PermissionTarget::Env(ClassPermissionTarget {
         verb: Some(EnvVerb::Read),

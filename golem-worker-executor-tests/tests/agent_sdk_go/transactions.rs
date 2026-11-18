@@ -255,7 +255,7 @@ async fn go_infallible_saga_exhausts_after_durable_waits(
                 entry.oplog_index > end_index
                     && entry.oplog_index < *next_index
                     && matches!(&entry.entry, PublicOplogEntry::Start(wait)
-                        if wait.function_name == "clocks::monotonic-clock::wait-for")
+                        if wait.function_name == "clocks::monotonic-clock::wait-until")
                     && oplog.iter().any(|terminal| {
                         terminal.oplog_index < *next_index
                             && matches!(&terminal.entry, PublicOplogEntry::End(end)
