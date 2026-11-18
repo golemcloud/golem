@@ -367,7 +367,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 	result0 := make([]golem_agent_common.RegisteredAgentType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(40+52*4))
-		result := wasm_lift_1_t511(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t523(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -394,7 +394,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 		option = witTypes.None[golem_agent_common.RegisteredAgentType]()
 	case 1:
-		result := wasm_lift_1_t511(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t523(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		option = witTypes.Some[golem_agent_common.RegisteredAgentType](result)
 	default:
@@ -422,7 +422,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 		option = witTypes.None[golem_agent_common.RegisteredAgentType]()
 	case 1:
-		result := wasm_lift_1_t511(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t523(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		option = witTypes.Some[golem_agent_common.RegisteredAgentType](result)
 	default:
@@ -478,7 +478,7 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 		result3 = witTypes.Ok[string, golem_agent_common.AgentError](value)
 	case 1:
-		result2 := wasm_lift_1_t513(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result2 := wasm_lift_1_t525(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result3 = witTypes.Err[string, golem_agent_common.AgentError](result2)
 	default:
@@ -520,7 +520,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 		result2 = witTypes.Ok[witTypes.Tuple3[string, golem_core_types.TypedSchemaValue, witTypes.Option[golem_core_types.Uuid]], golem_agent_common.AgentError](witTypes.Tuple3[string, golem_core_types.TypedSchemaValue, witTypes.Option[golem_core_types.Uuid]]{F0: value, F1: result, F2: option})
 	case 1:
-		result1 := wasm_lift_1_t513(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result1 := wasm_lift_1_t525(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result2 = witTypes.Err[witTypes.Tuple3[string, golem_core_types.TypedSchemaValue, witTypes.Option[golem_core_types.Uuid]], golem_agent_common.AgentError](result1)
 	default:
@@ -549,7 +549,7 @@ func CreateWebhook(promiseId golem_core_types.PromiseId) witTypes.Result[string,
 
 		result0 = witTypes.Ok[string, WebhookError](value)
 	case 1:
-		result := wasm_lift_1_t557(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t569(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[string, WebhookError](result)
 	default:
@@ -601,7 +601,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 	result3 := witRuntime.Allocate(pinner, uintptr(length4*(10*4)), 4)
 	for index, element := range slice2 {
 		base := unsafe.Add(result3, index*(10*4))
-		wasm_lower_1_t512(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t524(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -652,7 +652,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 	result3 := witRuntime.Allocate(pinner, uintptr(length4*(10*4)), 4)
 	for index, element := range slice2 {
 		base := unsafe.Add(result3, index*(10*4))
-		wasm_lower_1_t512(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t524(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -663,7 +663,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 		result6 = witTypes.Ok[*WasmRpc, RpcError](WasmRpcFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result5 := wasm_lift_1_t558(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result5 := wasm_lift_1_t570(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result6 = witTypes.Err[*WasmRpc, RpcError](result5)
 	default:
@@ -690,7 +690,7 @@ func WasmRpcBindSelf() witTypes.Result[witTypes.Tuple2[string, *WasmRpc], RpcErr
 
 		result0 = witTypes.Ok[witTypes.Tuple2[string, *WasmRpc], RpcError](witTypes.Tuple2[string, *WasmRpc]{F0: value, F1: WasmRpcFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))))})
 	case 1:
-		result := wasm_lift_1_t558(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t570(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Tuple2[string, *WasmRpc], RpcError](result)
 	default:
@@ -739,11 +739,11 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 	var result3 witTypes.Result[InvocationResultWithMetadata, RpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result1 := wasm_lift_1_t561(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result1 := wasm_lift_1_t573(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result3 = witTypes.Ok[InvocationResultWithMetadata, RpcError](result1)
 	case 1:
-		result2 := wasm_lift_1_t558(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result2 := wasm_lift_1_t570(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result3 = witTypes.Err[InvocationResultWithMetadata, RpcError](result2)
 	default:
@@ -792,11 +792,11 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 	var result3 witTypes.Result[InvocationMetadata, RpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result1 := wasm_lift_1_t559(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result1 := wasm_lift_1_t571(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result3 = witTypes.Ok[InvocationMetadata, RpcError](result1)
 	case 1:
-		result2 := wasm_lift_1_t558(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result2 := wasm_lift_1_t570(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result3 = witTypes.Err[InvocationMetadata, RpcError](result2)
 	default:
@@ -842,7 +842,7 @@ func (self *WasmRpc) AsyncInvokeAndAwait(methodName string, input golem_core_typ
 		panic("unreachable")
 	}
 	wasm_import_method_wasm_rpc_async_invoke_and_await((self).Handle(), uintptr(utf8), uint32(len(methodName)), uintptr(result), length, (input).Root, option, option0, returnArea)
-	result1 := wasm_lift_1_t567(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result1 := wasm_lift_1_t579(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result2 := result1
 	return result2
 
@@ -886,11 +886,11 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 	var result3 witTypes.Result[ScheduledInvocationReceipt, RpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result1 := wasm_lift_1_t562(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result1 := wasm_lift_1_t574(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result3 = witTypes.Ok[ScheduledInvocationReceipt, RpcError](result1)
 	case 1:
-		result2 := wasm_lift_1_t558(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result2 := wasm_lift_1_t570(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result3 = witTypes.Err[ScheduledInvocationReceipt, RpcError](result2)
 	default:
@@ -939,11 +939,11 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 	var result3 witTypes.Result[CancelableScheduledInvocationReceipt, RpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result1 := wasm_lift_1_t570(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result1 := wasm_lift_1_t582(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result3 = witTypes.Ok[CancelableScheduledInvocationReceipt, RpcError](result1)
 	case 1:
-		result2 := wasm_lift_1_t558(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result2 := wasm_lift_1_t570(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result3 = witTypes.Err[CancelableScheduledInvocationReceipt, RpcError](result2)
 	default:
@@ -982,7 +982,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 		result1 = witTypes.Ok[witTypes.Option[golem_core_types.SchemaValueTree], RpcError](option)
 	case 1:
-		result0 := wasm_lift_1_t558(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t570(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[witTypes.Option[golem_core_types.SchemaValueTree], RpcError](result0)
 	default:
@@ -1057,7 +1057,7 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 		result8 = witTypes.Ok[golem_core_types.SchemaValueTree, ConfigValueError](result6)
 	case 1:
-		result7 := wasm_lift_1_t571(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result7 := wasm_lift_1_t583(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result8 = witTypes.Err[golem_core_types.SchemaValueTree, ConfigValueError](result7)
 	default:
@@ -1069,8 +1069,8 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 }
 
 //go:noinline
-func wasm_lift_1_t511(src unsafe.Pointer) golem_agent_common.RegisteredAgentType {
-	result := wasm_lift_1_t510(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t523(src unsafe.Pointer) golem_agent_common.RegisteredAgentType {
+	result := wasm_lift_1_t522(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t7(unsafe.Add(unsafe.Pointer(src), (24 + 52*4)))
 
 	return golem_agent_common.RegisteredAgentType{AgentType: result, ImplementedBy: result0}
@@ -1360,7 +1360,7 @@ func wasm_lower_1_t78(pinner *runtime.Pinner, value golem_core_types.SchemaValue
 }
 
 //go:noinline
-func wasm_lift_1_t513(src unsafe.Pointer) golem_agent_common.AgentError {
+func wasm_lift_1_t525(src unsafe.Pointer) golem_agent_common.AgentError {
 	var variant golem_agent_common.AgentError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -1410,7 +1410,7 @@ func wasm_lift_1_t4(src unsafe.Pointer) golem_core_types.Uuid {
 }
 
 //go:noinline
-func wasm_lift_1_t557(src unsafe.Pointer) WebhookError {
+func wasm_lift_1_t569(src unsafe.Pointer) WebhookError {
 	var variant WebhookError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -1430,7 +1430,7 @@ func wasm_lift_1_t557(src unsafe.Pointer) WebhookError {
 }
 
 //go:noinline
-func wasm_lower_1_t512(pinner *runtime.Pinner, value golem_agent_common.TypedAgentConfigValue, dst unsafe.Pointer) {
+func wasm_lower_1_t524(pinner *runtime.Pinner, value golem_agent_common.TypedAgentConfigValue, dst unsafe.Pointer) {
 	slice := (value).Path
 	length := uint32(len(slice))
 	result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
@@ -1450,7 +1450,7 @@ func wasm_lower_1_t512(pinner *runtime.Pinner, value golem_agent_common.TypedAge
 }
 
 //go:noinline
-func wasm_lift_1_t558(src unsafe.Pointer) RpcError {
+func wasm_lift_1_t570(src unsafe.Pointer) RpcError {
 	var variant RpcError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -1474,7 +1474,7 @@ func wasm_lift_1_t558(src unsafe.Pointer) RpcError {
 		variant = MakeRpcErrorRemoteInternalError(value3)
 
 	case 4:
-		result := wasm_lift_1_t513(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t525(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeRpcErrorRemoteAgentError(result)
 
@@ -1486,8 +1486,8 @@ func wasm_lift_1_t558(src unsafe.Pointer) RpcError {
 }
 
 //go:noinline
-func wasm_lift_1_t561(src unsafe.Pointer) InvocationResultWithMetadata {
-	result := wasm_lift_1_t559(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t573(src unsafe.Pointer) InvocationResultWithMetadata {
+	result := wasm_lift_1_t571(unsafe.Add(unsafe.Pointer(src), 0))
 	var option witTypes.Option[golem_core_types.SchemaValueTree]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 4*4)))) {
 	case 0:
@@ -1505,7 +1505,7 @@ func wasm_lift_1_t561(src unsafe.Pointer) InvocationResultWithMetadata {
 }
 
 //go:noinline
-func wasm_lift_1_t559(src unsafe.Pointer) InvocationMetadata {
+func wasm_lift_1_t571(src unsafe.Pointer) InvocationMetadata {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	result := wasm_lift_1_t10(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 
@@ -1513,14 +1513,14 @@ func wasm_lift_1_t559(src unsafe.Pointer) InvocationMetadata {
 }
 
 //go:noinline
-func wasm_lift_1_t567(src unsafe.Pointer) AsyncInvocationWithMetadata {
+func wasm_lift_1_t579(src unsafe.Pointer) AsyncInvocationWithMetadata {
 	var option witTypes.Option[InvocationMetadata]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
 
 		option = witTypes.None[InvocationMetadata]()
 	case 1:
-		result := wasm_lift_1_t559(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t571(unsafe.Add(unsafe.Pointer(src), 8))
 
 		option = witTypes.Some[InvocationMetadata](result)
 	default:
@@ -1531,15 +1531,15 @@ func wasm_lift_1_t567(src unsafe.Pointer) AsyncInvocationWithMetadata {
 }
 
 //go:noinline
-func wasm_lift_1_t562(src unsafe.Pointer) ScheduledInvocationReceipt {
-	result := wasm_lift_1_t559(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t574(src unsafe.Pointer) ScheduledInvocationReceipt {
+	result := wasm_lift_1_t571(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return ScheduledInvocationReceipt{Metadata: result}
 }
 
 //go:noinline
-func wasm_lift_1_t570(src unsafe.Pointer) CancelableScheduledInvocationReceipt {
-	result := wasm_lift_1_t559(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t582(src unsafe.Pointer) CancelableScheduledInvocationReceipt {
+	result := wasm_lift_1_t571(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return CancelableScheduledInvocationReceipt{Metadata: result, CancellationToken: CancellationTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), (40 + 4*4))))))}
 }
@@ -1591,7 +1591,7 @@ func wasm_lower_1_t20(pinner *runtime.Pinner, value golem_core_types.SchemaTypeD
 }
 
 //go:noinline
-func wasm_lift_1_t571(src unsafe.Pointer) ConfigValueError {
+func wasm_lift_1_t583(src unsafe.Pointer) ConfigValueError {
 	var variant ConfigValueError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -1606,16 +1606,16 @@ func wasm_lift_1_t571(src unsafe.Pointer) ConfigValueError {
 }
 
 //go:noinline
-func wasm_lift_1_t510(src unsafe.Pointer) golem_agent_common.AgentType {
+func wasm_lift_1_t522(src unsafe.Pointer) golem_agent_common.AgentType {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
 	value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4))))
 	result := wasm_lift_1_t61(unsafe.Add(unsafe.Pointer(src), (7 * 4)))
-	result3 := wasm_lift_1_t500(unsafe.Add(unsafe.Pointer(src), (12 * 4)))
+	result3 := wasm_lift_1_t512(unsafe.Add(unsafe.Pointer(src), (12 * 4)))
 	result5 := make([]golem_agent_common.AgentMethod, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (23 * 4))))), index*(32+12*4))
-		result4 := wasm_lift_1_t488(unsafe.Add(unsafe.Pointer(base), 0))
+		result4 := wasm_lift_1_t500(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result5 = append(result5, result4)
 	}
@@ -1623,7 +1623,7 @@ func wasm_lift_1_t510(src unsafe.Pointer) golem_agent_common.AgentType {
 	result7 := make([]golem_agent_common.AgentDependency, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (26 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (26 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (25 * 4))))), index*(23*4))
-		result6 := wasm_lift_1_t502(unsafe.Add(unsafe.Pointer(base), 0))
+		result6 := wasm_lift_1_t514(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result7 = append(result7, result6)
 	}
@@ -1634,17 +1634,17 @@ func wasm_lift_1_t510(src unsafe.Pointer) golem_agent_common.AgentType {
 
 		option = witTypes.None[golem_agent_common.HttpMountDetails]()
 	case 1:
-		result8 := wasm_lift_1_t480(unsafe.Add(unsafe.Pointer(src), (29 * 4)))
+		result8 := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(src), (29 * 4)))
 
 		option = witTypes.Some[golem_agent_common.HttpMountDetails](result8)
 	default:
 		panic("unreachable")
 	}
-	result9 := wasm_lift_1_t504(unsafe.Add(unsafe.Pointer(src), (50 * 4)))
+	result9 := wasm_lift_1_t516(unsafe.Add(unsafe.Pointer(src), (50 * 4)))
 	result11 := make([]golem_agent_common.AgentConfigDeclaration, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 51*4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 51*4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 50*4))))), index*(4*4))
-		result10 := wasm_lift_1_t506(unsafe.Add(unsafe.Pointer(base), 0))
+		result10 := wasm_lift_1_t518(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result11 = append(result11, result10)
 	}
@@ -2544,7 +2544,7 @@ func wasm_lower_1_t24(pinner *runtime.Pinner, value golem_core_types.MetadataEnv
 }
 
 //go:noinline
-func wasm_lift_1_t500(src unsafe.Pointer) golem_agent_common.AgentConstructor {
+func wasm_lift_1_t512(src unsafe.Pointer) golem_agent_common.AgentConstructor {
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2570,19 +2570,19 @@ func wasm_lift_1_t500(src unsafe.Pointer) golem_agent_common.AgentConstructor {
 	default:
 		panic("unreachable")
 	}
-	result := wasm_lift_1_t462(unsafe.Add(unsafe.Pointer(src), (8 * 4)))
+	result := wasm_lift_1_t474(unsafe.Add(unsafe.Pointer(src), (8 * 4)))
 
 	return golem_agent_common.AgentConstructor{Name: option, Description: value1, PromptHint: option3, InputSchema: result}
 }
 
 //go:noinline
-func wasm_lift_1_t488(src unsafe.Pointer) golem_agent_common.AgentMethod {
+func wasm_lift_1_t500(src unsafe.Pointer) golem_agent_common.AgentMethod {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	result2 := make([]golem_agent_common.HttpEndpointDetails, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))), index*(16+18*4))
-		result := wasm_lift_1_t485(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t497(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result)
 	}
@@ -2599,15 +2599,15 @@ func wasm_lift_1_t488(src unsafe.Pointer) golem_agent_common.AgentMethod {
 	default:
 		panic("unreachable")
 	}
-	result4 := wasm_lift_1_t462(unsafe.Add(unsafe.Pointer(src), (9 * 4)))
-	result5 := wasm_lift_1_t463(unsafe.Add(unsafe.Pointer(src), (12 * 4)))
+	result4 := wasm_lift_1_t474(unsafe.Add(unsafe.Pointer(src), (9 * 4)))
+	result5 := wasm_lift_1_t475(unsafe.Add(unsafe.Pointer(src), (12 * 4)))
 	var option7 witTypes.Option[golem_agent_common.ReadOnlyConfig]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 12*4)))) {
 	case 0:
 
 		option7 = witTypes.None[golem_agent_common.ReadOnlyConfig]()
 	case 1:
-		result6 := wasm_lift_1_t465(unsafe.Add(unsafe.Pointer(src), (16 + 12*4)))
+		result6 := wasm_lift_1_t477(unsafe.Add(unsafe.Pointer(src), (16 + 12*4)))
 
 		option7 = witTypes.Some[golem_agent_common.ReadOnlyConfig](result6)
 	default:
@@ -2618,7 +2618,7 @@ func wasm_lift_1_t488(src unsafe.Pointer) golem_agent_common.AgentMethod {
 }
 
 //go:noinline
-func wasm_lift_1_t502(src unsafe.Pointer) golem_agent_common.AgentDependency {
+func wasm_lift_1_t514(src unsafe.Pointer) golem_agent_common.AgentDependency {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
@@ -2633,11 +2633,11 @@ func wasm_lift_1_t502(src unsafe.Pointer) golem_agent_common.AgentDependency {
 		panic("unreachable")
 	}
 	result := wasm_lift_1_t61(unsafe.Add(unsafe.Pointer(src), (5 * 4)))
-	result2 := wasm_lift_1_t500(unsafe.Add(unsafe.Pointer(src), (10 * 4)))
+	result2 := wasm_lift_1_t512(unsafe.Add(unsafe.Pointer(src), (10 * 4)))
 	result4 := make([]golem_agent_common.AgentMethod, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (22 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (22 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (21 * 4))))), index*(32+12*4))
-		result3 := wasm_lift_1_t488(unsafe.Add(unsafe.Pointer(base), 0))
+		result3 := wasm_lift_1_t500(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result4 = append(result4, result3)
 	}
@@ -2646,11 +2646,11 @@ func wasm_lift_1_t502(src unsafe.Pointer) golem_agent_common.AgentDependency {
 }
 
 //go:noinline
-func wasm_lift_1_t480(src unsafe.Pointer) golem_agent_common.HttpMountDetails {
+func wasm_lift_1_t492(src unsafe.Pointer) golem_agent_common.HttpMountDetails {
 	result0 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(4*4))
-		result := wasm_lift_1_t472(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t484(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -2661,7 +2661,7 @@ func wasm_lift_1_t480(src unsafe.Pointer) golem_agent_common.HttpMountDetails {
 
 		option = witTypes.None[golem_agent_common.AuthDetails]()
 	case 1:
-		result1 := wasm_lift_1_t473(unsafe.Add(unsafe.Pointer(src), (1 + 2*4)))
+		result1 := wasm_lift_1_t485(unsafe.Add(unsafe.Pointer(src), (1 + 2*4)))
 
 		option = witTypes.Some[golem_agent_common.AuthDetails](result1)
 	default:
@@ -2673,17 +2673,17 @@ func wasm_lift_1_t480(src unsafe.Pointer) golem_agent_common.HttpMountDetails {
 
 		option3 = witTypes.None[golem_agent_common.PhantomIdBinding]()
 	case 1:
-		result2 := wasm_lift_1_t467(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+		result2 := wasm_lift_1_t479(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
 
 		option3 = witTypes.Some[golem_agent_common.PhantomIdBinding](result2)
 	default:
 		panic("unreachable")
 	}
-	result4 := wasm_lift_1_t469(unsafe.Add(unsafe.Pointer(src), (8 * 4)))
+	result4 := wasm_lift_1_t481(unsafe.Add(unsafe.Pointer(src), (8 * 4)))
 	result6 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (11 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (11 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (10 * 4))))), index*(4*4))
-		result5 := wasm_lift_1_t472(unsafe.Add(unsafe.Pointer(base), 0))
+		result5 := wasm_lift_1_t484(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result6 = append(result6, result5)
 	}
@@ -2729,7 +2729,7 @@ func wasm_lift_1_t480(src unsafe.Pointer) golem_agent_common.HttpMountDetails {
 }
 
 //go:noinline
-func wasm_lift_1_t504(src unsafe.Pointer) golem_agent_common.Snapshotting {
+func wasm_lift_1_t516(src unsafe.Pointer) golem_agent_common.Snapshotting {
 	var variant golem_agent_common.Snapshotting
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2737,7 +2737,7 @@ func wasm_lift_1_t504(src unsafe.Pointer) golem_agent_common.Snapshotting {
 		variant = golem_agent_common.MakeSnapshottingDisabled()
 
 	case 1:
-		result := wasm_lift_1_t503(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t515(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_agent_common.MakeSnapshottingEnabled(result)
 
@@ -2749,7 +2749,7 @@ func wasm_lift_1_t504(src unsafe.Pointer) golem_agent_common.Snapshotting {
 }
 
 //go:noinline
-func wasm_lift_1_t506(src unsafe.Pointer) golem_agent_common.AgentConfigDeclaration {
+func wasm_lift_1_t518(src unsafe.Pointer) golem_agent_common.AgentConfigDeclaration {
 	result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(2*4))
@@ -3505,14 +3505,14 @@ func wasm_lower_1_t21(pinner *runtime.Pinner, value golem_core_types.Role, dst u
 }
 
 //go:noinline
-func wasm_lift_1_t462(src unsafe.Pointer) golem_agent_common.InputSchema {
+func wasm_lift_1_t474(src unsafe.Pointer) golem_agent_common.InputSchema {
 	var variant golem_agent_common.InputSchema
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
 		result0 := make([]golem_agent_common.NamedField, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(8+16*4))
-			result := wasm_lift_1_t460(unsafe.Add(unsafe.Pointer(base), 0))
+			result := wasm_lift_1_t472(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result0 = append(result0, result)
 		}
@@ -3527,12 +3527,12 @@ func wasm_lift_1_t462(src unsafe.Pointer) golem_agent_common.InputSchema {
 }
 
 //go:noinline
-func wasm_lift_1_t485(src unsafe.Pointer) golem_agent_common.HttpEndpointDetails {
-	result := wasm_lift_1_t470(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t497(src unsafe.Pointer) golem_agent_common.HttpEndpointDetails {
+	result := wasm_lift_1_t482(unsafe.Add(unsafe.Pointer(src), 0))
 	result1 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))), index*(4*4))
-		result0 := wasm_lift_1_t472(unsafe.Add(unsafe.Pointer(base), 0))
+		result0 := wasm_lift_1_t484(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result1 = append(result1, result0)
 	}
@@ -3559,13 +3559,13 @@ func wasm_lift_1_t485(src unsafe.Pointer) golem_agent_common.HttpEndpointDetails
 
 		option = witTypes.None[golem_agent_common.AuthDetails]()
 	case 1:
-		result6 := wasm_lift_1_t473(unsafe.Add(unsafe.Pointer(src), (1 + 10*4)))
+		result6 := wasm_lift_1_t485(unsafe.Add(unsafe.Pointer(src), (1 + 10*4)))
 
 		option = witTypes.Some[golem_agent_common.AuthDetails](result6)
 	default:
 		panic("unreachable")
 	}
-	result7 := wasm_lift_1_t469(unsafe.Add(unsafe.Pointer(src), (11 * 4)))
+	result7 := wasm_lift_1_t481(unsafe.Add(unsafe.Pointer(src), (11 * 4)))
 	var option8 witTypes.Option[golem_core_http.HttpRouteMode]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (13 * 4)))) {
 	case 0:
@@ -3594,7 +3594,7 @@ func wasm_lift_1_t485(src unsafe.Pointer) golem_agent_common.HttpEndpointDetails
 }
 
 //go:noinline
-func wasm_lift_1_t463(src unsafe.Pointer) golem_agent_common.OutputSchema {
+func wasm_lift_1_t475(src unsafe.Pointer) golem_agent_common.OutputSchema {
 	var variant golem_agent_common.OutputSchema
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3613,14 +3613,14 @@ func wasm_lift_1_t463(src unsafe.Pointer) golem_agent_common.OutputSchema {
 }
 
 //go:noinline
-func wasm_lift_1_t465(src unsafe.Pointer) golem_agent_common.ReadOnlyConfig {
-	result := wasm_lift_1_t464(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t477(src unsafe.Pointer) golem_agent_common.ReadOnlyConfig {
+	result := wasm_lift_1_t476(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return golem_agent_common.ReadOnlyConfig{CachePolicy: result}
 }
 
 //go:noinline
-func wasm_lift_1_t472(src unsafe.Pointer) golem_agent_common.PathSegment {
+func wasm_lift_1_t484(src unsafe.Pointer) golem_agent_common.PathSegment {
 	var variant golem_agent_common.PathSegment
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3640,22 +3640,22 @@ func wasm_lift_1_t472(src unsafe.Pointer) golem_agent_common.PathSegment {
 }
 
 //go:noinline
-func wasm_lift_1_t473(src unsafe.Pointer) golem_agent_common.AuthDetails {
+func wasm_lift_1_t485(src unsafe.Pointer) golem_agent_common.AuthDetails {
 
 	return golem_agent_common.AuthDetails{Required: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) != 0)}
 }
 
 //go:noinline
-func wasm_lift_1_t467(src unsafe.Pointer) golem_agent_common.PhantomIdBinding {
+func wasm_lift_1_t479(src unsafe.Pointer) golem_agent_common.PhantomIdBinding {
 	var variant golem_agent_common.PhantomIdBinding
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t466(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t478(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_agent_common.MakePhantomIdBindingPath(result)
 
 	case 1:
-		result0 := wasm_lift_1_t466(unsafe.Add(unsafe.Pointer(src), 4))
+		result0 := wasm_lift_1_t478(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_agent_common.MakePhantomIdBindingQuery(result0)
 
@@ -3667,7 +3667,7 @@ func wasm_lift_1_t467(src unsafe.Pointer) golem_agent_common.PhantomIdBinding {
 }
 
 //go:noinline
-func wasm_lift_1_t469(src unsafe.Pointer) golem_agent_common.CorsOptions {
+func wasm_lift_1_t481(src unsafe.Pointer) golem_agent_common.CorsOptions {
 	result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(2*4))
@@ -3709,7 +3709,7 @@ func wasm_lift_1_t101(src unsafe.Pointer) golem_core_http.FileResponseHeader {
 }
 
 //go:noinline
-func wasm_lift_1_t503(src unsafe.Pointer) golem_agent_common.SnapshottingConfig {
+func wasm_lift_1_t515(src unsafe.Pointer) golem_agent_common.SnapshottingConfig {
 	var variant golem_agent_common.SnapshottingConfig
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -4186,16 +4186,16 @@ func wasm_lower_1_t47(pinner *runtime.Pinner, value golem_core_types.UnionBranch
 }
 
 //go:noinline
-func wasm_lift_1_t460(src unsafe.Pointer) golem_agent_common.NamedField {
+func wasm_lift_1_t472(src unsafe.Pointer) golem_agent_common.NamedField {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t459(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+	result := wasm_lift_1_t471(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 	result1 := wasm_lift_1_t24(unsafe.Add(unsafe.Pointer(src), (8 + 2*4)))
 
 	return golem_agent_common.NamedField{Name: value0, Source: result, Schema: *(*int32)(unsafe.Add(unsafe.Pointer(src), (4 + 2*4))), Metadata: result1}
 }
 
 //go:noinline
-func wasm_lift_1_t470(src unsafe.Pointer) golem_agent_common.HttpMethod {
+func wasm_lift_1_t482(src unsafe.Pointer) golem_agent_common.HttpMethod {
 	var variant golem_agent_common.HttpMethod
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -4257,7 +4257,7 @@ func wasm_lift_1_t108(src unsafe.Pointer) golem_core_http.DurableStreamRouteOpti
 }
 
 //go:noinline
-func wasm_lift_1_t464(src unsafe.Pointer) golem_agent_common.CachePolicy {
+func wasm_lift_1_t476(src unsafe.Pointer) golem_agent_common.CachePolicy {
 	var variant golem_agent_common.CachePolicy
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -4306,7 +4306,7 @@ func wasm_lift_1_t95(src unsafe.Pointer) golem_core_http.PathSegment {
 }
 
 //go:noinline
-func wasm_lift_1_t466(src unsafe.Pointer) golem_agent_common.PhantomIdBindingDetails {
+func wasm_lift_1_t478(src unsafe.Pointer) golem_agent_common.PhantomIdBindingDetails {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return golem_agent_common.PhantomIdBindingDetails{Name: value0, Optional: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) != 0)}
@@ -4817,7 +4817,7 @@ func wasm_lower_1_t46(pinner *runtime.Pinner, value golem_core_types.Discriminat
 }
 
 //go:noinline
-func wasm_lift_1_t459(src unsafe.Pointer) golem_agent_common.FieldSource {
+func wasm_lift_1_t471(src unsafe.Pointer) golem_agent_common.FieldSource {
 	var variant golem_agent_common.FieldSource
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
