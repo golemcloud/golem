@@ -394,6 +394,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub(crate) entity_body_finalization: crate::worker::entity_invocation::EntityBodyFinalization,
     pub(crate) tool_trap_disposal: Arc<AtomicBool>,
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
+    pub(crate) tool_frontends: Option<Arc<stream_transport::ToolFrontendScope>>,
+    pub(crate) host_initiations: Option<Arc<concurrent::initiation_owner::InitiationOwner<Ctx>>>,
     pub(crate) schema_producers: stream_outcome::ProducerOutcomeScope,
     schema_output_tasks: Mutex<Option<crate::worker::tasks::NativeReconstructionTasks>>,
     owner_execution: Arc<OwnerExecution>,
@@ -1048,9 +1050,6 @@ pub(crate) struct PendingReplayToLive {
 
 const TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED: &str =
     "Tool attachment live-memory admission was exhausted";
-
-const TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED: &str =
-    "Tool attachment live-memory admission was cancelled";
 
 /// A failed replay of the recorded invocations of a start.
 struct ReplayFailure {
