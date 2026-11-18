@@ -246,12 +246,12 @@ test "erased schemas keep their occurrence codecs" {
     let narrow = produce_shapes_input_0_stream(async fn(writer) {
       assert_true(writer.write_one(12) is @schema.Accepted)
     })
-    assert_eq(narrow.read(), Some(12))
+    assert_eq(narrow.read(), Some(Ok(12)))
     assert_true(narrow.read() is None)
     let single = produce_shapes_input_5_stream(async fn(writer) {
       assert_true(writer.write_one("tuple") is @schema.Accepted)
     })
-    assert_eq(single.read(), Some("tuple"))
+    assert_eq(single.read(), Some(Ok("tuple")))
     assert_true(single.read() is None)
   })
 }
@@ -274,7 +274,10 @@ test "native custom streams are lazy recursive and directly forwardable" {
       assert_true(writer.write_one({ label: "root", children: [{ label: "child", children: [] }] }) is @schema.Accepted)
     })
     let inner = stream_decode_nested_input_0(stream_encode_nested_input_0(inner))
-    let item = inner.read().unwrap()
+    let item = match inner.read().unwrap() {
+      Ok(item) => item
+      Err(error) => raise error
+    }
     assert_eq(item.label, "root")
     assert_eq(item.children[0].label, "child")
     assert_true(inner.read() is None)
@@ -3240,8 +3243,23 @@ test "native value codec directly rejects the frozen malformed schema-value fixt
 test "text codec directly consumes frozen canonical and malformed fixtures" {
   let messages = expect_object(parse_strict_json(@fs.read_file_to_string("json-messages.json")))
   for vector in expect_array(get_field(messages, "vectors")) {
-    let canonical = expect_string(get_field(expect_object(vector), "canonical"))
+    let vector = expect_object(vector)
+    let canonical = expect_string(get_field(vector, "canonical"))
     assert_eq(parse_strict_json(canonical).stringify(), canonical)
+    if expect_string(get_field(vector, "direction")) == "server" {
+      let message = expect_object(parse_strict_json(canonical))
+      let kind = expect_string(get_field(vector, "type"))
+      validate_message_fields(message, kind)
+      if kind == "stream-end" {
+        ignore(validate_server_stream_end(message))
+      }
+      if kind == "invocationFinished" {
+        let outcome = expect_object(get_field(message, "outcome"))
+        if expect_string(get_field(outcome, "kind")) == "failure" {
+          ignore(failure_outcome(outcome))
+        }
+      }
+    }
   }
   let malformed = expect_object(parse_strict_json(@fs.read_file_to_string("malformed.json")))
   for vector in expect_array(get_field(malformed, "vectors")) {
@@ -3252,6 +3270,51 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
       }))
     }
   }
+}
+
+///|
+fn fixture_message(name : String) -> Map[String, Json] raise {
+  let messages = expect_object(parse_strict_json(@fs.read_file_to_string("json-messages.json")))
+  for vector in expect_array(get_field(messages, "vectors")) {
+    let vector = expect_object(vector)
+    if expect_string(get_field(vector, "name")) == name {
+      return expect_object(parse_strict_json(expect_string(get_field(vector, "canonical"))))
+    }
+  }
+  fail("missing vector \{name}")
+}
+
+///|
+test "agent failures surface stderr and still reject unknown members" {
+  let rejection = fixture_message("invocation-rejected-previous-invocation-failed")
+  validate_message_fields(rejection, "invocationRejected")
+  assert_eq(
+    reported_failure(rejection),
+    InvocationFailed(
+      code="previous-invocation-failed",
+      message="intentional invocation failure",
+      stderr=Some("intentional failure stderr\n"),
+    ),
+  )
+  let finished = fixture_message("invocation-finished-failure-with-stderr")
+  validate_message_fields(finished, "invocationFinished")
+  let outcome = expect_object(get_field(finished, "outcome"))
+  assert_eq(
+    failure_outcome(outcome),
+    InvocationFailed(
+      code="invocation-failed",
+      message="intentional invocation failure",
+      stderr=Some("intentional failure stderr\n"),
+    ),
+  )
+  let without_stderr = expect_object(get_field(fixture_message("invocation-finished-failure"), "outcome"))
+  assert_true(failure_outcome(without_stderr) is InvocationFailed(stderr=None, ..))
+  rejection["extra"] = Json::string("x")
+  assert_true(raises(() => validate_message_fields(rejection, "invocationRejected")))
+  outcome["extra"] = Json::string("x")
+  assert_true(raises(() => ignore(failure_outcome(outcome))))
+  finished["stderr"] = Json::string("misplaced")
+  assert_true(raises(() => validate_message_fields(finished, "invocationFinished")))
 }
 "#,
     )
@@ -3308,6 +3371,22 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         ("resume-routing-miss", "", window, STABLE),
         ("accept-drop", "unreachable", "Within(800)", "400"),
         ("stable-reset", "", "Within(1000)", "300"),
+        ("input-failure-replay", "", window, STABLE),
+        ("input-eof-replay", "", window, STABLE),
+        ("output-failed", "typed-failure", window, STABLE),
+        ("output-cancel-race", "", window, STABLE),
+        ("output-cancel-after-resume-head", "", window, STABLE),
+        ("output-cancel-partial-packed", "", window, STABLE),
+        ("terminal-accounting", "", window, STABLE),
+        ("output-admission-cancel", "", window, STABLE),
+        ("input-prefetch-delayed", "", window, STABLE),
+        ("input-prefetch-before-attachment", "", window, STABLE),
+        (
+            "output-consumer-cancelled",
+            "consumer-cancelled",
+            window,
+            STABLE,
+        ),
     ] {
         let mut server = std::process::Command::new("python3")
             .arg("-u")
@@ -3328,6 +3407,7 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
                 .replace("__PORT__", port.trim())
+                .replace("__MODE__", mode)
                 .replace("__ERROR__", expected_error)
                 .replace("__RECONNECT__", reconnect)
                 .replace("__STABLE__", stable)

@@ -19,6 +19,8 @@ package golem.runtime
 import golem.{BaseAgent, Principal}
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import golem.runtime.autowire.{AgentDefinition, AgentImplementation, MethodBinding, SchemaPayload}
+import golem.runtime.guest.Guest
+import golem.runtime.tool.ToolTestFixtures.withImmediateCaller
 import golem.runtime.InputRecordCodec
 import golem.schema.{FromSchema, IntoSchema}
 import golem.host.js.schema.JsSchemaValueTree
@@ -28,6 +30,7 @@ import zio.test._
 import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
+import scala.scalajs.js
 
 object PrincipalInjectionSpec extends ZIOSpecDefault {
 
@@ -207,6 +210,38 @@ object PrincipalInjectionSpec extends ZIOSpecDefault {
             .fromPromise(b.invoke(methodImpl, singleInput[String]("bob"), oidcPrincipal))
             .map(decodeSingle[String])
         }.map(r => assertTrue(r == "bob:oidc:user-42"))
+      }
+    ),
+
+    // Guest exports read the principal from `invocation-context.caller`
+    suite("guest exports")(
+      test("initialize and invoke receive the immediate caller principal") {
+        val caller = js.Dynamic.literal(
+          "tag" -> "oidc",
+          "val" -> js.Dynamic.literal("sub" -> "user-7", "issuer" -> "https://auth.example.com", "claims" -> "{}")
+        )
+        val expected = Principal.Oidc(sub = "user-7", issuer = "https://auth.example.com", claims = "{}")
+        val guest    = Guest.golemAgent200Guest
+        val typeName = methodDefn.typeName
+        Guest.resetForTesting()
+        ZIO.fromFuture { implicit ec =>
+          val initialized = withImmediateCaller(caller) {
+            guest
+              .initialize(typeName, SchemaPayload.encode[Unit](())(InputRecordCodec.unit))
+              .asInstanceOf[js.Promise[Unit]]
+          }
+          FutureInterop.fromPromise(initialized).flatMap { _ =>
+            val state   = Guest.stateForTesting
+            val invoked = withImmediateCaller(caller) {
+              guest
+                .invoke("identify", singleInput[String]("dave"))
+                .asInstanceOf[js.Promise[js.UndefOr[JsSchemaValueTree]]]
+            }
+            FutureInterop.fromPromise(invoked).map(result => (state, decodeSingle[String](result.toOption)))
+          }
+        }.ensuring(ZIO.succeed(Guest.resetForTesting())).map { case (state, result) =>
+          assertTrue(state == (true, Some(expected)), result == "dave:oidc:user-7")
+        }
       }
     ),
 

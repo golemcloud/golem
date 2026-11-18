@@ -39,6 +39,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         OplogEntry::Create { .. }
         | OplogEntry::AgentInvocationStarted { .. }
         | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::AgentInvocationFailed { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::RecoverySucceeded { .. }
         | OplogEntry::Jump { .. }
@@ -49,6 +50,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::SuccessfulUpdate { .. }
         | OplogEntry::FailedUpdate { .. }
         | OplogEntry::GrowMemory { .. }
+        | OplogEntry::MemorySizeReconciled { .. }
         | OplogEntry::CreateResource { .. }
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log {
@@ -80,8 +82,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::ToolAttachmentControl { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }
-        | OplogEntry::StreamEnd { .. }
-        | OplogEntry::StreamCancel { .. }
+        | OplogEntry::StreamTerminal { .. }
         | OplogEntry::StreamSession { .. } => None,
     }
 }
@@ -110,6 +111,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::CompletionDelivered { .. }
         | OplogEntry::AgentInvocationStarted { .. }
         | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::AgentInvocationFailed { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
         | OplogEntry::RecoverySucceeded { .. }
@@ -121,6 +123,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::SuccessfulUpdate { .. }
         | OplogEntry::FailedUpdate { .. }
         | OplogEntry::GrowMemory { .. }
+        | OplogEntry::MemorySizeReconciled { .. }
         | OplogEntry::CreateResource { .. }
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log { .. }
@@ -156,8 +159,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::ToolAttachmentRead { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }
-        | OplogEntry::StreamEnd { .. }
-        | OplogEntry::StreamCancel { .. }
+        | OplogEntry::StreamTerminal { .. }
         | OplogEntry::StreamSession { .. } => None,
     }
 }
@@ -957,7 +959,13 @@ impl CursorTx<'_> {
         }
         if claim.is_custom_invocation()
             || (claim.makes_host_internal_calls()
-                && cancelled_before_delivery(self.cursor, &self.st, handle.start_idx()).await?)
+                && host_internal_calls_are_replay_inert(
+                    self.cursor,
+                    &self.st,
+                    handle.start_idx(),
+                    claim.abandons_incomplete_host_internal_calls(),
+                )
+                .await?)
         {
             self.register_replay_inert_subtree_root(handle.start_idx());
         }

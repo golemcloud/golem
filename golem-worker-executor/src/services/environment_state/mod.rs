@@ -722,11 +722,11 @@ impl GrpcEnvironmentStateService {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<Arc<EnvironmentState>, WorkerExecutorError> {
+        let client = self.client.clone();
         self.cached_environment_state
-            .get_or_insert_simple(&environment_id, || {
+            .get_or_insert_simple_spawned(&environment_id, move || {
                 Box::pin(async move {
-                    let result = self
-                        .client
+                    let result = client
                         .get_current_environment_state(environment_id)
                         .await
                         .map_err(|e| {

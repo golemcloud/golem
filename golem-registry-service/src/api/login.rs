@@ -18,12 +18,12 @@ use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
 use crate::model::login::WebflowKind;
 use crate::services::oauth2::WebflowCallbackAction;
 use golem_common::base_model::api;
-use golem_common::model::Empty;
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
     OAuth2Provider, OAuth2WebflowData, OAuth2WebflowStart, OAuth2WebflowStateId,
 };
 use golem_common::recorded_http_api_request;
+use golem_schema::Empty;
 use golem_service_base::api_tags::ApiTags;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;

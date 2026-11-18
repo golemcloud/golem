@@ -5,9 +5,10 @@ import { parse } from "../src/AgentIdentity.js"
 import { bind } from "../src/DynamicClient.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
+import { hostInvocationMetadata, sdkInvocationMetadata } from "./invocation-metadata.js"
 
 const tree: CoreTypes.SchemaValueTree = { root: 0, valueNodes: [] }
-const metadata = { agentId: "agent", idempotencyKey: "key" }
+const metadata = hostInvocationMetadata("agent")
 
 const hostLayer = (parseAgentId: () => unknown = () => ["Agent", { value: tree }, undefined]) =>
   Layer.succeed(AgentHostClient, { parseAgentId } as never)
@@ -21,6 +22,7 @@ describe("DynamicClient", () => {
       }
       const identityError = { tag: "invalid-input", val: "malformed agent ID" }
       const unusedRpc = Layer.succeed(RpcClient, {
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: () => Effect.die("parse failure must not connect"),
       })
       const parsed = yield* parse("bad").pipe(
@@ -40,6 +42,7 @@ describe("DynamicClient", () => {
       })
 
       const rpc = Layer.succeed(RpcClient, {
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: () => Effect.fail(new RpcHostError(structured, "WasmRpc.create")),
       })
       const identity = yield* parse("valid").pipe(Effect.provide(hostLayer()))
@@ -80,20 +83,23 @@ describe("DynamicClient", () => {
         }),
         drop: () => undefined,
       } as unknown as RpcConnection
-      const rpc = Layer.succeed(RpcClient, { connect: () => Effect.succeed(connection) })
+      const rpc = Layer.succeed(RpcClient, {
+        bindSelf: () => Effect.die("unexpected self binding"),
+        connect: () => Effect.succeed(connection),
+      })
 
       yield* Effect.scoped(
         Effect.gen(function* () {
           const identity = yield* parse("valid")
           const client = yield* identity.dynamicClient()
           const triggered = yield* client.method("run").trigger(tree)
-          expect(triggered).toEqual(metadata)
+          expect(triggered).toEqual(sdkInvocationMetadata("agent"))
           expect(triggered).not.toBe(metadata)
           expect(Object.isFrozen(triggered)).toBe(true)
           const scheduled = yield* client
             .method("run")
             .schedule({ seconds: 1n, nanoseconds: 0 }, tree)
-          expect(scheduled.metadata).toEqual(metadata)
+          expect(scheduled.metadata).toEqual(sdkInvocationMetadata("agent"))
           expect(scheduled.metadata).not.toBe(metadata)
           expect(Object.isFrozen(scheduled.metadata)).toBe(true)
           yield* scheduled.cancel

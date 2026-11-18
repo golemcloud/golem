@@ -22,11 +22,10 @@ pub(crate) use invocation_session::{build_durable_streaming_request, decode_invo
 use crate::durable_host::agent_monomorphization_context;
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
-    PublicOplogPageLimits, find_component_revision_at, get_public_oplog_entry,
-    get_public_oplog_page, search_public_oplog_page,
+    PublicOplogPageLimits, check_oplog_cursor_query, get_public_oplog_entry, get_public_oplog_page,
+    oplog_page_cursor, oplog_page_start, search_public_oplog_page,
 };
 use crate::model::{LastError, LookupResult};
-use crate::services::events::Event;
 use crate::services::rpc::DurableStreamRemoteError;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
@@ -34,9 +33,9 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplog,
-    HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
-    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasOplog, HasOplogService,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{
     ExportStreamControlResult as DomainExportResult, RetirementReason, Worker, WorkerUpdateMode,
@@ -94,15 +93,13 @@ use golem_common::model::protobuf::shard_epochs_from_proto;
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor, ShardDeliveryOutcome,
-    ShardEpoch, ShardId, ShardLeaseRevision, Timestamp,
+    AgentStatus, AgentStatusRecord, OwnedAgentId, ScanCursor, ShardDeliveryOutcome, ShardEpoch,
+    ShardId, ShardLeaseRevision, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::clients::shard_manager::ExecutorEndpoint;
 use golem_service_base::error::worker_executor::*;
-use golem_service_base::grpc::{
-    proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
-};
+use golem_service_base::grpc::{proto_agent_id_string, proto_promise_id_string};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
@@ -113,7 +110,6 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};

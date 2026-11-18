@@ -4,7 +4,10 @@
 /// retained verbatim until the boundary wraps it.
 priv enum SchemaValueStreamEndpoint {
   Wrapped(@types.SchemaValueStream)
-  Native(@async-core.Stream[@types.SchemaValueTree])
+  Native(
+    @async-core.Stream[@types.SchemaValueTree],
+    @async-core.Future[Result[Unit, @types.StreamError]?]
+  )
 }
 
 ///|
@@ -23,8 +26,13 @@ pub fn GuestSchemaValueStreamHandle::from_wrapped(
 ///|
 pub fn GuestSchemaValueStreamHandle::from_native(
   reader : @async-core.Stream[@types.SchemaValueTree],
+  outcome~ : @async-core.Future[Result[Unit, @types.StreamError]],
 ) -> GuestSchemaValueStreamHandle {
-  { cell: Some(Native(reader)), }
+  let completion = @async-core.Future::from(
+    async fn() { Some(outcome.get()) },
+    on_unstarted_drop=() => outcome.drop_sync(),
+  )
+  { cell: Some(Native(reader, completion)), }
 }
 
 ///|
@@ -41,7 +49,8 @@ pub fn GuestSchemaValueStreamHandle::same_endpoint(
 ) -> Bool {
   match (self.cell, other.cell) {
     (Some(Wrapped(left)), Some(Wrapped(right))) => left == right
-    (Some(Native(left)), Some(Native(right))) => physical_equal(left, right)
+    (Some(Native(left, _)), Some(Native(right, _))) =>
+      physical_equal(left, right)
     _ => false
   }
 }
@@ -63,7 +72,10 @@ pub fn GuestSchemaValueStreamHandle::release(
 ) -> Unit {
   match self.take() {
     Some(Wrapped(value)) => drop_wrapped(value)
-    Some(Native(reader)) => drop_native(reader)
+    Some(Native(reader, outcome)) => {
+      drop_native(reader)
+      outcome.drop_sync()
+    }
     None => ()
   }
 }
@@ -78,8 +90,8 @@ pub async fn GuestSchemaValueStreamHandle::prepare_outgoing(
         "schema-value-stream handle was already transferred; an owned stream can only be sent once",
       )
     Some(Wrapped(value)) => self.cell = Some(Wrapped(value))
-    Some(Native(reader)) => {
-      let wrapped = @types.SchemaValueStream::wrap(reader) catch {
+    Some(Native(reader, outcome)) => {
+      let wrapped = @types.SchemaValueStream::wrap(reader, outcome) catch {
         e => raise EncodeError("failed wrapping schema value stream: \{e}")
       }
       self.cell = Some(Wrapped(wrapped))
@@ -114,23 +126,30 @@ pub fn GuestSchemaValueStreamHandle::take_wrapped(
 pub async fn GuestSchemaValueStreamHandle::read_native(
   self : GuestSchemaValueStreamHandle,
 ) -> FixedArray[@types.SchemaValueTree]? {
-  let reader = match self.take() {
+  let (reader, outcome) = match self.take() {
     None =>
       raise SchemaValueStreamReadError::Ownership(
         "schema-value-stream handle was already transferred; an owned stream can only be received once",
       )
-    Some(Native(reader)) => reader
-    Some(Wrapped(value)) =>
-      @types.SchemaValueStream::unwrap(value) catch {
+    Some(Native(reader, outcome)) => (reader, outcome)
+    Some(Wrapped(value)) => {
+      let (reader, outcome) = @types.SchemaValueStream::unwrap(value) catch {
         e =>
           raise SchemaValueStreamReadError::Transport(
             "failed unwrapping schema value stream: \{repr(e)}",
           )
       }
+      (
+        reader,
+        @async-core.Future::from(async fn() { Some(outcome.get()) }, on_unstarted_drop=() => {
+          outcome.drop_sync()
+        }),
+      )
+    }
   }
   let result = {
     errdefer {
-      self.cell = Some(Native(reader))
+      self.cell = Some(Native(reader, outcome))
     }
     reader.read(1) catch {
       e =>
@@ -139,7 +158,15 @@ pub async fn GuestSchemaValueStreamHandle::read_native(
         )
     }
   }
-  self.cell = Some(Native(reader))
+  self.cell = Some(Native(reader, outcome))
+  if result is None {
+    match outcome.get() {
+      Some(Ok(_)) => ()
+      Some(Err(error)) => raise SchemaValueStreamReadError::Outcome(error)
+      None =>
+        raise SchemaValueStreamReadError::Outcome(@types.StreamError::Abandoned)
+    }
+  }
   result
 }
 

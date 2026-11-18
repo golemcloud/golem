@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::replay_state::ReplayState;
+use crate::worker::filesystem_snapshots::InitializerReplay;
 use crate::worker::*;
 
 impl<Runtime, Adapter: SandboxFilesystemAdapter> PreparedAgent<Runtime, Adapter> {
@@ -199,6 +201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             initial_linear_memory,
             admitted_startup_bytes,
             self.agent_mode(),
+            replaying,
             replaying,
             Arc::clone(&self.resource_entry),
             retained_memory_grant,
@@ -801,14 +804,14 @@ impl RunningWorker {
         created.observe_release(&parent.release_scope());
         let retained_memory_grant = parent.linear_memory_grant();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
-        // The tracker starts in replay mode so the admitted startup reservation stays protected
-        // and prepays the growth replayed from the oplog; `DurableWorkerCtx::create` switches it
-        // to live once the replay state is known to be live.
+        // Allocation starts at zero; the admission grant separately prepays reconstruction.
+        // `DurableWorkerCtx::create` switches fresh instances to live once replay state is known.
         let linear_memory = LinearMemoryTracker::new_with_metering(
             parent.startup_linear_memory_bytes(),
             admitted_startup_bytes,
             parent.agent_mode(),
             true,
+            false,
             Arc::clone(&parent.resource_entry),
             retained_memory_grant,
             parent.config().effective_resource_usage_metering().memory,
@@ -898,7 +901,6 @@ impl RunningWorker {
                 .await);
             }
         };
-        let replays_a_snapshot = replay.snapshot.is_some();
         let reconstruction_generation_handle =
             match reconstruction_generation_handle(&reconstructing) {
                 Ok(generation_handle) => generation_handle,
@@ -932,6 +934,10 @@ impl RunningWorker {
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await?;
             let horizon = parent.oplog.current_oplog_index().await;
+            let mut main_regions = skipped_regions.clone();
+            if let Some(attempt) = replay.attempt_region(horizon) {
+                main_regions.add(attempt);
+            }
             let snapshot_index = replay.snapshot.map(|(index, _)| index);
             let baseline = owner_wallet::WalletBaseline::new(
                 parent.owned_agent_id.clone(),
@@ -946,22 +952,31 @@ impl RunningWorker {
             parent
                 .owner_execution
                 .install_replay_generation_locked(
-                    skipped_regions.clone(),
+                    main_regions.clone(),
                     snapshot_index,
                     baseline,
                     horizon,
                     parent.tasks.clone(),
                     &wallet_installation_guard,
                 )
-                .await
+                .await?;
+            Ok::<_, WorkerExecutorError>((horizon, main_regions))
         }
         .await;
-        if let Err(error) = install_wallet {
-            drop(filesystem_context);
-            return Err(
-                cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
-            );
-        }
+        let (horizon, main_regions) = match install_wallet {
+            Ok(installed) => installed,
+            Err(error) => {
+                drop(filesystem_context);
+                return Err(
+                    cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
+                );
+            }
+        };
+        let initializer = replay.initializer_replay(horizon);
+        let bootstrap_regions = replay.bootstrap_skipped_regions(
+            &worker_metadata.last_known_status.skipped_regions,
+            &worker_metadata.last_known_status.deleted_regions,
+        );
         drop(wallet_installation_guard);
         {
             let mut lifecycle = parent.instance.lock().await;
@@ -995,7 +1010,7 @@ impl RunningWorker {
             filesystem_context,
             linear_memory,
             AgentConfig::new(
-                skipped_regions,
+                main_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
                 worker_metadata.created_by,
@@ -1050,26 +1065,86 @@ impl RunningWorker {
                 );
             }
         };
-        if replays_a_snapshot {
-            // Core initializers run before load-snapshot, but their recorded host calls are
-            // already inside the skipped snapshot history. Recreate that runtime state with
-            // the same durability suppression as snapshot loading, without consuming the tail.
-            context.begin_call_snapshotting_function();
-        }
+        // A start replays the core initializer on a bootstrap cursor over the durable calls that
+        // its baseline names, or on the main cursor in its position; either way the bootstrap
+        // phase observes the range of those calls.
+        let cursor = match initializer {
+            InitializerReplay::Bootstrap {
+                skip_through,
+                target,
+                tail,
+            } => match ReplayState::new_for_bootstrap(
+                parent.owned_agent_id.clone(),
+                parent.oplog.clone(),
+                parent.owner_execution().tool_operations(),
+                &bootstrap_regions,
+                skip_through,
+                target,
+                tail,
+            )
+            .await
+            {
+                Ok(cursor) => Some(cursor),
+                Err(error) => {
+                    drop(context);
+                    return Err(cleanup_reconstructing_agent_filesystem(
+                        reconstructing,
+                        window,
+                        error,
+                    )
+                    .await);
+                }
+            },
+            InitializerReplay::Positional => None,
+        };
+        context
+            .durable_ctx_mut()
+            .enter_bootstrap_phase(cursor)
+            .await;
         let runtime = async {
             let mut hosted = instance_host.instantiate(context, &component).await?;
             instance_host.reconcile_linear_memories(&mut hosted).await?;
             Ok::<_, WorkerExecutorError>(hosted.into_parts())
         }
         .await;
+        // A divergence of the core initializer from its recorded durable calls, inside
+        // `instantiate` or in an unconsumed bootstrap block, is a replay divergence of the start.
+        let runtime = match runtime {
+            Ok((instance, mut store)) => {
+                match store
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .finish_bootstrap_phase()
+                    .await
+                {
+                    Ok(()) => Ok((instance, store)),
+                    Err(error) => {
+                        let diverged =
+                            matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
+                        Err((error, diverged))
+                    }
+                }
+            }
+            Err(error) => {
+                let diverged = matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
+                Err((error, diverged))
+            }
+        };
         let (instance, mut store) = match runtime {
             Ok(runtime) => runtime,
-            Err(error) => {
+            Err((error, diverged)) => {
                 return Err(Self::end_failed_start(
                     &parent,
                     &role,
                     pending_update_ref.as_ref(),
-                    start_outcome::RawStartError::Instantiation(&error),
+                    if diverged {
+                        start_outcome::RawStartError::Replay {
+                            error: &error,
+                            diverged: true,
+                        }
+                    } else {
+                        start_outcome::RawStartError::Instantiation(&error)
+                    },
                     async move |error| {
                         cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await
                     },
@@ -1077,9 +1152,6 @@ impl RunningWorker {
                 .await);
             }
         };
-        if replays_a_snapshot {
-            store.data_mut().end_call_snapshotting_function();
-        }
         {
             let (active_agent, generation) = entity_generation;
             let establishment = parent.interrupt_establishment_tail.lock().unwrap().clone();
@@ -1124,7 +1196,8 @@ impl RunningWorker {
         let prepared = match PreparedAgent::finish(
             RunningAgentRuntime {
                 instance,
-                store: store.map(async_lock::Mutex::new),
+                store: store
+                    .map(|store| async_lock::Mutex::new(instance::PrimaryStore::new(store))),
             },
             reconstructing,
             &decision,

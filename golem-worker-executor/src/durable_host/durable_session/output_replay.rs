@@ -119,10 +119,10 @@ impl StreamSession {
         Ok(())
     }
 
-    /// Sends the guest-authored cancellation of every callee-owned input stream to the attached
-    /// client. Inputs whose acceptance already announced a terminal high water are skipped: the
-    /// client learned about that cancellation from the acceptance, and re-sending the same
-    /// durable offset would violate the strictly increasing offset rule of the session protocol.
+    /// Sends authoritative control terminals of callee-owned inputs to the attached client.
+    /// Source terminals are acknowledged by the input path instead. Inputs whose acceptance
+    /// already announced a terminal high water are skipped: re-sending the same durable offset
+    /// would violate the strictly increasing offset rule of the session protocol.
     pub async fn pump_input_cancellations(
         &self,
         responses: &mpsc::Sender<InvocationResponse>,
@@ -155,20 +155,21 @@ impl StreamSession {
                 .map_err(SessionError::from)?;
             while let Some(event) = reader.next().await.map_err(SessionError::from)? {
                 match event.payload {
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::InputConsumer,
-                        reason,
-                        details,
-                    } => {
+                    CommittedProducerStreamEventPayload::Terminal(terminal)
+                        if event.terminal_origin == Some(StreamTerminalOrigin::Control) =>
+                    {
+                        let authored_by = event
+                            .terminal_author
+                            .ok_or_else(|| "committed stream terminal has no author".to_string())?;
                         responses
                             .send(InvocationResponse {
-                                response: Some(invocation_response::Response::StreamCancel(
-                                    StreamCancel {
+                                response: Some(invocation_response::Response::StreamEnd(
+                                    StreamEnd {
                                         transport_stream_id,
                                         producer_sequence: event.producer_sequence,
-                                        role: golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer as i32,
-                                        reason: stream_cancel_reason_to_proto(reason) as i32,
-                                        details,
+                                        direction: StreamDirection::Input as i32,
+                                        outcome: Some(terminal.try_into()?),
+                                        authored_by: golem_api_grpc::proto::golem::worker::StreamTerminalAuthor::from(authored_by) as i32,
                                         durable_stream_id: Some(handle.stream_id.0.into()),
                                         epoch: self.attachment_epoch,
                                         durable_offset: event.offset.0.to_vec(),
@@ -179,8 +180,7 @@ impl StreamSession {
                             .map_err(|_| "invocation response stream closed".to_string())?;
                         break;
                     }
-                    CommittedProducerStreamEventPayload::End(_)
-                    | CommittedProducerStreamEventPayload::Cancel { .. } => break,
+                    CommittedProducerStreamEventPayload::Terminal(_) => break,
                     CommittedProducerStreamEventPayload::Value(_)
                     | CommittedProducerStreamEventPayload::PackedU8(_) => {}
                 }
@@ -403,47 +403,26 @@ impl StreamSession {
                         packed_u8: bytes,
                     })
                 }
-                CommittedProducerStreamEventPayload::End(StreamEndResult::Ok) => {
-                    invocation_response::Response::OutputEnd(OutputStreamEnd {
+                CommittedProducerStreamEventPayload::Terminal(terminal) => {
+                    let authored_by = event
+                        .terminal_author
+                        .ok_or_else(|| "committed stream terminal has no author".to_string())?;
+                    invocation_response::Response::StreamEnd(StreamEnd {
                         transport_stream_id,
                         producer_sequence: event.producer_sequence,
                         durable_stream_id: Some(durable_stream_id.0.into()),
                         durable_offset: event.offset.0.to_vec(),
                         epoch: self.attachment_epoch,
+                        direction: StreamDirection::Output as i32,
+                        outcome: Some(terminal.try_into()?),
+                        authored_by:
+                            golem_api_grpc::proto::golem::worker::StreamTerminalAuthor::from(
+                                authored_by,
+                            ) as i32,
                     })
                 }
-                CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(
-                    details,
-                )) => invocation_response::Response::OutputError(OutputStreamError {
-                    transport_stream_id,
-                    producer_sequence: event.producer_sequence,
-                    details: String::from_utf8_lossy(&details).into_owned(),
-                    durable_stream_id: Some(durable_stream_id.0.into()),
-                    durable_offset: event.offset.0.to_vec(),
-                    epoch: self.attachment_epoch,
-                }),
-                CommittedProducerStreamEventPayload::Cancel {
-                    role: _,
-                    reason,
-                    details,
-                } => invocation_response::Response::StreamCancel(StreamCancel {
-                    transport_stream_id,
-                    producer_sequence: event.producer_sequence,
-                    role: golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputProducer
-                        as i32,
-                    reason: stream_cancel_reason_to_proto(reason) as i32,
-                    details,
-                    durable_stream_id: Some(durable_stream_id.0.into()),
-                    epoch: self.attachment_epoch,
-                    durable_offset: event.offset.0.to_vec(),
-                }),
             };
-            let terminal = matches!(
-                response,
-                invocation_response::Response::OutputEnd(_)
-                    | invocation_response::Response::OutputError(_)
-                    | invocation_response::Response::StreamCancel(_)
-            );
+            let terminal = matches!(response, invocation_response::Response::StreamEnd(_));
             responses
                 .send(InvocationResponse {
                     response: Some(response),

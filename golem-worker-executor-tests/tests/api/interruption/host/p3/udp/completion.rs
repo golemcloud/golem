@@ -58,6 +58,9 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
     let ready_port = peer.local_addr()?.port();
     let mut failure_address = None;
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "udp_receive_wait_p3")
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -114,7 +117,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(receive_start(&completed, 1)? == start);
         assert_settled_history(&completed)?;
-        assert_invocation(&completed, &key, 1)?;
+        assert_invocation(&completed, &stored_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
         let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "udp_receive_wait_p3", data_value!(port, ready_port)).await?;
         ensure!(cached.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"completed".to_vec()));

@@ -332,6 +332,9 @@ mod retries {
             let _ = closed_tx.send(matches!(socket.read(&mut byte).await, Ok(0)));
         }));
         let key = IdempotencyKey::fresh();
+        let stored_key = executor
+            .external_invocation_key(&id, &key, "tcp_collect_p3")
+            .await?;
         let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let executor = executor.clone();
             let component = component.clone();
@@ -449,7 +452,7 @@ mod retries {
                 .filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::AgentInvocationStarted(start)
                 if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.idempotency_key == key)))
+                    if method.invocation_id == stored_key)))
                 .count(),
             1
         );
@@ -506,7 +509,7 @@ mod retries {
                 .filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::AgentInvocationStarted(start)
                 if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.idempotency_key == key)))
+                    if method.invocation_id == stored_key)))
                 .count(),
             1
         );

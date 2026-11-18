@@ -68,6 +68,104 @@ async fn sleep_ms(millis: u32) {
     golem_rust::wasip3::clocks::monotonic_clock::wait_for(u64::from(millis) * 1_000_000).await;
 }
 
+async fn start_pending_return_tail(tail: impl Future<Output = ()> + 'static) {
+    let started = Rc::new(Cell::new(false));
+    let signal = started.clone();
+    spawn_local(async move {
+        let mut tail = std::pin::pin!(tail);
+        std::future::poll_fn(|cx| {
+            assert!(tail.as_mut().poll(cx).is_pending());
+            signal.set(true);
+            std::task::Poll::Ready(())
+        })
+        .await;
+        tail.await;
+    });
+    while !started.get() {
+        golem_rust::wasip3::wit_bindgen::yield_async().await;
+    }
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait ReturnBoundaryProbe {
+    async fn valid(&self) -> String;
+    async fn malformed(&self) -> String;
+    async fn unpadded(&self) -> String;
+    async fn pending_http(&self, authority: String) -> String;
+}
+
+struct ReturnBoundaryProbeImpl;
+
+#[tool_implementation]
+impl ReturnBoundaryProbe for ReturnBoundaryProbeImpl {
+    async fn valid(&self) -> String {
+        unreachable!("the raw invoker handles this command")
+    }
+
+    async fn malformed(&self) -> String {
+        unreachable!("the raw invoker handles this command")
+    }
+
+    async fn unpadded(&self) -> String {
+        unreachable!("the raw invoker handles this command")
+    }
+
+    async fn pending_http(&self, _authority: String) -> String {
+        unreachable!("the raw invoker handles this command")
+    }
+
+    // Return raw wire data so the SDK cannot turn the malformed payload into a typed error.
+    fn __tool_invoke(
+        command_path: Vec<String>,
+        input: wire::TypedSchemaValue,
+        _stdin: Option<InputStream>,
+        _stdout: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+        _stderr: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+        _principal: Principal,
+    ) -> golem_rust::agentic::ToolInvokeFuture {
+        Box::pin(async move {
+            if command_path == ["pending-http"] {
+                let input = golem_rust::decode_typed_schema_value_owned(input).unwrap();
+                let SchemaValue::Record { fields } = input.value() else {
+                    panic!("expected probe input record");
+                };
+                let SchemaValue::String(authority) = &fields[0] else {
+                    panic!("expected HTTP authority");
+                };
+                let authority = authority.clone();
+                start_pending_return_tail(async move {
+                    fetch_checkpoint(&authority).await;
+                    let _ = golem_rust::create_promise();
+                })
+                .await;
+            } else {
+                start_pending_return_tail(async {
+                    sleep_ms(1_000).await;
+                    let _ = golem_rust::create_promise();
+                })
+                .await;
+            }
+            let mut result = golem_rust::encode_typed_schema_value(
+                &"raw-return-control"
+                    .to_string()
+                    .into_typed_schema_value()
+                    .unwrap(),
+            )
+            .unwrap();
+            if command_path == ["malformed"] {
+                result.graph.root = i32::MAX;
+            }
+            Ok(
+                golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
+                    result: Some(result),
+                    stdout: None,
+                    stderr: None,
+                },
+            )
+        })
+    }
+}
+
 async fn fetch_checkpoint(authority: &str) -> String {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::wit_bindgen::StreamResult;
@@ -715,11 +813,19 @@ impl Typed for TypedImpl {
     fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Ok(Some(value)) = input.next().await {
+            while let Some(value) = input.next().await {
+                let value = match value {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = writer.finish(Err(error)).await;
+                        return;
+                    }
+                };
                 if writer.write_one(value * 3 + 1).await.is_err() {
-                    break;
+                    return;
                 }
             }
+            let _ = writer.close().await;
         });
         output
     }
@@ -1012,6 +1118,7 @@ impl TypedOutputStream for TypedOutputStreamImpl {
                 ])
                 .await
                 .expect("write remaining typed tool output items");
+            writer.close().await.expect("close typed tool output");
         });
         output
     }
@@ -1042,18 +1149,15 @@ impl TypedInputStream for TypedInputStreamImpl {
         let first = input
             .next()
             .await
-            .expect("read first typed tool input item")
-            .expect("typed tool input has a first item");
+            .expect("typed tool input has a first item")
+            .expect("read first typed tool input item");
         wait_at_promise_checkpoint("typed-input-provider-consumed-first").await;
         let mut evidence = vec![TypedInputEvidence {
             label: first.label,
             ordinal: first.ordinal,
         }];
-        while let Some(item) = input
-            .next()
-            .await
-            .expect("read remaining typed tool input item")
-        {
+        while let Some(item) = input.next().await {
+            let item = item.expect("read remaining typed tool input item");
             evidence.push(TypedInputEvidence {
                 label: item.label,
                 ordinal: item.ordinal,
@@ -1812,6 +1916,55 @@ impl Streaming for StreamingImpl {
         mut stdout: OutputStream,
         principal: golem_rust::agentic::Principal,
     ) -> Result<StreamSummary, StreamingError> {
+        if let Some(tail) = mode.strip_prefix("return-cutoff-") {
+            stdout
+                .write(MARKER.to_vec())
+                .await
+                .expect("accepted prefix");
+            match tail {
+                "finished" => stdout.clone().finish().await.expect("explicit finish"),
+                "failed" => stdout
+                    .clone()
+                    .fail(ByteStreamFailure::Failed("explicit failure".into()))
+                    .await
+                    .expect("explicit failure"),
+                "unused-live" => {
+                    let (writer, output) = AgentStream::<Vec<String>>::new();
+                    let wrapped = output
+                        .into_schema_stream()
+                        .take_wrapped_async()
+                        .await
+                        .unwrap();
+                    let (raw, outcome) = wire::SchemaValueStream::unwrap(wrapped).await;
+                    let rewrapped =
+                        golem_rust::schema::SchemaValueStream::from_reader(raw, outcome)
+                            .take_wrapped_async()
+                            .await
+                            .unwrap();
+                    // Keep the unused bridge and guest writer pending until Store teardown.
+                    std::mem::forget((writer, rewrapped));
+                }
+                "late" | "infinite" => {}
+                _ => panic!("unknown return cutoff mode"),
+            }
+            let late = tail == "late";
+            start_pending_return_tail(async move {
+                if late {
+                    sleep_ms(1_000).await;
+                    stdout.write(b"late".to_vec()).await.expect("late write");
+                    stdout.finish().await.expect("late finish");
+                } else {
+                    let _stdout = stdout;
+                    std::future::pending::<()>().await;
+                }
+            })
+            .await;
+            return Ok(StreamSummary {
+                chunks_read: 0,
+                bytes_read: 0,
+                output_closed: false,
+            });
+        }
         if let Some(arguments) = mode.strip_prefix("rdbms-drop-trap:") {
             use golem_rust::bindings::golem::rdbms::postgres::DbConnection;
             let (address, table) = arguments.split_once('|').expect("database and table");
@@ -1891,6 +2044,9 @@ impl Streaming for StreamingImpl {
                 | "trap-after-clean-eof"
                 | "declared-error"
                 | "explicit-stdout-failure"
+                | "explicit-stdout-cancelled"
+                | "explicit-stdout-abandoned"
+                | "explicit-stdout-resource-exhausted"
                 | "finish-failure"
                 | "writer-abandonment"
                 | "finish-after-reader-drop"
@@ -2032,13 +2188,19 @@ impl Streaming for StreamingImpl {
                 }
                 return Ok(summary);
             }
-            "explicit-stdout-failure" => {
-                stdout
-                    .fail(ByteStreamFailure::Failed(
+            "explicit-stdout-failure"
+            | "explicit-stdout-cancelled"
+            | "explicit-stdout-abandoned"
+            | "explicit-stdout-resource-exhausted" => {
+                let failure = match mode.as_str() {
+                    "explicit-stdout-cancelled" => ByteStreamFailure::Cancelled,
+                    "explicit-stdout-abandoned" => ByteStreamFailure::Abandoned,
+                    "explicit-stdout-resource-exhausted" => ByteStreamFailure::ResourceExhausted,
+                    _ => ByteStreamFailure::Failed(
                         "rust provider explicit stdout failure".to_string(),
-                    ))
-                    .await
-                    .expect("fail stdout explicitly");
+                    ),
+                };
+                stdout.fail(failure).await.expect("fail stdout explicitly");
                 return Ok(summary);
             }
             "writer-abandonment" => {
@@ -2349,6 +2511,27 @@ impl CapableStreaming for CapableStreamingImpl {
             };
             chunks_read += 1;
             bytes.extend(chunk);
+        }
+
+        if let Some(path) = path.strip_prefix("return-cutoff-file:") {
+            write_owner_file(path, b"before").expect("write before return");
+            stdout.write(bytes.clone()).await.expect("accepted stdout");
+            stdout
+                .finish()
+                .await
+                .expect("explicit finish before return");
+            let path = path.to_string();
+            start_pending_return_tail(async move {
+                sleep_ms(1_000).await;
+                write_owner_file(&format!("{path}-late"), b"late").expect("delayed file creation");
+                append_owner_file(&path, b":late").expect("delayed filesystem effect");
+            })
+            .await;
+            return Ok(StreamSummary {
+                chunks_read,
+                bytes_read: bytes.len() as u64,
+                output_closed: false,
+            });
         }
 
         if path == "cancel-stdout-over" {

@@ -1,0 +1,44 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/websocket"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn connect(String, headers? : Array[(String, String)], reconstruction_policy? : ReconstructionPolicy) -> WebsocketConnection raise WebsocketError
+
+// Errors
+pub(all) suberror WebsocketError {
+  ConnectionFailure(String)
+  SendFailure(String)
+  ReceiveFailure(String)
+  ProtocolError(String)
+  Closed((UInt32, String)?)
+  Other(String)
+  SessionLost
+} derive(Eq, @debug.Debug)
+
+// Types and methods
+pub(all) enum Message {
+  Text(String)
+  Binary(Bytes)
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ReconstructionPolicy {
+  ReconnectAutomatically
+  ReportConnectionLoss
+} derive(Eq, @debug.Debug)
+
+pub struct WebsocketConnection {
+  // private fields
+}
+pub fn WebsocketConnection::close(Self, code? : UInt32, reason? : String) -> Unit raise WebsocketError
+pub fn WebsocketConnection::drop(Self) -> Unit
+pub async fn WebsocketConnection::receive(Self) -> Message
+pub async fn WebsocketConnection::receive_with_timeout(Self, UInt64) -> Message?
+pub fn WebsocketConnection::send(Self, Message) -> Unit raise WebsocketError
+
+// Type aliases
+
+// Traits

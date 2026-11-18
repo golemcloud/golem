@@ -7,13 +7,15 @@ use golem_api_grpc::proto::golem::worker::{
     AgentId as ProtoAgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey,
     InputStreamAck, InputStreamHighWater, InvocationAccepted, InvocationFailure,
     InvocationFailureKind, InvocationRejected, InvocationRejectionReason, InvocationRequest,
-    InvocationResponse, InvocationSessionCompletion, OutputStreamEnd, OutputStreamItem,
-    ResumeAttach, ResumeOperation, StreamCancelReason, StreamCancelRole, StreamInvocationIdentity,
-    StreamMappingRole, input_stream_item, invocation_request, invocation_response,
+    InvocationResponse, InvocationSessionCompletion, OutputStreamItem, ResumeAttach,
+    ResumeOperation, StreamDirection, StreamEnd, StreamInvocationIdentity, StreamMappingRole,
+    StreamTerminalAuthor, input_stream_item, invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, invocation_session_result,
 };
+use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+use golem_common::model::{AgentId, InvocationId};
 use golem_schema::proto::golem::common::{Empty, Uuid};
 use golem_schema::proto::golem::schema::{
     ListValue, SchemaValue, SchemaValueStreamReference, schema_value,
@@ -42,7 +44,7 @@ enum Call {
 struct ScriptTransport {
     calls: mpsc::UnboundedSender<Call>,
     responses: Mutex<VecDeque<Result<InvocationResponseStream, WorkerServiceError>>>,
-    cleanups: mpsc::UnboundedSender<(AgentId, ModelIdempotencyKey)>,
+    cleanups: mpsc::UnboundedSender<(AgentId, InvocationId)>,
     cleanup_gate: Arc<Semaphore>,
 }
 
@@ -76,7 +78,7 @@ impl SessionTransport for ScriptTransport {
             .unwrap_or_else(|| Err(WorkerServiceError::Internal("missing resume script".into())))
     }
 
-    async fn cleanup(&self, agent: AgentId, key: ModelIdempotencyKey) -> CleanupOutcome {
+    async fn cleanup(&self, agent: AgentId, key: InvocationId) -> CleanupOutcome {
         let _ = self.cleanups.send((agent, key));
         let _ = self.cleanup_gate.acquire().await;
         CleanupOutcome::FinishedUnconfirmed
@@ -86,7 +88,7 @@ impl SessionTransport for ScriptTransport {
 pub(in crate::custom_api) struct Harness {
     transport: Arc<ScriptTransport>,
     calls: mpsc::UnboundedReceiver<Call>,
-    cleanups: mpsc::UnboundedReceiver<(AgentId, ModelIdempotencyKey)>,
+    cleanups: mpsc::UnboundedReceiver<(AgentId, InvocationId)>,
     pub(in crate::custom_api) response_txs: Vec<ResponseSender>,
 }
 
@@ -188,10 +190,8 @@ fn proto_agent() -> ProtoAgentId {
     }
 }
 
-fn key() -> IdempotencyKey {
-    IdempotencyKey {
-        value: "private-final-key".into(),
-    }
+fn key() -> Uuid {
+    uuid(6)
 }
 
 fn stream_value(id: u64) -> SchemaValue {
@@ -207,7 +207,10 @@ fn start() -> InvocationStart {
         agent_id: Some(proto_agent()),
         method_name: Some("run".into()),
         input: Some(stream_value(INPUT_STREAM_ID)),
-        idempotency_key: Some(key()),
+        idempotency_key: Some(IdempotencyKey {
+            value: "private-final-key".into(),
+        }),
+        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
         ..Default::default()
     }
 }
@@ -302,15 +305,19 @@ fn output_item(sequence: u64) -> InvocationResponse {
 }
 
 fn producer_cancel(sequence: u64) -> InvocationResponse {
-    response(invocation_response::Response::StreamCancel(StreamCancel {
+    response(invocation_response::Response::StreamEnd(StreamEnd {
         transport_stream_id: 9,
         producer_sequence: sequence,
-        role: StreamCancelRole::OutputProducer as i32,
-        reason: StreamCancelReason::Cancelled as i32,
+        direction: StreamDirection::Output as i32,
+        authored_by: StreamTerminalAuthor::Guest as i32,
+        outcome: Some(
+            StreamTerminal::ConsumerCancelled { details: None }
+                .try_into()
+                .unwrap(),
+        ),
         durable_stream_id: Some(uuid(109)),
         durable_offset: offset(sequence),
         epoch: 1,
-        ..Default::default()
     }))
 }
 
@@ -405,7 +412,6 @@ fn limits() -> HttpSessionLimits {
     HttpSessionLimits {
         retry_delay: Duration::ZERO,
         retry_deadline: Duration::from_secs(2),
-        exchange_timeout: Duration::from_secs(5),
         cleanup_timeout: Duration::from_millis(100),
         ..Default::default()
     }
@@ -473,9 +479,12 @@ fn output_bytes(sequence: u64, bytes: &[u8], epoch: u64) -> InvocationResponse {
 }
 
 fn output_end(sequence: u64, epoch: u64) -> InvocationResponse {
-    response(invocation_response::Response::OutputEnd(OutputStreamEnd {
+    response(invocation_response::Response::StreamEnd(StreamEnd {
         transport_stream_id: 9,
         producer_sequence: sequence,
+        direction: StreamDirection::Output as i32,
+        authored_by: StreamTerminalAuthor::Guest as i32,
+        outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
         durable_stream_id: Some(uuid(109)),
         durable_offset: offset(sequence),
         epoch,
@@ -506,15 +515,16 @@ fn event_bytes(event: HttpSessionEvent) -> Option<Vec<u8>> {
 #[test_timeout("10s")]
 async fn input_is_held_until_acceptance_and_empty_chunk_is_not_eof() {
     let mut h = harness(1);
+    let prepared = start();
     let mut session =
-        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+        HttpSession::start_with_transport(prepared.clone(), h.transport.clone(), limits()).unwrap();
     session.input.send_chunk(vec![7]).await.unwrap();
     session.input.send_chunk(Vec::new()).await.unwrap();
     session.input.finish().await.unwrap();
     let Call::Start(sent_start, mut tail) = call(&mut h.calls).await else {
         panic!()
     };
-    assert_eq!(*sent_start, start());
+    assert_eq!(*sent_start, prepared);
     assert!(
         timeout(Duration::from_millis(30), tail.next())
             .await
@@ -554,10 +564,10 @@ async fn input_is_held_until_acceptance_and_empty_chunk_is_not_eof() {
             expected
         );
     }
-    let invocation_request::Request::InputEnd(end) = input(tail.next().await.unwrap()) else {
+    let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap()) else {
         panic!("expected EOF")
     };
-    assert_eq!(end.sequence, 2);
+    assert_eq!(end.producer_sequence, 2);
 }
 
 #[test]
@@ -659,8 +669,9 @@ async fn lost_resume_acceptance_replays_the_exact_attempt() {
     session.input.dispose().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
+    send(&h.response_txs[0], ack(0, replayed.expected_epoch + 1)).await;
     send(&h.response_txs[0], scalar_result()).await;
     assert!(matches!(
         event(&mut session).await,
@@ -705,8 +716,9 @@ async fn definite_attached_rejection_switches_resume_to_takeover() {
     session.input.dispose().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
+    send(&h.response_txs[1], ack(0, takeover.expected_epoch + 1)).await;
     send(&h.response_txs[1], scalar_result()).await;
     assert!(matches!(
         event(&mut session).await,
@@ -761,8 +773,9 @@ async fn definite_takeover_rejection_switches_back_to_resume_without_changing_ep
     session.input.dispose().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
+    send(&h.response_txs[2], ack(0, retry.expected_epoch + 1)).await;
     send(&h.response_txs[2], scalar_result()).await;
     assert!(matches!(
         event(&mut session).await,
@@ -827,8 +840,12 @@ async fn first_acceptance_lost_fails_without_resume_or_second_start() {
 #[test_timeout("10s")]
 async fn cancellation_while_awaiting_acceptance_cleans_prepared_identity() {
     let mut h = harness(1);
+    let mut prepared = start();
+    prepared.idempotency_key = Some(golem_api_grpc::proto::golem::worker::IdempotencyKey {
+        value: "raw-request-key-not-final".into(),
+    });
     let mut session =
-        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+        HttpSession::start_with_transport(prepared, h.transport.clone(), limits()).unwrap();
     let Call::Start(_, _) = call(&mut h.calls).await else {
         panic!()
     };
@@ -845,10 +862,7 @@ async fn cancellation_while_awaiting_acceptance_cleans_prepared_identity() {
         .unwrap()
         .unwrap();
     assert_eq!(agent, AgentId::try_from(proto_agent()).unwrap());
-    assert_eq!(
-        key,
-        ModelIdempotencyKey::new("private-final-key".to_string())
-    );
+    assert_eq!(key, InvocationId::from(self::key()));
 }
 
 #[test]
@@ -912,8 +926,9 @@ async fn explicit_success_does_not_cleanup() {
     session.input.dispose().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
+    send(&h.response_txs[0], ack(0, 1)).await;
     let result = golem_api_grpc::proto::golem::worker::InvocationSessionResult {
         result: Some(invocation_session_result::Result::MethodResult(
             SchemaValue {
@@ -959,6 +974,7 @@ async fn finished_failure_does_not_cleanup() {
     let _ = event(&mut session).await;
     session.input.dispose().await.unwrap();
     let _ = tail.next().await.unwrap();
+    send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], scalar_result()).await;
     let _ = event(&mut session).await;
     send(&h.response_txs[0], failed()).await;
@@ -975,10 +991,18 @@ async fn finished_failure_does_not_cleanup() {
 
 #[test]
 #[test_timeout("10s")]
-async fn rejected_start_cleans_up_exactly_once() {
+async fn rejected_start_cleans_up_its_prepared_unkeyed_identity_exactly_once() {
     let mut h = harness(1);
+    let prepared = start();
+    let Some(golem_common::model::InvocationRequestKey::Unkeyed(uuid)) = prepared
+        .request_key
+        .clone()
+        .map(|key| golem_common::model::InvocationRequestKey::try_from(key).unwrap())
+    else {
+        panic!("test start is unkeyed")
+    };
     let mut session =
-        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+        HttpSession::start_with_transport(prepared, h.transport.clone(), limits()).unwrap();
     let _ = call(&mut h.calls).await;
     send(
         &h.response_txs[0],
@@ -998,10 +1022,12 @@ async fn rejected_start_cleans_up_exactly_once() {
         event(&mut session).await,
         HttpSessionEvent::Error(HttpSessionError::Rejected)
     ));
-    timeout(Duration::from_secs(1), h.cleanups.recv())
+    let (agent, key) = timeout(Duration::from_secs(1), h.cleanups.recv())
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(agent, AgentId::try_from(proto_agent()).unwrap());
+    assert_eq!(key, InvocationId(uuid));
     assert!(
         timeout(Duration::from_millis(50), h.cleanups.recv())
             .await
@@ -1117,9 +1143,12 @@ async fn output_end_does_not_complete_session_and_it_remains_cancelable() {
     };
     send(&h.response_txs[0], accepted(1, None)).await;
     let _ = event(&mut session).await;
-    let end = OutputStreamEnd {
+    let end = StreamEnd {
         transport_stream_id: 9,
         producer_sequence: 0,
+        direction: StreamDirection::Output as i32,
+        authored_by: StreamTerminalAuthor::Guest as i32,
+        outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
         durable_stream_id: Some(uuid(109)),
         durable_offset: offset(0),
         epoch: 1,
@@ -1147,12 +1176,12 @@ async fn output_end_does_not_complete_session_and_it_remains_cancelable() {
     let _ = event(&mut session).await;
     send(
         &h.response_txs[0],
-        response(invocation_response::Response::OutputEnd(end)),
+        response(invocation_response::Response::StreamEnd(end)),
     )
     .await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::OutputEnd(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     session.input.dispose_output(9).await.unwrap();
     assert!(
@@ -1219,14 +1248,16 @@ async fn disposing_delivered_output_uses_consumer_control_and_terminal_disposal_
     ));
 
     session.input.dispose_output(9).await.unwrap();
-    let invocation_request::Request::StreamCancel(cancel) = input(tail.next().await.unwrap())
-    else {
+    let invocation_request::Request::StreamEnd(cancel) = input(tail.next().await.unwrap()) else {
         panic!()
     };
     assert_eq!(cancel.transport_stream_id, 9);
     assert_eq!(cancel.producer_sequence, 0);
-    assert_eq!(cancel.role(), StreamCancelRole::OutputConsumer);
-    assert_eq!(cancel.reason(), StreamCancelReason::ConsumerDrop);
+    assert_eq!(cancel.direction(), StreamDirection::Output);
+    assert_eq!(
+        StreamTerminal::try_from(cancel.outcome.clone().unwrap()).unwrap(),
+        StreamTerminal::ConsumerCancelled { details: None }
+    );
     assert_eq!(cancel.durable_stream_id, Some(uuid(109)));
     assert_eq!(cancel.epoch, 1);
     assert!(cancel.durable_offset.is_empty());
@@ -1234,7 +1265,7 @@ async fn disposing_delivered_output_uses_consumer_control_and_terminal_disposal_
     send(&h.response_txs[0], producer_cancel(1)).await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::StreamCancel(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     session.input.dispose_output(9).await.unwrap();
     assert!(
@@ -1258,7 +1289,7 @@ async fn observed_producer_cancel_is_a_terminal_resume_cursor_after_transport_lo
     session.input.finish().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::InputEnd(_)
+        invocation_request::Request::StreamEnd(_)
     ));
     send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], stream_result()).await;
@@ -1311,7 +1342,7 @@ async fn output_disposal_lost_before_confirmation_is_reissued_after_resume() {
     session.input.dispose_output(9).await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
     drop(h.response_txs.remove(0));
 
@@ -1324,12 +1355,11 @@ async fn output_disposal_lost_before_confirmation_is_reissued_after_resume() {
     };
     accepted.stream_mappings.push(output_mapping());
     send(&h.response_txs[0], decision).await;
-    let invocation_request::Request::StreamCancel(cancel) =
-        input(resumed_tail.next().await.unwrap())
+    let invocation_request::Request::StreamEnd(cancel) = input(resumed_tail.next().await.unwrap())
     else {
         panic!()
     };
-    assert_eq!(cancel.role(), StreamCancelRole::OutputConsumer);
+    assert_eq!(cancel.direction(), StreamDirection::Output);
     assert_eq!(cancel.durable_stream_id, Some(uuid(109)));
     assert_eq!(cancel.epoch, 2);
     assert!(cancel.durable_offset.is_empty());
@@ -1375,6 +1405,92 @@ async fn terminal_input_high_water_releases_retention_and_replays_nothing() {
 
 #[test]
 #[test_timeout("10s")]
+async fn request_body_idle_failure_replays_in_order_until_its_terminal_is_persisted() {
+    for high_water in [None, Some(0), Some(1)] {
+        let mut h = harness(2);
+        let mut session = h.start_session();
+        let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+            panic!()
+        };
+        send(&h.response_txs[0], accepted(1, None)).await;
+        let _ = event(&mut session).await;
+        session
+            .input
+            .send_chunk(b"asymmetric".to_vec())
+            .await
+            .unwrap();
+        let invocation_request::Request::InputItem(original) = input(tail.next().await.unwrap())
+        else {
+            panic!()
+        };
+        session.input.fail_idle_timeout().await.unwrap();
+        let invocation_request::Request::StreamEnd(original_end) =
+            input(tail.next().await.unwrap())
+        else {
+            panic!()
+        };
+        drop(h.response_txs.remove(0));
+        let Call::Resume(resume, mut tail) = call(&mut h.calls).await else {
+            panic!()
+        };
+        let mut decision = resumed_accepted(&resume, high_water);
+        if high_water == Some(1) {
+            let Some(invocation_response::Response::Accepted(accepted)) = &mut decision.response
+            else {
+                panic!()
+            };
+            accepted.stream_mappings[0]
+                .high_water
+                .as_mut()
+                .unwrap()
+                .terminal = true;
+        }
+        send(&h.response_txs[0], decision).await;
+        if high_water.is_none() {
+            let invocation_request::Request::InputItem(item) = input(tail.next().await.unwrap())
+            else {
+                panic!("lost buffered bytes")
+            };
+            assert_eq!(item.payload, original.payload);
+            assert_eq!(item.sequence, 0);
+            assert_eq!(item.epoch, 2);
+            send(&h.response_txs[0], ack(0, 2)).await;
+        }
+        if high_water != Some(1) {
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!("lost idle terminal")
+            };
+            assert_eq!(end.outcome, original_end.outcome);
+            assert_eq!(end.authored_by(), StreamTerminalAuthor::Host);
+            assert_eq!(end.producer_sequence, 1);
+            assert_eq!(end.epoch, 2);
+            send(&h.response_txs[0], ack(1, 2)).await;
+        }
+        send(&h.response_txs[0], scalar_result()).await;
+        let actual = event(&mut session).await;
+        if let HttpSessionEvent::Error(error) = &actual {
+            panic!("high_water={high_water:?}: {error:?}");
+        }
+        assert!(
+            matches!(actual, HttpSessionEvent::Result(_)),
+            "high_water={high_water:?}: {actual:?}"
+        );
+        send(&h.response_txs[0], finished()).await;
+        assert!(matches!(
+            event(&mut session).await,
+            HttpSessionEvent::Finished(_)
+        ));
+        assert!(
+            tail.next().await.is_none(),
+            "persisted frames were replayed"
+        );
+        assert!(h.cleanups.try_recv().is_err());
+    }
+}
+
+#[test]
+#[test_timeout("10s")]
 async fn disposal_control_bypasses_a_full_output_event_queue() {
     let mut h = harness(1);
     let mut l = limits();
@@ -1399,7 +1515,7 @@ async fn disposal_control_bypasses_a_full_output_event_queue() {
     .await
     .unwrap();
     session.input.dispose_output(9).await.unwrap();
-    let invocation_request::Request::StreamCancel(cancel) = input(
+    let invocation_request::Request::StreamEnd(cancel) = input(
         timeout(Duration::from_secs(1), tail.next())
             .await
             .unwrap()
@@ -1407,7 +1523,7 @@ async fn disposal_control_bypasses_a_full_output_event_queue() {
     ) else {
         panic!()
     };
-    assert_eq!(cancel.role(), StreamCancelRole::OutputConsumer);
+    assert_eq!(cancel.direction(), StreamDirection::Output);
 }
 
 #[test]
@@ -1507,8 +1623,9 @@ fn body_bytes_are_absent_from_session_trace_logs() {
             session.input.dispose().await.unwrap();
             assert!(matches!(
                 input(tail.next().await.unwrap()),
-                invocation_request::Request::StreamCancel(_)
+                invocation_request::Request::StreamEnd(_)
             ));
+            send(&h.response_txs[0], ack(1, 1)).await;
             send(&h.response_txs[0], stream_result()).await;
             let _ = event(&mut session).await;
             send(
@@ -1521,22 +1638,33 @@ fn body_bytes_are_absent_from_session_trace_logs() {
             assert_eq!(event_bytes(output).unwrap(), b"private-response-sentinel");
             send(
                 &h.response_txs[0],
-                response(invocation_response::Response::OutputError(
-                    golem_api_grpc::proto::golem::worker::OutputStreamError {
-                        transport_stream_id: 9,
-                        producer_sequence: 1,
-                        details: "value-node index out of range: 3".into(),
-                        durable_stream_id: Some(uuid(109)),
-                        durable_offset: offset(1),
-                        epoch: 1,
-                    },
-                )),
+                response(invocation_response::Response::StreamEnd(StreamEnd {
+                    transport_stream_id: 9,
+                    producer_sequence: 1,
+                    direction: StreamDirection::Output as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        StreamTerminal::Failed(StreamError::Trapped(
+                            "value-node index out of range: 3".into(),
+                        ))
+                        .try_into()
+                        .unwrap(),
+                    ),
+                    durable_stream_id: Some(uuid(109)),
+                    durable_offset: offset(1),
+                    epoch: 1,
+                })),
             )
             .await;
-            let HttpSessionEvent::OutputError(error) = event(&mut session).await else {
+            let HttpSessionEvent::StreamEnd(error) = event(&mut session).await else {
                 panic!("expected the producer error to reach the HTTP adapter");
             };
-            assert_eq!(error.details, "value-node index out of range: 3");
+            assert_eq!(
+                StreamTerminal::try_from(error.outcome.unwrap()).unwrap(),
+                StreamTerminal::Failed(StreamError::Trapped(
+                    "value-node index out of range: 3".into()
+                ))
+            );
             let mut completion = failed();
             let Some(invocation_response::Response::Finished(finished)) = &mut completion.response
             else {
@@ -1662,12 +1790,15 @@ async fn lifecycle_early_response_is_independent_of_request_eof() {
         "early response disposal must wait for in-flight input ACKs"
     );
     send(&h.response_txs[0], ack(0, 1)).await;
-    let invocation_request::Request::StreamCancel(cancel) = input(tail.next().await.unwrap())
-    else {
+    let invocation_request::Request::StreamEnd(cancel) = input(tail.next().await.unwrap()) else {
         panic!()
     };
     assert_eq!(cancel.producer_sequence, 1);
-    assert_eq!(cancel.reason(), StreamCancelReason::ConsumerDrop);
+    assert_eq!(
+        StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
+        StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+    );
+    send(&h.response_txs[0], ack(1, 1)).await;
     send(&h.response_txs[0], stream_result()).await;
     let _ = event(&mut session).await;
     send(&h.response_txs[0], output_bytes(0, b"bc", 1)).await;
@@ -1675,7 +1806,7 @@ async fn lifecycle_early_response_is_independent_of_request_eof() {
     send(&h.response_txs[0], output_end(1, 1)).await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::OutputEnd(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     send(&h.response_txs[0], finished()).await;
     assert!(matches!(
@@ -1739,14 +1870,16 @@ async fn input_disposal_is_reissued_only_when_resume_high_water_is_not_terminal(
                     .is_err()
             );
         } else {
-            let invocation_request::Request::StreamCancel(cancel) =
-                input(tail.next().await.unwrap())
+            let invocation_request::Request::StreamEnd(cancel) = input(tail.next().await.unwrap())
             else {
                 panic!()
             };
             assert_eq!(cancel.producer_sequence, 1);
             assert_eq!(cancel.epoch, 2);
-            assert_eq!(cancel.reason(), StreamCancelReason::ConsumerDrop);
+            assert_eq!(
+                StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+            );
         }
         session.cancellation.cancel();
     }
@@ -1789,25 +1922,29 @@ async fn lifecycle_reattach_deduplicates_replayed_public_output() {
     send(&h.response_txs[0], output_end(2, 8)).await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::OutputEnd(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     send(
         &h.response_txs[0],
-        response(invocation_response::Response::StreamCancel(StreamCancel {
+        response(invocation_response::Response::StreamEnd(StreamEnd {
             transport_stream_id: INPUT_STREAM_ID,
             producer_sequence: 0,
-            role: StreamCancelRole::InputConsumer as i32,
-            reason: StreamCancelReason::ConsumerDrop as i32,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(
+                StreamTerminal::ConsumerCancelled { details: None }
+                    .try_into()
+                    .unwrap(),
+            ),
             durable_stream_id: Some(uuid(101)),
             durable_offset: offset(0),
             epoch: 8,
-            ..Default::default()
         })),
     )
     .await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::StreamCancel(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     send(&h.response_txs[0], finished()).await;
     assert!(matches!(
@@ -1902,7 +2039,7 @@ async fn lifecycle_input_ack_lost_replays_actual_unacknowledged_request() {
     assert_eq!(next.sequence, first.sequence + 1);
     assert!(matches!(
         input(resumed_tail.next().await.unwrap()),
-        invocation_request::Request::InputEnd(_)
+        invocation_request::Request::StreamEnd(_)
     ));
     assert!(
         timeout(Duration::from_millis(30), h.calls.recv())
@@ -1982,10 +2119,10 @@ async fn lifecycle_input_eof_is_not_invocation_cancellation() {
     ));
 
     session.input.finish().await.unwrap();
-    let invocation_request::Request::InputEnd(end) = input(tail.next().await.unwrap()) else {
+    let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap()) else {
         panic!("input EOF was not forwarded")
     };
-    assert_eq!(end.sequence, 0);
+    assert_eq!(end.producer_sequence, 0);
     send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], scalar_result()).await;
     assert!(matches!(
@@ -2011,6 +2148,623 @@ async fn lifecycle_input_eof_is_not_invocation_cancellation() {
             .await
             .is_err()
     );
+}
+
+#[test]
+#[test_timeout("10s")]
+fn request_body_idle_timeout_fails_only_the_input_stream() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            for send_prefix in [false, true] {
+                let mut h = harness(1);
+                let l = HttpSessionLimits {
+                    retained_input_bytes: 136,
+                    retained_input_frames: 1,
+                    ..limits()
+                };
+                let mut session =
+                    HttpSession::start_with_transport(start(), h.transport.clone(), l).unwrap();
+                let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                    panic!()
+                };
+                send(&h.response_txs[0], accepted(1, None)).await;
+                let _ = event(&mut session).await;
+                let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
+                let done = Arc::new(AtomicBool::new(false));
+                let mut upload = crate::custom_api::raw_handler::start_upload(
+                    poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                    session.input.clone(),
+                    session.cancellation.clone(),
+                    done.clone(),
+                    Duration::from_secs(1),
+                    crate::custom_api::http_envelope::HttpVersion::Http2,
+                );
+                if send_prefix {
+                    tx.send(Ok(bytes::Bytes::from_static(b"a"))).await.unwrap();
+                    assert!(matches!(
+                        input(tail.next().await.unwrap()),
+                        invocation_request::Request::InputItem(_)
+                    ));
+                    send(&h.response_txs[0], ack(0, 1)).await;
+                }
+                tokio::task::yield_now().await;
+                tokio::time::advance(Duration::from_millis(800)).await;
+                // An empty transport chunk does not buy the client another idle interval.
+                tx.send(Ok(bytes::Bytes::new())).await.unwrap();
+                tokio::task::yield_now().await;
+                tokio::time::advance(Duration::from_millis(400)).await;
+                let expiry = tokio::time::Instant::now();
+                upload.delivery_stopped().await;
+                assert_eq!(
+                    tokio::time::Instant::now(),
+                    expiry,
+                    "empty chunks extended the idle interval"
+                );
+                tokio::task::yield_now().await;
+                assert!(
+                    tx.is_closed(),
+                    "an HTTP/2 upload kept polling the request body after the idle timeout"
+                );
+                let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+                else {
+                    panic!("missing input failure")
+                };
+                assert_eq!(end.direction(), StreamDirection::Input);
+                assert_eq!(end.authored_by(), StreamTerminalAuthor::Host);
+                assert_eq!(end.producer_sequence, u64::from(send_prefix));
+                assert_eq!(
+                    StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                    StreamTerminal::Failed(StreamError::Interrupted(
+                        "HTTP request body idle timeout".into()
+                    ))
+                );
+                send(&h.response_txs[0], ack(u64::from(send_prefix), 1)).await;
+                assert!(!done.load(Ordering::Acquire));
+                assert!(!session.cancellation.token.is_cancelled());
+                assert!(h.cleanups.try_recv().is_err());
+                send(&h.response_txs[0], scalar_result()).await;
+                assert!(matches!(
+                    event(&mut session).await,
+                    HttpSessionEvent::Result(_)
+                ));
+                send(&h.response_txs[0], finished()).await;
+                assert!(matches!(
+                    event(&mut session).await,
+                    HttpSessionEvent::Finished(_)
+                ));
+                assert!(
+                    tail.next().await.is_none(),
+                    "idle expiry must not send further frames"
+                );
+                assert!(h.cleanups.try_recv().is_err());
+            }
+        });
+}
+
+#[test]
+#[test_timeout("10s")]
+fn unread_request_body_bounds_only_the_wait_for_acceptance() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            const IDLE: Duration = Duration::from_secs(1);
+            let idle = IDLE;
+            async fn receive(
+                session: &mut HttpSession,
+                body_rx: mpsc::Receiver<Result<bytes::Bytes, std::io::Error>>,
+                upload: &mut Option<crate::custom_api::raw_handler::Upload>,
+                has_request_body: bool,
+            ) -> Result<(), crate::custom_api::error::RequestHandlerError> {
+                crate::custom_api::raw_handler::receive_response_head(
+                    session,
+                    poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(
+                        body_rx,
+                    )),
+                    upload,
+                    Arc::new(AtomicBool::new(false)),
+                    IDLE,
+                    has_request_body,
+                    crate::custom_api::http_envelope::HttpVersion::Http1,
+                )
+                .await
+                .map(|_| ())
+            }
+
+            // An incomplete body that is never polled, and no acceptance.
+            let h = harness(1);
+            let mut session = h.start_session();
+            let (tx, rx) = mpsc::channel(1);
+            tx.send(Ok(bytes::Bytes::from_static(b"x"))).await.unwrap();
+            let started = tokio::time::Instant::now();
+            let result = timeout(
+                Duration::from_secs(30),
+                receive(&mut session, rx, &mut None, true),
+            )
+            .await
+            .expect("the acceptance wait of an unread body is unbounded");
+            assert!(matches!(
+                result,
+                Err(crate::custom_api::error::RequestHandlerError::RawAcceptanceTimeout)
+            ));
+            assert_eq!(started.elapsed(), idle);
+
+            // A bodyless request keeps waiting for acceptance.
+            let h = harness(1);
+            let mut session = h.start_session();
+            let (_tx, rx) = mpsc::channel(1);
+            assert!(
+                timeout(idle * 10, receive(&mut session, rx, &mut None, false))
+                    .await
+                    .is_err()
+            );
+
+            // After acceptance the response head may take longer than the bound.
+            let h = harness(1);
+            let mut session = h.start_session();
+            let (_tx, rx) = mpsc::channel(1);
+            send(&h.response_txs[0], accepted(1, None)).await;
+            let response_tx = h.response_txs[0].clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(idle * 5).await;
+                send(&response_tx, scalar_result()).await;
+            });
+            let mut upload = None;
+            receive(&mut session, rx, &mut upload, true)
+                .await
+                .expect("an accepted handler was bounded by the acceptance wait");
+            assert!(upload.is_some());
+
+            // Dropping the unread input after acceptance does not bring the bound back.
+            let h = harness(1);
+            let mut session = h.start_session();
+            let (_tx, rx) = mpsc::channel(1);
+            send(&h.response_txs[0], accepted(1, None)).await;
+            send(
+                &h.response_txs[0],
+                response(invocation_response::Response::StreamEnd(StreamEnd {
+                    transport_stream_id: INPUT_STREAM_ID,
+                    producer_sequence: 0,
+                    direction: StreamDirection::Input as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        StreamTerminal::ConsumerCancelled { details: None }
+                            .try_into()
+                            .unwrap(),
+                    ),
+                    durable_stream_id: Some(uuid(101)),
+                    durable_offset: offset(0),
+                    epoch: 1,
+                })),
+            )
+            .await;
+            let response_tx = h.response_txs[0].clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(idle * 5).await;
+                send(&response_tx, scalar_result()).await;
+            });
+            let mut upload = None;
+            receive(&mut session, rx, &mut upload, true)
+                .await
+                .expect("dropping the input brought back the acceptance bound");
+        });
+}
+
+#[test]
+#[test_timeout("10s")]
+fn guest_input_disposal_stops_the_upload_without_a_late_idle_failure() {
+    use crate::custom_api::http_envelope::HttpVersion;
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            for version in [HttpVersion::Http2, HttpVersion::Http1] {
+                let mut h = harness(1);
+                let mut session = h.start_session();
+                let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                    panic!()
+                };
+                send(&h.response_txs[0], accepted(1, None)).await;
+                send(
+                    &h.response_txs[0],
+                    response(invocation_response::Response::StreamEnd(StreamEnd {
+                        transport_stream_id: INPUT_STREAM_ID,
+                        producer_sequence: 0,
+                        direction: StreamDirection::Input as i32,
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(
+                            StreamTerminal::ConsumerCancelled { details: None }
+                                .try_into()
+                                .unwrap(),
+                        ),
+                        durable_stream_id: Some(uuid(101)),
+                        durable_offset: offset(0),
+                        epoch: 1,
+                    })),
+                )
+                .await;
+                send(&h.response_txs[0], scalar_result()).await;
+                let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(1);
+                let done = Arc::new(AtomicBool::new(false));
+                let mut upload = None;
+                crate::custom_api::raw_handler::receive_response_head(
+                    &mut session,
+                    poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                    &mut upload,
+                    done.clone(),
+                    Duration::from_secs(1),
+                    true,
+                    version,
+                )
+                .await
+                .unwrap();
+                if version == HttpVersion::Http2 {
+                    assert!(
+                        tx.is_closed(),
+                        "a stopped HTTP/2 upload kept polling the request body"
+                    );
+                } else {
+                    // The rest of an HTTP/1 body is read and discarded, so a disconnect is seen.
+                    for _ in 0..2 {
+                        tx.send(Ok(bytes::Bytes::from_static(b"late")))
+                            .await
+                            .unwrap();
+                    }
+                }
+                tokio::time::advance(Duration::from_secs(10)).await;
+                send(&h.response_txs[0], finished()).await;
+                assert!(matches!(
+                    event(&mut session).await,
+                    HttpSessionEvent::Finished(_)
+                ));
+                assert!(
+                    tail.next().await.is_none(),
+                    "a stopped upload sent late input"
+                );
+                assert!(!done.load(Ordering::Acquire));
+                assert!(!session.cancellation.token.is_cancelled());
+                assert!(h.cleanups.try_recv().is_err());
+                if version == HttpVersion::Http1 {
+                    tx.send(Err(std::io::Error::other("client disconnected")))
+                        .await
+                        .unwrap();
+                    timeout(
+                        Duration::from_secs(1),
+                        session.cancellation.token.cancelled(),
+                    )
+                    .await
+                    .expect("a read failure after disposal did not cancel the session");
+                }
+            }
+        });
+}
+
+#[test]
+#[test_timeout("30s")]
+async fn disconnect_cancels_the_session_after_the_upload_stops() {
+    use crate::custom_api::http_envelope::HttpVersion;
+    use tokio::io::AsyncWriteExt;
+
+    enum Client {
+        Http1(tokio::net::TcpStream),
+        Http2 {
+            body: h2::SendStream<bytes::Bytes>,
+            _client: h2::client::SendRequest<bytes::Bytes>,
+            _response: h2::client::ResponseFuture,
+            _connection: tokio_util::task::AbortOnDropHandle<Result<(), h2::Error>>,
+        },
+    }
+
+    for (version, idle_failure) in [
+        (HttpVersion::Http1, false),
+        (HttpVersion::Http1, true),
+        (HttpVersion::Http2, false),
+        (HttpVersion::Http2, true),
+    ] {
+        let mut h = harness(1);
+        let session = h.start_session();
+        let cancellation = session.cancellation.clone();
+        let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+            panic!()
+        };
+        send(&h.response_txs[0], accepted(1, None)).await;
+        let idle = if idle_failure {
+            Duration::from_millis(200)
+        } else {
+            Duration::from_secs(60)
+        };
+        let (head_tx, head_rx) = tokio::sync::oneshot::channel();
+        let session = Arc::new(Mutex::new(Some((session, head_tx))));
+        let endpoint = poem::endpoint::make({
+            move |mut request: poem::Request| {
+                let session = session.clone();
+                async move {
+                    let (mut session, head_tx) = session.lock().await.take().unwrap();
+                    let _guard = session.drop_guard();
+                    let mut upload = None;
+                    let head = crate::custom_api::raw_handler::receive_response_head(
+                        &mut session,
+                        request.take_body(),
+                        &mut upload,
+                        Arc::new(AtomicBool::new(false)),
+                        idle,
+                        true,
+                        version,
+                    )
+                    .await;
+                    let _ = head_tx.send(head.map(|_| ()));
+                    // The response body would keep the session and the upload alive.
+                    std::future::pending::<()>().await;
+                    poem::Response::default()
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let acceptor = poem::listener::TcpAcceptor::from_tokio(listener).unwrap();
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+            golem_service_base::http_server::run(acceptor, endpoint, Default::default()),
+        ));
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut client = if version == HttpVersion::Http1 {
+            socket
+                .write_all(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100\r\n\r\nx")
+                .await
+                .unwrap();
+            Client::Http1(socket)
+        } else {
+            let (mut client, connection) = h2::client::handshake(socket).await.unwrap();
+            let connection = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(connection));
+            let request = http::Request::builder()
+                .method("POST")
+                .uri(format!("http://{address}/"))
+                .body(())
+                .unwrap();
+            let (response, mut body) = client.send_request(request, false).unwrap();
+            body.send_data(bytes::Bytes::from_static(b"x"), false)
+                .unwrap();
+            Client::Http2 {
+                body,
+                _client: client,
+                _response: response,
+                _connection: connection,
+            }
+        };
+        assert!(matches!(
+            input(tail.next().await.unwrap()),
+            invocation_request::Request::InputItem(_)
+        ));
+        send(&h.response_txs[0], ack(0, 1)).await;
+        if idle_failure {
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!("missing input failure")
+            };
+            assert_eq!(end.authored_by(), StreamTerminalAuthor::Host);
+        } else {
+            send(
+                &h.response_txs[0],
+                response(invocation_response::Response::StreamEnd(StreamEnd {
+                    transport_stream_id: INPUT_STREAM_ID,
+                    producer_sequence: 1,
+                    direction: StreamDirection::Input as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        StreamTerminal::ConsumerCancelled { details: None }
+                            .try_into()
+                            .unwrap(),
+                    ),
+                    durable_stream_id: Some(uuid(101)),
+                    durable_offset: offset(1),
+                    epoch: 1,
+                })),
+            )
+            .await;
+            send(&h.response_txs[0], stream_result()).await;
+            head_rx.await.unwrap().expect("the response head failed");
+        }
+        // A client that is still connected keeps its session; its late bytes are discarded.
+        match &mut client {
+            Client::Http1(socket) => socket.write_all(b"late").await.unwrap(),
+            Client::Http2 { body, .. } => body
+                .send_data(bytes::Bytes::from_static(b"late"), false)
+                .unwrap(),
+        }
+        assert!(
+            timeout(Duration::from_millis(300), tail.next())
+                .await
+                .is_err(),
+            "a stopped upload delivered late bytes"
+        );
+        assert!(!cancellation.token.is_cancelled());
+        drop(client);
+        timeout(Duration::from_secs(5), cancellation.token.cancelled())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "a disconnected {version:?} client kept its session after the upload stopped"
+                )
+            });
+    }
+}
+
+#[test]
+#[test_timeout("10s")]
+fn steady_upload_and_long_response_are_not_bounded_by_session_duration() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut h = harness(1);
+            let mut session = h.start_session();
+            let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                panic!()
+            };
+            send(&h.response_txs[0], accepted(1, None)).await;
+            let _ = event(&mut session).await;
+            send(&h.response_txs[0], stream_result()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Result(_)
+            ));
+            let mut response_bytes = Vec::new();
+            let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(1);
+            let done = Arc::new(AtomicBool::new(false));
+            let mut upload = crate::custom_api::raw_handler::start_upload(
+                poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                session.input.clone(),
+                session.cancellation.clone(),
+                done.clone(),
+                Duration::from_secs(60),
+                crate::custom_api::http_envelope::HttpVersion::Http1,
+            );
+            for sequence in 0..7 {
+                tokio::time::advance(Duration::from_secs(48)).await;
+                tx.send(Ok(bytes::Bytes::from(vec![sequence as u8])))
+                    .await
+                    .unwrap();
+                let invocation_request::Request::InputItem(item) =
+                    input(tail.next().await.unwrap())
+                else {
+                    panic!("steady upload failed")
+                };
+                assert_eq!(item.sequence, sequence);
+                let input_stream_item::Payload::Value(value) = item.payload.unwrap() else {
+                    panic!()
+                };
+                assert_eq!(
+                    value,
+                    SchemaValue {
+                        value: Some(schema_value::Value::ListValue(ListValue {
+                            elements: vec![SchemaValue {
+                                value: Some(schema_value::Value::U8Value(sequence as u32)),
+                            }]
+                        })),
+                    }
+                );
+                send(&h.response_txs[0], ack(sequence, 1)).await;
+                send(
+                    &h.response_txs[0],
+                    output_bytes(sequence, &[sequence as u8], 1),
+                )
+                .await;
+                response_bytes.extend(event_bytes(event(&mut session).await).unwrap());
+            }
+            drop(tx);
+            upload.delivery_stopped().await;
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!("missing EOF")
+            };
+            assert_eq!(end.producer_sequence, 7);
+            assert_eq!(
+                StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                StreamTerminal::Finished
+            );
+            send(&h.response_txs[0], ack(7, 1)).await;
+            assert!(done.load(Ordering::Acquire));
+            tokio::time::advance(Duration::from_secs(360)).await;
+            send(&h.response_txs[0], output_bytes(7, b"last", 1)).await;
+            response_bytes.extend(event_bytes(event(&mut session).await).unwrap());
+            assert_eq!(response_bytes, b"\0\x01\x02\x03\x04\x05\x06last");
+            send(&h.response_txs[0], output_end(8, 1)).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::StreamEnd(_)
+            ));
+            send(&h.response_txs[0], finished()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Finished(_)
+            ));
+            assert!(tail.next().await.is_none(), "late input terminal after EOF");
+            assert!(!session.cancellation.token.is_cancelled());
+            assert!(h.cleanups.try_recv().is_err());
+        });
+}
+
+#[test]
+#[test_timeout("10s")]
+fn invocation_backpressure_is_not_request_body_idle_time() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut h = harness(1);
+            let mut session = HttpSession::start_with_transport(
+                start(),
+                h.transport.clone(),
+                HttpSessionLimits {
+                    retained_input_bytes: 136,
+                    retained_input_frames: 1,
+                    ..limits()
+                },
+            )
+            .unwrap();
+            let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                panic!()
+            };
+            send(&h.response_txs[0], accepted(1, None)).await;
+            let _ = event(&mut session).await;
+            let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
+            let done = Arc::new(AtomicBool::new(false));
+            let mut upload = crate::custom_api::raw_handler::start_upload(
+                poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                session.input.clone(),
+                session.cancellation.clone(),
+                done.clone(),
+                Duration::from_secs(1),
+                crate::custom_api::http_envelope::HttpVersion::Http2,
+            );
+            tx.send(Ok(bytes::Bytes::from_static(b"ab"))).await.unwrap();
+            assert!(matches!(
+                input(tail.next().await.unwrap()),
+                invocation_request::Request::InputItem(_)
+            ));
+            tokio::time::advance(Duration::from_secs(3)).await;
+            send(&h.response_txs[0], ack(0, 1)).await;
+            let invocation_request::Request::InputItem(item) = input(tail.next().await.unwrap())
+            else {
+                panic!("backpressure expired the upload")
+            };
+            assert_eq!(item.sequence, 1);
+            send(&h.response_txs[0], ack(1, 1)).await;
+            drop(tx);
+            upload.delivery_stopped().await;
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!("missing EOF")
+            };
+            assert_eq!(
+                StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                StreamTerminal::Finished
+            );
+            send(&h.response_txs[0], ack(2, 1)).await;
+            assert!(done.load(Ordering::Acquire));
+            send(&h.response_txs[0], scalar_result()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Result(_)
+            ));
+            send(&h.response_txs[0], finished()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Finished(_)
+            ));
+        });
 }
 
 #[test]
@@ -2046,21 +2800,22 @@ async fn lifecycle_disconnect_active_compute_cancels_once_and_releases_blocked_i
     session.cancellation.cancel();
 
     let mut cancelled_roles = Vec::new();
-    for expected in [
-        StreamCancelRole::OutputConsumer,
-        StreamCancelRole::InputProducer,
-    ] {
+    for expected in [StreamDirection::Output, StreamDirection::Input] {
         let request = timeout(Duration::from_secs(1), tail.next())
             .await
             .unwrap()
             .unwrap();
-        let invocation_request::Request::StreamCancel(cancel) = input(request) else {
+        let invocation_request::Request::StreamEnd(cancel) = input(request) else {
             panic!("disconnect must cancel both stream directions");
         };
-        assert_eq!(cancel.reason(), StreamCancelReason::Cancelled);
         assert_eq!(cancel.epoch, 1);
-        assert_eq!(cancel.role(), expected);
-        if expected == StreamCancelRole::OutputConsumer {
+        assert_eq!(cancel.direction(), expected);
+        let terminal = StreamTerminal::try_from(cancel.outcome.clone().unwrap()).unwrap();
+        if expected == StreamDirection::Output {
+            assert_eq!(
+                terminal,
+                StreamTerminal::ConsumerCancelled { details: None }
+            );
             assert!(
                 timeout(Duration::from_millis(20), tail.next())
                     .await
@@ -2069,12 +2824,16 @@ async fn lifecycle_disconnect_active_compute_cancels_once_and_releases_blocked_i
             );
             send(&h.response_txs[0], ack(0, 1)).await;
         } else {
+            assert_eq!(
+                terminal,
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+            );
             assert_eq!(cancel.producer_sequence, 1);
         }
-        cancelled_roles.push(cancel.role());
+        cancelled_roles.push(cancel.direction());
     }
-    assert!(cancelled_roles.contains(&StreamCancelRole::InputProducer));
-    assert!(cancelled_roles.contains(&StreamCancelRole::OutputConsumer));
+    assert!(cancelled_roles.contains(&StreamDirection::Input));
+    assert!(cancelled_roles.contains(&StreamDirection::Output));
 
     let result = timeout(Duration::from_secs(1), blocked_input)
         .await
@@ -2135,15 +2894,24 @@ async fn dropping_response_owner_sends_cancellation_before_closing_transport() {
                 .await
                 .expect("cancellation must not wait for the cleanup deadline")
                 .expect("owner drop must send cancellations before closing transport");
-            let invocation_request::Request::StreamCancel(cancel) = input(request) else {
+            let invocation_request::Request::StreamEnd(cancel) = input(request) else {
                 panic!("expected stream cancellation")
             };
-            assert_eq!(cancel.reason(), StreamCancelReason::Cancelled);
             assert_eq!(cancel.epoch, 1);
-            roles.push(cancel.role());
+            let expected = if cancel.direction() == StreamDirection::Input {
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+            } else {
+                StreamTerminal::ConsumerCancelled { details: None }
+            };
+            assert_eq!(
+                StreamTerminal::try_from(cancel.outcome.clone().unwrap()).unwrap(),
+                expected
+            );
+            roles.push(cancel.direction());
         }
-        assert!(roles.contains(&StreamCancelRole::InputProducer));
-        assert!(roles.contains(&StreamCancelRole::OutputConsumer));
+        assert!(roles.contains(&StreamDirection::Input));
+        assert!(roles.contains(&StreamDirection::Output));
+        send(&h.response_txs[0], ack(0, 1)).await;
         send(&h.response_txs[0], producer_cancel(0)).await;
         send(&h.response_txs[0], finished()).await;
         assert!(
@@ -2172,20 +2940,28 @@ async fn dropping_owner_before_acceptance_cancels_late_output_mapping() {
         .await
         .unwrap()
         .unwrap();
-    let invocation_request::Request::StreamCancel(cancel) = input(request) else {
+    let invocation_request::Request::StreamEnd(cancel) = input(request) else {
         panic!("expected input cancellation")
     };
-    assert_eq!(cancel.role(), StreamCancelRole::InputProducer);
+    assert_eq!(cancel.direction(), StreamDirection::Input);
+    assert_eq!(
+        StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
+        StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+    );
+    send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], stream_result()).await;
     let request = timeout(Duration::from_secs(1), tail.next())
         .await
         .unwrap()
         .unwrap();
-    let invocation_request::Request::StreamCancel(cancel) = input(request) else {
+    let invocation_request::Request::StreamEnd(cancel) = input(request) else {
         panic!("expected output cancellation")
     };
-    assert_eq!(cancel.role(), StreamCancelRole::OutputConsumer);
-    assert_eq!(cancel.reason(), StreamCancelReason::Cancelled);
+    assert_eq!(cancel.direction(), StreamDirection::Output);
+    assert_eq!(
+        StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
+        StreamTerminal::ConsumerCancelled { details: None }
+    );
     send(&h.response_txs[0], producer_cancel(0)).await;
     send(&h.response_txs[0], finished()).await;
     assert!(
@@ -2212,9 +2988,10 @@ async fn disconnect_finished_during_drain_skips_fallback_cleanup() {
     for _ in 0..2 {
         assert!(matches!(
             input(tail.next().await.unwrap()),
-            invocation_request::Request::StreamCancel(_)
+            invocation_request::Request::StreamEnd(_)
         ));
     }
+    send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], producer_cancel(0)).await;
     send(&h.response_txs[0], finished()).await;
     assert!(matches!(
@@ -2335,4 +3112,92 @@ async fn lifecycle_serving_owner_drop_releases_resources_without_second_start() 
             .await
             .is_err()
     );
+}
+
+#[test]
+#[test_timeout("10s")]
+fn idle_failure_waits_for_input_credits_without_stopping_output() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut h = harness(1);
+            let mut session = HttpSession::start_with_transport(
+                start(),
+                h.transport.clone(),
+                HttpSessionLimits {
+                    retained_input_bytes: 136,
+                    retained_input_frames: 1,
+                    ..limits()
+                },
+            )
+            .unwrap();
+            let Call::Start(_, mut tail) = call(&mut h.calls).await else {
+                panic!()
+            };
+            send(&h.response_txs[0], accepted(1, None)).await;
+            let _ = event(&mut session).await;
+            let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(2);
+            let done = Arc::new(AtomicBool::new(false));
+            let mut upload = crate::custom_api::raw_handler::start_upload(
+                poem::Body::from_bytes_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                session.input.clone(),
+                session.cancellation.clone(),
+                done.clone(),
+                Duration::from_secs(1),
+                crate::custom_api::http_envelope::HttpVersion::Http2,
+            );
+            tx.send(Ok(bytes::Bytes::from_static(b"a"))).await.unwrap();
+            assert!(matches!(
+                input(tail.next().await.unwrap()),
+                invocation_request::Request::InputItem(_)
+            ));
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(2)).await;
+            tokio::task::yield_now().await;
+            assert!(
+                timeout(Duration::from_millis(30), tail.next())
+                    .await
+                    .is_err(),
+                "terminal must retain its own input credit"
+            );
+            send(&h.response_txs[0], stream_result()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Result(_)
+            ));
+            send(&h.response_txs[0], output_bytes(0, b"before", 1)).await;
+            assert_eq!(event_bytes(event(&mut session).await).unwrap(), b"before");
+            assert!(!session.cancellation.token.is_cancelled());
+            send(&h.response_txs[0], ack(0, 1)).await;
+            upload.delivery_stopped().await;
+            let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap())
+            else {
+                panic!()
+            };
+            assert_eq!(end.producer_sequence, 1);
+            assert_eq!(end.authored_by(), StreamTerminalAuthor::Host);
+            assert!(matches!(
+                StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                StreamTerminal::Failed(StreamError::Interrupted(_))
+            ));
+            send(&h.response_txs[0], ack(1, 1)).await;
+            send(&h.response_txs[0], output_bytes(1, b"after", 1)).await;
+            assert_eq!(event_bytes(event(&mut session).await).unwrap(), b"after");
+            send(&h.response_txs[0], output_end(2, 1)).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::StreamEnd(_)
+            ));
+            send(&h.response_txs[0], finished()).await;
+            assert!(matches!(
+                event(&mut session).await,
+                HttpSessionEvent::Finished(_)
+            ));
+            assert!(!done.load(Ordering::Acquire));
+            assert!(h.cleanups.try_recv().is_err());
+            drop(tx);
+        });
 }

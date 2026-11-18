@@ -108,6 +108,18 @@ pub fn FromSchemaError::out_of_range(UInt32, UInt32, String) -> Self
 pub fn FromSchemaError::shape_mismatch(String, String, String) -> Self
 pub fn FromSchemaError::to_repr(Self) -> @debug.Repr
 
+pub suberror StreamError {
+  Failed(@schema_model.TypedSchemaValue)
+  Trapped(String)
+  Cancelled
+  Abandoned
+  Interrupted(String)
+  ResourceExhausted(String)
+} derive(Eq, @debug.Debug)
+pub fn StreamError::equal(Self, Self) -> Bool
+pub fn StreamError::not_equal(Self, Self) -> Bool
+pub fn StreamError::to_repr(Self) -> @debug.Repr
+
 pub suberror UuidParseError {
   UuidParseError(String)
 } derive(Eq, @debug.Debug)
@@ -163,7 +175,7 @@ pub fn[T : IntoWire + FromWire] AgentStream::new() -> (AgentStreamWriter[T], Sel
 pub fn[T] AgentStream::new_with_codec((T) -> @schema_model.SchemaValue raise, (@schema_model.SchemaValue) -> T raise FromSchemaError, (T) -> Unit) -> (AgentStreamWriter[T], Self[T])
 pub fn[T : IntoWire + FromWire] AgentStream::produce(async (AgentStreamWriter[T]) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
 pub fn[T] AgentStream::produce_with_codec(async (AgentStreamWriter[T]) -> Unit, (T) -> @schema_model.SchemaValue raise, (@schema_model.SchemaValue) -> T raise FromSchemaError, (T) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
-pub async fn[T] AgentStream::read(Self[T]) -> T?
+pub async fn[T] AgentStream::read(Self[T]) -> Result[T, StreamError]?
 pub fn[T : FromWire] AgentStream::read_result_payload(WireReader, Int32?) -> Self[T] raise WireError
 pub fn[T : FromWire] AgentStream::read_wire(WireReader, Int32) -> Self[T] raise WireError
 pub fn[T : IntoSchema] AgentStream::register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
@@ -189,6 +201,7 @@ pub struct AgentStreamWriter[T] {
   // private fields
 }
 pub async fn[T] AgentStreamWriter::close(Self[T]) -> Unit
+pub async fn[T] AgentStreamWriter::finish(Self[T], Error) -> Unit
 pub async fn[T] AgentStreamWriter::write_all(Self[T], Array[T]) -> AgentStreamWriteOutcome
 pub async fn[T] AgentStreamWriter::write_one(Self[T], T) -> AgentStreamWriteOutcome
 

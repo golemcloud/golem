@@ -13,8 +13,188 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::attribution::InvocationAttribution;
 use futures::FutureExt;
 use test_r::test;
+
+#[test]
+#[test_r::timeout("10s")]
+async fn closing_owned_initiation_retires_window_and_protocol_waits() {
+    use crate::durable_host::concurrent::initiation::InitiationAccess;
+    use crate::durable_host::concurrent::initiation_owner::InitiationOwner;
+    use crate::worker::tasks::WorkerTasks;
+    use crate::workerctx::default::Context;
+
+    for queued_window in [false, true] {
+        let owner = InitiationOwner::<Context>::new();
+        let registration = owner.register().unwrap();
+        let tasks = WorkerTasks::default();
+        let job_owner = owner.clone();
+        let (ready, waiting) = oneshot::channel();
+        let job = tasks
+            .spawn_metadata(async move {
+                let mut access = job_owner.access(InvocationAttribution::default().capture());
+                let result = job_owner
+                    .run(async move {
+                        if queued_window {
+                            let window = access.window(|_| ());
+                            ready.send(()).unwrap();
+                            window.await?;
+                        } else {
+                            ready.send(()).unwrap();
+                            std::future::pending::<()>().await;
+                        }
+                        Ok::<_, WorkerExecutorError>(())
+                    })
+                    .await;
+                registration.complete();
+                result.and_then(|settled| settled)
+            })
+            .unwrap();
+        waiting.await.unwrap();
+        // A closed owner must also cancel protocol waits that have no pending window.
+        owner.close();
+        owner.wait_closed().await;
+        assert!(job.await.unwrap().is_err());
+        tasks.stop_and_wait().await.unwrap();
+        assert!(owner.register().is_err());
+        assert!(
+            owner
+                .access(InvocationAttribution::default().capture())
+                .window(|_| ())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn buffered_session_preserves_cleanup_after_initiation_retirement() {
+    use crate::durable_host::concurrent::initiation_owner::InitiationOwner;
+    use crate::worker::tasks::WorkerTasks;
+    use crate::workerctx::default::Context;
+
+    for buffered in [false, true] {
+        let owner = InitiationOwner::<Context>::new();
+        let registration = owner.register().unwrap();
+        let tasks = WorkerTasks::default();
+        let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut session = live_unfinished_handle_with_counter::<Cancellable>(
+            OplogIndex::from_u64(8),
+            sink.clone(),
+            counter.clone(),
+        );
+        session.cleanup_sink = Some(sink);
+        session.tool_trap_disposal.store(true, Ordering::Release);
+        let (send, receive) = oneshot::channel();
+        let receive = buffered.then_some(receive);
+        let job = tasks
+            .spawn_metadata(async move {
+                if let Err(session) = send.send(session) {
+                    session.discard_after_guest_drop();
+                }
+                registration.complete();
+            })
+            .unwrap();
+        job.await.unwrap();
+        owner.close();
+        owner.wait_closed().await;
+        tasks.stop_and_wait().await.unwrap();
+        if buffered {
+            assert!(
+                events.try_recv().is_err(),
+                "the buffered session still owns cleanup"
+            );
+        }
+        drop(receive);
+        let DropEvent::UnfinishedCancellable { call } = events.try_recv().unwrap() else {
+            panic!("losing the guest receiver must retain accepted-call cleanup");
+        };
+        assert_eq!(call.start_idx(), OplogIndex::from_u64(8));
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        drop(call);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+        assert!(events.try_recv().is_err());
+    }
+}
+
+// An accepted Start must retain its cancellation obligation while the final owned
+// context window is queued, just as it does at the earlier metadata handoff.
+#[test]
+async fn abandoned_final_initiation_window_preserves_accepted_start_cleanup() {
+    use crate::durable_host::concurrent::initiation::InitiationAccess;
+    use crate::durable_host::concurrent::initiation_owner::InitiationOwner;
+    use crate::workerctx::default::Context;
+
+    let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let start_idx = OplogIndex::from_u64(8);
+    let mut session = live_unfinished_handle::<Cancellable>(start_idx, sink.clone());
+    let accepted = AcceptedAccessStart::<Cancellable> {
+        result: Some((start_idx, PendingUpload::already_durable())),
+        call: Some(session.dropped_call_snapshot(None)),
+        marker: Arc::new(AtomicBool::new(false)),
+        sink: Some(sink.clone()),
+        cleanup_sink: Some(sink.clone()),
+        teardown: TeardownProbe::never(),
+        _policy: PhantomData,
+    };
+    session.abandon_for_trap();
+    drop(session);
+    let (start_idx, state) = accepted.into_executing(LiveCallPermit::new(counter.clone()));
+    let executed = ExecutedAccessStart::<
+        golem_common::model::oplog::host_functions::MonotonicClockNow,
+        Cancellable,
+    > {
+        start_idx,
+        state,
+        requires_agent_authority: false,
+        agent_auth_ctx: None,
+        execution_scope: CallExecutionScope {
+            retry_from: start_idx,
+            durable_scope: None,
+            observational_owner: None,
+            entity_parent_start_index: None,
+            invocation_id: None,
+            logical_key_position: None,
+            agent_invocation: None,
+        },
+        retry: InFunctionRetryController::new(
+            DurableFunctionType::ReadLocal,
+            DurableExecutionState {
+                is_live: true,
+                snapshotting_mode: false,
+                max_in_function_retry_delay: std::time::Duration::ZERO,
+            },
+            "test:monotonic_clock::now",
+        ),
+        scope_replay_recovery: ScopeReplayRecovery::default(),
+        drop_sink: Some(sink.clone()),
+        cleanup_sink: Some(sink),
+        _phantom: PhantomData,
+    };
+    let owner = InitiationOwner::<Context>::new();
+    let mut access = owner.access(InvocationAttribution::default().capture());
+    // This is the final window in start_owned_initiation. Drop the context
+    // service before it can construct the session, as on runtime disposal.
+    let window = access.window(move |ctx| DurableCallSession::finish_access_start(ctx, executed));
+    assert_eq!(counter.load(Ordering::Acquire), 1);
+    drop(access);
+    drop(owner);
+    assert!(
+        window.await.is_err(),
+        "the disposed service must abandon the window"
+    );
+    let event = events.try_recv().expect(
+        "an accepted Start lost at the final context window must transfer to cancellation cleanup",
+    );
+    assert!(matches!(event, DropEvent::UnfinishedCancellable { .. }));
+    assert_eq!(counter.load(Ordering::Acquire), 1);
+    drop(event);
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+}
 
 pub fn live_unfinished_handle<P: DropPolicy>(
     start_idx: OplogIndex,
@@ -47,6 +227,7 @@ pub fn live_unfinished_handle_with_counter<P: DropPolicy>(
             entity_parent_start_index: None,
             invocation_id: None,
             logical_key_position: None,
+            agent_invocation: None,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -457,6 +638,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
                     observational_owner: None,
                     invocation_id: Some(invocation_id),
                     logical_key_position: None,
+                    agent_invocation: None,
                 },
                 &InFunctionRetryController::new(
                     DurableFunctionType::ReadLocal,

@@ -42,6 +42,7 @@ pub mod registry_service;
 pub mod s3;
 pub mod service;
 pub mod shard_manager;
+pub mod tcp_relay;
 pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;

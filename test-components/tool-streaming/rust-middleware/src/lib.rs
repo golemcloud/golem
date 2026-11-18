@@ -333,7 +333,8 @@ impl
         let mut source = underlying.produce(tag).await?;
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Some(item) = source.next().await.expect("read provider typed output") {
+            while let Some(item) = source.next().await {
+                let item = item.expect("read provider typed output");
                 writer
                     .write_one(presented_typed_output::Item {
                         label: item.label,
@@ -342,6 +343,7 @@ impl
                     .await
                     .expect("write projected typed output");
             }
+            writer.close().await.unwrap();
         });
         Ok(output)
     }
@@ -491,6 +493,7 @@ struct HumanApprovalRequest {
     request_id: String,
     owner: HumanApprovalOwner,
     promise_oplog_idx: u64,
+    promise_fingerprint: String,
     policy: String,
     tool_name: String,
     command_path: Vec<String>,
@@ -548,6 +551,7 @@ async fn human_approval(
         request_id: request_id.to_string(),
         owner,
         promise_oplog_idx: promise.oplog_idx,
+        promise_fingerprint: promise.fingerprint.to_string(),
         policy: parameters.policy,
         tool_name,
         command_path: command_path.clone(),
@@ -861,6 +865,38 @@ streaming_middleware!(
             .await?;
         drop(admitted);
         Ok(format!("early-return({value})"))
+    }
+);
+
+streaming_middleware!(
+    ReturnCutoff,
+    [name = "streaming-return-cutoff"],
+    |underlying, value| {
+        let result = underlying.apply(value).await?;
+        let started = std::rc::Rc::new(std::cell::Cell::new(false));
+        let signal = started.clone();
+        spawn_local(async move {
+            let mut wait = std::pin::pin!(golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                60_000_000_000
+            ));
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(wait.as_mut(), cx).is_pending());
+                signal.set(true);
+                std::task::Poll::Ready(())
+            })
+            .await;
+            wait.await;
+            panic!("middleware guest tail ran after return");
+        });
+        while !started.get() {
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        // The test requires the timer's Start and internal clock read to be
+        // recorded before publication, not merely a queued guest import.
+        for _ in 0..2_000 {
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        Ok(result)
     }
 );
 

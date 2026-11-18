@@ -61,7 +61,7 @@ use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::{AgentId, IdempotencyKey, OplogIndex};
+use crate::base_model::{AgentId, InvocationId, OplogIndex};
 use crate::model::card::owner::{AgentOwnerPattern, EnvironmentOwnerPattern};
 use crate::model::card::recipient::RecipientPattern;
 use RecipientPattern as AccountRecipientPattern;
@@ -134,7 +134,7 @@ fn runtime_derived_card_provenance_binary_roundtrip() {
             component_id: ComponentId(uuid!("ffeeddcc-bbaa-9988-7766-554433221100")),
             agent_id: "cart/primary".to_string(),
         },
-        invocation_key: IdempotencyKey::new("invocation-42".to_string()),
+        invocation_key: InvocationId(uuid!("01234567-89ab-cdef-fedc-ba9876543210")),
         oplog_index: OplogIndex::from_u64(42),
     });
 

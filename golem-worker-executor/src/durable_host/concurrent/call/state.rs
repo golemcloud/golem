@@ -124,6 +124,25 @@ struct CallDropContext {
     tool_trap_disposal: Arc<AtomicBool>,
 }
 
+impl<P: DropPolicy> AcceptedAccessStart<P> {
+    pub(super) fn into_executing(
+        mut self,
+        permit: LiveCallPermit,
+    ) -> (OplogIndex, SessionState<P>) {
+        let (index, request_upload) = self.result.take().expect("accepted Start result");
+        let context = CallDropContext {
+            call: self.call.take().expect("accepted Start cleanup"),
+            sink: self.sink.clone(),
+            cleanup_sink: self.cleanup_sink.clone(),
+            teardown: self.teardown.clone(),
+            tool_trap_disposal: self.marker.clone(),
+        };
+        let mut state = SessionState::executing(CallRecording::Recorded { request_upload }, permit);
+        state.guard_mut().expect("executing call guard").context = Some(context);
+        (index, state)
+    }
+}
+
 impl<P: DropPolicy> CallGuard<P> {
     fn new(cleanup: Cleanup, permit: Option<LiveCallPermit>) -> Self {
         Self {

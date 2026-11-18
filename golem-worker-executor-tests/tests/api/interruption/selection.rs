@@ -61,7 +61,11 @@ async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
                 component.id,
                 &name
                     .clone()
-                    .with_ephemeral_invocation_phantom(&key)
+                    .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                        &executor,
+                        &key,
+                        "tcp_collect_p3",
+                    ))
                     .unwrap(),
             )
             .unwrap()
@@ -656,7 +660,11 @@ async fn deadline_selection(
                 component.id,
                 &name
                     .clone()
-                    .with_ephemeral_invocation_phantom(&key)
+                    .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                        &executor,
+                        &key,
+                        "tcp_collect_p3",
+                    ))
                     .unwrap(),
             )
             .unwrap()

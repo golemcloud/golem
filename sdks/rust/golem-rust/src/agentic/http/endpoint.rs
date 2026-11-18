@@ -15,9 +15,9 @@
 use crate::agentic::http::path::parse_path;
 use crate::agentic::http::query::parse_query;
 use crate::golem_agentic::golem::agent::common::{
-    AuthDetails, CorsOptions, DurableStreamRouteOptions, HeaderVariable, HttpEndpointDetails,
-    HttpMethod,
+    AuthDetails, CorsOptions, HttpEndpointDetails, HttpMethod,
 };
+use golem_schema::http::wit::wire::{self as http, DurableStreamRouteOptions, HeaderVariable};
 
 pub fn get_http_endpoint_details(
     method: &str,
@@ -38,15 +38,15 @@ pub fn get_http_endpoint_details(
 
     let http_method = match method {
         "any" => HttpMethod::Any,
-        "get" => HttpMethod::Get,
-        "post" => HttpMethod::Post,
-        "put" => HttpMethod::Put,
-        "delete" => HttpMethod::Delete,
-        "patch" => HttpMethod::Patch,
-        "head" => HttpMethod::Head,
-        "options" => HttpMethod::Options,
-        "connect" => HttpMethod::Connect,
-        "trace" => HttpMethod::Trace,
+        "get" => HttpMethod::Method(http::HttpMethod::Get),
+        "post" => HttpMethod::Method(http::HttpMethod::Post),
+        "put" => HttpMethod::Method(http::HttpMethod::Put),
+        "delete" => HttpMethod::Method(http::HttpMethod::Delete),
+        "patch" => HttpMethod::Method(http::HttpMethod::Patch),
+        "head" => HttpMethod::Method(http::HttpMethod::Head),
+        "options" => HttpMethod::Method(http::HttpMethod::Options),
+        "connect" => HttpMethod::Method(http::HttpMethod::Connect),
+        "trace" => HttpMethod::Method(http::HttpMethod::Trace),
         other => return Err(format!("Unsupported HTTP method: {}", other)),
     };
 

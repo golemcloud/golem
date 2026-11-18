@@ -32,8 +32,7 @@ pub fn StreamingAgent::doubled(
 
 ## Consume, Produce, and Forward
 
-Read incrementally. `None` means normal close. Ownership, transport, wire-decode, and item-decode
-failures are `AgentStreamReadError`; operation cancellation propagates as cancellation, not EOF.
+Read incrementally. `read()` returns `Result[T, StreamError]?`: `None` means normal close, and a terminal failure appears once as `Some(Err(error))`, followed by `None`. Ownership, transport, wire-decode, and item-decode failures are `AgentStreamReadError`; operation cancellation propagates as cancellation, not EOF.
 
 ```moonbit nocheck
 ///|
@@ -42,7 +41,8 @@ async fn sum_stream(input : @schema.AgentStream[UInt]) -> UInt {
   let mut total = 0U
   for ;; {
     match input.read() {
-      Some(value) => total += value
+      Some(Ok(value)) => total += value
+      Some(Err(error)) => raise error
       None => return total
     }
   }
@@ -61,10 +61,11 @@ fn doubled_stream(
       defer input.drop()
       for ;; {
         match input.read() {
-          Some(value) =>
+          Some(Ok(value)) =>
             if writer.write_one(value * 2U) is @schema.PeerDropped {
               return
             }
+          Some(Err(error)) => raise error
           None => return
         }
       }
@@ -87,10 +88,9 @@ unread input directly for zero-copy forwarding; a partially read stream cannot b
 
 - Each stream preserves its own item order. Independent sibling streams have no relative ordering
   guarantee; use a task group to consume them concurrently when back-pressure could block either.
-- A bare stream has no recoverable error terminal. Use `AgentStream[Result[T, E]]` for recoverable
-  application errors.
-- Normal close, explicit drop, canonical cancellation, transport failure, and a fatal invocation
-  failure remain distinct. Producer failure traps the active operation instead of becoming EOF.
+- `StreamError::Failed` carries a typed schema value. Raise it from a producer to declare failure; ordinary producer errors become a typed string failure. `produce` closes successfully on normal return; manual writers must call `close()` for success or `finish(error)` for failure.
+- `Trapped`, `Cancelled`, `Abandoned`, `Interrupted`, and `ResourceExhausted` are host outcomes. Guests may author only success or `Failed`. An unsettled writer becomes `Abandoned` when its body completes normally, or `Trapped` when its body traps.
+- Catch a terminal failure without failing unrelated sibling streams. `AgentStream[Result[T, E]]` remains useful for per-item errors that do not end the stream. Item EOF alone is not success; the reader waits for its completion outcome.
 - `write_one` and `write_all` consume their values even on peer drop or failure; never retry an
   unaccepted suffix that may own nested stream handles.
 

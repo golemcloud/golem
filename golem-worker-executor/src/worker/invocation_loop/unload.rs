@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 return true;
             }
             if matches!(kind, InterruptKind::Interrupt(_))
-                && let Some(key) = status.current_idempotency_key.clone()
+                && let Some(key) = status.current_idempotency_key
             {
                 self.parent
                     .store_invocation_failure(&key, &TrapType::Interrupt(kind))
@@ -258,7 +258,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Suspends the worker after the invocation loop exited
-    pub(super) async fn suspend_worker(&self, store: &Mutex<Store<Ctx>>) {
+    pub(super) async fn suspend_worker(&self, store: &Mutex<PrimaryStore<Ctx>>) {
         async {
             // Marking the worker as suspended
             store.lock().await.data().set_suspended();

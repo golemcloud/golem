@@ -18,7 +18,7 @@ use golem_common::model::invocation_session_public::{
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::tool::SerializableToolRpcError;
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::{AgentId, IdempotencyKey, InvocationId};
 use golem_common::recorded_http_api_request;
 use golem_common::schema::tool::Tool;
 use golem_common::schema::{ExternalSchemaValue, ExternalTypedSchemaValue};
@@ -296,7 +296,7 @@ pub struct AgentInvocationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvocationResult {
     pub agent_id: AgentId,
-    pub idempotency_key: IdempotencyKey,
+    pub idempotency_key: InvocationId,
     pub result: Option<ExternalTypedSchemaValue>,
     pub component_revision: Option<ComponentRevision>,
 }
@@ -374,7 +374,7 @@ pub enum NativeToolResult {
 #[serde(rename_all = "camelCase")]
 pub struct NativeToolInvocationResponse {
     pub agent_id: AgentId,
-    pub idempotency_key: IdempotencyKey,
+    pub idempotency_key: InvocationId,
     pub result: Option<NativeToolResult>,
     pub status: Option<golem_common::model::InvocationStatus>,
     pub component_revision: Option<ComponentRevision>,

@@ -97,7 +97,8 @@ pub(super) fn calculate_latest_worker_status(
                     current_retry_state.clear();
                 }
             }
-            OplogEntry::AgentInvocationFinished { .. } => {
+            OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationFailed { .. } => {
                 current_status = AgentStatus::Idle;
                 if !unresolved_recovery {
                     last_error_kind = None;
@@ -134,6 +135,7 @@ pub(super) fn calculate_latest_worker_status(
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
             OplogEntry::GrowMemory { .. } => {}
+            OplogEntry::MemorySizeReconciled { .. } => {}
             OplogEntry::CreateResource { .. } => {}
             OplogEntry::DropResource { .. } => {}
             OplogEntry::Log { .. } => {
@@ -180,8 +182,7 @@ pub(super) fn calculate_latest_worker_status(
             OplogEntry::ToolAttachmentRead { .. } => {}
             OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately
@@ -201,8 +202,10 @@ pub(super) fn calculate_latest_worker_status(
         if unresolved_recovery
             && !matches!(
                 entry,
-                OplogEntry::Error { .. }
-                    | OplogEntry::RecoverySucceeded { .. }
+                OplogEntry::Error {
+                    kind: OplogErrorKind::Invocation | OplogErrorKind::Recovery,
+                    ..
+                } | OplogEntry::RecoverySucceeded { .. }
                     | OplogEntry::Suspend { .. }
                     | OplogEntry::Interrupted { .. }
                     | OplogEntry::Exited { .. }

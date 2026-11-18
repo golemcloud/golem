@@ -3,7 +3,6 @@ name: Built-in Bash
 on:
   push:
     branches:
-      - main
       - "[0-9]+.[0-9]+.x"
     paths:
       - ".github/workflows/builtin-bash.yaml"
@@ -18,6 +17,8 @@ on:
       - "Cargo.toml"
       - "Makefile.toml"
   pull_request:
+    branches:
+      - "[0-9]+.[0-9]+.x"
     paths:
       - ".github/workflows/builtin-bash.yaml"
       - "builtin-tools/bash/**"

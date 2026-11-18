@@ -21,8 +21,8 @@ use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasOplog;
 use crate::worker::Worker;
+use crate::worker::tasks::NativeReconstructionSpawner;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
     SessionStreamRole, StreamRegistrationInvocation, StreamSessionKey,
@@ -41,6 +41,7 @@ pub(super) struct MaterializeResponse {
     pub response: ToolInvokeResponse,
     pub completed: oneshot::Sender<Result<HostResponseEntityInvocation, WorkerExecutorError>>,
     pub activity: TailActivity,
+    pub output_tasks: NativeReconstructionSpawner,
 }
 
 impl MaterializeResponse {
@@ -54,9 +55,11 @@ impl MaterializeResponse {
             response,
             completed,
             activity: _activity,
+            output_tasks,
         } = self;
         let result = async {
-            let response = materialize_response(&streams, revision, response).await?;
+            let response =
+                materialize_response(&streams, revision, response, &output_tasks).await?;
             let response = response.map(|result| SerializableToolStructuredResult {
                 result: result
                     .result
@@ -82,11 +85,11 @@ pub(super) async fn session<Ctx: WorkerCtx>(
         callee_environment_id: owner.environment_id,
         callee: owner.agent_id,
         callee_fingerprint: owner.fingerprint,
-        idempotency_key: scope.stream_session_idempotency_key().clone(),
+        idempotency_key: *scope.stream_session_idempotency_key(),
     };
     let mut consumer = key.clone();
     consumer.idempotency_key =
-        IdempotencyKey::derived_from_bytes(&key.idempotency_key, b"golem:tool-result-consumer:v1");
+        uuid::Uuid::new_v5(&key.idempotency_key.0, b"golem:tool-result-consumer:v1").into();
     Ok(StreamSession::new(
         worker.durable_stream_producer().await?,
         worker.oplog(),
@@ -158,6 +161,7 @@ pub(super) async fn materialize_response(
     streams: &StreamSession,
     revision: ComponentRevision,
     mut response: ToolInvokeResponse,
+    output_tasks: &NativeReconstructionSpawner,
 ) -> Result<ToolInvokeResponse, WorkerExecutorError> {
     let Some(value) = payload(&mut response) else {
         return Ok(response);
@@ -169,8 +173,8 @@ pub(super) async fn materialize_response(
     let value = value.value().clone();
     let stripped = strip_response(response);
     streams
-        .materialize_result(value, &graph, &graph.root, revision)
+        .spawn_materialize_result(value, &graph, &graph.root, revision, None, output_tasks)?
         .await
-        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        .map_err(|_| WorkerExecutorError::runtime("tool result materialization owner stopped"))??;
     Ok(stripped)
 }

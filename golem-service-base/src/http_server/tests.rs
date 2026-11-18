@@ -331,6 +331,7 @@ async fn request_metadata_errors_and_http1_keep_alive_are_preserved() {
     assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
     error.into_body().collect().await.unwrap();
 
+    sender.ready().await.unwrap();
     let response = sender.send_request(request("/metadata")).await.unwrap();
     let text = String::from_utf8(
         response

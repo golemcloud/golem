@@ -475,13 +475,14 @@ where
             TaskRetryContext {
                 retry_point: begin,
                 entity_parent_start_index: ctx.entity_parent_start_index(),
+                invocation_id: ctx.state.get_current_idempotency_key(),
                 environment_state_service: ctx.state.environment_state_service.clone(),
                 environment_id: ctx.state.owned_agent_id.environment_id,
                 default_retry_policy: golem_common::model::NamedRetryPolicy::default_from_config(
                     &ctx.state.config.retry,
                 ),
                 agent_config_retry_policies: ctx.state.agent_config_retry_policies(),
-                runtime_retry_policy_mutations: ctx.state.runtime_retry_policy_mutations.clone(),
+                runtime_retry_policy_mutations: ctx.state.retry_policy_mutations(),
                 max_in_function_retry_delay: ctx.state.config.max_in_function_retry_delay,
                 current_retry_policy_state: None,
                 retry_properties: rdbms_retry_properties(ctx, "transaction-status", &tx.pool_key),

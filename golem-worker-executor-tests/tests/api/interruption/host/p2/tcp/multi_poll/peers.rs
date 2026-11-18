@@ -74,7 +74,7 @@ pub(super) async fn no_connections(listeners: &[TcpListener; 2]) -> anyhow::Resu
 pub(super) async fn wait_for_input_poll(
     executor: &TestWorkerExecutor,
     id: &AgentId,
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     count: usize,
 ) -> anyhow::Result<OplogIndex> {
     tokio::time::timeout(Duration::from_secs(10), async {

@@ -28,10 +28,10 @@ use anyhow::bail;
 use golem_client::api::ApiSecurityClient;
 use golem_client::model::{SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeUpdate};
 use golem_common::base_model::api;
-use golem_common::model::Empty;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{AuthorizationCodePkceConfig, SecuritySchemeLogin};
 use golem_common::model::security_scheme::{Provider, ProviderKind, SecuritySchemeName};
+use golem_schema::Empty;
 use std::sync::Arc;
 
 pub struct ApiSecuritySchemeCommandHandler {

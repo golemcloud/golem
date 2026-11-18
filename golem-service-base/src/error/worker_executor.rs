@@ -37,6 +37,9 @@ pub enum WorkerExecutorError {
     AgentAlreadyExists {
         agent_id: AgentId,
     },
+    CreateIdempotencyKeyConflict {
+        agent_id: AgentId,
+    },
     AgentNotFound {
         agent_id: AgentId,
     },
@@ -166,6 +169,27 @@ pub enum WorkerExecutorError {
         agent_id: AgentId,
         details: String,
     },
+    /// An oplog read refuses its cursor, because the cursor did not come from a page of this
+    /// read. The caller starts again without a cursor.
+    StaleCursor {
+        agent_id: AgentId,
+        next_oplog_index: OplogIndex,
+        reason: StaleCursorReason,
+    },
+}
+
+/// Why an oplog read refuses a cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
+pub enum StaleCursorReason {
+    /// The cursor points past the last entry of the oplog. A page hands out a cursor only while
+    /// the oplog has entries after it, and the oplog only grows, so the cursor did not come from
+    /// a page of this oplog: the agent was deleted and created again since, or the cursor was
+    /// made up.
+    PastEnd { last_oplog_index: OplogIndex },
+    /// The cursor came from the pages of another query: a search of another query, a search for
+    /// a read without a query, or a read without a query for a search.
+    QueryMismatch,
 }
 
 /// Why the component service refused a request.
@@ -348,6 +372,12 @@ impl Display for WorkerExecutorError {
             Self::AgentAlreadyExists { agent_id } => {
                 write!(f, "Worker already exists: {agent_id}")
             }
+            Self::CreateIdempotencyKeyConflict { agent_id } => {
+                write!(
+                    f,
+                    "Create idempotency key conflicts with the stored request for {agent_id}"
+                )
+            }
             Self::AgentNotFound { agent_id } => {
                 write!(f, "Worker not found: {agent_id}")
             }
@@ -499,6 +529,24 @@ impl Display for WorkerExecutorError {
             Self::OplogFailed { agent_id, details } => {
                 write!(f, "The oplog of {agent_id} failed: {details}")
             }
+            Self::StaleCursor {
+                agent_id,
+                next_oplog_index,
+                reason: StaleCursorReason::PastEnd { last_oplog_index },
+            } => write!(
+                f,
+                "Stale oplog cursor: it points to index {next_oplog_index}, but the oplog of \
+                 {agent_id} ends at index {last_oplog_index}"
+            ),
+            Self::StaleCursor {
+                agent_id,
+                next_oplog_index,
+                reason: StaleCursorReason::QueryMismatch,
+            } => write!(
+                f,
+                "Stale oplog cursor: the cursor to index {next_oplog_index} of the oplog of \
+                 {agent_id} comes from the pages of another query"
+            ),
         }
     }
 }
@@ -514,6 +562,7 @@ impl Error for WorkerExecutorError {
         match self {
             Self::InvalidRequest { .. } => "Invalid request",
             Self::AgentAlreadyExists { .. } => "Worker already exists",
+            Self::CreateIdempotencyKeyConflict { .. } => "Create idempotency key conflict",
             Self::AgentNotFound { .. } => "Worker not found",
             Self::AgentCreationFailed { .. } => "Failed to create worker",
             Self::FailedToResumeAgent { .. } => "Failed to resume worker",
@@ -547,6 +596,7 @@ impl Error for WorkerExecutorError {
             Self::ComponentServiceUnavailable { .. } => "Component service unavailable",
             Self::ComponentServiceRefused { .. } => "Component service refused the request",
             Self::OplogFailed { .. } => "Oplog failed",
+            Self::StaleCursor { .. } => "Stale oplog cursor",
         }
     }
 }
@@ -556,6 +606,7 @@ impl ApiErrorDetails for WorkerExecutorError {
         match self {
             Self::InvalidRequest { .. } => "InvalidRequest",
             Self::AgentAlreadyExists { .. } => "AgentAlreadyExists",
+            Self::CreateIdempotencyKeyConflict { .. } => "CreateIdempotencyKeyConflict",
             Self::AgentNotFound { .. } => "AgentNotFound",
             Self::AgentCreationFailed { .. } => "AgentCreationFailed",
             Self::FailedToResumeAgent { .. } => "FailedToResumeAgent",
@@ -587,12 +638,14 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ComponentServiceUnavailable { .. } => "ComponentServiceUnavailable",
             Self::ComponentServiceRefused { .. } => "ComponentServiceRefused",
             Self::OplogFailed { .. } => "OplogFailed",
+            Self::StaleCursor { .. } => "StaleCursor",
         }
     }
 
     fn is_expected(&self) -> bool {
         match self {
             Self::AgentAlreadyExists { .. }
+            | Self::CreateIdempotencyKeyConflict { .. }
             | Self::AgentNotFound { .. }
             | Self::PromiseNotFound { .. }
             | Self::PromiseDropped { .. }
@@ -600,6 +653,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::Interrupted { .. }
             | Self::InvalidShardId { .. }
             | Self::OplogFenced { .. }
+            | Self::StaleCursor { .. }
             | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
@@ -682,10 +736,22 @@ impl From<std::io::Error> for WorkerExecutorError {
 impl From<WorkerExecutorError> for Status {
     fn from(value: WorkerExecutorError) -> Self {
         match value {
-            error @ WorkerExecutorError::PreviousInvocationFailed { .. } => {
+            error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+            | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::AgentAlreadyExists { .. }) => {
+                let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
+                    tonic::Code::AlreadyExists
+                } else {
+                    tonic::Code::FailedPrecondition
+                };
                 let message = error.to_string();
                 let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
-                Self::with_details(tonic::Code::FailedPrecondition, message, details.into())
+                Self::with_details(code, message, details.into())
+            }
+            error @ WorkerExecutorError::StaleCursor { .. } => {
+                let message = error.to_string();
+                let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
+                Self::with_details(tonic::Code::InvalidArgument, message, details.into())
             }
             WorkerExecutorError::InvalidRequest { details } => Self::invalid_argument(details),
             WorkerExecutorError::PromiseNotFound { promise_id } => {
@@ -733,6 +799,15 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::AgentAlreadyExists(
                         golem::worker::v1::AgentAlreadyExists {
+                            agent_id: Some(agent_id.into()),
+                        },
+                    ),
+                ),
+            },
+            WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::CreateIdempotencyKeyConflict(
+                        golem::worker::v1::CreateIdempotencyKeyConflict {
                             agent_id: Some(agent_id.into()),
                         },
                     ),
@@ -1031,6 +1106,34 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
+            WorkerExecutorError::StaleCursor {
+                agent_id,
+                next_oplog_index,
+                reason,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::StaleCursor(
+                        golem::worker::v1::StaleCursor {
+                            agent_id: Some(agent_id.into()),
+                            next_oplog_index: next_oplog_index.into(),
+                            reason: Some(match reason {
+                                StaleCursorReason::PastEnd { last_oplog_index } => {
+                                    golem::worker::v1::stale_cursor::Reason::PastEnd(
+                                        golem::worker::v1::StaleCursorPastEnd {
+                                            last_oplog_index: last_oplog_index.into(),
+                                        },
+                                    )
+                                }
+                                StaleCursorReason::QueryMismatch => {
+                                    golem::worker::v1::stale_cursor::Reason::QueryMismatch(
+                                        golem::worker::v1::StaleCursorQueryMismatch {},
+                                    )
+                                }
+                            }),
+                        },
+                    ),
+                ),
+            },
         }
     }
 }
@@ -1053,6 +1156,11 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .agent_id
                     .ok_or("Missing agent_id")?
                     .try_into()?,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::CreateIdempotencyKeyConflict(
+                conflict,
+            )) => Ok(Self::CreateIdempotencyKeyConflict {
+                agent_id: conflict.agent_id.ok_or("Missing agent_id")?.try_into()?,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::AgentNotFound(
                 worker_not_found,
@@ -1254,6 +1362,22 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     details: error.details,
                 })
             }
+            Some(golem::worker::v1::worker_execution_error::Error::StaleCursor(error)) => {
+                Ok(Self::StaleCursor {
+                    agent_id: error.agent_id.ok_or("Missing agent_id")?.try_into()?,
+                    next_oplog_index: OplogIndex::from_u64(error.next_oplog_index),
+                    reason: match error.reason.ok_or("Missing reason")? {
+                        golem::worker::v1::stale_cursor::Reason::PastEnd(past_end) => {
+                            StaleCursorReason::PastEnd {
+                                last_oplog_index: OplogIndex::from_u64(past_end.last_oplog_index),
+                            }
+                        }
+                        golem::worker::v1::stale_cursor::Reason::QueryMismatch(_) => {
+                            StaleCursorReason::QueryMismatch
+                        }
+                    },
+                })
+            }
         }
     }
 }
@@ -1401,15 +1525,32 @@ mod read_only_violation_trap_tests {
     use test_r::test;
 
     #[test]
-    fn previous_invocation_failure_round_trips_through_grpc_status_details() {
-        let expected = WorkerExecutorError::PreviousInvocationFailed {
-            error: AgentError::Unknown("guest failure".to_string()),
-            stderr: "guest stderr".to_string(),
-        };
-
+    fn worker_failures_round_trip_through_grpc_status_details() {
+        for expected in [
+            WorkerExecutorError::PreviousInvocationFailed {
+                error: AgentError::Unknown("guest failure".to_string()),
+                stderr: "guest stderr".to_string(),
+            },
+            WorkerExecutorError::CreateIdempotencyKeyConflict {
+                agent_id: AgentId {
+                    component_id: ComponentId(uuid::Uuid::nil()),
+                    agent_id: "Counter(17)".to_string(),
+                },
+            },
+        ] {
+            let status: Status = expected.clone().into();
+            assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+            assert_eq!(
+                WorkerExecutorError::from_status_details(&status),
+                Some(expected)
+            );
+        }
+        let expected = WorkerExecutorError::worker_already_exists(AgentId {
+            component_id: ComponentId(uuid::Uuid::nil()),
+            agent_id: "Counter(23)".to_string(),
+        });
         let status: Status = expected.clone().into();
-
-        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(status.code(), tonic::Code::AlreadyExists);
         assert_eq!(
             WorkerExecutorError::from_status_details(&status),
             Some(expected)
@@ -1417,6 +1558,39 @@ mod read_only_violation_trap_tests {
         assert!(
             WorkerExecutorError::from_status_details(&Status::internal("plain error")).is_none()
         );
+    }
+
+    #[test]
+    fn a_stale_cursor_keeps_its_reason_and_indices_through_grpc() {
+        for reason in [
+            StaleCursorReason::PastEnd {
+                last_oplog_index: OplogIndex::from_u64(17),
+            },
+            StaleCursorReason::QueryMismatch,
+        ] {
+            let expected = WorkerExecutorError::StaleCursor {
+                agent_id: AgentId {
+                    component_id: ComponentId(uuid::Uuid::nil()),
+                    agent_id: "Counter(\"a\")".to_string(),
+                },
+                next_oplog_index: OplogIndex::from_u64(42),
+                reason,
+            };
+
+            let status: Status = expected.clone().into();
+
+            assert_eq!(status.code(), tonic::Code::InvalidArgument);
+            assert_eq!(
+                WorkerExecutorError::from_status_details(&status),
+                Some(expected.clone())
+            );
+            assert_eq!(
+                WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(
+                    expected.clone()
+                )),
+                Ok(expected)
+            );
+        }
     }
 
     #[test]

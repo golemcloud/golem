@@ -31,6 +31,7 @@ where
         runtime_retry_policy_mutations,
         max_in_function_retry_delay,
         entity_parent_start_index,
+        invocation_id,
         worker,
     ) = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
@@ -40,9 +41,10 @@ where
             ctx.state.owned_agent_id.environment_id,
             NamedRetryPolicy::default_from_config(&ctx.state.config.retry),
             ctx.state.agent_config_retry_policies(),
-            ctx.state.runtime_retry_policy_mutations.clone(),
+            ctx.state.retry_policy_mutations(),
             ctx.state.config.max_in_function_retry_delay,
             ctx.entity_parent_start_index(),
+            ctx.state.get_current_idempotency_key(),
             ctx.public_state.worker(),
         )
     });
@@ -56,6 +58,7 @@ where
     TaskRetryContext {
         retry_point,
         entity_parent_start_index,
+        invocation_id,
         environment_state_service,
         environment_id,
         default_retry_policy,

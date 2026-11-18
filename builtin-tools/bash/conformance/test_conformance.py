@@ -38,14 +38,14 @@ class ExactOutcomeTests(unittest.TestCase):
             HARNESS.outcomes_match((0, b"out\n", b""), HARNESS.outcome(result))
         )
 
-    def test_wasm_report_preserves_nonzero_shell_status(self):
+    def test_wasm_exit_with_failure_instead_of_the_shell_status_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             status = pathlib.Path(directory) / "status"
             status.write_text("2", encoding="ascii")
-            result = self.completed(stderr=b"refused\n", returncode=1)
-            self.assertEqual(
-                (2, b"", b"refused\n"), HARNESS.wasm_outcome(result, status)
-            )
+            with self.assertRaises(ValueError):
+                HARNESS.wasm_outcome(
+                    self.completed(stderr=b"refused\n", returncode=1), status
+                )
 
     def test_wasm_exit_with_the_shell_status_passes(self):
         with tempfile.TemporaryDirectory() as directory:

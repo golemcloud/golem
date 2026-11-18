@@ -55,6 +55,61 @@ impl ReplayState {
         last_oplog_index: OplogIndex,
         wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
     ) -> Result<Self, WorkerExecutorError> {
+        Self::build(
+            owned_agent_id,
+            oplog,
+            skipped_regions,
+            initial_snapshot_skip_end,
+            owner_tool_operations,
+            last_oplog_index,
+            wallet,
+            None,
+        )
+        .await
+    }
+
+    /// A cursor over the bootstrap block of a core initializer: it skips the history
+    /// `INITIAL.next()..=skip_through` and the operator-reverted `deleted_regions`, and replays up
+    /// to `target`. It has no wallet, records no replay events, and does not publish live when it
+    /// starts exhausted; `tail` decides what a durable call after the block does.
+    pub(crate) async fn new_for_bootstrap(
+        owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        deleted_regions: &DeletedRegions,
+        skip_through: OplogIndex,
+        target: OplogIndex,
+        tail: BootstrapTail,
+    ) -> Result<Self, WorkerExecutorError> {
+        let mut skipped_regions = DeletedRegions::from_regions(deleted_regions.regions().cloned());
+        if skip_through > OplogIndex::INITIAL {
+            skipped_regions.add(OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=skip_through,
+            ));
+        }
+        Self::build(
+            owned_agent_id,
+            oplog,
+            skipped_regions,
+            Some(skip_through),
+            owner_tool_operations,
+            target,
+            None,
+            Some(tail),
+        )
+        .await
+    }
+
+    async fn build(
+        owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        skipped_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
+        owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        last_oplog_index: OplogIndex,
+        wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
+        bootstrap: Option<BootstrapTail>,
+    ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
@@ -86,6 +141,7 @@ impl ReplayState {
             owned_agent_id,
             oplog,
             wallet,
+            bootstrap,
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_in_progress: AtomicBool::new(false),
@@ -137,7 +193,7 @@ impl ReplayState {
             tx.move_replay_idx(OplogIndex::INITIAL).await?; // By this we handle initial skipped regions applied by manual updates correctly
             tx.skip_forward().await?;
         }
-        if cursor.at_replay_tail() {
+        if cursor.bootstrap.is_none() && cursor.at_replay_tail() {
             cursor.publish_live();
         }
         Ok(Self {
@@ -388,7 +444,15 @@ impl ReplayState {
                         None
                     }
                     OplogEntry::AgentInvocationFinished { .. } => {
-                        invocation_finishes.insert(marker_idx);
+                        invocation_finishes.insert(marker_idx, None);
+                        None
+                    }
+                    OplogEntry::AgentInvocationFailed {
+                        start_index,
+                        entity_parent_start_index: None,
+                        ..
+                    } => {
+                        invocation_finishes.insert(marker_idx, Some(start_index));
                         None
                     }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
@@ -444,6 +508,7 @@ impl ReplayState {
                             &record,
                             StreamSessionRecord::ConsumerItemValue(_)
                                 | StreamSessionRecord::ConsumerTerminal(_)
+                                | StreamSessionRecord::ConsumerOutcome(_)
                         ) && !record.has_supported_format()
                         {
                             return Err(WorkerExecutorError::runtime(format!(
@@ -459,7 +524,8 @@ impl ReplayState {
                             StreamSessionRecord::ConsumerItemValue(record) => {
                                 Some(record.observation)
                             }
-                            StreamSessionRecord::ConsumerTerminal(record) => {
+                            StreamSessionRecord::ConsumerTerminal(record)
+                            | StreamSessionRecord::ConsumerOutcome(record) => {
                                 Some(record.observation)
                             }
                             _ => None,
@@ -505,7 +571,7 @@ impl ReplayState {
         })
     }
 
-    /// The first visible `AgentInvocationFinished` after the cursor and before `index`. Reads
+    /// The first visible invocation terminal after the cursor and before `index`. Reads
     /// only the scanned invocation finishes, never the oplog.
     pub(in crate::durable_host::replay_state) fn invocation_finish_before(
         &self,
@@ -521,7 +587,17 @@ impl ReplayState {
             .unwrap()
             .range(after_cursor..index)
             .next()
-            .copied()
+            .map(|(index, _)| *index)
+    }
+
+    pub(crate) fn invocation_has_recorded_local_failure(&self, start: OplogIndex) -> bool {
+        self.cursor
+            .invocation_finishes
+            .lock()
+            .unwrap()
+            .range(start.next()..)
+            .next()
+            .is_some_and(|(_, anchor)| anchor.is_some())
     }
 
     pub(crate) fn transaction_marker(
@@ -622,7 +698,7 @@ impl ReplayState {
                         entries.retain(|index, _| *index <= new_target);
                         !entries.is_empty()
                     });
-                    cursor.invocation_finishes.lock().unwrap().retain(|index| *index <= new_target);
+                    cursor.invocation_finishes.lock().unwrap().retain(|index, _| *index <= new_target);
                     cursor.tool_attachment_reconstruction.lock().unwrap()
                         .truncate(new_target);
                 }

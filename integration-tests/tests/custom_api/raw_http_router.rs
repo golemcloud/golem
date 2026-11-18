@@ -416,12 +416,23 @@ async fn raw_router_disconnect_stops_private_execution(
     #[dimension(db)] raw_router_context: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let raw_router_context = &self::raw_router_context(&raw_router_context.user.deps).await;
+    use anyhow::Context;
+    use golem_client::api::WorkerClient;
     use golem_common::model::ScanCursor;
-    use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+    use golem_common::model::oplog::{
+        OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogPageEntry,
+    };
+    use golem_test_framework::config::TestDependencies;
     use golem_test_framework::dsl::TestDsl;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    let worker_client = raw_router_context
+        .user
+        .deps
+        .worker_service()
+        .worker_http_client(&raw_router_context.user.token)
+        .await;
     for path in ["/raw/wait-head", "/raw/echo", "/raw/slow"] {
         let (_, before) = raw_router_context
             .user
@@ -462,16 +473,25 @@ async fn raw_router_disconnect_stops_private_execution(
                     .map(|agent| agent.agent_id)
                     .filter(|agent_id| !before.iter().any(|old| old.agent_id == *agent_id))
                 {
-                    let oplog = raw_router_context
-                        .user
-                        .get_oplog(&agent_id, OplogIndex::INITIAL)
+                    // The invocation starts in the initial page. Reading the entire history
+                    // can chase the unbounded output producer without ever reaching its tail.
+                    let oplog = worker_client
+                        .get_oplog(
+                            &agent_id.component_id.0,
+                            &agent_id.agent_id,
+                            Some(OplogIndex::INITIAL.as_u64()),
+                            100,
+                            None,
+                            None,
+                        )
                         .await?;
-                    if oplog.iter().any(|entry| {
-                        matches!(&entry.entry,
-                        PublicOplogEntry::AgentInvocationStarted(started)
+                    if oplog.entries.iter().any(|entry| {
+                        matches!(entry,
+                        PublicOplogPageEntry::Included(entry)
+                            if matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
                             if matches!(&started.invocation,
                                 PublicAgentInvocation::AgentMethodInvocation(method)
-                                    if method.method_name == "handle"))
+                                    if method.method_name == "handle")))
                     }) {
                         break 'discover anyhow::Ok(agent_id);
                     }
@@ -479,7 +499,8 @@ async fn raw_router_disconnect_stops_private_execution(
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
-        .await??;
+        .await
+        .with_context(|| format!("discovering the private execution for {path}"))??;
         if path != "/raw/wait-head" {
             let mut head = Vec::new();
             let mut byte = [0];
@@ -489,8 +510,23 @@ async fn raw_router_disconnect_stops_private_execution(
             }
             assert!(head.starts_with(b"HTTP/1.1 200 "));
         }
+        if path == "/raw/slow" {
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_millis(100),
+                    wait_for_stopped(raw_router_context, &agent),
+                )
+                .await
+                .is_err(),
+                "the observer must not accept a still-running producer"
+            );
+        }
         drop(socket);
-        wait_for_stopped(raw_router_context, &agent).await?;
+        wait_for_stopped(raw_router_context, &agent)
+            .await
+            .with_context(|| {
+                format!("stopping the private execution after disconnect from {path}")
+            })?;
     }
     Ok(())
 }
@@ -577,26 +613,61 @@ async fn wait_for_stopped(
     context: &HttpTestContext,
     agent: &golem_common::model::AgentId,
 ) -> anyhow::Result<()> {
-    use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+    use golem_client::api::WorkerClient;
+    use golem_common::model::AgentStatus;
+    use golem_common::model::oplog::{
+        OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogPageEntry,
+    };
+    use golem_test_framework::config::TestDependencies;
     use golem_test_framework::dsl::TestDsl;
     use std::time::Duration;
 
     tokio::time::timeout(Duration::from_secs(10), async {
+        let client = context
+            .user
+            .deps
+            .worker_service()
+            .worker_http_client(&context.user.token)
+            .await;
+        // Only the initial page is needed to identify this isolated request's method.
+        // Fetching all output can chase the producer or spend the deadline on stream payloads.
+        let page = client
+            .get_oplog(
+                &agent.component_id.0,
+                &agent.agent_id,
+                Some(OplogIndex::INITIAL.as_u64()),
+                100,
+                None,
+                None,
+            )
+            .await?;
+        let started_at = page
+            .entries
+            .iter()
+            .find_map(|entry| match entry {
+                PublicOplogPageEntry::Included(entry)
+                    if matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(&started.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(method)
+                                if method.method_name == "handle")) =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("private execution {agent} has no started handle method")
+            })?;
         loop {
-            let oplog = context.user.get_oplog(agent, OplogIndex::INITIAL).await?;
-            if oplog
-                .iter()
-                .rev()
-                .take_while(|entry| {
-                    !matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))
-                })
-                .any(|entry| {
-                    matches!(
-                        entry.entry,
-                        PublicOplogEntry::Interrupted(_)
-                            | PublicOplogEntry::AgentInvocationFinished(_)
-                    )
-                })
+            let metadata = context.user.get_worker_metadata(agent).await?;
+            if metadata.last_oplog_index >= started_at
+                && matches!(
+                    metadata.status,
+                    AgentStatus::Idle
+                        | AgentStatus::Interrupted
+                        | AgentStatus::Failed
+                        | AgentStatus::Exited
+                )
             {
                 return anyhow::Ok(());
             }

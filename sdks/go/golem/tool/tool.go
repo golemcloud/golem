@@ -20,7 +20,6 @@ import (
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
@@ -164,7 +163,6 @@ func init() {
 		stdin toolExports.Stdin,
 		stdout toolExports.Stdout,
 		stderr toolExports.Stderr,
-		principal common.Principal,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 		// The input's cards are this component's: the ones no decode took or
 		// call sent go back to the host however the invocation ends.
@@ -175,7 +173,7 @@ func init() {
 		}
 		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
 			hostOutputs{stdout: hostOutput(stdout), stderr: hostOutput(toolExports.Stderr(stderr))},
-			principalFromWit(principal))
+			principalFromWit(link.ImmediateCaller()))
 	}
 
 	mwExports.Exports.DiscoverToolMiddlewares = func() witTypes.Result[[]toolCommon.ToolMiddleware, types.ToolError] {
@@ -208,7 +206,6 @@ func init() {
 		stdin mwExports.Stdin,
 		stdout mwExports.Stdout,
 		stderr mwExports.Stderr,
-		principal common.Principal,
 		wrapped *underlying.UnderlyingTool,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 		// The input's cards are this component's: the ones no decode took or
@@ -223,7 +220,7 @@ func init() {
 			stdin:       newToolStdin(toolExports.Stdin(stdin)),
 			stdout:      newToolOutput("stdout", hostOutput(toolExports.Stdout(stdout))),
 			stderr:      newToolOutput("stderr", hostOutput(toolExports.Stderr(stderr))),
-			principal:   principalFromWit(principal),
+			principal:   principalFromWit(link.ImmediateCaller()),
 			under:       newUnderlyingLayer(wrapped),
 		})
 	}

@@ -46,7 +46,7 @@ If your endpoints are not accessible after deployment, verify that:
   [shared storage](/next/operate/http-gateway#configuring-shared-storage).
 - **Live read stalls:** check agent initialization and preceding work, then test
   cancellation through the ingress and review the
-  [exchange deadline](/next/operate/http-gateway#setting-timeouts-and-resource-budgets).
+  [live-file deadline](/next/operate/http-gateway#setting-timeouts-and-resource-budgets).
 - **OpenAPI returns 502:** check provider JSON, size limits, local references, and
   conflicting paths, components, or operation IDs. A provider failure does not
   disable ordinary router traffic. See

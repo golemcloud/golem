@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Completes a live call: upload the response, append the matching host-call `End`, then close
     /// the durable scope / commit / checkpoint via `end_durable_function`.
@@ -132,10 +133,28 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// As with [`Self::complete`], a terminal failure carries this call's own
     /// [`DurableCallTrapContext`] via [`TerminalCallError`].
     pub async fn complete_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.complete_access_with_delivered(store, get_ctx, response, Box::new(|| {}))
+            .await
+    }
+
+    /// [`Self::complete_access`] that runs `on_delivered` when the guest receives the result
+    /// (see [`CompletionDelivery::deliver_at_accessor_terminal_with_delivered`]).
+    pub(crate) async fn complete_access_with_delivered<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
+        on_delivered: crate::durable_host::concurrent::OnDelivered,
     ) -> Result<Pair::Resp, TerminalCallError>
     where
         T: 'static,
@@ -156,7 +175,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // the impl returning and this call) — the observer settles it when the guest actually
         // consumes (or discards) the lowered result.
         delivery
-            .deliver_at_accessor_terminal(store)
+            .deliver_at_accessor_terminal_with_delivered(store, on_delivered)
             .await
             .map_err(|source| TerminalCallError::new(source, context))?;
         Ok(response)
@@ -803,10 +822,22 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (snapshotting_mode, public_state) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        (ctx.state.snapshotting_mode, ctx.public_state.clone())
-    });
+    end_durable_function_initiation(
+        &mut InlineInitiationAccess::new(&mut AccessorContext::new(store, get_ctx)),
+        function_type,
+        forced_commit,
+    )
+    .await
+}
+
+pub(crate) async fn end_durable_function_initiation<Ctx: WorkerCtx>(
+    access: &mut impl InitiationAccess<Ctx>,
+    function_type: DurableFunctionType,
+    forced_commit: bool,
+) -> Result<(), WorkerExecutorError> {
+    let (snapshotting_mode, public_state) = access
+        .window(|ctx| (ctx.state.snapshotting_mode, ctx.public_state.clone()))
+        .await?;
 
     if snapshotting_mode {
         return Ok(());
@@ -817,10 +848,10 @@ where
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
             .await?;
-        if store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            ctx.state.at_clean_checkpoint_boundary()
-        }) {
+        if access
+            .window(|ctx| ctx.state.at_clean_checkpoint_boundary())
+            .await?
+        {
             public_state
                 .worker()
                 .checkpoint_status_mid_invocation()
@@ -869,19 +900,32 @@ pub(crate) fn finish_span_in_memory<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     span_id: &SpanId,
 ) -> Result<(), WorkerExecutorError> {
-    if &ctx.state.current_span_id == span_id {
-        let span = ctx.state.invocation_context.get(span_id).map_err(|err| {
-            WorkerExecutorError::runtime(format!(
-                "span {span_id} missing during finish_span replay: {err}"
-            ))
-        })?;
-        ctx.state.current_span_id = span
+    if &ctx.state.invocation_state().current_span_id == span_id {
+        let span = ctx
+            .state
+            .invocation_state()
+            .invocation_context
+            .get(span_id)
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "span {span_id} missing during finish_span replay: {err}"
+                ))
+            })?;
+        ctx.state.invocation_state_mut().current_span_id = span
             .parent()
             .map(|p| p.span_id().clone())
-            .unwrap_or_else(|| ctx.state.invocation_context.root.span_id().clone());
+            .unwrap_or_else(|| {
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .root
+                    .span_id()
+                    .clone()
+            });
     }
     let _ = ctx
         .state
+        .invocation_state_mut()
         .invocation_context
         .finish_span(span_id)
         .map_err(WorkerExecutorError::runtime);

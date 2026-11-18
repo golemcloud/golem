@@ -16,10 +16,10 @@ use super::{
     AgentPermissionMonomorphizationContext, CallReplayOutcome, CardId, CardManagedByRuntimeDerived,
     CardRevokeResult, CardState, DateTime, DurableCallSession, DurableFunctionType,
     DurableWorkerCtx, GolemPermissionsInstallChildPersist, HostPayloadPair,
-    HostRequestPermissionCardDerive, HostResponsePermissionCardDerived, IdempotencyKey,
-    NotCancellable, OplogEntry, OplogIndex, PermissionCardDeriveError, PolymorphicCard,
-    ResolvedCall, RuntimeCardCreation, StoredCard, Timestamp, Utc, WorkerCtx, WorkerExecutorError,
-    agent_recipient_pattern, anyhow, derive_error_to_permission_error, deserialize, durable_now,
+    HostRequestPermissionCardDerive, HostResponsePermissionCardDerived, NotCancellable, OplogEntry,
+    OplogIndex, PermissionCardDeriveError, PolymorphicCard, ResolvedCall, RuntimeCardCreation,
+    StoredCard, Timestamp, Utc, WorkerCtx, WorkerExecutorError, agent_recipient_pattern, anyhow,
+    derive_error_to_permission_error, deserialize, durable_now,
     ensure_install_permission_in_surface, instantiate_polymorphic_card_for_agent,
     permission_error_to_derive_error, permissions_types, serialize,
 };
@@ -165,7 +165,9 @@ where
             Req = HostRequestPermissionCardDerive,
             Resp = HostResponsePermissionCardDerived,
         >,
-    DeriveCardId: FnOnce(&OwnedAgentId, &IdempotencyKey, OplogIndex) -> CardId + Send + 'static,
+    DeriveCardId: FnOnce(&OwnedAgentId, &golem_common::model::InvocationId, OplogIndex) -> CardId
+        + Send
+        + 'static,
     BuildCard: FnOnce(CardId) -> StoredCard + Send + 'static,
     RepairAuthorization:
         FnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<(), permissions_types::PermissionError>,
@@ -407,7 +409,7 @@ pub(crate) async fn persist_installed_child_card<Ctx: WorkerCtx>(
         source.expires_at,
         move |ctx| {
             ensure_install_permission_in_surface(
-                &ctx.state.agent_effective_surface,
+                ctx.state.authority().effective_surface(),
                 &ctx.state.created_by_email,
                 source_card_id,
                 &target_recipient,

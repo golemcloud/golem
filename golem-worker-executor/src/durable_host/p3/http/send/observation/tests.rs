@@ -19,6 +19,7 @@ use crate::services::oplog::Oplog;
 use golem_common::model::Timestamp;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::{HostPayloadPair, HostRequestNoInput, OplogEntry, OplogPayload};
+use std::collections::BTreeMap;
 use test_r::test;
 
 fn opening() -> OplogEntry {
@@ -37,7 +38,7 @@ fn opening() -> OplogEntry {
             parent_span_id: None,
             links: Vec::new(),
             started_at: "2025-03-12T13:14:00Z".parse().unwrap(),
-            attributes: AttributeMap(HashMap::new()),
+            attributes: AttributeMap(BTreeMap::new()),
             kind: SpanKind::Client,
         })),
         denial: None,
@@ -275,10 +276,12 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
             if name == "http-tail-sentinel")
         );
     }
+    let now = std::time::Instant::now();
     let memory = crate::services::linear_memory::LinearMemoryTracker::new(
         2,
         2,
         golem_common::model::agent::AgentMode::Durable,
+        true,
         true,
         Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
             0, 10, 0, 0, 0,
@@ -286,8 +289,9 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
         Arc::new(Mutex::new(
             crate::services::active_agents::MemoryGrant::inert(2),
         )),
-        std::time::Instant::now(),
+        now,
     );
+    memory.grow(2, now);
     replay.publish_primary_live(&memory).await.unwrap();
     assert!(replay.is_live_published());
     let mut delivery = if let Some(delivery) = delivery.take() {

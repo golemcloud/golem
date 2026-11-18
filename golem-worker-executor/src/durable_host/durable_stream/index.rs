@@ -298,6 +298,7 @@ impl ProducerStreamIndex {
             record,
             StreamSessionRecord::ConsumerItemValue(_)
                 | StreamSessionRecord::ConsumerTerminal(_)
+                | StreamSessionRecord::ConsumerOutcome(_)
                 | StreamSessionRecord::SourceUnavailable(_)
         ) && !record.has_supported_format()
         {
@@ -308,6 +309,37 @@ impl ProducerStreamIndex {
         if record.reobserves().is_some() {
             // The oplog fold validates the original record before applying this boundary.
             // Its logical ordinal, source high-water and nested readers already exist.
+            return Ok(());
+        }
+        if let StreamSessionRecord::ConsumerOutcome(record) = record {
+            let key = (
+                record
+                    .session_key
+                    .qualify(owner_environment_id, owner, owner_fingerprint),
+                record.reader_id,
+            );
+            let journal = self
+                .consumer_journals
+                .get_mut(&key)
+                .ok_or(StreamStoreError::ConsumerJournalAdvanced)?;
+            let matches_position = if journal.terminal {
+                record.consumer_read_ordinal.checked_add(1) == Some(journal.next_read_ordinal)
+                    && journal.last_source_offset == Some(record.source_offset)
+            } else {
+                record.consumer_read_ordinal == journal.next_read_ordinal
+                    && journal.source_unavailable == Some(record.source_offset)
+            };
+            let matches_terminal = matches_position
+                && journal
+                    .terminal_outcome
+                    .as_ref()
+                    .is_some_and(|(author, terminal)| {
+                        *author == record.authored_by && *terminal == record.terminal
+                    });
+            if journal.outcome_observed || !matches_terminal {
+                return Err(StreamStoreError::ConsumerJournalAdvanced);
+            }
+            journal.outcome_observed = true;
             return Ok(());
         }
         let relative_session_key = match record {
@@ -344,7 +376,10 @@ impl ProducerStreamIndex {
                     && let Some(existing_offset) = journal.source_unavailable
                 {
                     return if existing_offset == record.source_offset
-                        && record.consumer_read_ordinal == journal.next_read_ordinal
+                        && record
+                            .consumer_read_ordinal
+                            .checked_add(u64::from(journal.terminal))
+                            == Some(journal.next_read_ordinal)
                     {
                         Ok(())
                     } else {
@@ -362,6 +397,12 @@ impl ProducerStreamIndex {
                     .entry((session_key.clone(), record.reader_id))
                     .or_default();
                 journal.source_unavailable = Some(record.source_offset);
+                journal.terminal_outcome = Some((
+                    StreamTerminalAuthor::Protocol,
+                    StreamTerminal::Failed(StreamError::Interrupted(
+                        "durable stream source unavailable".into(),
+                    )),
+                ));
                 self.session_consumer_streams
                     .entry(session_key)
                     .or_default()
@@ -372,8 +413,17 @@ impl ProducerStreamIndex {
         };
         let key = (session_key.clone(), reader_id);
         let journal = self.consumer_journals.get(&key);
-        if journal.is_some_and(|journal| journal.terminal || journal.source_unavailable.is_some())
-            || ordinal != journal.map_or(0, |journal| journal.next_read_ordinal)
+        let observes_overlay = journal.is_some_and(|journal| {
+            matches!(record, StreamSessionRecord::ConsumerTerminal(record)
+                if journal.source_unavailable == Some(record.source_offset)
+                    && journal.terminal_outcome.as_ref().is_some_and(|(author, terminal)|
+                        *author == record.authored_by && *terminal == record.terminal))
+        });
+        if journal.is_some_and(|journal| {
+            journal.terminal
+                || journal.outcome_observed
+                || (journal.source_unavailable.is_some() && !observes_overlay)
+        }) || ordinal != journal.map_or(0, |journal| journal.next_read_ordinal)
         {
             return Err(StreamStoreError::ConsumerJournalAdvanced);
         }
@@ -397,6 +447,9 @@ impl ProducerStreamIndex {
         journal.next_read_ordinal = next_read_ordinal;
         journal.last_source_offset = Some(last_source_offset);
         journal.terminal = terminal;
+        if let StreamSessionRecord::ConsumerTerminal(record) = record {
+            journal.terminal_outcome = Some((record.authored_by, record.terminal.clone()));
+        }
         self.session_consumer_streams
             .entry(session_key.clone())
             .or_default()
@@ -815,6 +868,7 @@ impl ProducerStreamIndex {
                 offset,
                 packed_u8_batch_end,
                 terminal_author: None,
+                terminal_origin: None,
                 nested_handles: nested_handles.clone(),
                 nested_references: record.nested_stream_ids.clone(),
                 payload,
@@ -836,11 +890,11 @@ impl ProducerStreamIndex {
         Ok(events)
     }
 
-    pub(super) fn apply_end(
+    pub(super) fn apply_terminal(
         &mut self,
         oplog_index: OplogIndex,
         entity_parent_start_index: Option<OplogIndex>,
-        record: StreamEndRecord,
+        record: StreamTerminalRecord,
         _producer_fingerprint: AgentFingerprint,
     ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
         validate_version(record.format_version)?;
@@ -850,7 +904,7 @@ impl ProducerStreamIndex {
         let stream_id = self.runtime_stream_id(record.stream_id)?;
         if self.entity_parent_start_index(stream_id)? != entity_parent_start_index {
             return Err(StreamStoreError::CorruptHistory(
-                "stream end attribution differs from its registration".to_string(),
+                "stream terminal attribution differs from its registration".to_string(),
             ));
         }
         let stream = self
@@ -864,9 +918,10 @@ impl ProducerStreamIndex {
             offset: record.offset,
             packed_u8_batch_end: None,
             terminal_author: Some(record.authored_by),
+            terminal_origin: Some(record.origin),
             nested_handles: Vec::new(),
             nested_references: Vec::new(),
-            payload: CommittedProducerStreamEventPayload::End(record.result),
+            payload: CommittedProducerStreamEventPayload::Terminal(record.terminal),
         };
         stream.first_sequence.get_or_insert(record.sequence);
         stream.last_offset = Some(record.offset);
@@ -906,54 +961,6 @@ impl ProducerStreamIndex {
         }
         self.finished_sessions.insert(session_key);
         Ok(())
-    }
-
-    pub(super) fn apply_cancel(
-        &mut self,
-        oplog_index: OplogIndex,
-        entity_parent_start_index: Option<OplogIndex>,
-        record: StreamCancelRecord,
-        _producer_fingerprint: AgentFingerprint,
-    ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
-        validate_version(record.format_version)?;
-        if record.offset != StreamOffset::new(oplog_index, 0) {
-            return Err(StreamStoreError::InvalidHandle);
-        }
-        let stream_id = self.runtime_stream_id(record.stream_id)?;
-        if self.entity_parent_start_index(stream_id)? != entity_parent_start_index {
-            return Err(StreamStoreError::CorruptHistory(
-                "stream cancellation attribution differs from its registration".to_string(),
-            ));
-        }
-        let stream = self
-            .streams
-            .get_mut(&stream_id)
-            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
-        validate_terminal_sequence(stream, stream_id, record.sequence)?;
-        let event = CommittedProducerStreamEvent {
-            stream_id,
-            producer_sequence: record.sequence,
-            offset: record.offset,
-            packed_u8_batch_end: None,
-            terminal_author: Some(record.authored_by),
-            nested_handles: Vec::new(),
-            nested_references: Vec::new(),
-            payload: CommittedProducerStreamEventPayload::Cancel {
-                role: record.role,
-                reason: record.reason,
-                details: record.details,
-            },
-        };
-        stream.first_sequence.get_or_insert(record.sequence);
-        stream.last_offset = Some(record.offset);
-        stream.terminal = true;
-        self.open_streams -= 1;
-        if let Some(session) = self.stream_sessions.get(&stream_id)
-            && let Some(streams) = self.open_session_streams.get_mut(session)
-        {
-            streams.remove(&stream_id);
-        }
-        Ok(event)
     }
 
     pub(super) fn apply_attachment_record(
@@ -1400,12 +1407,4 @@ pub(super) fn nested_coordinate_matches_item(
                 .checked_sub(first_sequence)
                 .is_some_and(|relative_sequence| relative_sequence < logical_item_count)
     )
-}
-
-pub(super) fn resource_exhausted_error_context() -> Result<Vec<u8>, StreamStoreError> {
-    let error = AgentError::CustomError(TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::string()),
-        SchemaValue::String("ResourceExhausted".to_string()),
-    ));
-    golem_common::serialization::serialize(&error).map_err(StreamStoreError::Oplog)
 }

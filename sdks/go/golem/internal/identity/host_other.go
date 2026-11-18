@@ -15,6 +15,12 @@ import (
 )
 
 var platform = operations{
+	bindSelf: func() witTypes.Result[witTypes.Tuple2[string, *host.WasmRpc], host.RpcError] {
+		panic("golem: identity operations are only available on the wasm target")
+	},
+	drop: func(*host.WasmRpc) {
+		panic("golem: identity operations are only available on the wasm target")
+	},
 	parse: func(string) witTypes.Result[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError] {
 		panic("golem: identity operations are only available on the wasm target")
 	},

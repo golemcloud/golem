@@ -15,10 +15,16 @@ import {
   type NonSecretOverride,
 } from "./Config.js"
 import * as Datetime from "./Datetime.js"
+import type { InvocationId } from "./InvocationId.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "./host/RpcClient.js"
-import { awaitInvocation, scheduleCancelableInvocation, wrapHostThrow } from "./internal/rpc.js"
+import {
+  awaitInvocation,
+  invocationMetadataFromHost,
+  scheduleCancelableInvocation,
+  wrapHostThrow,
+} from "./internal/rpc.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
 import {
   compileCallerParamBindings,
@@ -46,7 +52,16 @@ export type RemoteCallError =
 
 const responseError = (reason: string): RemoteCallError => ({ _tag: "RemoteResponseError", reason })
 
-export type InvocationMetadata = AgentHost.InvocationMetadata
+/**
+ * Host metadata of one invocation: the agent ID text of the target and the typed invocation ID.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface InvocationMetadata {
+  readonly agentId: string
+  readonly invocationId: InvocationId
+}
 export interface EphemeralInvocationResult<T> {
   readonly metadata: InvocationMetadata
   readonly value: T
@@ -145,6 +160,24 @@ export interface DurableClient<
   M extends Record<string, AnyMethodSpec>,
   F extends ConfigFields,
 > {
+  /**
+   * Bind the current durable incarnation without creating it or waiting for initialization.
+   *
+   * Use this to schedule work on self from inside the constructor. Normal `get` reuses
+   * an initialized agent without rerunning its constructor, but waits for an unfinished
+   * constructor. Calling `get` on self from that constructor would therefore deadlock.
+   *
+   * Scheduled work runs after construction finishes. This does not make awaited
+   * self-calls reentrant or bypass method permissions. A different client type fails
+   * with a typed error. Replay preserves the recorded incarnation.
+   */
+  readonly bindSelf: (
+    options?: ScopeCardOptions,
+  ) => Effect.Effect<
+    RemoteAgent<M>,
+    RemoteCallError | UnsupportedSchemaError | AgentIdentity.AgentIdentityError,
+    RpcClient | AgentHostClient | Scope.Scope
+  >
   readonly get: (
     input: CallerInput<C>,
     options?: GetOptions<F>,
@@ -389,7 +422,10 @@ const buildRemote = (
       if (streaming) return rejectNonAwaitedStream()
       return encode(input).pipe(
         Effect.flatMap((tree) =>
-          Effect.try({ try: () => rpc.invoke(name, tree), catch: wrapHostThrow }),
+          Effect.try({
+            try: () => invocationMetadataFromHost(rpc.invoke(name, tree)),
+            catch: wrapHostThrow,
+          }),
         ),
         Effect.map((metadata) => (ephemeral ? metadata : undefined)),
       )
@@ -754,6 +790,28 @@ const clientForCompiled = <
       )
       return { rpc, codecs, scopeCard: options?.scopeCard }
     })
+  const bindSelf = (options?: ScopeCardOptions) =>
+    Effect.gen(function* () {
+      const host = yield* RpcClient
+      const [id, rpc] = yield* Effect.acquireRelease(
+        host.bindSelf().pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
+        ([, connection]) => Effect.sync(() => connection.drop()),
+      )
+      const identity = yield* AgentIdentity.parse(id)
+      if (identity.typeName !== def.name)
+        return yield* Effect.fail<RemoteCallError>({
+          _tag: "RpcCallError",
+          cause: {
+            tag: "remote-agent-error",
+            val: {
+              tag: "invalid-type",
+              val: `self binding expects ${def.name}, identity is ${identity.typeName}`,
+            },
+          },
+        })
+      const codecs = yield* compile
+      return buildRemote(rpc, codecs, false, options?.scopeCard) as RemoteAgent<Methods>
+    })
   const get = (input: CallerInput<C>, options?: GetOptions<F>) =>
     construct(input, undefined, options).pipe(
       Effect.map(
@@ -808,6 +866,6 @@ const clientForCompiled = <
             ),
           newPhantom,
         }
-      : { get, getPhantom, newPhantom }
+      : { bindSelf, get, getPhantom, newPhantom }
   ) as AgentClient<C, Methods, Mode, F>
 }

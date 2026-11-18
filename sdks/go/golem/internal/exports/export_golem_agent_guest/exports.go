@@ -15,8 +15,8 @@
 // Package export_golem_agent_guest holds the hand-written export slots for
 // golem:agent/guest@2.0.0.
 //
-// These are NOT generated: `componentize-go bindings` is run with
-// --export-pkg-name pointing here, so the generated wasmexport glue in
+// These are NOT generated: dev-tools/go-bindgen sets export_pkg_name to
+// this package, so the generated wasmexport glue in
 // internal/wit/wit_exports calls into this package while never overwriting it.
 // The SDK fills the slots from its init(); leaving one nil is a programming
 // error and panics with a clear message rather than a nil-deref.
@@ -34,8 +34,8 @@ import (
 
 // Exports is the set of slots the SDK must fill before the component is invoked.
 var Exports struct {
-	Initialize         func(agentType string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Unit, common.AgentError]
-	Invoke             func(methodName string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError]
+	Initialize         func(agentType string, input types.SchemaValueTree) witTypes.Result[witTypes.Unit, common.AgentError]
+	Invoke             func(methodName string, input types.SchemaValueTree) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError]
 	GetDefinition      func() common.AgentType
 	DiscoverAgentTypes func() witTypes.Result[[]common.AgentType, common.AgentError]
 }
@@ -46,14 +46,14 @@ func mustBeSet(name string, set bool) {
 	}
 }
 
-func Initialize(agentType string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
+func Initialize(agentType string, input types.SchemaValueTree) witTypes.Result[witTypes.Unit, common.AgentError] {
 	mustBeSet("initialize", Exports.Initialize != nil)
-	return Exports.Initialize(agentType, input, principal)
+	return Exports.Initialize(agentType, input)
 }
 
-func Invoke(methodName string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
+func Invoke(methodName string, input types.SchemaValueTree) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
 	mustBeSet("invoke", Exports.Invoke != nil)
-	return Exports.Invoke(methodName, input, principal)
+	return Exports.Invoke(methodName, input)
 }
 
 func GetDefinition() common.AgentType {

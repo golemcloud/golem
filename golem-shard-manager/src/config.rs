@@ -18,9 +18,10 @@ use golem_common::SafeDisplay;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples,
 };
+use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
-use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
+use golem_schema::Empty;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;

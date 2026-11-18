@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::{IdempotencyKey, InvocationId};
+
 mod acquisition;
 mod ingress;
 mod persistence;
@@ -161,8 +163,8 @@ use crate::worker::lifecycle::state::{
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
-    calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
-    revert_validation_regions, update_status_with_new_entries,
+    InvocationRequests, calculate_last_known_status_with_checkpoint,
+    fold_invocation_result_entries, revert_validation_regions, update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::{
@@ -202,17 +204,17 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    CreateRequest, CreateRequestKind, DurableStreamEventSummary, FilesystemSnapshotName,
-    OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
-    SnapshotAssistedUpdateDetails, UpdateDescription,
+    AgentError, CreateRequest, CreateRequestKind, DurableStreamEventSummary,
+    FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
+    ReadOnlyViolationError, SnapshotAssistedUpdateDetails, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, ShardAssignment,
-    ShardEpoch, ShardId, Timestamp,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationResultPosition,
+    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState,
+    ShardAssignment, ShardEpoch, ShardId, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -552,7 +554,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Holds captured origins rather than `tracing::Span`s: a durable invocation can
     /// be picked up long after the request that enqueued it returned. See
     /// [`TraceOrigin`].
-    external_invocation_origins: Arc<RwLock<HashMap<IdempotencyKey, TraceOrigin>>>,
+    external_invocation_origins: Arc<RwLock<HashMap<InvocationId, TraceOrigin>>>,
 
     hydrated_invocation_results: Arc<RwLock<HydratedInvocationResultCache>>,
     ephemeral_invocation: StdMutex<EphemeralInvocationState>,
@@ -616,6 +618,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     snapshot_exclusions: StdMutex<SnapshotExclusions>,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
+    memory_accounting: residency::MemoryAccounting,
     memory_limit_interrupt_queued: AtomicBool,
 
     /// Snapshot of the active component, refreshed by `create_instance`.
@@ -899,7 +902,7 @@ impl Drop for WorkerStatusMetric {
 #[derive(Debug)]
 enum WorkerInstance {
     Unresolved,
-    Initializing(Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>),
+    Initializing(Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>),
     /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
     /// admission returns it until the next start, which runs the agent again.
     Unloaded {
@@ -1032,7 +1035,7 @@ struct RunningAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesyst
 
 struct RunningAgentRuntime<Ctx: WorkerCtx> {
     instance: Instance,
-    store: ObservedPrimaryStore<async_lock::Mutex<Store<Ctx>>>,
+    store: ObservedPrimaryStore<async_lock::Mutex<instance::PrimaryStore<Ctx>>>,
 }
 
 pub(crate) struct ObservedPrimaryStore<T> {
@@ -1166,9 +1169,9 @@ struct StoppingWorker {
 }
 
 #[derive(Debug, Clone)]
-struct FailedInvocationResult {
-    pub trap_type: TrapType,
-    pub stderr: String,
+enum FailedInvocationResult {
+    Trap { trap_type: TrapType, stderr: String },
+    Method { error: AgentError, stderr: String },
 }
 
 #[derive(Debug, Clone)]
@@ -1186,14 +1189,14 @@ enum InvocationResult {
 /// Bounded cache of invocation result payloads loaded from the oplog. The status membership only
 /// stores result oplog indexes; this cache avoids repeatedly loading and decoding those entries.
 struct HydratedInvocationResultCache {
-    values: HashMap<IdempotencyKey, HydratedInvocationResultCacheEntry>,
-    insertion_order: VecDeque<IdempotencyKey>,
+    values: HashMap<InvocationId, HydratedInvocationResultCacheEntry>,
+    insertion_order: VecDeque<InvocationId>,
     capacity: usize,
     /// Committed completions the published status may not include yet, by the oplog index of
     /// their result. The early commit receipt publishes a completion before its fold, and a failed
     /// fold leaves the status detached with the key still current. Payload eviction must not make
     /// such a key look unresolved, or terminal cleanup would fail an invocation that succeeded.
-    unprojected_completions: HashMap<IdempotencyKey, UnprojectedCompletion>,
+    unprojected_completions: HashMap<InvocationId, UnprojectedCompletion>,
 }
 
 struct UnprojectedCompletion {
@@ -1210,6 +1213,12 @@ struct HydratedInvocationResultCacheEntry {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether method-failure settlement failed before or after its invocation outcome was recorded.
+pub(crate) enum MethodFailureSettlementError {
+    Invocation(WorkerExecutorError),
+    Recovery(WorkerExecutorError),
+}
 
 /// What follows a failed invocation.
 #[derive(Clone, Debug)]
@@ -1348,7 +1357,7 @@ pub(crate) const INACTIVE_EPHEMERAL_AGENT_ERROR: &str =
 #[derive(Debug)]
 enum EphemeralInvocationState {
     Available,
-    Accepted(Option<IdempotencyKey>),
+    Accepted(Option<InvocationId>),
 }
 
 #[derive(Debug)]
@@ -1367,7 +1376,7 @@ enum StopResult {
 mod resource_release_tests;
 
 pub use acquisition::merge_agent_env_with_default_env;
-pub(crate) use ingress::require_expected_tool_deployment_revision;
+pub(crate) use ingress::{await_scalar_invocation, require_expected_tool_deployment_revision};
 use ingress::{
     inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
 };

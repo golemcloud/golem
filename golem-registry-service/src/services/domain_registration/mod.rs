@@ -504,8 +504,8 @@ fn environment_owner_from_domain_registration(
 mod tests {
     use test_r::test;
 
-    use golem_common::model::Empty;
     use golem_common::model::domain_registration::Domain;
+    use golem_schema::Empty;
 
     use super::{
         AvailableDomainsConfig, DomainMatcher, ReservedDomains, RestrictedAvailableDomainsConfig,

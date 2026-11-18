@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::attribution::Attributed;
 use crate::durable_host::concurrent::DropEvent;
 use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::durable_session::{
@@ -23,6 +24,9 @@ use crate::durable_host::stream_transport::{
     LiveInputProducer, LiveStreamEndpoint, accounted_output_stream_pair, relay_stream_pair,
 };
 use crate::workerctx::WorkerCtx;
+use golem_common::model::durable_stream::{
+    StreamError, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
+};
 use golem_schema::schema::schema_value::{
     PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
 };
@@ -31,7 +35,7 @@ use golem_schema::schema::tool::compatibility::{
 };
 use golem_schema::schema::wit::wire::{
     Host, HostQuotaToken, HostSchemaValueStream, HostSchemaValueStreamWithStore, HostSecret,
-    HostWithStore, SchemaValueTree, Uuid,
+    HostWithStore, SchemaValueTree, StreamOutcome, Uuid,
 };
 use golem_schema::schema::wit::{
     PermissionCardHandleRep, PermissionCardResolver, QuotaTokenHandleRep, QuotaTokenResolver,
@@ -44,8 +48,10 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use wasmtime::StoreContextMut;
-use wasmtime::component::{Access, Accessor, HasData, HasSelf, Resource, StreamReader};
+use wasmtime::component::{
+    Access, Accessor, FutureReader, HasData, HasSelf, Resource, StreamReader,
+};
+use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Returns whether a schema value contains a stream at any nesting depth.
 pub fn contains_stream(value: &SchemaValue) -> bool {
@@ -77,16 +83,19 @@ pub(crate) struct ExecutorProjectionStreams {
     pub(crate) runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     pub(crate) drop_event_sink: mpsc::UnboundedSender<DropEvent>,
     pub(crate) durable_receives: Option<mpsc::UnboundedSender<DurableInputReceiveAdmission>>,
+    pub(crate) body_trap: Option<tokio::sync::watch::Receiver<Option<String>>>,
 }
 
-struct ProjectionReceiveDispatcher(mpsc::UnboundedReceiver<DurableInputReceiveAdmission>);
+struct ProjectionReceiveDispatcher {
+    receiver: mpsc::UnboundedReceiver<DurableInputReceiveAdmission>,
+}
 
 impl ProjectionReceiveDispatcher {
     async fn run<U: Send + 'static, Ctx: WorkerCtx>(
         mut self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
-        while let Some(request) = self.0.recv().await {
+        while let Some(request) = self.receiver.recv().await {
             accessor.spawn(async move |accessor| request.run(accessor).await)?;
         }
         Ok(())
@@ -94,6 +103,23 @@ impl ProjectionReceiveDispatcher {
 }
 
 impl ExecutorProjectionStreams {
+    async fn body_trapped(
+        mut receiver: Option<tokio::sync::watch::Receiver<Option<String>>>,
+    ) -> String {
+        if let Some(receiver) = &mut receiver {
+            loop {
+                if let Some(details) = receiver.borrow_and_update().clone() {
+                    return details;
+                }
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+        // Normal release and runtime loss do not select a producer terminal.
+        std::future::pending().await
+    }
+
     async fn store_closed(&self) {
         match &self.durable_receives {
             Some(sender) => sender.closed().await,
@@ -105,7 +131,7 @@ impl ExecutorProjectionStreams {
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<Self> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let task = ProjectionReceiveDispatcher(receiver);
+        let task = ProjectionReceiveDispatcher { receiver };
         accessor.spawn(async move |accessor| task.run(accessor).await)?;
         Ok(accessor.with(|mut access| {
             let ctx = access.get();
@@ -117,6 +143,7 @@ impl ExecutorProjectionStreams {
                     .dropped_call_event_sender()
                     .expect("dropped-call event sender is always available"),
                 durable_receives: Some(sender),
+                body_trap: Some(ctx.schema_producers.projection_trap()),
             }
         }))
     }
@@ -129,6 +156,7 @@ impl ExecutorProjectionStreams {
             runtime_teardown: Arc::new(|| false),
             drop_event_sink,
             durable_receives: None,
+            body_trap: None,
         }
     }
 }
@@ -157,9 +185,21 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
             let mut source = DurableInputProducer::new(endpoint)
                 .with_drop_cleanup(self.drop_event_sink.clone(), self.runtime_teardown.clone());
             tokio::spawn(async move {
+                let mut trapped = Box::pin(Self::body_trapped(item_context.body_trap.clone()));
                 loop {
                     let event = tokio::select! {
                         biased;
+                        details = &mut trapped => {
+                            source.abort_for_teardown();
+                            if publisher.publish_terminal_with_origin(
+                                StreamTerminalAuthor::Host,
+                                StreamTerminalOrigin::Control,
+                                StreamTerminal::Failed(StreamError::Trapped(details)),
+                            ).await.is_err() {
+                                target_lifecycle.abort();
+                            }
+                            return;
+                        },
                         _ = item_context.store_closed() => {
                             source.abort_for_teardown();
                             target_lifecycle.abort();
@@ -175,23 +215,22 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                                 match apply_projection(&item_plan, value, &mut context) {
                                     Ok(value) => (Box::pin(publisher.publish_item(value)), false),
                                     Err(error) => (
-                                        Box::pin(publisher.publish_error(format!(
-                                            "schema stream item projection failed at {}: {}",
-                                            error.path, error.message
-                                        ))),
+                                        Box::pin(publisher.publish_terminal(
+                                            StreamTerminalAuthor::Protocol,
+                                            StreamTerminal::Failed(StreamError::Interrupted(format!(
+                                                "schema stream item projection failed at {}: {}",
+                                                error.path, error.message
+                                            ))),
+                                        )),
                                         true,
                                     ),
                                 }
                             }
-                            Ok(Some(DurableInputEvent::End)) => {
-                                (Box::pin(publisher.publish_end()), true)
+                            Ok(Some(DurableInputEvent::Terminal { authored_by, terminal })) => {
+                                (Box::pin(publisher.publish_terminal(authored_by, terminal)), true)
                             }
                             Ok(None) => {
                                 source.abort_for_teardown();
-                                target_lifecycle.abort();
-                                return;
-                            }
-                            Ok(Some(DurableInputEvent::Cancelled)) => {
                                 target_lifecycle.abort();
                                 return;
                             }
@@ -207,6 +246,17 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                         };
                     tokio::select! {
                         biased;
+                        details = &mut trapped => {
+                            source.abort_for_teardown();
+                            if publisher.publish_terminal_with_origin(
+                                StreamTerminalAuthor::Host,
+                                StreamTerminalOrigin::Control,
+                                StreamTerminal::Failed(StreamError::Trapped(details)),
+                            ).await.is_err() {
+                                target_lifecycle.abort();
+                            }
+                            return;
+                        },
                         _ = item_context.store_closed() => {
                             source.abort_for_teardown();
                             target_lifecycle.abort();
@@ -223,6 +273,7 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
         } else {
             let source = stream.take_host_endpoint::<LiveStreamEndpoint>()?;
             let source_lifecycle = source.lifecycle();
+            source_lifecycle.forward_to(&target_lifecycle, publisher.retirement());
             let activity = source.external_activity();
             let mut source = source.activate();
             tokio::spawn(async move {
@@ -249,38 +300,30 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                                         terminal = false;
                                         Box::pin(publisher.publish_item(value))
                                     }
-                                    Err(error) => Box::pin(publisher.publish_error(format!(
-                                        "schema stream item projection failed at {}: {}",
-                                        error.path, error.message
-                                    ))),
+                                    Err(error) => Box::pin(publisher.publish_terminal(
+                                        StreamTerminalAuthor::Protocol,
+                                        StreamTerminal::Failed(StreamError::Interrupted(format!(
+                                            "schema stream item projection failed at {}: {}",
+                                            error.path, error.message
+                                        ))),
+                                    )),
                                 }
                             }
-                            crate::durable_host::stream_bus::LiveStreamEventPayload::End => {
-                                Box::pin(publisher.publish_end())
-                            }
-                            crate::durable_host::stream_bus::LiveStreamEventPayload::Error(
-                                error,
-                            ) => Box::pin(publisher.publish_error(error)),
-                            crate::durable_host::stream_bus::LiveStreamEventPayload::ClassifiedError {
-                                kind,
-                                message,
-                            } => {
-                                let ordinary_message = message.clone();
-                                Box::pin(publisher.publish_host_error(
-                                    anyhow::Error::new(
-                                        crate::durable_host::durability::ClassifiedHostError {
-                                            kind,
-                                            message,
-                                        },
-                                    ),
-                                    ordinary_message,
-                                ))
-                            }
+                            crate::durable_host::stream_bus::LiveStreamEventPayload::Terminal {
+                                authored_by,
+                                terminal,
+                            } => Box::pin(publisher.publish_terminal_with_origin(
+                                authored_by,
+                                event.terminal_origin.expect("live terminal origin"),
+                                terminal,
+                            )),
                         },
-                        Err(error) => Box::pin(
-                            publisher
-                                .publish_error(format!("live stream receive failed: {error:?}")),
-                        ),
+                        Err(error) => Box::pin(publisher.publish_terminal(
+                            StreamTerminalAuthor::Host,
+                            StreamTerminal::Failed(StreamError::Interrupted(format!(
+                                "live stream receive failed: {error:?}"
+                            ))),
+                        )),
                     };
                     tokio::select! {
                         biased;
@@ -508,11 +551,14 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
     async fn wrap(
         accessor: &Accessor<T, Self>,
         reader: StreamReader<SchemaValueTree>,
+        mut outcome: FutureReader<Option<StreamOutcome>>,
     ) -> anyhow::Result<Resource<SchemaValueStreamHandleRep>> {
         accessor
             .with(|mut access| -> wasmtime::Result<_> {
                 let reader = match reader.try_into::<ForwardedDurableInput>(&mut access) {
                     Ok(forwarded) => {
+                        // The original durable handle already carries its exact terminal.
+                        outcome.close(&mut access)?;
                         return access
                             .get()
                             .table()
@@ -531,13 +577,19 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     .runtime_suspension
                     .as_ref()
                     .map(|runtime| runtime.source());
+                let producer = access.get().schema_producers.register();
                 let (consumer, stream) = accounted_output_stream_pair(
                     capacity,
                     runtime_teardown,
                     runtime_source,
                     interrupt,
+                    Some(producer.clone()),
                 )
                 .map_err(wasmtime::Error::msg)?;
+                if let Some(scope) = &access.get().tool_frontends {
+                    consumer.retain_for_tool_return(scope);
+                }
+                outcome.pipe(&mut access, producer.consumer())?;
                 reader.pipe(&mut access, consumer)?;
                 access
                     .get()
@@ -551,7 +603,7 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
     async fn unwrap(
         accessor: &Accessor<T, Self>,
         value: Resource<SchemaValueStreamHandleRep>,
-    ) -> anyhow::Result<StreamReader<SchemaValueTree>> {
+    ) -> anyhow::Result<(StreamReader<SchemaValueTree>, FutureReader<StreamOutcome>)> {
         accessor
             .with(|mut access| -> wasmtime::Result<_> {
                 let stream = access
@@ -573,17 +625,20 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     let endpoint = stream
                         .take_host_endpoint::<DurableInputEndpoint>()
                         .map_err(wasmtime::Error::msg)?;
-                    StreamReader::new(
-                        &mut access,
-                        DurableInputProducer::new(endpoint)
-                            .with_drop_cleanup(drop_event_sink, runtime_teardown),
-                    )
+                    let (producer, outcome) = DurableInputProducer::new(endpoint)
+                        .with_drop_cleanup(drop_event_sink, runtime_teardown)
+                        .with_completion(&mut access.as_context_mut())?;
+                    let producer = Attributed::new(access.get().attribution.clone(), producer);
+                    Ok((StreamReader::new(&mut access, producer)?, outcome))
                 } else {
                     let endpoint = stream
                         .take_host_endpoint::<LiveStreamEndpoint>()
                         .map_err(wasmtime::Error::msg)?;
                     let interrupt = access.get().create_interrupt_signal();
-                    StreamReader::new(&mut access, LiveInputProducer::new(endpoint, interrupt))
+                    let disposable_tool = access.get().tool_frontends.is_some();
+                    let (producer, outcome) =
+                        LiveInputProducer::new(&mut access, endpoint, interrupt, disposable_tool)?;
+                    Ok((StreamReader::new(&mut access, producer)?, outcome))
                 }
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))
@@ -635,6 +690,9 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostWithStore<T> for CoreTypesHost<Ctx> {
 mod tests {
     use super::*;
     use crate::durable_host::stream_bus::LiveStreamEventPayload;
+    use golem_common::base_model::durable_stream::{
+        StreamError, StreamTerminal, StreamTerminalAuthor,
+    };
     use golem_schema::schema::metadata::MetadataEnvelope;
     use golem_schema::schema::schema_type::NamedFieldType;
     use golem_schema::schema::tool::compatibility::{ProjectionNode, RecordFieldProjection};
@@ -776,8 +834,56 @@ mod tests {
         );
         assert!(matches!(
             target.recv().await.unwrap().payload,
-            LiveStreamEventPayload::End
+            LiveStreamEventPayload::Terminal {
+                authored_by: StreamTerminalAuthor::Guest,
+                terminal: StreamTerminal::Finished,
+            }
         ));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn relay_preserves_typed_terminal_and_author() {
+        for terminal in [
+            StreamTerminal::Finished,
+            StreamTerminal::Failed(StreamError::Interrupted("source stopped".into())),
+            StreamTerminal::Failed(StreamError::Trapped("trap".into())),
+            StreamTerminal::Failed(StreamError::Cancelled),
+            StreamTerminal::Failed(StreamError::Abandoned),
+            StreamTerminal::Failed(StreamError::ResourceExhausted("memory".into())),
+            StreamTerminal::ConsumerCancelled {
+                details: Some("reader stopped".into()),
+            },
+        ] {
+            for authored_by in [
+                StreamTerminalAuthor::Guest,
+                StreamTerminalAuthor::Host,
+                StreamTerminalAuthor::Protocol,
+            ] {
+                let (publisher, endpoint) = relay_stream_pair(1).unwrap();
+                let mut streams = ExecutorProjectionStreams::for_test(1);
+                let mut target = streams
+                    .project_stream(
+                        SchemaValueStream::from_host_endpoint(endpoint),
+                        Some(reordered_record_plan()),
+                    )
+                    .unwrap()
+                    .take_host_endpoint::<LiveStreamEndpoint>()
+                    .unwrap()
+                    .activate();
+                publisher
+                    .publish_terminal(authored_by, terminal.clone())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    target.recv().await.unwrap().payload,
+                    LiveStreamEventPayload::Terminal {
+                        authored_by,
+                        terminal: terminal.clone(),
+                    }
+                );
+            }
+        }
     }
 
     #[test]
@@ -907,14 +1013,23 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let LiveStreamEventPayload::Error(error) = target.recv().await.unwrap().payload else {
+            let LiveStreamEventPayload::Terminal {
+                authored_by,
+                terminal: StreamTerminal::Failed(error),
+            } = target.recv().await.unwrap().payload
+            else {
                 panic!("expected error terminal");
             };
             if invalid_item {
+                assert_eq!(authored_by, StreamTerminalAuthor::Protocol);
+                let StreamError::Interrupted(error) = error else {
+                    panic!("projection rejection must be a protocol interruption");
+                };
                 assert!(error.contains("projection failed"));
                 lifecycle.cancelled().await;
             } else {
-                assert_eq!(error, "upstream failure");
+                assert_eq!(authored_by, StreamTerminalAuthor::Host);
+                assert_eq!(error, StreamError::Trapped("upstream failure".into()));
             }
         }
     }

@@ -494,6 +494,7 @@ impl McpDeploymentService {
             .mcp_deployment_repo
             .get_by_id_and_revision(mcp_deployment_id.0, revision.into())
             .await?
+            .filter(|record| !record.deployment.revision.audit.deleted)
             .ok_or(McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
         let owner = environment_owner_from_deployment(&deployment_record);

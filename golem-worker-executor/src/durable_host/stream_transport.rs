@@ -12,39 +12,235 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::durability::ClassifiedHostError;
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{
     LiveStreamEventPayload, LiveStreamPublishError, LiveStreamPublisher, LiveStreamReceiveError,
     PrimaryLiveStreamSubscriber, ReservedPrimaryLiveStreamSubscriber, live_output_stream_bus,
+    live_stream_bus,
 };
 use crate::worker::suspension::{ExternalActivity, RuntimeSource};
 use crate::workerctx::WorkerCtx;
-use golem_schema::schema::wit::wire::SchemaValueTree;
+use golem_common::base_model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
+use golem_schema::schema::wit::wire::{SchemaValueTree, StreamOutcome};
 use golem_schema::schema::wit::{decode_value_with, encode_value_with_streams};
 use golem_schema::schema::{SchemaValue, SchemaValueStream};
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use wasmtime::StoreContextMut;
-use wasmtime::component::{Destination, Source, StreamConsumer, StreamProducer, StreamResult};
+use wasmtime::component::{
+    Destination, FutureProducer, FutureReader, Source, StreamConsumer, StreamProducer,
+    StreamResult, TerminalConsumption,
+};
 
-#[derive(Debug)]
+#[derive(Default)]
+pub(crate) struct ToolFrontendScope {
+    frontends: std::sync::Mutex<(bool, Vec<std::sync::Weak<SourceLifecycle>>)>,
+    recordings: tokio_util::task::TaskTracker,
+    cutoff: CancellationToken,
+}
+
+impl ToolFrontendScope {
+    pub(crate) fn cutoff(&self) -> CancellationToken {
+        self.cutoff.clone()
+    }
+
+    pub(crate) fn begin_return(&self) {
+        self.cutoff.cancel();
+    }
+
+    pub(crate) fn recording(&self) -> tokio_util::task::task_tracker::TaskTrackerToken {
+        self.recordings.token()
+    }
+
+    pub(crate) fn retirement(self: &Arc<Self>) -> ToolFrontendRetirement {
+        ToolFrontendRetirement(self.clone())
+    }
+
+    fn register(self: &Arc<Self>, lifecycle: &Arc<SourceLifecycle>) {
+        *lifecycle.scope.lock().unwrap() = Some(self.clone());
+        let mut frontends = self.frontends.lock().unwrap();
+        if frontends.0 {
+            lifecycle.retire();
+        } else {
+            frontends.1.push(Arc::downgrade(lifecycle));
+        }
+    }
+
+    pub(crate) async fn finish_recording(&self) {
+        self.recordings.close();
+        self.recordings.wait().await;
+    }
+
+    pub(crate) async fn finish_returned_frontends(&self) {
+        let frontends: Vec<_> = self
+            .frontends
+            .lock()
+            .unwrap()
+            .1
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect();
+        futures::future::join_all(frontends.into_iter().map(|frontend| async move {
+            frontend.publications.close();
+            frontend.publications.wait().await;
+            let terminal = frontend.return_terminal.lock().unwrap().take();
+            if let Some(terminal) = terminal {
+                let _ = terminal.await;
+                frontend.finish();
+            }
+        }))
+        .await;
+    }
+
+    pub(crate) fn retire(&self) {
+        self.cutoff.cancel();
+        let mut frontends = self.frontends.lock().unwrap();
+        frontends.0 = true;
+        for frontend in std::mem::take(&mut frontends.1) {
+            if let Some(frontend) = frontend.upgrade() {
+                frontend.retire();
+            }
+        }
+    }
+}
+
+pub(crate) struct ToolFrontendRetirement(Arc<ToolFrontendScope>);
+
+impl Drop for ToolFrontendRetirement {
+    fn drop(&mut self) {
+        self.0.retire();
+    }
+}
+
 pub(crate) struct SourceLifecycle {
     pub(super) finished: AtomicBool,
+    retired: AtomicBool,
     cancelled: CancellationToken,
+    acceptance_cancelled: CancellationToken,
+    acceptance: Mutex<Option<NativeAcceptance>>,
+    acceptance_changed: futures::task::AtomicWaker,
+    scope: std::sync::Mutex<Option<Arc<ToolFrontendScope>>>,
+    retirement: std::sync::Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    return_terminal: std::sync::Mutex<Option<PublicationFuture>>,
+    publications: tokio_util::task::TaskTracker,
+}
+
+impl std::fmt::Debug for SourceLifecycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceLifecycle")
+            .field("finished", &self.finished)
+            .field("cancelled", &self.cancelled)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativeAcceptance {
+    replay_items: u64,
+    control_limit: Option<u64>,
 }
 
 impl SourceLifecycle {
     fn new(cancelled: CancellationToken) -> Self {
         Self {
             finished: AtomicBool::new(false),
+            retired: AtomicBool::new(false),
             cancelled,
+            acceptance_cancelled: CancellationToken::new(),
+            acceptance: Mutex::new(None),
+            acceptance_changed: futures::task::AtomicWaker::new(),
+            scope: Default::default(),
+            retirement: Default::default(),
+            return_terminal: Default::default(),
+            publications: Default::default(),
         }
+    }
+
+    fn retire(&self) {
+        self.retired.store(true, Ordering::Release);
+        if let Some(retirement) = self.retirement.lock().unwrap().as_ref() {
+            retirement();
+        }
+    }
+
+    pub(crate) fn recording(&self) -> Option<tokio_util::task::task_tracker::TaskTrackerToken> {
+        self.scope
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|scope| scope.recordings.token())
+    }
+
+    pub(crate) fn forward_to(
+        &self,
+        target: &Arc<SourceLifecycle>,
+        retirement: Box<dyn Fn() + Send + Sync>,
+    ) {
+        if let Some(scope) = self.scope.lock().unwrap().as_ref() {
+            *target.retirement.lock().unwrap() = Some(retirement);
+            scope.register(target);
+        }
+    }
+
+    pub(crate) fn source_cancellation(&self) -> CancellationToken {
+        self.acceptance_cancelled.clone()
+    }
+
+    /// Installs the native acceptance boundary before the durable drain activates its source.
+    pub(crate) fn configure_native_acceptance(
+        &self,
+        replay_items: u64,
+        control_limit: Option<u64>,
+    ) {
+        *self
+            .acceptance
+            .lock()
+            .expect("native acceptance lock poisoned") = Some(NativeAcceptance {
+            replay_items,
+            control_limit,
+        });
+        self.acceptance_changed.wake();
+    }
+
+    fn activate_native_acceptance(&self) {
+        self.acceptance
+            .lock()
+            .expect("native acceptance lock poisoned")
+            .get_or_insert(NativeAcceptance {
+                replay_items: 0,
+                control_limit: None,
+            });
+        self.acceptance_changed.wake();
+    }
+
+    fn poll_native_allowance(&self, accepted: u64, cx: &mut Context<'_>) -> Poll<u64> {
+        self.acceptance_changed.register(cx.waker());
+        if self.finished.load(Ordering::Acquire) {
+            return Poll::Ready(0);
+        }
+        let acceptance = *self
+            .acceptance
+            .lock()
+            .expect("native acceptance lock poisoned");
+        let Some(acceptance) = acceptance else {
+            return Poll::Pending;
+        };
+        // A reconstructed source must reproduce its prefix even when control already won.
+        // Count native takes, not drain progress: the frontend can run ahead of publication.
+        let limit = acceptance
+            .control_limit
+            .map_or(u64::MAX, |limit| limit.saturating_sub(accepted));
+        Poll::Ready(if self.acceptance_cancelled.is_cancelled() {
+            limit.min(acceptance.replay_items.saturating_sub(accepted))
+        } else {
+            limit
+        })
     }
 
     pub(crate) fn abort(&self) {
@@ -62,6 +258,7 @@ impl SourceLifecycle {
 
     pub(crate) fn finish(&self) {
         self.finished.store(true, Ordering::Release);
+        self.acceptance_changed.wake();
     }
 }
 
@@ -72,6 +269,13 @@ pub(crate) struct LiveStreamEndpoint {
 }
 
 impl LiveStreamEndpoint {
+    pub(crate) fn into_recording(mut self) -> Self {
+        if let Some(recording) = self.lifecycle.recording() {
+            self.primary.as_mut().unwrap().keep_alive(recording);
+        }
+        self
+    }
+
     pub(crate) fn runtime_source(&self) -> Option<RuntimeSource> {
         self.runtime_source.clone()
     }
@@ -87,6 +291,7 @@ impl LiveStreamEndpoint {
     }
 
     pub(crate) fn activate(mut self) -> PrimaryLiveStreamSubscriber<SchemaValue> {
+        self.lifecycle.activate_native_acceptance();
         self.primary
             .take()
             .expect("live stream primary subscriber already activated")
@@ -110,7 +315,7 @@ pub(super) fn output_stream_pair(
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     interrupt: FrontendInterrupt,
 ) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
-    accounted_output_stream_pair(capacity, runtime_teardown, None, interrupt)
+    accounted_output_stream_pair(capacity, runtime_teardown, None, interrupt, None)
 }
 
 pub(super) fn accounted_output_stream_pair(
@@ -118,11 +323,21 @@ pub(super) fn accounted_output_stream_pair(
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     runtime_source: Option<RuntimeSource>,
     interrupt: FrontendInterrupt,
+    producer_outcome: Option<Arc<crate::durable_host::stream_outcome::ProducerOutcome>>,
 ) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
     let cancellation = CancellationToken::new();
     let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
-    let (publisher, primary) = live_output_stream_bus(capacity, cancellation)
-        .map_err(|error| format!("failed to create live output stream bus: {error:?}"))?;
+    let retained_producer = producer_outcome.clone();
+    let (publisher, primary) = live_stream_bus(capacity, move || {
+        cancellation.cancel();
+        if let Some(producer) = &retained_producer {
+            producer.close_items();
+        }
+    })
+    .map_err(|error| format!("failed to create live output stream bus: {error:?}"))?;
+    if let Some(producer) = &producer_outcome {
+        producer.bind_publication(publisher.clone(), lifecycle.clone());
+    }
     let endpoint = LiveStreamEndpoint {
         primary: Some(primary),
         lifecycle: lifecycle.clone(),
@@ -138,6 +353,8 @@ pub(super) fn accounted_output_stream_pair(
             runtime_teardown,
             interrupt,
             runtime_source,
+            accepted_items: 0,
+            producer_outcome,
         },
         SchemaValueStream::from_host_endpoint(endpoint),
     ))
@@ -153,6 +370,7 @@ pub(super) fn byte_output_stream_pair(
     Ok((LiveByteOutputConsumer(consumer), stream))
 }
 
+#[cfg(test)]
 pub(super) fn accounted_byte_output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
@@ -160,12 +378,14 @@ pub(super) fn accounted_byte_output_stream_pair(
     interrupt: FrontendInterrupt,
 ) -> Result<(LiveByteOutputConsumer, SchemaValueStream), String> {
     let (consumer, stream) =
-        accounted_output_stream_pair(capacity, runtime_teardown, runtime_source, interrupt)?;
+        accounted_output_stream_pair(capacity, runtime_teardown, runtime_source, interrupt, None)?;
     Ok((LiveByteOutputConsumer(consumer), stream))
 }
 
+#[cfg(test)]
 pub(super) struct LiveByteOutputConsumer(LiveOutputConsumer);
 
+#[cfg(test)]
 impl<D> StreamConsumer<D> for LiveByteOutputConsumer {
     type Item = u8;
 
@@ -179,32 +399,62 @@ impl<D> StreamConsumer<D> for LiveByteOutputConsumer {
         if self.0.pending.is_some() {
             return self.0.poll_pending(cx);
         }
+        let allowance = match self
+            .0
+            .lifecycle
+            .poll_native_allowance(self.0.accepted_items, cx)
+        {
+            Poll::Pending if finish => {
+                self.0.begin_terminal_publication();
+                return self.0.poll_pending(cx);
+            }
+            Poll::Pending => {
+                if let Poll::Ready(kind) = self.0.interrupt.as_mut().poll(cx) {
+                    return Poll::Ready(Err(wasmtime::Error::from_anyhow(kind.into())));
+                }
+                return Poll::Pending;
+            }
+            Poll::Ready(0) => return Poll::Ready(Ok(StreamResult::Dropped)),
+            Poll::Ready(allowance) => allowance,
+        };
         if finish {
             self.0.begin_terminal_publication();
             return self.0.poll_pending(cx);
         }
 
         let mut source = source.as_direct(store);
-        let count = source.remaining().len().min(64 * 1024);
+        let count = source
+            .remaining()
+            .len()
+            .min(64 * 1024)
+            .min(usize::try_from(allowance).unwrap_or(usize::MAX));
         if count == 0 {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
         let bytes = source.remaining()[..count].to_vec();
         source.mark_read(count);
+        self.0.accepted_items += count as u64;
         let publisher = self.0.publisher.clone();
-        self.0.pending = Some(Box::pin(async move {
+        self.0.pending = Some(self.0.retain_publication(Box::pin(async move {
             let mut offset = 0;
             for byte in bytes {
                 offset = publisher.publish_item(SchemaValue::U8(byte)).await?;
             }
             Ok(offset)
-        }));
+        })));
         self.0.poll_pending(cx)
     }
 }
 
 pub(crate) fn relay_stream_pair(
     capacity: usize,
+) -> Result<(LiveStreamPublisher<SchemaValue>, LiveStreamEndpoint), String> {
+    accounted_relay_stream_pair(capacity, None)
+}
+
+pub(super) fn accounted_relay_stream_pair(
+    capacity: usize,
+    runtime_source: Option<RuntimeSource>,
 ) -> Result<(LiveStreamPublisher<SchemaValue>, LiveStreamEndpoint), String> {
     let cancellation = CancellationToken::new();
     let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
@@ -215,7 +465,7 @@ pub(crate) fn relay_stream_pair(
         LiveStreamEndpoint {
             primary: Some(primary),
             lifecycle,
-            runtime_source: None,
+            runtime_source,
         },
     ))
 }
@@ -239,20 +489,55 @@ pub(super) struct LiveOutputConsumer {
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     interrupt: FrontendInterrupt,
     runtime_source: Option<RuntimeSource>,
+    accepted_items: u64,
+    producer_outcome: Option<Arc<crate::durable_host::stream_outcome::ProducerOutcome>>,
 }
 
 impl LiveOutputConsumer {
+    pub(crate) fn retain_for_tool_return(&self, scope: &Arc<ToolFrontendScope>) {
+        // Tool result streams must accept their bounded prefix before the export returns
+        // and materialization can configure the durable drain.
+        self.lifecycle.activate_native_acceptance();
+        *self.lifecycle.retirement.lock().unwrap() = Some(self.publisher.retirement());
+        if self.producer_outcome.is_none() {
+            let publisher = self.publisher.clone();
+            *self.lifecycle.return_terminal.lock().unwrap() =
+                Some(Box::pin(async move { publisher.publish_end().await }));
+        }
+        scope.register(&self.lifecycle);
+    }
+
+    fn retain_publication(&self, publication: PublicationFuture) -> PublicationFuture {
+        if self.lifecycle.scope.lock().unwrap().is_none() {
+            return publication;
+        }
+        let (complete, completed) = tokio::sync::oneshot::channel();
+        self.lifecycle.publications.spawn(async move {
+            let _ = complete.send(publication.await);
+        });
+        Box::pin(async move {
+            completed
+                .await
+                .unwrap_or(Err(LiveStreamPublishError::Closed))
+        })
+    }
+
     fn begin_terminal_publication(&mut self) {
         self.terminal_requested = true;
+        if let Some(outcome) = &self.producer_outcome {
+            outcome.close_items();
+            self.pending = Some(Box::pin(async { Ok(0) }));
+            return;
+        }
         let publisher = self.publisher.clone();
-        self.pending = Some(Box::pin(async move {
+        self.pending = Some(self.retain_publication(Box::pin(async move {
             let result = publisher.publish_end().await;
             tracing::trace!(
                 succeeded = result.is_ok(),
                 "Live output terminal publication completed"
             );
             result
-        }));
+        })));
     }
 
     fn poll_pending(&mut self, cx: &mut Context<'_>) -> Poll<wasmtime::Result<StreamResult>> {
@@ -311,6 +596,12 @@ impl LiveOutputConsumer {
 
 impl Drop for LiveOutputConsumer {
     fn drop(&mut self) {
+        if let Some(outcome) = &self.producer_outcome {
+            // Accepted items already belong to the native publication lane. Closing items
+            // never selects an outcome; the invocation scope still owns absent outcomes.
+            outcome.close_items();
+            return;
+        }
         let pending = self.pending.take();
         let terminal_requested = self.terminal_requested;
         let publisher = self.publisher.clone();
@@ -364,6 +655,23 @@ impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for LiveOutputConsumer {
         if self.pending.is_some() {
             return self.poll_pending(cx);
         }
+        match self
+            .lifecycle
+            .poll_native_allowance(self.accepted_items, cx)
+        {
+            Poll::Pending if finish => {
+                self.begin_terminal_publication();
+                return self.poll_pending(cx);
+            }
+            Poll::Pending => {
+                if let Poll::Ready(kind) = self.interrupt.as_mut().poll(cx) {
+                    return Poll::Ready(Err(wasmtime::Error::from_anyhow(kind.into())));
+                }
+                return Poll::Pending;
+            }
+            Poll::Ready(0) => return Poll::Ready(Ok(StreamResult::Dropped)),
+            Poll::Ready(_) => {}
+        }
         if finish {
             self.begin_terminal_publication();
             return self.poll_pending(cx);
@@ -374,6 +682,7 @@ impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for LiveOutputConsumer {
         let Some(item) = item else {
             return Poll::Ready(Ok(StreamResult::Completed));
         };
+        self.accepted_items += 1;
 
         let decoded = {
             let mut resolver = StoreValueResolver::new(&mut store);
@@ -382,14 +691,37 @@ impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for LiveOutputConsumer {
         let publisher = self.publisher.clone();
         match decoded {
             Ok(value) => {
-                self.pending = Some(Box::pin(async move { publisher.publish_item(value).await }));
+                self.pending = Some(match &self.producer_outcome {
+                    Some(outcome) => {
+                        let completion = outcome.publish_item(value);
+                        Box::pin(async move {
+                            completion
+                                .await
+                                .unwrap_or(Err(LiveStreamPublishError::Closed))
+                        })
+                    }
+                    None => self.retain_publication(Box::pin(async move {
+                        publisher.publish_item(value).await
+                    })),
+                });
             }
             Err(error) => {
+                if self.producer_outcome.is_some() {
+                    return Poll::Ready(Err(wasmtime::Error::from(
+                        wasmtime::Trap::UnreachableCodeReached,
+                    )
+                    .context(format!("invalid schema stream item: {error}"))));
+                }
                 self.pending_failure = Some(error.clone());
                 self.terminal_requested = true;
-                self.pending = Some(Box::pin(
-                    async move { publisher.publish_error(error).await },
-                ));
+                self.pending = Some(self.retain_publication(Box::pin(async move {
+                    publisher
+                        .publish_terminal(
+                            StreamTerminalAuthor::Protocol,
+                            StreamTerminal::Failed(StreamError::Interrupted(error)),
+                        )
+                        .await
+                })));
             }
         }
         self.poll_pending(cx)
@@ -435,18 +767,62 @@ pub(super) struct LiveInputProducer {
     lifecycle: Arc<SourceLifecycle>,
     finished: bool,
     interrupt: Option<FrontendInterrupt>,
+    retain_for_tool_return: bool,
+    completion: Option<oneshot::Sender<StreamTerminal>>,
+}
+
+struct LiveInputOutcomeProducer(Option<oneshot::Receiver<StreamTerminal>>);
+
+impl<D: Send + 'static> FutureProducer<D> for LiveInputOutcomeProducer {
+    type Item = StreamOutcome;
+
+    fn poll_produce(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        _store: StoreContextMut<D>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<Option<Self::Item>>> {
+        if finish {
+            return Poll::Ready(Ok(None));
+        }
+        let Some(receiver) = self.0.as_mut() else {
+            return Poll::Pending;
+        };
+        let result = std::task::ready!(Pin::new(receiver).poll(cx));
+        self.0 = None;
+        match result {
+            Ok(terminal) => Poll::Ready(
+                crate::durable_host::stream_outcome::encode_outcome(&terminal).map(Some),
+            ),
+            // An early reader drop is not a producer outcome.
+            Err(_) => Poll::Pending,
+        }
+    }
 }
 
 impl LiveInputProducer {
-    pub(super) fn new(endpoint: LiveStreamEndpoint, interrupt: FrontendInterrupt) -> Self {
+    pub(super) fn new<D: Send + 'static>(
+        store: &mut impl wasmtime::AsContextMut<Data = D>,
+        endpoint: LiveStreamEndpoint,
+        interrupt: FrontendInterrupt,
+        disposable_tool: bool,
+    ) -> wasmtime::Result<(Self, FutureReader<StreamOutcome>)> {
         let lifecycle = endpoint.lifecycle.clone();
-        Self {
-            subscriber: Some(endpoint.activate()),
-            pending: None,
-            lifecycle,
-            finished: false,
-            interrupt: Some(interrupt),
-        }
+        let retain_for_tool_return = disposable_tool && lifecycle.scope.lock().unwrap().is_some();
+        let (sender, receiver) = oneshot::channel();
+        let outcome = FutureReader::new(store, LiveInputOutcomeProducer(Some(receiver)))?;
+        Ok((
+            Self {
+                subscriber: Some(endpoint.activate()),
+                pending: None,
+                lifecycle,
+                finished: false,
+                interrupt: Some(interrupt),
+                retain_for_tool_return,
+                completion: Some(sender),
+            },
+            outcome,
+        ))
     }
 }
 
@@ -519,30 +895,33 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for LiveInputProducer {
                     destination.set_buffer(Some(encoded));
                     Poll::Ready(Ok(StreamResult::Completed))
                 }
-                LiveStreamEventPayload::End => {
+                LiveStreamEventPayload::Terminal { terminal, .. } => {
                     self.finished = true;
                     self.lifecycle.finish();
+                    if let Some(completion) = self.completion.take() {
+                        if destination.remaining(&mut store).is_some() {
+                            destination.register_read_observer(&mut store, move |consumption| {
+                                if consumption == TerminalConsumption::Delivered {
+                                    let _ = completion.send(terminal);
+                                }
+                            })?;
+                        } else {
+                            let _ = completion.send(terminal);
+                        }
+                    }
                     Poll::Ready(Ok(StreamResult::Dropped))
-                }
-                LiveStreamEventPayload::Error(error) => {
-                    self.finished = true;
-                    self.lifecycle.finish();
-                    Poll::Ready(Err(wasmtime::Error::msg(error)))
-                }
-                LiveStreamEventPayload::ClassifiedError { kind, message } => {
-                    self.finished = true;
-                    self.lifecycle.finish();
-                    Poll::Ready(Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
-                        ClassifiedHostError { kind, message },
-                    ))))
                 }
             },
             Some(Err(LiveStreamReceiveError::Closed)) => {
                 self.finished = true;
                 self.lifecycle.finish();
-                Poll::Ready(Err(wasmtime::Error::msg(
-                    "live input stream closed without a terminal event",
-                )))
+                if self.retain_for_tool_return && self.lifecycle.retired.load(Ordering::Acquire) {
+                    Poll::Ready(Ok(StreamResult::Dropped))
+                } else {
+                    Poll::Ready(Err(wasmtime::Error::msg(
+                        "live input stream closed without a terminal event",
+                    )))
+                }
             }
             Some(Err(LiveStreamReceiveError::Lagged(missed))) => {
                 self.finished = true;
@@ -566,8 +945,218 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for LiveInputProducer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::base_model::durable_stream::StreamTerminalAuthor;
     use std::time::Duration;
     use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("10s")]
+    async fn tool_return_preserves_schema_producer_outcome() {
+        use crate::durable_host::stream_outcome::ProducerOutcomeScope;
+
+        let scope = Arc::new(ToolFrontendScope::default());
+        let mut producers = ProducerOutcomeScope::default();
+        let producer = producers.register();
+        let (consumer, stream) = accounted_output_stream_pair(
+            1,
+            Arc::new(|| false),
+            None,
+            Box::pin(std::future::pending()),
+            Some(producer.clone()),
+        )
+        .unwrap();
+        consumer.retain_for_tool_return(&scope);
+        let mut reader = stream
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap()
+            .activate();
+        producer
+            .publish_item(SchemaValue::U8(83))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            reader.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(83))
+        ));
+
+        producers.settle(Ok(()));
+        producers.release();
+        scope.begin_return();
+        scope.finish_returned_frontends().await;
+        assert!(matches!(
+            reader.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Terminal {
+                terminal: StreamTerminal::Failed(StreamError::Abandoned),
+                ..
+            }
+        ));
+        scope.retire();
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn unused_publication_does_not_block_recorded_sibling_terminal() {
+        let scope = Arc::new(ToolFrontendScope::default());
+        let (unused, _unused_stream) =
+            output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
+        unused.retain_for_tool_return(&scope);
+        unused
+            .publisher
+            .publish_item(SchemaValue::U8(17))
+            .await
+            .unwrap();
+        let publisher = unused.publisher.clone();
+        let blocked = unused.retain_publication(Box::pin(async move {
+            publisher.publish_item(SchemaValue::U8(29)).await
+        }));
+        tokio::pin!(blocked);
+        assert!(futures::poll!(&mut blocked).is_pending());
+
+        let (recorded, recorded_stream) =
+            output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
+        recorded.retain_for_tool_return(&scope);
+        let mut recording = recorded_stream
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap()
+            .into_recording()
+            .activate();
+        let publisher = recorded.publisher.clone();
+        recorded
+            .retain_publication(Box::pin(async move {
+                publisher.publish_item(SchemaValue::U8(83)).await
+            }))
+            .await
+            .unwrap();
+        assert!(matches!(
+            recording.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(83))
+        ));
+
+        scope.begin_return();
+        let closing = scope.finish_returned_frontends();
+        tokio::pin!(closing);
+        let terminal = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::select! {
+                result = recording.recv() => result,
+                _ = &mut closing => recording.recv().await,
+            }
+        })
+        .await;
+        drop(recording);
+        scope.retire();
+        assert_eq!(blocked.await, Err(LiveStreamPublishError::Closed));
+        scope.finish_recording().await;
+        assert!(
+            matches!(terminal, Ok(Ok(event)) if matches!(event.payload, LiveStreamEventPayload::Terminal { terminal: StreamTerminal::Finished, .. })),
+            "recorded sibling must receive End without consuming the unused frontend"
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn tool_return_retirement_releases_unused_frontends_but_waits_for_recording() {
+        let scope = Arc::new(ToolFrontendScope::default());
+        let (reserved, _reserved_stream) =
+            output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
+        reserved.retain_for_tool_return(&scope);
+        reserved
+            .publisher
+            .publish_item(SchemaValue::U8(17))
+            .await
+            .unwrap();
+        let reserved_write = reserved.publisher.publish_item(SchemaValue::U8(41));
+        tokio::pin!(reserved_write);
+        assert!(futures::poll!(&mut reserved_write).is_pending());
+
+        let (active, active_stream) =
+            output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
+        active.retain_for_tool_return(&scope);
+        let _primary = active_stream
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap()
+            .activate();
+        active
+            .publisher
+            .publish_item(SchemaValue::U8(83))
+            .await
+            .unwrap();
+        let active_write = active.publisher.publish_item(SchemaValue::U8(29));
+        tokio::pin!(active_write);
+        assert!(futures::poll!(&mut active_write).is_pending());
+
+        let (recorded, recorded_stream) =
+            output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
+        recorded.retain_for_tool_return(&scope);
+        let recording = recorded_stream
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap()
+            .into_recording();
+        let recording = recording.activate();
+        let finish = scope.finish_recording();
+        tokio::pin!(finish);
+        assert!(futures::poll!(&mut finish).is_pending());
+        let nested = recorded.lifecycle.recording().unwrap();
+        drop(recording);
+        assert!(futures::poll!(&mut finish).is_pending());
+        drop(nested);
+        finish.await;
+        scope.retire();
+        assert_eq!(reserved_write.await, Err(LiveStreamPublishError::Closed));
+        assert_eq!(active_write.await, Err(LiveStreamPublishError::Closed));
+
+        let (late, _late_stream) =
+            output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
+        late.retain_for_tool_return(&scope);
+        assert_eq!(
+            late.publisher.publish_item(SchemaValue::U8(61)).await,
+            Err(LiveStreamPublishError::Closed)
+        );
+    }
+
+    #[test]
+    fn native_acceptance_preserves_only_the_recorded_control_prefix() {
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        for cancel_before_configuration in [false, true] {
+            let lifecycle = SourceLifecycle::new(CancellationToken::new());
+            let cancelled = lifecycle.source_cancellation();
+            assert!(lifecycle.poll_native_allowance(0, &mut cx).is_pending());
+            if cancel_before_configuration {
+                cancelled.cancel();
+            }
+            lifecycle.configure_native_acceptance(3, Some(3));
+            lifecycle.activate_native_acceptance();
+            // The allowance caps a byte batch as well as successive scalar takes, even
+            // when the drain has not yet validated any of the accepted prefix.
+            assert_eq!(lifecycle.poll_native_allowance(0, &mut cx), Poll::Ready(3));
+            assert_eq!(lifecycle.poll_native_allowance(2, &mut cx), Poll::Ready(1));
+            assert_eq!(lifecycle.poll_native_allowance(3, &mut cx), Poll::Ready(0));
+            cancelled.cancel();
+            assert_eq!(lifecycle.poll_native_allowance(2, &mut cx), Poll::Ready(1));
+            assert_eq!(lifecycle.poll_native_allowance(3, &mut cx), Poll::Ready(0));
+        }
+
+        let lifecycle = SourceLifecycle::new(CancellationToken::new());
+        lifecycle.configure_native_acceptance(3, None);
+        lifecycle.activate_native_acceptance();
+        // A Source terminal must still be reproduced, not converted into a native drop.
+        assert_eq!(
+            lifecycle.poll_native_allowance(3, &mut cx),
+            Poll::Ready(u64::MAX)
+        );
+        lifecycle.source_cancellation().cancel();
+        assert_eq!(lifecycle.poll_native_allowance(2, &mut cx), Poll::Ready(1));
+        assert_eq!(lifecycle.poll_native_allowance(3, &mut cx), Poll::Ready(0));
+
+        let lifecycle = SourceLifecycle::new(CancellationToken::new());
+        lifecycle.activate_native_acceptance();
+        assert_eq!(
+            lifecycle.poll_native_allowance(0, &mut cx),
+            Poll::Ready(u64::MAX)
+        );
+        lifecycle.source_cancellation().cancel();
+        assert_eq!(lifecycle.poll_native_allowance(0, &mut cx), Poll::Ready(0));
+    }
 
     #[test]
     #[timeout("5s")]
@@ -755,7 +1344,10 @@ mod tests {
         ));
         assert!(matches!(
             primary.recv().await.unwrap().payload,
-            LiveStreamEventPayload::End
+            LiveStreamEventPayload::Terminal {
+                authored_by: StreamTerminalAuthor::Guest,
+                terminal: StreamTerminal::Finished,
+            }
         ));
     }
 
@@ -833,7 +1425,10 @@ mod tests {
                     assert_eq!(event.offset, bytes.len() as u64);
                     match event.payload {
                         LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => bytes.push(byte),
-                        LiveStreamEventPayload::End => break,
+                        LiveStreamEventPayload::Terminal {
+                            terminal: StreamTerminal::Finished,
+                            ..
+                        } => break,
                         other => panic!("unexpected byte output event: {other:?}"),
                     }
                 }
@@ -864,7 +1459,11 @@ mod tests {
             primary.recv().await.unwrap(),
             crate::durable_host::stream_bus::LiveStreamEvent {
                 offset: 0,
-                payload: LiveStreamEventPayload::End,
+                payload: LiveStreamEventPayload::Terminal {
+                    authored_by: StreamTerminalAuthor::Guest,
+                    terminal: StreamTerminal::Finished,
+                },
+                ..
             }
         ));
     }
@@ -884,7 +1483,11 @@ mod tests {
             primary.recv().await.unwrap(),
             crate::durable_host::stream_bus::LiveStreamEvent {
                 offset: 0,
-                payload: LiveStreamEventPayload::End,
+                payload: LiveStreamEventPayload::Terminal {
+                    authored_by: StreamTerminalAuthor::Guest,
+                    terminal: StreamTerminal::Finished,
+                },
+                ..
             }
         ));
         tokio::time::timeout(Duration::from_millis(20), async {

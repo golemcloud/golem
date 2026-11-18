@@ -2,13 +2,14 @@ use super::super::ResolutionOutcome;
 use super::*;
 use tokio::sync::oneshot;
 
-/// Whether the replay-visible terminal of the call started at `start_index` is a `Cancelled`
-/// without a partial result: the guest dropped the call before it delivered anything. The scan
-/// reads the oplog up to the replay target and skips deleted regions; nothing is consumed.
-pub(super) async fn cancelled_before_delivery(
+/// Whether replay parks the outer call without reconstructing its host-internal observations:
+/// cancellation without a partial result, or an opted-in incomplete call abandoned by a
+/// completed tool. The scan skips deleted regions and consumes nothing.
+pub(super) async fn host_internal_calls_are_replay_inert(
     cursor: &ReplayCursor,
     state: &CursorState,
     start_index: OplogIndex,
+    abandon_if_incomplete: bool,
 ) -> Result<bool, UnreadableOplog> {
     let replay_target = cursor.replay_target();
     let mut next = start_index.next();
@@ -31,7 +32,7 @@ pub(super) async fn cancelled_before_delivery(
         }
         next = last_read.next();
     }
-    Ok(false)
+    Ok(abandon_if_incomplete)
 }
 
 pub(super) fn custom_subtree_entry_is_drainable(state: &CursorState, entry: &OplogEntry) -> bool {
@@ -333,7 +334,13 @@ impl RetainedClaims<'_> {
         }
         if claim.is_custom_invocation()
             || (claim.makes_host_internal_calls()
-                && cancelled_before_delivery(self.cursor, self.st, handle.start_idx()).await?)
+                && host_internal_calls_are_replay_inert(
+                    self.cursor,
+                    self.st,
+                    handle.start_idx(),
+                    claim.abandons_incomplete_host_internal_calls(),
+                )
+                .await?)
         {
             self.register_replay_inert_subtree_root(handle.start_idx());
         }
