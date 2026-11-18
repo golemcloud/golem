@@ -218,6 +218,221 @@ async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
 }
 
 #[test]
+async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
+    use golem_common::schema::{AutoInjectedKind, NamedField};
+    use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
+    use golem_service_base::model::SafeIndex;
+
+    let mut failures = Vec::new();
+    for durable in [false, true] {
+        for binding in ["query", "header", "path", "map", "optional-map"] {
+            if durable && binding == "path" {
+                continue;
+            }
+            let harness = invocation_harness();
+            let mut route = test_route(
+                1,
+                if binding == "path" { "/{wire}" } else { "/run" },
+                Some(if durable { "PUT" } else { "GET" }),
+                "typed",
+            );
+            let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                unreachable!()
+            };
+            let map = binding.ends_with("map");
+            let input_type = if map {
+                let ty = SchemaType::map(SchemaType::string(), SchemaType::bool());
+                if binding == "optional-map" {
+                    SchemaType::option(SchemaType::option(ty))
+                } else {
+                    ty
+                }
+            } else {
+                SchemaType::U32 {
+                    restrictions: Some(NumericRestrictions {
+                        min: Some(NumericBound::Unsigned(2)),
+                        max: None,
+                        unit: None,
+                    }),
+                    metadata: Default::default(),
+                }
+            };
+            call.method_input = CompiledInputSchema {
+                graph: SchemaGraph::empty(),
+                input_schema: InputSchema::parameters([
+                    NamedField::auto_injected(
+                        "principal",
+                        AutoInjectedKind::Principal,
+                        SchemaType::string(),
+                    ),
+                    NamedField::user_supplied("amount", input_type),
+                ]),
+            };
+            call.method_parameters = vec![match binding {
+                "map" | "optional-map" => {
+                    let ty = QueryOrHeaderType::Map {
+                        key: PathSegmentType::Str,
+                        value: PathSegmentType::Bool,
+                    };
+                    MethodParameter::Query {
+                        query_parameter_name: "wire".into(),
+                        parameter_type: if binding == "optional-map" {
+                            QueryOrHeaderType::Option {
+                                owner: None,
+                                name: None,
+                                inner: Box::new(QueryOrHeaderType::Option {
+                                    owner: None,
+                                    name: None,
+                                    inner: Box::new(ty),
+                                }),
+                            }
+                        } else {
+                            ty
+                        },
+                    }
+                }
+                "query" => MethodParameter::Query {
+                    query_parameter_name: "wire".into(),
+                    parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+                },
+                "header" => MethodParameter::Header {
+                    header_name: "x-wire".into(),
+                    parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+                },
+                _ => MethodParameter::Path {
+                    path_segment_index: SafeIndex::new(0),
+                    parameter_type: PathSegmentType::U32,
+                },
+            }];
+            if durable {
+                call.route_mode = AgentRouteMode::DurableStreams;
+                call.durable_streams = Some(DurableStreamRoutePolicy {
+                    family_id: 1,
+                    slots: vec![DurableStreamSlot {
+                        canonical_name: "events".into(),
+                        public_name: "events".into(),
+                        direction: DurableStreamSlotDirection::Output,
+                        content_type: "application/json".into(),
+                        representation: DurableStreamRepresentation::Json,
+                    }],
+                    allow_external_writes: false,
+                    allow_stream_delete: false,
+                    allow_invocation_delete: false,
+                    load: None,
+                });
+            }
+            let handler = request_handler_with_worker(
+                test_resolver(vec![route]),
+                Arc::new(InitialAgentFilesService::new(Arc::new(
+                    golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+                ))),
+                harness.worker_service.clone(),
+            );
+            let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
+            let cases: &[(&str, &[&str], &str, &str)] = match binding {
+                "map" | "optional-map" => &[
+                    ("/run?wire=x", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    (
+                        "/run?w%69re=x&wire[env]=true",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "amount",
+                    ),
+                ],
+                "query" => &[
+                    ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
+                    (
+                        "/run?wire=3&wire=4",
+                        &[],
+                        "REQUEST_TOO_MANY_VALUES",
+                        "amount",
+                    ),
+                    (
+                        "/run?wire=bad",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "amount",
+                    ),
+                    ("/run?wire=1", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    (
+                        "/run?surprise=3",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "surprise",
+                    ),
+                ],
+                "header" => &[
+                    ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
+                    ("/run", &["3", "4"], "REQUEST_TOO_MANY_VALUES", "amount"),
+                    ("/run", &["bad"], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    ("/run", &["1"], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                ],
+                _ => &[
+                    ("/bad", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    ("/1", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                ],
+            };
+            for (target, headers, code, detail) in cases {
+                let mut request = Request::builder()
+                    .method(if durable {
+                        http::Method::PUT
+                    } else {
+                        http::Method::GET
+                    })
+                    .uri(target.parse().unwrap())
+                    .header("host", "example.com");
+                for value in *headers {
+                    request = request.header("x-wire", *value);
+                }
+                let response = endpoint.execute(request.finish()).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{durable} {binding} {target}"
+                );
+                if durable {
+                    let has_content_type =
+                        response.headers().contains_key(http::header::CONTENT_TYPE);
+                    let body = response.into_body().into_bytes().await.unwrap();
+                    if has_content_type || !body.is_empty() {
+                        failures.push(format!(
+                            "DurableStreams {binding} {target}: expected empty 400, got {body:?}"
+                        ));
+                    }
+                } else {
+                    let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                    if body["code"] != *code {
+                        failures.push(format!("{binding} {target}: expected {code}, got {body}"));
+                    }
+                    assert!(
+                        body["errors"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|error| error.as_str().unwrap().contains(detail)),
+                        "{body}"
+                    );
+                    if map {
+                        assert!(
+                            body["errors"].as_array().unwrap().iter().any(|error| {
+                                error.as_str().unwrap().contains("maps require name[key]")
+                            }),
+                            "{body}"
+                        );
+                    }
+                }
+            }
+            assert!(harness.contexts.lock().unwrap().is_empty());
+            assert!(harness.metadata_reads.lock().unwrap().is_empty());
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
 async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
@@ -569,6 +784,9 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         )
     };
     for (query, authorized, expected) in [
+        ("v=3".into(), false, StatusCode::UNAUTHORIZED),
+        ("v=3".into(), true, StatusCode::BAD_REQUEST),
+        (format!("instance={p}&v=3"), true, StatusCode::BAD_REQUEST),
         ("instance=invalid".into(), false, StatusCode::UNAUTHORIZED),
         ("instance=invalid".into(), true, StatusCode::BAD_REQUEST),
         ("instance=".into(), true, StatusCode::BAD_REQUEST),
@@ -1416,7 +1634,7 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 } else {
                     format!(
                         "{target}?{}",
-                        root.map(|id| format!("instance={}&count=17", id.to_uppercase()))
+                        root.map(|id| format!("instance={}", id.to_uppercase()))
                             .unwrap_or_default()
                     )
                 };

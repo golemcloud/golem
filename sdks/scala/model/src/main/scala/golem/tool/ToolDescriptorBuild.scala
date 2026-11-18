@@ -157,7 +157,8 @@ final case class CommandBuild(
   aliases: List[String],
   doc: Doc,
   globals: GlobalsBuild,
-  body: Option[BodyBuild]
+  body: Option[BodyBuild],
+  http: Option[CommandHttp] = None
 )
 
 /** One child of the root command: a leaf command or a grafted subtree. */
@@ -170,7 +171,8 @@ object ChildBuild {
     overrideDoc: Option[Doc],
     overrideAliases: Option[List[String]],
     parentGlobals: GlobalsBuild,
-    descriptor: ToolBuildCtx => Either[ToolBuildError, ExtendedToolType]
+    descriptor: ToolBuildCtx => Either[ToolBuildError, ExtendedToolType],
+    http: Option[CommandHttp] = None
   ) extends ChildBuild
 }
 
@@ -189,7 +191,8 @@ object ToolDescriptorBuilder {
     version: String,
     requiresFilesystem: Boolean,
     root: CommandBuild,
-    children: List[ChildBuild]
+    children: List[ChildBuild],
+    httpMount: Option[ToolHttpMount] = None
   )(ctx: ToolBuildCtx): Either[ToolBuildError, ExtendedToolType] =
     ctx.withDescriptor(identity) { ctx =>
       try {
@@ -247,7 +250,8 @@ object ToolDescriptorBuilder {
                 s.overrideName,
                 s.overrideDoc,
                 s.overrideAliases,
-                None
+                None,
+                s.http
               )
             )
             val (appended, off) = ToolComposition.appendGraftedSubtree(commands, graft)
@@ -257,7 +261,7 @@ object ToolDescriptorBuilder {
 
         commands = commands.updated(0, commands(0).copy(subcommands = rootSubs))
 
-        val tool = ExtendedToolType(version, commands, requiresFilesystem)
+        val tool = ExtendedToolType(version, commands, requiresFilesystem, httpMount)
         if (ctx.isOutermostDescriptor) ToolComposition.normalizeInheritedGlobals(tool)
         else Right(tool)
       } catch { case ToolBuildException(error) => Left(error) }
@@ -295,7 +299,8 @@ object ToolDescriptorBuilder {
       doc = build.doc,
       globals = resolveGlobals(build.globals),
       subcommands = Nil,
-      body = build.body.map(resolveBody)
+      body = build.body.map(resolveBody),
+      http = build.http
     )
 
   private def resolveGlobals(build: GlobalsBuild): ExtendedGlobals =

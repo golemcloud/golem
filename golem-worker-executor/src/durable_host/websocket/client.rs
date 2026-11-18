@@ -158,13 +158,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             accessor,
             accessor.getter(),
             DurableFunctionType::WriteRemote,
-            move |start, accessor| {
+            move |start, mut access| {
                 Box::pin(async move {
                     if start.is_live {
                         let denied = match websocket_target(&target_url) {
-                            Ok(normalized) => authorize_live_permissions_at_serialized_access(
-                                accessor,
-                                accessor.getter(),
+                            Ok(normalized) => crate::durable_host::call_coordinator::authorize_live_permissions_at_serialized_initiation(
+                                &mut access,
                                 &[normalized.permission],
                             )
                             .await?

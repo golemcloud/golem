@@ -6,6 +6,7 @@ import {
   type FileResponseHeaders,
 } from "@golemcloud/http-contract"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
+import type * as ToolCommon from "golem:tool/common@0.1.0"
 import { withPipe } from "./internal/pipeable.js"
 import type {
   EndpointBound,
@@ -212,7 +213,7 @@ const verbToWit = (v: HttpVerb): AgentCommon.HttpMethod => {
 
 /** Verbs that may not carry a request body (per the SDK convention). */
 const isBodylessVerb = (v: HttpVerb): boolean =>
-  typeof v === "string" && (v === "GET" || v === "HEAD")
+  typeof v === "string" && (v === "GET" || v === "HEAD" || v === "DELETE")
 
 // ---------------------------------------------------------------------------
 // Typed failures
@@ -363,16 +364,9 @@ declare const endpointBoundBrand: unique symbol
 declare const endpointHeaderNamesBrand: unique symbol
 
 /**
- * Whether an endpoint's HTTP verb permits a request body. Used as a
- * phantom on {@link EndpointDef} so the `method({...})` factory can
- * statically reject bodyless endpoints (`GET` / `HEAD`) whose path /
- * query / header bindings do not cover every method parameter — the
- * Golem host has no body in which to deliver an unbound value.
- *
- * Custom verbs (`Http.endpoint(verb, ...)` / `Http.custom(verb, ...)`)
- * always tag as `"bodyful"` regardless of the verb string, matching
- * the runtime `isBodylessVerb` convention which only treats the
- * literal `"GET"` / `"HEAD"` shorthands as bodyless.
+ * The endpoint's implicit input source. GET, HEAD, and DELETE use query
+ * parameters for remaining inputs; custom and other verbs use a request body.
+ * The phantom lets `method({...})` validate concrete input schemas.
  *
  * @since 1.5.0
  * @category models
@@ -530,6 +524,10 @@ export interface EndpointDef<
   readonly cors: ReadonlyArray<string>
   readonly durableStreams?: DurableStreamOptions
   readonly mode?: HttpRouteMode
+  /** Stable tool route identity. */
+  readonly routeId?: string
+  /** Response headers for a tool endpoint. */
+  readonly responseHeaders?: FileResponseHeaders
 }
 
 // ---------------------------------------------------------------------------
@@ -930,6 +928,8 @@ export interface EndpointOptions<H extends Readonly<Record<string, string>> = No
   /** Durable-stream route customization for this endpoint. */
   readonly durableStreams?: DurableStreamOptions
   readonly mode?: HttpRouteMode
+  readonly routeId?: string
+  readonly responseHeaders?: FileResponseHeaders
 }
 
 const buildEndpoint = <H extends Readonly<Record<string, string>>>(
@@ -953,6 +953,8 @@ const buildEndpoint = <H extends Readonly<Record<string, string>>>(
     cors: opts?.cors ?? [],
     durableStreams: opts?.durableStreams,
     mode: opts?.mode,
+    routeId: opts?.routeId,
+    responseHeaders: opts?.responseHeaders,
   }) as unknown as EndpointDef<string>
 }
 
@@ -983,11 +985,8 @@ export type HeaderValuesArray<H extends Readonly<Record<string, string>>> = [Val
 /**
  * Shape of a verb-shorthand factory, parameterised by {@link EndpointKind}.
  *
- * `Http.get` / `Http.head` instantiate it with `"bodyless"` so the
- * compile-time check rejecting `GET` / `HEAD` endpoints with unbound
- * method parameters fires; every other verb shorthand instantiates it
- * with `"bodyful"` so unbound parameters are allowed to map to the
- * request body.
+ * GET, HEAD, and DELETE use `"bodyless"` to validate remaining input schemas
+ * for query binding. Other verbs use `"bodyful"` for request-body binding.
  *
  * @since 1.5.0
  * @category models
@@ -1015,12 +1014,8 @@ export type EndpointFactory<Kind extends EndpointKind> = <
  * `{agent-type}`, `{agent-version}`, and inline `?key={var}&…` query
  * bindings.
  *
- * The returned endpoint is tagged `"bodyful"` regardless of the verb
- * string — `Http.endpoint("GET", ...)` does NOT participate in the
- * compile-time bodyless-binding check; use the `Http.get(...)`
- * shorthand if you want that. This matches the runtime `isBodylessVerb`
- * convention in `validateEndpoint`, which only treats the literal
- * `"GET"` / `"HEAD"` shorthands as bodyless.
+ * Declared GET, HEAD, and DELETE endpoints bind remaining user inputs from
+ * query parameters. Custom and other verbs retain body binding.
  *
  * **Compile-time guarantees**
  *
@@ -1050,9 +1045,7 @@ export type EndpointFactory<Kind extends EndpointKind> = <
  *   (path / query / header) within the same endpoint.
  * - Header names declared on the same endpoint must be unique when
  *   compared case-insensitively.
- * - Bodyless verbs (`GET` / `HEAD`) — only via the {@link get} /
- *   {@link head} shorthands — may not have any unbound method
- *   parameter, since there is no request body in which to deliver it.
+ * - GET, HEAD, and DELETE require query-bindable schemas for remaining inputs.
  * - Path bindings are primitive-only. Query/header bindings may also
  *   target `Schema.Array` of a host-supported primitive so repeated
  *   request values arrive as one collection. Multimodal,
@@ -1072,15 +1065,16 @@ export type EndpointFactory<Kind extends EndpointKind> = <
  * @category constructors
  */
 export const endpoint: <
+  const Verb extends HttpVerb,
   const Path extends string,
   H extends Readonly<Record<string, string>> = NoHeaderBindings,
 >(
-  verb: HttpVerb,
+  verb: Verb,
   path: ValidEndpointPath<Path>,
   opts?: EndpointOptions<H>,
 ) => EndpointDef<
   Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>,
-  "bodyful",
+  Verb extends "GET" | "HEAD" | "DELETE" ? "bodyless" : "bodyful",
   {
     readonly path: PathTupleOf<Path>
     readonly query: QueryTupleOf<Path>
@@ -1094,15 +1088,8 @@ const verbHelper = <Kind extends EndpointKind>(verb: HttpVerb): EndpointFactory<
     buildEndpoint(verb, path, opts) as never) as never
 
 /**
- * Shorthand for `Http.endpoint("GET", path, opts?)`. Bodyless: every
- * method parameter MUST be bound from a path / query / header variable
- * within the same endpoint; unbound params would otherwise have to
- * travel in the request body, which `GET` does not have. The
- * "no-unbound-param" check is enforced at compile time by tagging the
- * returned endpoint as `"bodyless"` and surfacing an `Invalid<…>`
- * carrier at the offending `method({ http: [...] })` call site;
- * see {@link endpoint} for the full set of compile-time guarantees
- * shared with every verb shorthand.
+ * Shorthand for `Http.endpoint("GET", path, opts?)`. Remaining inputs bind
+ * from query parameters. See {@link endpoint} for schema eligibility checks.
  *
  * @since 1.5.0
  * @category constructors
@@ -1136,13 +1123,14 @@ export const post: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("POST")
  */
 export const put: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("PUT")
 /**
- * Shorthand for `Http.endpoint("DELETE", path, opts?)`. Bodyful — see
- * {@link post}.
+ * Shorthand for `Http.endpoint("DELETE", path, opts?)`. Remaining inputs bind from query.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const del: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("DELETE")
+export const del: EndpointFactory<"bodyless"> = verbHelper<"bodyless">("DELETE")
+/** DELETE endpoint constructor. @since 1.6.0 @category constructors */
+export { del as delete }
 /**
  * Shorthand for `Http.endpoint("PATCH", path, opts?)`. Bodyful — see
  * {@link post}.
@@ -1178,10 +1166,7 @@ export const connect: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("CONNEC
 
 /**
  * Shorthand for a custom (non-standard) HTTP verb. Always tagged
- * `"bodyful"` — custom verbs do NOT participate in the compile-time
- * bodyless-binding check, matching the runtime `isBodylessVerb`
- * convention which only treats the literal `"GET"` / `"HEAD"`
- * shorthands as bodyless. All other compile-time guarantees on the
+ * `"bodyful"` — remaining inputs bind from the request body. Other guarantees on the
  * path string (shape, query-key uniqueness, …) and on the resulting
  * endpoint (duplicate bindings, case-fold header uniqueness,
  * `BindableKeys` filtering of multimodal/unstructured params) apply
@@ -1481,6 +1466,9 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
  * @category metadata
  */
 export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpointDetails => {
+  if (ep.routeId !== undefined || ep.responseHeaders !== undefined) {
+    throw new TypeError("routeId and responseHeaders are tool endpoint options")
+  }
   if (
     ep.mode !== undefined &&
     ep.mode !== "durableStreams" &&
@@ -1535,6 +1523,63 @@ export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpoi
 // Validation
 // ---------------------------------------------------------------------------
 
+/** Command-group HTTP suffix; publishes no endpoint. @since 1.6.0 @category models */
+export interface PrefixDef {
+  readonly prefix: ReadonlyArray<PathSegment>
+}
+
+/** Declare the suffix inherited by a command group's descendants. @since 1.6.0 @category constructors */
+export const prefix = (path: string): PrefixDef => ({ prefix: runParse(parseMountPath(path)) })
+
+const toolPath = (
+  path: ReadonlyArray<AgentCommon.PathSegment>,
+): ToolCommon.ToolHttpMount["pathPrefix"] =>
+  path.map((segment) => {
+    if (segment.tag !== "segment")
+      throw new TypeError("Tool paths cannot use agent system variables")
+    return segment.val
+  })
+
+/** Compile a tool mount without agent admission metadata. @since 1.6.0 @category metadata */
+export const compileToolMount = (mount: MountDef<string, string>): ToolCommon.ToolHttpMount => {
+  if (
+    mount.authRequired ||
+    mount.cors.length ||
+    mount.phantomAgent ||
+    mount.phantomId ||
+    mount.webhookSuffix.length ||
+    mount.exposeFiles?.length ||
+    mount.fileResponseHeaders
+  ) {
+    throw new TypeError("Tool mounts declare only a path; admission belongs to the export")
+  }
+  return { pathPrefix: toolPath(mount.pathPrefix.map(segmentToWit)) }
+}
+
+/** Compile a tool command endpoint or prefix with neutral route types. @since 1.6.0 @category metadata */
+export const compileToolHttp = (spec: EndpointDef<string> | PrefixDef): ToolCommon.CommandHttp => {
+  if ("prefix" in spec)
+    return { tag: "prefix", val: { pathSuffix: toolPath(spec.prefix.map(segmentToWit)) } }
+  if (spec.authRequired !== undefined || spec.cors.length)
+    throw new TypeError("Tool endpoint admission and CORS belong to the export")
+  const endpoint = compileEndpoint({ ...spec, routeId: undefined, responseHeaders: undefined })
+  if (endpoint.httpMethod.tag !== "method")
+    throw new TypeError("Tools require a concrete HTTP method")
+  return {
+    tag: "endpoint",
+    val: {
+      routeId: spec.routeId,
+      httpMethod: endpoint.httpMethod.val,
+      pathSuffix: toolPath(endpoint.pathSuffix),
+      queryVars: endpoint.queryVars,
+      headerVars: endpoint.headerVars,
+      responseHeaders: compileFileResponseHeaders(spec.responseHeaders),
+      mode: endpoint.mode,
+      durableStreams: endpoint.durableStreams,
+    },
+  }
+}
+
 /**
  * Result of `validateAgentHttp`: the compiled WIT mount (when present)
  * and a per-method-name list of compiled endpoints (always present;
@@ -1579,6 +1624,10 @@ export interface MethodHttpInput {
    * scalar-only set.
    */
   readonly queryOrHeaderBindableParams?: ReadonlySet<string>
+  /** Inputs whose compiled wire schemas support query binding. */
+  readonly queryBindableParams: ReadonlySet<string>
+  /** Top-level stream inputs classified as DurableStreams resource slots by the host. */
+  readonly streamParams: ReadonlySet<string>
 }
 
 /**
@@ -1691,7 +1740,7 @@ const validateEndpoint = (
           ),
         )
       }
-      if (!(m.queryOrHeaderBindableParams ?? m.stringBindableParams).has(q.varName)) {
+      if (!m.queryBindableParams.has(q.varName)) {
         return yield* Effect.fail(
           new HttpRouteError(
             `${ctx}: parameter '${q.varName}' has a schema that is not bindable from a query parameter (only primitive schemas, branded variants thereof, or arrays of those primitives are supported)`,
@@ -1751,13 +1800,17 @@ const validateEndpoint = (
       seenSources.set(h.varName, "header")
     }
 
-    // Body restrictions on bodyless verbs.
+    // Inference belongs to the registry compiler; validate without adding templates.
     if (isBodylessVerb(ep.verb)) {
       for (const paramName of Object.keys(m.params)) {
-        if (!seenSources.has(paramName)) {
+        if (
+          !seenSources.has(paramName) &&
+          !m.streamParams.has(paramName) &&
+          !m.queryBindableParams.has(paramName)
+        ) {
           return yield* Effect.fail(
             new HttpRouteError(
-              `${ctx}: ${verbLabel(ep.verb)} endpoints may not have unbound parameters (parameter '${paramName}' is not bound to any path/query/header variable, so it would map to the request body)`,
+              `${ctx}: ${verbLabel(ep.verb)} cannot bind implicit query input '${paramName}': expected a scalar, scalar list, scalar map, or outer option`,
             ),
           )
         }

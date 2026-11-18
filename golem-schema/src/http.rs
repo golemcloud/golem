@@ -16,8 +16,9 @@ pub mod wit;
 #[cfg(test)]
 mod tests;
 
-/// Headers owned by the gateway rather than declared response-header metadata.
-/// Header syntax and duplicate declarations must be validated separately.
+/// Headers owned by HTTP framing, admission and response policy rather than
+/// code-level response declarations. Dynamic raw responses are checked at the
+/// response boundary instead.
 pub fn is_managed_response_header(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     name.starts_with("access-control-")
@@ -25,16 +26,18 @@ pub fn is_managed_response_header(name: &str) -> bool {
             name.as_str(),
             "age"
                 | "accept-ranges"
+                | "authorization"
                 | "cache-control"
                 | "connection"
                 | "content-encoding"
                 | "content-length"
                 | "content-range"
                 | "content-type"
+                | "cookie"
                 | "etag"
                 | "expires"
-                | "golem-environment-id"
                 | "golem-invocation-id"
+                | "golem-environment-id"
                 | "golem-token"
                 | "keep-alive"
                 | "last-modified"
@@ -68,10 +71,9 @@ pub fn is_managed_response_header(name: &str) -> bool {
 )]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum HttpMethod {
     Get(Empty),
@@ -121,9 +123,8 @@ impl TryFrom<HttpMethod> for http::Method {
 )]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct CustomHttpMethod {
@@ -133,9 +134,8 @@ pub struct CustomHttpMethod {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum PathSegment {
@@ -147,9 +147,8 @@ pub enum PathSegment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct LiteralSegment {
@@ -159,10 +158,9 @@ pub struct LiteralSegment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PathVariable {
     pub variable_name: String,

@@ -34,6 +34,47 @@ import java.time.Instant
  */
 object ToolDefinitionMacroSpec extends ZIOSpecDefault {
 
+  @toolDefinition(mount = "/ignored")
+  trait HttpAdmin {
+    @endpoint(prefix = "/own")
+    def httpAdmin(): Unit
+
+    @endpoint(method = "DELETE", path = "/purge/{id}")
+    def purge(id: String): Unit
+  }
+
+  @toolDefinition(name = "report", mount = "/reports")
+  trait HttpReport {
+    @endpoint(method = "POST", path = "/generate")
+    def generate(): Unit
+    @endpoint(method = "GET", path = "/status/{id}")
+    def status(id: String): Unit
+    @command(name = "admin")
+    @endpoint(prefix = "/admin")
+    def admin(): HttpAdmin
+  }
+
+  @toolDefinition(mount = "/retained")
+  trait HttpGraftRetain {
+    @command(name = "admin")
+    def admin(): HttpAdmin
+  }
+
+  @toolDefinition(mount = "/options")
+  trait HttpOptions {
+    @endpoint(
+      method = "POST",
+      path = "/run?format={format}",
+      mode = "durableStreams",
+      routeId = "custom",
+      responseHeaders = Array(("X-Result", "ready"))
+    )
+    @durableStreamSlot(source = "input", slot = "stdin", name = "upload", contentType = "text/plain")
+    @durableStreamSlot(source = "output", slot = "stdout", name = "download", contentType = "text/csv")
+    @durableStreams(maxConcurrentReadersPerStream = 7, maxAppendRequestsPerSecondPerStream = 11)
+    def run(format: String, @header("X-Token") token: String): Unit
+  }
+
   // --- grep: an implicit-body tool exercising every parameter surface -------
 
   enum GrepError {
@@ -433,6 +474,67 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("ToolDefinitionMacroSpec")(
+      test("HTTP report declarations match the shared fixture") {
+        import golem.runtime.http.*
+        def path(segments: List[PathSegment]): String = "/" + segments.map {
+          case PathSegment.Literal(value)              => value
+          case PathSegment.PathVariable(name)          => s"{$name}"
+          case PathSegment.RemainingPathVariable(name) => s"{+$name}"
+          case PathSegment.SystemVariable(name)        => s"$$$name"
+        }.mkString("/")
+        val report                                               = ToolDefinitionMacro.metadata[HttpReport]
+        def walk(index: Int, parent: List[String]): List[String] = {
+          val node        = report.commands(index)
+          val command     = parent :+ node.name
+          val name        = command.mkString(".")
+          val declaration = node.http.get match {
+            case CommandHttp.Prefix(suffix) => s"""{"command":"$name","prefix":"${path(suffix)}"}"""
+            case ep: CommandHttp.Endpoint   =>
+              s"""{"command":"$name","method":"${ep.httpMethod.toString.toUpperCase}","suffix":"${path(
+                  ep.pathSuffix
+                )}"}"""
+          }
+          declaration :: node.subcommands.flatMap(child => walk(child, command))
+        }
+        val commands = report.commands.head.subcommands.flatMap(index => walk(index, Nil))
+        val actual   = s"""{"mount":"${path(report.httpMount.get.pathPrefix)}","commands":[${commands.mkString(",")}]}"""
+        val fixture  = java.nio.file.Files.readString(java.nio.file.Paths.get("../../test-data/tool-http-report.json"))
+        assertTrue(actual.filterNot(_.isWhitespace) == fixture.filterNot(_.isWhitespace), report.tryToTool.isRight)
+      },
+      test("HTTP graft retains child declaration unless explicitly overridden") {
+        import golem.runtime.http.PathSegment
+        val child      = ToolDefinitionMacro.metadata[HttpAdmin]
+        val retained   = ToolDefinitionMacro.metadata[HttpGraftRetain]
+        val overridden = ToolDefinitionMacro.metadata[HttpReport]
+        assertTrue(
+          retained.commands(1).http == child.commands.head.http,
+          retained.httpMount.contains(ToolHttpMount(List(PathSegment.Literal("retained")))),
+          child.httpMount.contains(ToolHttpMount(List(PathSegment.Literal("ignored")))),
+          child.commands.head.http.contains(CommandHttp.Prefix(List(PathSegment.Literal("own")))),
+          overridden.commands(3).http.contains(CommandHttp.Prefix(List(PathSegment.Literal("admin"))))
+        )
+      },
+      test("HTTP options survive authoring to wire") {
+        import golem.runtime.http.*
+        val wire = ToolDefinitionMacro.metadata[HttpOptions].tryToTool.toOption.get
+        val ep   = wire.commands.nodes(1).http.get.asInstanceOf[CommandHttp.Endpoint]
+        assertTrue(
+          ep.routeId.contains("custom"),
+          ep.mode.contains(HttpRouteMode.DurableStreams),
+          ep.queryVars == List(QueryVariable("format", "format")),
+          ep.headerVars == List(HeaderVariable("X-Token", "token")),
+          ep.responseHeaders == List(FileResponseHeader("X-Result", "ready")),
+          ep.durableStreams.contains(
+            DurableStreamRouteOptions(
+              List(
+                DurableStreamSlotOptions(DurableStreamSlotSource.Input("stdin"), Some("upload"), Some("text/plain")),
+                DurableStreamSlotOptions(DurableStreamSlotSource.Output("stdout"), Some("download"), Some("text/csv"))
+              ),
+              Some(DurableStreamRouteLoadOptions(Some(7), Some(11)))
+            )
+          )
+        )
+      },
       suite("grep descriptor")(
         test("tool name, version and docs") {
           assertTrue(

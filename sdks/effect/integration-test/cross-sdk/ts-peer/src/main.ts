@@ -2,12 +2,15 @@ import { z } from "zod"
 import {
   acquireQuotaToken,
   AgentStream,
+  Datetime,
   defineAgent,
   method,
   ok,
   ParsedAgentId,
   reflection,
+  Result,
   s,
+  type StartedToolInvocation,
   toolDefinition,
 } from "@golemcloud/golem-ts-sdk"
 import { EffectFixture } from "effect-fixture-guest-client"
@@ -169,18 +172,18 @@ TsPeer.implement({
         header: { requestId, flags: [true, false] },
         items: [{ sku: "TS", quantities: [2, 3] }],
       })
-      return "ok" in result
-        ? `${result.ok.summary}:${result.ok.accepted[0]?.total}`
-        : `error:${result.err.code}`
+      return result.tag === "ok"
+        ? `${result.val.summary}:${result.val.accepted[0]?.total}`
+        : `error:${result.val.code}`
     },
     async callEffectFailure({ tenant, requestId }) {
       const result = await EffectFixture.getWithConfig(tenant, "ts-failure").transform({
         header: { requestId, flags: [false] },
         items: [],
       })
-      return "err" in result
-        ? `${result.err.code}:${result.err.requestId}`
-        : `unexpected:${result.ok.summary}`
+      return result.tag === "err"
+        ? `${result.val.code}:${result.val.requestId}`
+        : `unexpected:${result.val.summary}`
     },
     async callEffectStream({ tenant }) {
       let pulled = 0
@@ -222,9 +225,9 @@ TsPeer.implement({
           controller.close()
         },
       })
-      const { result, stdout } = await EffectCrossStreamingClient.newClient()
-        .effect_cross_streaming(this.name, stdin)
-        .collect()
+      const { result, stdout } = await collectSuccessfulInvocation(
+        EffectCrossStreamingClient.newClient().effect_cross_streaming(this.name, stdin),
+      )
       return `${result}|${new TextDecoder().decode(stdout)}`
     },
     async reflectedEffectTool({ payload }) {
@@ -238,12 +241,14 @@ TsPeer.implement({
           },
         })
       const command = tool.client.command([])
-      const json = await command.startJson({ label: this.name }, stdin()).collect()
-      const native = await command
-        .startValue(command.inputSchema!.packJson({ label: this.name }), stdin())
-        .collect()
-      const dynamic = await new reflection.DynamicToolClient("effect-cross-streaming")
-        .start(
+      const json = await collectSuccessfulInvocation(
+        command.startJson({ label: this.name }, stdin()),
+      )
+      const native = await collectSuccessfulInvocation(
+        command.startValue(command.inputSchema!.packJson({ label: this.name }), stdin()),
+      )
+      const dynamic = await collectSuccessfulInvocation(
+        new reflection.DynamicToolClient("effect-cross-streaming").start(
           [],
           {
             graph: command.inputSchema!.graph,
@@ -251,8 +256,8 @@ TsPeer.implement({
           },
           stdin(),
           true,
-        )
-        .collect()
+        ),
+      )
       let invalidRejected = false
       try {
         await command.startJson({ label: 7 }, stdin()).collect()
@@ -392,10 +397,10 @@ TsPeer.implement({
         fixed: ["left", "right"],
         map: new Map([["answer", 42]]),
         option: undefined,
-        result: { ok: 31 },
+        result: Result.ok(31),
         path: "notes.txt",
         url: "https://golem.cloud/corpus",
-        datetime: "2024-02-29T12:34:56.123456789Z",
+        datetime: Datetime.parse("2024-02-29T12:34:56.123456789Z"),
         duration: 9_223_372_036_854_775_000n,
         choice: { tag: "name", val: "name:alice" },
       })
@@ -419,7 +424,7 @@ TsPeer.implement({
         fixed: ["right", "left"],
         map: [["answer!", -42]],
         option: "effect-option",
-        result: { err: "effect:31" },
+        result: { tag: "err", val: "effect:31" },
         path: "effect-notes.txt",
         url: "https://golem.cloud/corpus",
         datetime: "2024-02-29T12:34:56.123456789Z",
@@ -429,6 +434,7 @@ TsPeer.implement({
       const actual = {
         ...result,
         map: [...result.map],
+        datetime: Datetime.toISOString(result.datetime),
       }
       for (const [key, value] of Object.entries(expected)) {
         const actualValue = actual[key as keyof typeof actual]
@@ -524,3 +530,11 @@ TsPeer.implement({
     },
   },
 })
+
+async function collectSuccessfulInvocation<T>(invocation: StartedToolInvocation<T>) {
+  const { result, stdout, stderr } = await invocation.collect()
+  if (result.status === "rejected") throw result.reason
+  if (stdout.status === "rejected") throw stdout.reason
+  if (stderr.status === "rejected") throw stderr.reason
+  return { result: result.value, stdout: stdout.value }
+}

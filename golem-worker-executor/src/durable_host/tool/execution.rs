@@ -121,7 +121,14 @@ impl ToolExecution {
     }
 
     pub(super) fn cancel_body(&self) -> bool {
-        if self.cancellable && self.operation.begin_cancel() {
+        if !self.cancellable {
+            // Reproduce the caller's transient stdin closure without selecting a new
+            // outcome or interrupting a completed historical body. Its recorded calls
+            // after that closure still have to replay before the terminal can resolve.
+            self.operation.cancel_unrecorded_stdin();
+            return false;
+        }
+        if self.operation.begin_cancel() {
             self.cancel.cancel();
             true
         } else {
@@ -757,12 +764,22 @@ where
     })?;
     let tasks = caller.primary.active_agents().invocation_loops();
     let owned_execution = execution.clone();
+    let input_recordings = {
+        let context = accepted.operation.context();
+        crate::durable_host::durable_session::StreamSession::retain_input_recording(
+            context.input.value(),
+            context.input.graph(),
+            &context.input.graph().root,
+        )
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+    };
     accepted.durability.accept_execution_ownership();
     tasks.spawn_entity(async move {
         let result = execute_accepted_tool_call(
             &caller,
             accepted,
             endpoints,
+            input_recordings,
             Some(&owned_execution),
             completed_supervisor_started,
         )

@@ -751,11 +751,14 @@ impl CompletionDelivery {
             .await
     }
 
-    /// [`Self::deliver_at_accessor_terminal`] that runs `on_delivered` when the observer settles
-    /// the token as delivered: when the guest receives the terminal, live or at its recorded
-    /// `CompletionDelivered` marker on replay. It runs inside Wasmtime's event loop, so it must
-    /// not access the store. A completion that the guest discards, that no observer watches, or
-    /// whose observer is dropped never runs it.
+    /// [`Self::deliver_at_accessor_terminal`] that runs `on_delivered` when the token settles as
+    /// delivered: when the guest receives the terminal, live or at its recorded
+    /// `CompletionDelivered` marker on replay, or at once for a token that needs no observer (an
+    /// unpersisted live call, or a replayed partial result of a cancelled call). The observer
+    /// runs it inside Wasmtime's event loop, so it must not access the store, block or panic. A
+    /// completion that the guest discards, a replayed completion that waits for the replay tail
+    /// without a guest-visible subtask, a token that no observer watches, and a dropped observer
+    /// never run it.
     pub(crate) async fn deliver_at_accessor_terminal_with_delivered<T, D>(
         mut self,
         store: &Accessor<T, D>,
@@ -789,6 +792,7 @@ impl CompletionDelivery {
         );
         if !self.is_live_armed() && !replay_barrier {
             self.delivered();
+            on_delivered();
             return Ok(());
         }
         let guard = AccessorDeliveryGuard {

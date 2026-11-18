@@ -170,6 +170,39 @@ class FixtureCacheTests(unittest.TestCase):
         copied.write_text("changed local implementation")
         self.assertNotEqual(baseline, self.key())
 
+    def test_stage_refuses_input_mutations_and_reports_each_path(self):
+        helper = self.write(".github/main-validation/fixture-cache.py", HELPER.read_bytes())
+        self.write("test-components/example/package-lock.json", "lockfile")
+        self.track()
+        environment = {**os.environ, "GOLEM_FIXTURE_CACHE": str(self.cache)}
+
+        def run(operation):
+            return subprocess.run([sys.executable, "-B", str(helper), operation, "example"],
+                                  cwd=self.root, env=environment, capture_output=True, text=True, timeout=30)
+
+        for paths in (("test-components/example/package-lock.json",),
+                      ("sdks/anything/runtime", "wit/interface.wit", "cli/golem-cli/src/lib.rs")):
+            with self.subTest(paths=paths):
+                self.assertEqual(run("begin").returncode, 0)
+                self.assertEqual(run("restore").returncode, 1)
+                for path in paths:
+                    self.write(path, "mutated input")
+                self.write("test-components/export.wasm", "compiled output")
+                result = run("stage")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("checked-in build inputs changed during compilation: " + ", ".join(sorted(paths)),
+                              result.stdout)
+                self.assertFalse(any(path.is_dir() for path in self.pending.iterdir()))
+
+        # An unchanged input snapshot still stages the exported output.
+        self.assertEqual(run("begin").returncode, 0)
+        self.assertEqual(run("restore").returncode, 1)
+        self.write("test-components/export.wasm", "new compiled output")
+        result = run("stage")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("stage miss", result.stdout)
+        CACHE.verify(self.pending / self.key(), self.key())
+
     def test_corrupt_incomplete_unsafe_and_symlink_bundles_are_misses_before_copy(self):
         key = self.bundle()
         bundle = self.pending / key
