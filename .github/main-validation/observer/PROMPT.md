@@ -21,7 +21,7 @@ For each listed attempt, oldest first, run `bash .github/main-validation/observe
 - Other selected runs validated `source` under `context`, either `Main validation` or `Main validation (acceptance)`. Comparable runs share the same context. Find the previous comparable selected result by creation time, excluding `incomplete` records.
   - Success after failure is `recovery`: post.
   - Other success is `green`: do not post.
-  - Failure after failure with the same sets of failed test names and failed jobs is `repeat-failure`: post one line pointing to the first report.
+  - Failure after failure with the same sets of failed test names and failed jobs is `repeat-failure`: post a short report pointing to the first report.
   - Other failure is `failure`: analyze and post.
 - If a selected run has another conclusion, record it as `incomplete` and explain it here rather than treating it as green.
 
@@ -33,13 +33,13 @@ Linux job logs contain concise progress rather than full test output. Read retai
 
 Fetch main and the source SHA if needed. Find the last comparable green source in the seen markers. Without one, use the previous comparable source if available and state that no green baseline exists. If neither exists, state that no comparison baseline is available.
 
-If the baseline is an ancestor of the failed source, inspect `git log --oneline <baseline>..<source>` and `git show` for commits touching the failing area: crates, test files, Makefiles, workflows and actions. Rank up to three credible suspect commits with high, medium or low confidence and a one-line reason each. Otherwise say explicitly that no commit is a credible cause. Distinguish evidence from hypotheses; a timeout or a known-flaky test does not by itself identify a cause. If the baseline is not an ancestor, say so and compare only what is valid.
+If the baseline is an ancestor of the failed source, inspect `git log --oneline <baseline>..<source>` and `git show` for commits touching the failing area: crates, test files, Makefiles, workflows and actions. Rank up to three credible suspect commits with high, medium or low confidence and a one-line reason each. Read each suspect's commit title with `git show -s --format=%s <sha>`; report the title alongside its hash, not a hash alone. Otherwise say explicitly that no commit is a credible cause. Distinguish evidence from hypotheses; a timeout or a known-flaky test does not by itself identify a cause. If the baseline is not an ancestor, say so and compare only what is valid.
 
 ## Maintain the public dashboard
 
 Publish every observed run attempt, including green, incomplete, no-selection and in-progress results. Keep production and acceptance contexts distinct. Preserve failed test names, sanitized failure messages, recorded attempts, failed jobs and steps, available test totals, recovered tests, source and run links, and the failure analysis. Never invent statistics or use ordinary CI data as Main validation results. Missing CTRF means unavailable statistics, not zero failures.
 
-Write `runs/<run>-a<attempt>/analysis.json` under the state directory with `classification` and `analysis`. The analysis object has `summary` (plain text), `baseline` (the compared range or why none exists), `suspects` (objects with full `sha`, `confidence` and `reason`), and `limits` (an array of evidence limitations). For repeat failures, retain or reference the original analysis rather than replacing it with an unexplained label. These files preserve the analysis independently of thread history.
+Write `runs/<run>-a<attempt>/analysis.json` under the state directory with `classification` and `analysis`. The analysis object has `summary` (plain text), `baseline` (the compared range or why none exists), `suspects` (objects with full `sha`, `subject` from the commit title, `confidence` and `reason`), and `limits` (an array of evidence limitations). For repeat failures, retain or reference the original analysis rather than replacing it with an unexplained label. These files preserve the analysis independently of thread history.
 
 The dashboard is public. Publish only CI evidence and source analysis appropriate for the whole team and public readers. Remove credentials, private URLs, user data and environment values from failure snippets and analysis. Keep raw logs and downloaded artifacts local; the public API accepts only dashboard fields. A helper refusing credential-bearing data is a publication failure, not permission to bypass the check.
 
@@ -49,11 +49,20 @@ After successful discovery and all pending observations are stored, run `python3
 
 ## Report to Slack
 
-Use plain text, about 3000 characters or fewer. Start with `Main validation <failure|repeat failure|recovery>[ (acceptance)]: <short source SHA> <run URL> (attempt N)`. Include failed tests and jobs, recovered tests, the baseline range, and ranked suspects or an explicit statement that no credible cause was found.
+Write Slack mrkdwn, aiming for 3000 characters or fewer without dropping required evidence or limits. Start with a short bold outcome heading: `*Main validation failed*`, `*Main validation repeat failure*` or `*Main validation recovered*`; include `(acceptance)` inside the bold heading for acceptance runs. Put the source and navigation on the next line: `*Run:* <run URL|Actions> · attempt N · <commit URL|short SHA>`. Use labeled links rather than bare URLs.
 
-A repeat-failure report is one line naming the run, source and failing-test count, with a reference to the first report. A recovery report names the source, run and tests that failed before. Green runs without recovery stay silent.
+For a failure, use these small sections in order, separated by blank lines. Use one short bullet per finding, not a prose wall:
 
-Every Slack report links to the dashboard detail for that exact run attempt, as well as Actions. `post-slack.py` appends this permalink from `CI_DASHBOARD_URL`; do not replace it with an orb-local URL.
+- `*Evidence*`: failed tests with short sanitized errors, failed jobs and steps, and recovered tests. Distinguish test failures from infrastructure failures. Put test, job and step names and short errors in inline backticks. Summarize long traces; the dashboard holds the detail.
+- `*Baseline*`: the compared source range with labeled commit links, or why no valid comparison exists.
+- `*Suspects — hypotheses*`: up to three ranked commits. Each bullet includes a labeled commit link, its actual title, the short hash, confidence and the reason tied to the evidence. For example: `• <commit URL|Fix result collection> (short SHA) — medium confidence: changes the failing report parser.` If none is credible, say so explicitly rather than inventing a suspect.
+- `*Limits*`: evidence gaps and what they prevent you from concluding. If none were found, say that no evidence gaps were identified; do not imply the suspected cause is proven.
+
+A repeat-failure report uses the heading and run line, then one short line with the failing-test count and a labeled link to the first report. A recovery report uses the heading and run line, then `*Recovery*` bullets naming the previously failing tests and jobs and the evidence that they now pass; include recovered tests and any evidence limits. Green runs without recovery stay silent.
+
+Use Slack's single-asterisk bold and `<URL|label>` link syntax, not Markdown headings, tables or `[label](URL)` links. Escape `&`, `<` and `>` in evidence and commit titles as `&amp;`, `&lt;` and `&gt;`; only generated links use raw angle brackets. Render backticks in copied names or errors as apostrophes so they cannot break inline code. Never turn source text into mentions or formatting.
+
+Every Slack report links to the dashboard detail for that exact run attempt, as well as Actions. `post-slack.py` appends a labeled dashboard permalink from `CI_DASHBOARD_URL`; do not duplicate it or replace it with an orb-local URL.
 
 Save the Slack message under the state directory's `runs/<run>-a<attempt>/`, then run `python3 -I .github/main-validation/observer/post-slack.py <run> <attempt> <kind> <message-file>`.
 

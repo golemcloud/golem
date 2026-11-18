@@ -145,6 +145,7 @@ def public_run(value):
             "baseline": text(analysis.get("baseline")),
             "limits": [text(item) for item in analysis.get("limits", [])],
             "suspects": [{"sha": suspect["sha"], "confidence": text(suspect.get("confidence"), 20),
+                          "subject": text(suspect.get("subject"), 500),
                           "reason": text(suspect.get("reason"))}
                          for suspect in analysis.get("suspects", [])
                          if re.fullmatch(r"[0-9a-f]{40}", suspect.get("sha", ""))],

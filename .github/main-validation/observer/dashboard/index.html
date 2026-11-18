@@ -374,7 +374,13 @@
         for (const suspect of suspects) {
           const item = el('div','suspect'), head = el('div','suspect-head');
           const sha = str(suspect.sha);
-          head.append(/^[a-fA-F0-9]{7,40}$/.test(sha) ? githubLink(sha.slice(0,12),`https://github.com/golemcloud/golem/commit/${sha}`) : el('span','mono',sha || 'SHA unavailable'));
+          const title = suspect.subject || 'Commit subject unavailable';
+          const link = /^[a-fA-F0-9]{7,40}$/.test(sha) ? githubLink(title,`https://github.com/golemcloud/golem/commit/${sha}`) : el('span','',title);
+          link.style.fontWeight = '600';
+          link.style.overflowWrap = 'anywhere';
+          item.append(link);
+          head.style.marginTop = '8px';
+          head.append(el('span','mono',sha.slice(0,12) || 'SHA unavailable'));
           head.append(el('span','confidence',`${['high','medium','low'].includes(suspect.confidence) ? suspect.confidence : 'Unknown'} confidence`));
           item.append(head,el('p','',suspect.reason || 'No reasoning provided.')); box.append(item);
         }

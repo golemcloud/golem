@@ -38,7 +38,8 @@ class DashboardTest(unittest.TestCase):
                               "totals": {"tests": 17, "passed": 15, "failed": 2},
                               "failed": [{"name": "a_test", "message": "<script>untrusted</script>"}]},
                     "analysis": {"summary": "A hypothesis, not a confirmed cause.", "suspects": [
-                        {"sha": "b" * 40, "confidence": "low", "reason": "Changed the affected crate"}]}}
+                        {"sha": "b" * 40, "subject": "Fix worker <replay> & delivery", "confidence": "low",
+                         "reason": "Changed the affected crate"}]}}
 
     def stop(self):
         self.server.shutdown()
@@ -280,6 +281,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(record["url"], "https://github.com/golemcloud/golem/actions/runs/901/attempts/1")
         self.assertEqual(record["tests"]["totals"]["passed"], 15)
         self.assertEqual(record["analysis"]["suspects"][0]["sha"], "b" * 40)
+        self.assertEqual(record["analysis"]["suspects"][0]["subject"], "Fix worker <replay> & delivery")
 
     def test_reruns_have_distinct_records_and_old_activity_cannot_replace_completion(self):
         self.assertEqual(self.publish(self.run)[0], 200)

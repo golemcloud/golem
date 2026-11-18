@@ -26,7 +26,7 @@ dashboard = os.environ.get("CI_DASHBOARD_URL", "").rstrip("/")
 parsed = urllib.parse.urlsplit(dashboard)
 if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
     sys.exit("CI_DASHBOARD_URL must be configured as a public HTTPS URL")
-message += f"\nDashboard: {dashboard}/#run-{run_id}-a{attempt}"
+message += f"\n\n<{dashboard}/#run-{run_id}-a{attempt}|Dashboard>"
 url = os.environ.get("SLACK_BENCHMARK_WEBHOOK_URL", "")
 if not url:
     sys.exit("SLACK_BENCHMARK_WEBHOOK_URL is not set; nothing sent")
@@ -47,7 +47,7 @@ except FileExistsError:
 
 request = urllib.request.Request(
     url,
-    data=json.dumps({"text": message}).encode(),
+    data=json.dumps({"text": message, "mrkdwn": True}).encode(),
     headers={"Content-Type": "application/json"},
     method="POST",
 )
