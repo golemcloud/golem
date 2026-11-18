@@ -127,6 +127,38 @@ test('retry transient reads and recover an ambiguous append across reload withou
 	expect(JSON.parse(await readFile(join(f.config.stateDir, `events/${run.id}-a1.json`), 'utf8')).status).toBe('notified')
 }))
 
+test('an uncertain append never requeues while a busy owner hides queued messages, including cancellation and reload', async () => fixture(async f => {
+	const queued: any[] = []
+	const controller = new AbortController()
+	f.ctx = { ...f.ctx, signal: controller.signal, thread: { ...f.ctx.thread,
+		appendUserMessage: async (message: any) => {
+			queued.push({ content: [{ type: 'text', text: message.content }] })
+			controller.abort()
+			throw new Error('Append acknowledgement lost at deadline')
+		} } }
+	await expect(f.handle(delivery(), f.ctx)).rejects.toThrow('acknowledgement lost')
+	f.ctx = { ...f.ctx, signal: new AbortController().signal }
+	await receiver(f.config, f.api)(delivery({}, 'retry-1'), f.ctx)
+	await receiver(f.config, f.api)(delivery({}, 'retry-2'), f.ctx)
+	expect(queued).toHaveLength(1)
+	expect(JSON.parse(await readFile(join(f.config.stateDir, `events/${run.id}-a1.json`), 'utf8')).status).toBe('pending')
+	// Consuming the busy queue eventually makes the accepted message visible in history.
+	f.messages.push(...queued)
+	await receiver(f.config, f.api)(delivery({}, 'retry-3'), f.ctx)
+	expect(queued).toHaveLength(1)
+	expect(JSON.parse(await readFile(join(f.config.stateDir, `events/${run.id}-a1.json`), 'utf8')).status).toBe('notified')
+}))
+
+test('a rejected append stays discoverable for manual analysis rather than guessing whether to resend', async () => fixture(async f => {
+	let appends = 0
+	f.ctx.thread.appendUserMessage = async () => { appends++; throw new Error('Connection lost before acceptance') }
+	await expect(f.handle(delivery(), f.ctx)).rejects.toThrow('before acceptance')
+	await receiver(f.config, f.api)(delivery({}, 'retry'), f.ctx)
+	expect(appends).toBe(1)
+	expect(f.messages).toHaveLength(0)
+	expect(JSON.parse(await readFile(join(f.config.stateDir, `events/${run.id}-a1.json`), 'utf8')).status).toBe('pending')
+}))
+
 test('abort, wrong owner and mismatched GitHub attempt cannot queue analysis', async () => fixture(async f => {
 	const aborted = new AbortController(); aborted.abort()
 	await expect(f.handle(delivery(), { ...f.ctx, signal: aborted.signal })).rejects.toThrow()

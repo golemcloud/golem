@@ -86,8 +86,8 @@ export function receiver(config: Config, api: (path: string, signal: AbortSignal
 			}
 			const marker = `Main-validation-completion:${key}`
 			await store(path, { ...id, status: 'pending', eventId: event.id })
-			// Recover an ambiguous append without sending a second notification. Amp has no
-			// transactional append/idempotency API; the durable pending record survives reloads.
+			// History can confirm an append, but its absence cannot exclude a queued message.
+			// Leave uncertain delivery pending for reconciliation instead of reappending.
 			let appended = false
 			if (prior?.status === 'pending') {
 				for (let offset = 0; ; offset += 20) {
@@ -97,6 +97,7 @@ export function receiver(config: Config, api: (path: string, signal: AbortSignal
 						block.type === 'text' && block.text.startsWith(marker + '\n')))
 					if (appended || messages.length < 20) break
 				}
+				if (!appended) return
 			}
 			ctx.signal.throwIfAborted()
 			if (!appended) await ctx.thread.appendUserMessage({ type: 'user-message', content:
