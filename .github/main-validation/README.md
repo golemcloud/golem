@@ -85,9 +85,20 @@ After publication, remove completed bundles not used or built by that cycle.
 Eviction starts only after validation and bundle publication succeed. Retention uses
 ordinary directory operations and does not depend on Blacksmith or sticky disks.
 
+Staging refuses a bundle if tracked inputs changed during its build and lists the
+changed paths. Keep generated sources and linked SDK lock metadata current rather
+than weakening that check. This also exposes CLI-applied migrations that would
+otherwise prevent a fixture from ever entering the cache.
+
 The outer Lima workload VM is parked on the local
 `gol-1971-own-machine-vm` branch; only the existing managed-XFS tests use Lima.
 The own-machine phase must accept its VM and mount controls separately.
+On Linux, managed-XFS downloads use Lima's native cache below
+`.validation-cache/lima-images-v1/<effective-image-list-sha256>` through
+`XDG_CACHE_HOME`. Resolving the inherited template makes URL/digest changes select
+a different directory. Lima verifies downloads under its normal image policy;
+this assumes a trusted local cache. Old image directories remain until local
+cache cleanup. `LIMA_HOME`, VM creation/deletion and fresh test volumes are unchanged.
 
 The cold serial estimate is 4.5 hours. The workload step has a 300-minute timeout;
 the Linux job has 330 minutes for setup and report upload. These are provisional
@@ -116,14 +127,39 @@ runner to reclaim. The retained manifest and task logs record dependency and has
 evidence; sharing a cache is not a claim of measured speedup.
 
 Parallel execution is the default. Worker tests overlap service compilation,
-then service and CLI tests. Groups within
-each subflow remain serial. The ceiling is three stateful subflows, not a custom
+then service and CLI tests. Once both service compilation and worker tests finish,
+the same executor also runs lint and Bash checks in a background branch,
+sequentially with each other. Ordinary worker failures still admit these independent
+checks. The completion wait is bounded by the 300-minute validation timeout.
+They retain their existing progress identities and run once per cycle.
+The background branch limits Cargo, native test harnesses and Bash conformance
+to four workers; the Bash compatibility container also has a four-CPU quota.
+Bash uses a separate persistent Cargo target, including its conformance examples.
+It cannot overwrite native service or executor outputs. Lint skips the WIT sync
+already completed during preparation. Neither check overlaps a native producer.
+The four-worker cap applies only to parallel mode; serial diagnosis retains the
+normal tool concurrency. The background branch joins before privileged checks.
+
+Groups within each stateful subflow remain serial. The ceiling is three stateful
+subflows and one bounded checks branch, not another executor or a dynamic
 scheduler. Each fork collects ordinary failures before joining; the final task
 rejects failed or missing branch completion records. Conflicting privileged
 checks follow the join. Set `MAIN_VALIDATION_PARALLEL=false` locally or the manual
 acceptance `parallel` input to false for a serial diagnostic run. Production
 sampling always uses parallel execution. Real overlap acceptance remains required;
 local contract tests alone do not establish isolation or resource headroom.
+
+General workers retain test-r's hardware-derived concurrency. Keep the dedicated
+storage-quota single-thread and tool-streaming eight-thread limits. Service
+invocations share fixed dependency ports and include cluster restarts, so their
+single-thread limits are not an invitation to remove them globally. CLI's four
+concurrent tests each start servers and can run parallel compilers. Evaluate any
+increase using CPU and memory samples, not the number of test threads alone.
+The current 20-job native Cargo cap is not the main observed bottleneck: general
+and executor compilation used fewer than 20 host CPUs in over 90% of samples in
+acceptance 44267744093. Keep heavy native producers ordered and preserve their
+different feature selections. Metadata listing uses `--tests`, not `--bins`, so
+nextest does not force additional test-mode builds of `test = false` binaries.
 
 Offsets are 0 for worker tests, 10000 for service tests, and 20000 for CLI tests.
 Preparation creates a unique root in the runner's system temporary directory.

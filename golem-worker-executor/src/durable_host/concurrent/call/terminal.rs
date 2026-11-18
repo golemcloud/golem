@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Completes a live call: upload the response, append the matching host-call `End`, then close
     /// the durable scope / commit / checkpoint via `end_durable_function`.
@@ -153,7 +154,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
-        on_delivered: crate::durable_host::concurrent::OnDelivered,
+        on_delivered: OnDelivered,
     ) -> Result<Pair::Resp, TerminalCallError>
     where
         T: 'static,
@@ -822,10 +823,22 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (snapshotting_mode, public_state) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        (ctx.state.snapshotting_mode, ctx.public_state.clone())
-    });
+    end_durable_function_initiation(
+        &mut InlineInitiationAccess::new(&mut AccessorContext::new(store, get_ctx)),
+        function_type,
+        forced_commit,
+    )
+    .await
+}
+
+pub(crate) async fn end_durable_function_initiation<Ctx: WorkerCtx>(
+    access: &mut impl InitiationAccess<Ctx>,
+    function_type: DurableFunctionType,
+    forced_commit: bool,
+) -> Result<(), WorkerExecutorError> {
+    let (snapshotting_mode, public_state) = access
+        .window(|ctx| (ctx.state.snapshotting_mode, ctx.public_state.clone()))
+        .await?;
 
     if snapshotting_mode {
         return Ok(());
@@ -836,10 +849,10 @@ where
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
             .await?;
-        if store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            ctx.state.at_clean_checkpoint_boundary()
-        }) {
+        if access
+            .window(|ctx| ctx.state.at_clean_checkpoint_boundary())
+            .await?
+        {
             public_state
                 .worker()
                 .checkpoint_status_mid_invocation()

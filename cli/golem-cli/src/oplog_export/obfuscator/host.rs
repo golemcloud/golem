@@ -281,6 +281,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsIpNameLookupResolveAddresses => {
             pair::<host_functions::P3SocketsIpNameLookupResolveAddresses>(Bare::Neither)
         }
+        HostFunctionName::GolemNetworkDnsResolve => {
+            pair::<host_functions::GolemNetworkDnsResolve>(Bare::Neither)
+        }
         HostFunctionName::GolemAgentGetAllAgentTypes => {
             pair::<host_functions::GolemAgentGetAllAgentTypes>(Bare::Neither)
         }
