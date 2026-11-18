@@ -15,12 +15,11 @@
 use crate::benchmarks::public_invocation::{
     PublicInvocationSession, SessionCheckpoint, public_record, public_u32,
 };
-use crate::benchmarks::{cleanup_user_state, delete_workers};
+use crate::benchmarks::{cleanup_user_state, delete_workers, lookup_keyed_agent};
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use golem_common::data_value;
-use golem_common::model::AgentId;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
@@ -61,7 +60,7 @@ pub struct StreamingHistoryIteration {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
     caller: ParsedAgentKey,
-    measured_agents: Vec<AgentId>,
+    measured_agents: Vec<OwnedAgentId>,
     environment_id: EnvironmentId,
     length: u32,
     storage_before: StorageSnapshot,
@@ -76,7 +75,7 @@ pub struct StreamingColdIteration {
     application: String,
     environment: String,
     target: ParsedAgentKey,
-    measured_agents: Vec<AgentId>,
+    measured_agents: Vec<OwnedAgentId>,
     environment_id: EnvironmentId,
     length: u32,
     post_restart: StorageSnapshot,
@@ -461,7 +460,7 @@ impl Benchmark for StreamingRpcHistory {
         let (user, component, environment_id, _, _) = component_and_environment(&context.deps)
             .await
             .map_err(|error| benchmark_error("setup", error))?;
-        let warm = golem_common::agent_id!(
+        let warm = golem_common::agent_key!(
             "StreamingRpcCaller",
             format!("warm-{}", uuid::Uuid::new_v4())
         );
@@ -478,8 +477,8 @@ impl Benchmark for StreamingRpcHistory {
             .map_err(|error| benchmark_error("setup-warm-cache-correctness", error))?;
 
         let name = format!("history-{}", uuid::Uuid::new_v4());
-        let caller = golem_common::agent_id!("StreamingRpcCaller", name.clone());
-        let target = golem_common::agent_id!("StreamingRpcTarget", name);
+        let caller = golem_common::agent_key!("StreamingRpcCaller", name.clone());
+        let target = golem_common::agent_key!("StreamingRpcTarget", name);
         let initialized = invoke_caller(
             &user,
             &component,
@@ -514,11 +513,14 @@ impl Benchmark for StreamingRpcHistory {
             self.config.size as u64,
         );
         let storage_before = metrics_snapshot(&context.deps, "setup-storage-snapshot").await?;
-        let measured_agents = [&caller, &target]
-            .into_iter()
-            .map(|agent| AgentId::from_agent_id(component.id, agent).map_err(anyhow::Error::msg))
-            .collect::<anyhow::Result<Vec<_>>>()
-            .map_err(|error| benchmark_error("setup-agent-id", error))?;
+        let mut measured_agents = Vec::new();
+        for agent in [&caller, &target] {
+            measured_agents.push(
+                lookup_keyed_agent(&user, &component, agent)
+                    .await
+                    .map_err(|error| benchmark_error("setup-agent-id", error))?,
+            );
+        }
         Ok(StreamingHistoryIteration {
             user,
             component,
@@ -704,7 +706,7 @@ impl StreamingRpcCold {
             component_and_environment(&context.deps)
                 .await
                 .map_err(|error| benchmark_error("setup", error))?;
-        let warm = golem_common::agent_id!(
+        let warm = golem_common::agent_key!(
             "StreamingRpcTarget",
             format!("warm-{}", uuid::Uuid::new_v4())
         );
@@ -719,7 +721,7 @@ impl StreamingRpcCold {
         .await
         .map_err(|error| benchmark_error("setup-warm-cache", error))?;
 
-        let target = golem_common::agent_id!(
+        let target = golem_common::agent_key!(
             "StreamingRpcTarget",
             format!("cold-{}", uuid::Uuid::new_v4())
         );
@@ -739,7 +741,8 @@ impl StreamingRpcCold {
             ));
         }
 
-        let agent_id = AgentId::from_agent_id(component.id, &target)
+        let agent_id = lookup_keyed_agent(&user, &component, &target)
+            .await
             .map_err(|error| benchmark_error("setup-agent-id", error))?;
         for index in 0..self.config.size {
             seed_direct_session(

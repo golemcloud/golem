@@ -1,6 +1,7 @@
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::{AgentFilter, FilterComparator};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use reqwest::{Body, Method, StatusCode};
@@ -437,7 +438,8 @@ async fn raw_router_disconnect_stops_private_execution(
         let (_, before) = raw_router_context
             .user
             .get_workers_metadata(
-                &raw_router_context.component_id,
+                &raw_router_context.env_id,
+                &AgentTypeName("RawHttpRouter".to_string()),
                 Some(AgentFilter::new_mode(
                     FilterComparator::Equal,
                     AgentMode::Ephemeral,
@@ -458,7 +460,8 @@ async fn raw_router_disconnect_stops_private_execution(
                 let (_, agents) = raw_router_context
                     .user
                     .get_workers_metadata(
-                        &raw_router_context.component_id,
+                        &raw_router_context.env_id,
+                        &AgentTypeName("RawHttpRouter".to_string()),
                         Some(AgentFilter::new_mode(
                             FilterComparator::Equal,
                             AgentMode::Ephemeral,
@@ -470,17 +473,18 @@ async fn raw_router_disconnect_stops_private_execution(
                     .await?;
                 for agent_id in agents
                     .into_iter()
-                    .map(|agent| agent.agent_id)
-                    .filter(|agent_id| !before.iter().any(|old| old.agent_id == *agent_id))
+                    .map(|agent| OwnedAgentId::new(raw_router_context.env_id, &agent.agent_id))
+                    .filter(|agent_id| !before.iter().any(|old| old.agent_id == agent_id.agent_id))
                 {
                     // The invocation starts in the initial page. Reading the entire history
                     // can chase the unbounded output producer without ever reaching its tail.
                     let oplog = worker_client
                         .get_oplog(
-                            &agent_id.component_id.0,
-                            &agent_id.agent_id,
+                            &agent_id.environment_id.0,
+                            &agent_id.agent_id.0,
                             Some(OplogIndex::INITIAL.as_u64()),
                             100,
+                            None,
                             None,
                             None,
                         )
@@ -544,7 +548,8 @@ async fn raw_router_h2_reset_stops_private_execution(
     let (_, before) = raw_router_context
         .user
         .get_workers_metadata(
-            &raw_router_context.component_id,
+            &raw_router_context.env_id,
+            &AgentTypeName("RawHttpRouter".to_string()),
             Some(AgentFilter::new_mode(
                 FilterComparator::Equal,
                 AgentMode::Ephemeral,
@@ -573,7 +578,8 @@ async fn raw_router_h2_reset_stops_private_execution(
             let (_, agents) = raw_router_context
                 .user
                 .get_workers_metadata(
-                    &raw_router_context.component_id,
+                    &raw_router_context.env_id,
+                    &AgentTypeName("RawHttpRouter".to_string()),
                     Some(AgentFilter::new_mode(
                         FilterComparator::Equal,
                         AgentMode::Ephemeral,
@@ -587,6 +593,7 @@ async fn raw_router_h2_reset_stops_private_execution(
                 .into_iter()
                 .map(|agent| agent.agent_id)
                 .find(|agent_id| !before.iter().any(|old| old.agent_id == *agent_id))
+                .map(|agent_id| OwnedAgentId::new(raw_router_context.env_id, &agent_id))
             {
                 // The response head proves this isolated request's method has started.
                 // Do not chase a growing output oplog before sending the reset.
@@ -609,10 +616,7 @@ async fn raw_router_h2_reset_stops_private_execution(
     Ok(())
 }
 
-async fn wait_for_stopped(
-    context: &HttpTestContext,
-    agent: &golem_common::model::AgentId,
-) -> anyhow::Result<()> {
+async fn wait_for_stopped(context: &HttpTestContext, agent: &OwnedAgentId) -> anyhow::Result<()> {
     use golem_client::api::WorkerClient;
     use golem_common::model::AgentStatus;
     use golem_common::model::oplog::{
@@ -633,10 +637,11 @@ async fn wait_for_stopped(
         // Fetching all output can chase the producer or spend the deadline on stream payloads.
         let page = client
             .get_oplog(
-                &agent.component_id.0,
-                &agent.agent_id,
+                &agent.environment_id.0,
+                &agent.agent_id.0,
                 Some(OplogIndex::INITIAL.as_u64()),
                 100,
+                None,
                 None,
                 None,
             )
@@ -690,7 +695,8 @@ async fn raw_router_cors_preflight_does_not_invoke(
         raw_router_context
             .user
             .get_workers_metadata(
-                &raw_router_context.component_id,
+                &raw_router_context.env_id,
+                &AgentTypeName("RawHttpRouter".to_string()),
                 Some(AgentFilter::new_mode(
                     FilterComparator::Equal,
                     AgentMode::Ephemeral,
@@ -874,7 +880,8 @@ async fn immutable_router_files_from_registry_blob_storage(
     let (_, agents) = context
         .user
         .get_workers_metadata(
-            &context.component_id,
+            &context.env_id,
+            &AgentTypeName("StaticHttpRouter".to_string()),
             None,
             ScanCursor::default(),
             100,

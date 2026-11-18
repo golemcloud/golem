@@ -298,7 +298,6 @@ impl PublicInvocationSession {
                 constructor_parameters,
                 environment: environment.to_string(),
                 method: method.to_string(),
-                phantom_id: agent.phantom_id,
             }),
             version: INVOCATION_SESSION_VERSION,
         };
@@ -467,10 +466,7 @@ mod tests {
     fn accepted(channel: u32, stream_token: &str) -> PublicServerMessage {
         PublicServerMessage::InvocationAccepted {
             attempt_id: uuid::Uuid::new_v4(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(4)),
-                agent_id: "counter()".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings: vec![mapping(channel, stream_token)],
             session_token: "session".to_string(),

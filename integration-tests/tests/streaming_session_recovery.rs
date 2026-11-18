@@ -18,16 +18,17 @@ test_r::enable!();
 mod tests {
     use anyhow::{Context, ensure};
     use golem_api_grpc::proto::golem::worker::{ResumeOperation, invocation_session_result};
+    use golem_common::model::PromiseId;
     use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
-    use golem_common::model::{AgentId, PromiseId};
     use golem_common::schema::SchemaValue;
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
     use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
     use golem_test_framework::config::{
         DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+    use integration_tests::agents::lookup_keyed_agent;
     use integration_tests::benchmarks::streaming_recovery::Topology;
     use integration_tests::invocation_session::{InvocationSession, SessionCheckpoint, StreamId};
     use std::sync::Once;
@@ -220,7 +221,7 @@ mod tests {
         let mut expectations = Vec::new();
         let mut stream_ids = Vec::new();
         for branch in 0..if topology == Topology::Flat { 2 } else { 1 } {
-            let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
+            let agent = agent_key!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
             for _ in 0..historical_sessions {
                 InvocationSession::start(
                     &deps,
@@ -278,7 +279,8 @@ mod tests {
         .await?;
         // Every Takeover has been accepted and its epoch checked before either gate is released.
         for gate in gates.iter().rev() {
-            user.complete_promise(gate, Vec::new()).await?;
+            user.complete_promise(&component.environment_id, gate, Vec::new())
+                .await?;
         }
         let reports =
             futures::future::try_join_all(resumed.into_iter().map(InvocationSession::finish))
@@ -320,8 +322,7 @@ mod tests {
                 assert!(events.accepted.unwrap() <= events.first_items[id]);
                 assert!(events.first_items[id] <= events.completed.unwrap());
             }
-            let worker =
-                AgentId::from_agent_id(component.id, &agents[index]).map_err(anyhow::Error::msg)?;
+            let worker = lookup_keyed_agent(&user, &component, &agents[index]).await?;
             let history = user.get_oplog(&worker, OplogIndex::INITIAL).await?;
             let key = golem_common::model::InvocationId::from(
                 *report

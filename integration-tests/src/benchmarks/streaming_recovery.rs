@@ -18,11 +18,11 @@ use crate::benchmarks::public_invocation::{
     DetachedSession, PublicInvocationSession, SessionCheckpoint, SessionEvents, StreamId,
     public_record, public_u32, public_value,
 };
-use crate::benchmarks::{cleanup_account, cleanup_user_state, delete_workers};
+use crate::benchmarks::{cleanup_account, cleanup_user_state, delete_workers, lookup_keyed_agent};
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::future::try_join_all;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
@@ -32,11 +32,11 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, InvocationId, PromiseId};
+use golem_common::model::{InvocationId, PromiseId};
 use golem_common::schema::FromSchema;
 #[cfg(test)]
 use golem_common::schema::{SchemaGraph, SchemaType};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::storage_metrics::{
     StorageMetricsClient, StorageOperation, StorageSnapshot,
 };
@@ -79,7 +79,7 @@ pub struct RecoveryIteration {
     application: String,
     environment: String,
     deadline: tokio::time::Instant,
-    warm_agent: Option<AgentId>,
+    warm_agent: Option<OwnedAgentId>,
     agents: Vec<ParsedAgentKey>,
     gates: Vec<PromiseId>,
     expected: Vec<Vec<(u32, u32)>>,
@@ -109,9 +109,13 @@ fn session_key(report: &SessionCheckpoint) -> anyhow::Result<InvocationId> {
         .context("missing accepted invocation key")
 }
 
-fn worker(iteration: &RecoveryIteration, index: usize) -> anyhow::Result<AgentId> {
-    AgentId::from_agent_id(iteration.component.id, &iteration.agents[index])
-        .map_err(anyhow::Error::msg)
+async fn worker(iteration: &RecoveryIteration, index: usize) -> anyhow::Result<OwnedAgentId> {
+    lookup_keyed_agent(
+        &iteration.user,
+        &iteration.component,
+        &iteration.agents[index],
+    )
+    .await
 }
 
 fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<InvocationId>> {
@@ -134,7 +138,7 @@ async fn wait_finished(
     index: usize,
     expected: &[InvocationId],
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-    let id = worker(iteration, index)?;
+    let id = worker(iteration, index).await?;
     loop {
         let history = iteration.user.get_oplog(&id, OplogIndex::INITIAL).await?;
         let keys = finished_keys(&history)?;
@@ -543,7 +547,7 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
         iteration.sessions.lock().await.clear();
         let mut workers = iteration.warm_agent.iter().cloned().collect::<Vec<_>>();
         for index in 0..iteration.agents.len() {
-            match worker(&iteration, index) {
+            match worker(&iteration, index).await {
                 Ok(id) => workers.push(id),
                 Err(e) => recorder.failure(&ResultKey::primary("cleanup-agent-id"), e.to_string()),
             }
@@ -596,13 +600,9 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
         recorder: &BenchmarkRecorder,
     ) -> BenchmarkResultValue {
         let result: anyhow::Result<()> = async {
-            let warm = agent_id!(
+            let warm = agent_key!(
                 "StreamingRpcTarget",
                 format!("warm-{}", uuid::Uuid::new_v4())
-            );
-            iteration.warm_agent = Some(
-                AgentId::from_agent_id(iteration.component.id, &warm)
-                    .map_err(anyhow::Error::msg)?,
             );
             PublicInvocationSession::start(
                 &context.deps,
@@ -617,8 +617,10 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
             .await?
             .finish()
             .await?;
+            iteration.warm_agent =
+                Some(lookup_keyed_agent(&iteration.user, &iteration.component, &warm).await?);
             for branch in 0..if CASE == 1 { 2 } else { 1 } {
-                let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
+                let agent = agent_key!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
                 iteration.agents.push(agent.clone());
                 let length = self.config.length as u32;
                 let mut keys = Vec::new();
@@ -861,7 +863,10 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
         // Both public takeover requests are accepted before any gate can advance a suffix.
         phase("release-gates", async {
             for gate in &iteration.gates {
-                iteration.user.complete_promise(gate, Vec::new()).await?;
+                iteration
+                    .user
+                    .complete_promise(&iteration.env, gate, Vec::new())
+                    .await?;
             }
             Ok(())
         })
@@ -930,7 +935,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                 )?;
                 let history = iteration
                     .user
-                    .get_oplog(&worker(iteration, index)?, OplogIndex::INITIAL)
+                    .get_oplog(&worker(iteration, index).await?, OplogIndex::INITIAL)
                     .await?;
                 validate_execution(&history, &session_key(report)?)?;
                 let events = report.attempts.last().context("missing request timing")?;
@@ -988,7 +993,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                 for (index, history) in histories.iter().enumerate() {
                     let after = iteration
                         .user
-                        .get_oplog(&worker(iteration, index)?, OplogIndex::INITIAL)
+                        .get_oplog(&worker(iteration, index).await?, OplogIndex::INITIAL)
                         .await?;
                     ensure!(
                         session_records(history) == session_records(&after),
@@ -1010,7 +1015,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                     );
                     let demanded = iteration
                         .user
-                        .get_oplog(&worker(iteration, index)?, OplogIndex::INITIAL)
+                        .get_oplog(&worker(iteration, index).await?, OplogIndex::INITIAL)
                         .await?;
                     ensure!(
                         session_records(history) == session_records(&demanded),

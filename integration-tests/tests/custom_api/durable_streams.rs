@@ -6,15 +6,17 @@
 
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use base64::Engine;
+use golem_common::agent_key;
 use golem_common::base_model::agent::AgentTypeName;
-use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::durable_stream::StreamTerminalRecord;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::FromSchema;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDsl;
+use integration_tests::agents::derive_keyed_agent_id;
 use pretty_assertions::assert_eq;
 use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
@@ -1433,21 +1435,27 @@ async fn post_input_offsets_and_retry_survive_reconstruction(
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
     let id = format!("ds3-{session}");
-    let component_id = agent
+    let agent_id = agent
         .client
         .put(
             agent
                 .base_url
-                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+                .join(&format!("/durable-stream-agents/{id}/agent-id"))?,
         )
         .send()
         .await?
         .json::<String>()
         .await?;
-    let worker = AgentId {
-        component_id: ComponentId(Uuid::parse_str(&component_id)?),
-        agent_id: format!("DurableStreamAgent(\"{id}\")"),
-    };
+    let worker = OwnedAgentId::new(agent.env_id, &AgentId(Uuid::parse_str(&agent_id)?));
+    assert_eq!(
+        worker,
+        derive_keyed_agent_id(
+            &agent.user,
+            &agent.component_id,
+            &agent_key!("DurableStreamAgent", id.clone()),
+        )
+        .await?
+    );
     let input = echo_stream_path(&session, "input");
     let output = echo_stream_path(&session, "output");
     let mut offsets = Vec::new();
@@ -2160,7 +2168,6 @@ async fn websocket_and_http_sessions_have_isolated_identities(
                 constructor_parameters: native_constructor_id(format!("ds3-{session}")),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
-                phantom_id: None,
             }),
             version: INVOCATION_SESSION_VERSION,
         },
@@ -2329,21 +2336,27 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
     assert_eq!(marked.json::<Value>().await?, serde_json::json!("37"));
     assert_eq!(observations(agent, &id).await?, vec![0, 0, 1, 1, 1, 37, 0]);
 
-    let component_id = agent
+    let agent_id = agent
         .client
         .put(
             agent
                 .base_url
-                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+                .join(&format!("/durable-stream-agents/{id}/agent-id"))?,
         )
         .send()
         .await?
         .json::<String>()
         .await?;
-    let worker = AgentId {
-        component_id: ComponentId(Uuid::parse_str(&component_id)?),
-        agent_id: format!("DurableStreamAgent(\"{id}\")"),
-    };
+    let worker = OwnedAgentId::new(agent.env_id, &AgentId(Uuid::parse_str(&agent_id)?));
+    assert_eq!(
+        worker,
+        derive_keyed_agent_id(
+            &agent.user,
+            &agent.component_id,
+            &agent_key!("DurableStreamAgent", id.clone()),
+        )
+        .await?
+    );
     let before = stream_terminals(agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?)?;
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].1.authored_by, StreamTerminalAuthor::Host);
@@ -2436,10 +2449,12 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
     }
     use golem_common::model::durable_stream::{StreamError, StreamSessionRecord, StreamTerminal};
 
-    let worker = AgentId {
-        component_id: agent.component_id,
-        agent_id: format!("DurableStreamAgent(\"{id}\")"),
-    };
+    let worker = derive_keyed_agent_id(
+        &agent.user,
+        &agent.component_id,
+        &agent_key!("DurableStreamAgent", id.clone()),
+    )
+    .await?;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let history = agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -2526,21 +2541,27 @@ async fn output_slot_delete_is_guest_observable_and_tombstoned(
     }
     wait_for_observations(agent, &id, &[0, 0, 1, 1, 1, 0, 0]).await?;
 
-    let component_id = agent
+    let agent_id = agent
         .client
         .put(
             agent
                 .base_url
-                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+                .join(&format!("/durable-stream-agents/{id}/agent-id"))?,
         )
         .send()
         .await?
         .json::<String>()
         .await?;
-    let worker = AgentId {
-        component_id: ComponentId(Uuid::parse_str(&component_id)?),
-        agent_id: format!("DurableStreamAgent(\"{id}\")"),
-    };
+    let worker = OwnedAgentId::new(agent.env_id, &AgentId(Uuid::parse_str(&agent_id)?));
+    assert_eq!(
+        worker,
+        derive_keyed_agent_id(
+            &agent.user,
+            &agent.component_id,
+            &agent_key!("DurableStreamAgent", id.clone()),
+        )
+        .await?
+    );
     agent.user.simulated_crash(&worker).await?;
     agent.user.resume(&worker, false).await?;
     for method in [Method::GET, Method::HEAD, Method::POST, Method::DELETE] {
@@ -2763,10 +2784,12 @@ async fn trapped_output_closes_without_the_cancelled_header(
         StatusCode::NO_CONTENT
     );
     wait_for_closed(agent, &path).await?;
-    let worker = AgentId {
-        component_id: agent.component_id,
-        agent_id: format!("DurableStreamAgent(\"ds3-{session}\")"),
-    };
+    let worker = derive_keyed_agent_id(
+        &agent.user,
+        &agent.component_id,
+        &agent_key!("DurableStreamAgent", format!("ds3-{session}")),
+    )
+    .await?;
     let history = agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let output = history
         .iter()
