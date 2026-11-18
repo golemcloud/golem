@@ -34,7 +34,24 @@ shared dependency preparations, metadata extraction, bridge collections and know
 candidate scopes. Typed inputs refer to future metadata and guest bridges, not
 to additional work discovered during execution. Progress and results are separate
 from the plan. The serial runner chooses ready components in stable name order.
-It retains completed commands and bridge results across grant continuations.
+It retains completed commands, bridge results and preparation results.
+
+Remote tool releases, remote middleware releases and the environment tool
+resolver are fixed preparation entries. The inventory shows release references,
+component dependency inputs, bridge matchers, owner metadata selectors and the
+environment resolver's bounded name/wildcard and MCP import scope. Remote reads
+and MCP resolution are distinct from conditional persistent grant upserts.
+Import identities include their index and prefix, not authentication values.
+
+Before a stage runs, its selected preparation inputs must have results. New
+component metadata can select another inventoried release or activate the fixed
+environment resolver; it cannot add a release reference or resolver operation.
+Selected identities and result bounds are checked before grant writes or the
+next stage. A missing selected environment tool fails before its consumers run.
+Grant reconciliation still needs explicit authorization and keeps its changes
+if a later build fails. A metadata lookup error is a failure, not authority to
+plan another operation. Checks print the inventory without resolving remote
+metadata or changing grants.
 
 Middleware lookup may wait for a pending candidate, use one known matching
 provider, or reject a known ambiguity or incompatible version. Final validation

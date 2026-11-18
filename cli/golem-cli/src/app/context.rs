@@ -76,16 +76,37 @@ pub enum ResolvedEnvironmentTool<'a> {
     Mcp(&'a golem_client::model::McpResolvedTool),
 }
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum BuildMetadataRequired {
-    #[error("Remote tool '{0}' is not granted to the selected environment")]
-    Tool(golem_common::model::tool::ToolName),
-    #[error("Tool middleware '{0}' has no environment release grant")]
-    Middleware(golem_common::model::tool_middleware::ToolMiddlewareName),
-    #[error(
-        "Environment tool dependency '{0}' was not found among the selected environment's ambient tools or MCP imports"
-    )]
-    EnvironmentTool(golem_common::model::tool::ToolName),
+impl ResolvedEnvironmentTools {
+    pub fn tool(
+        &self,
+        name: &golem_common::model::tool::ToolName,
+    ) -> anyhow::Result<ResolvedEnvironmentTool<'_>> {
+        if let Some(tool) = self.ambient_tools.iter().find(|tool| tool.name == *name) {
+            return Ok(ResolvedEnvironmentTool::Ambient(tool));
+        }
+        if let Some(tool) = self
+            .mcp_tools
+            .iter()
+            .find(|tool| tool.definition.name() == Some(name.as_str()))
+        {
+            return Ok(ResolvedEnvironmentTool::Mcp(tool));
+        }
+        if let Some(diagnostic) = self
+            .mcp_diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.canonical_name == name.as_str())
+        {
+            bail!(
+                "Environment tool '{name}' was rejected by MCP import {} (upstream '{}'): {}",
+                diagnostic.import_index,
+                diagnostic.upstream_name,
+                diagnostic.reason
+            );
+        }
+        bail!(
+            "Environment tool dependency '{name}' was not found among the selected environment's ambient tools or MCP imports"
+        )
+    }
 }
 
 pub struct BuildContext<'a> {
@@ -150,7 +171,7 @@ impl<'a> BuildContext<'a> {
         self.resolved_tool_middleware_grants
             .and_then(|grants| grants.get(&reference))
             .map(|grant| grant.release.definition.clone())
-            .ok_or_else(|| BuildMetadataRequired::Middleware(name.clone()).into())
+            .ok_or_else(|| anyhow!("Tool middleware '{name}' has no resolved build preparation"))
     }
 
     pub fn with_environment_tools(mut self, tools: &'a ResolvedEnvironmentTools) -> Self {
@@ -178,25 +199,11 @@ impl<'a> BuildContext<'a> {
         &self,
         name: &golem_common::model::tool::ToolName,
     ) -> anyhow::Result<ResolvedEnvironmentTool<'_>> {
-        if let Some(tool) = self.ambient_tools().iter().find(|tool| tool.name == *name) {
-            return Ok(ResolvedEnvironmentTool::Ambient(tool));
-        }
-        if let Some(tool) = self
-            .mcp_tools()
-            .iter()
-            .find(|tool| tool.definition.name() == Some(name.as_str()))
-        {
-            return Ok(ResolvedEnvironmentTool::Mcp(tool));
-        }
-        if let Some(diagnostic) = self.environment_tool_diagnostic(name) {
-            bail!(
-                "Environment tool '{name}' was rejected by MCP import {} (upstream '{}'): {}",
-                diagnostic.import_index,
-                diagnostic.upstream_name,
-                diagnostic.reason
-            );
-        }
-        Err(BuildMetadataRequired::EnvironmentTool(name.clone()).into())
+        self.environment_tools
+            .ok_or_else(|| {
+                anyhow!("Environment tool dependency '{name}' has no resolved build preparation")
+            })?
+            .tool(name)
     }
 
     pub fn environment_tool_diagnostic(
@@ -769,16 +776,16 @@ impl ApplicationContext {
     pub async fn build(
         &self,
         build_config: &BuildConfig,
-        resolved_tool_grants: &ResolvedToolGrants,
-        resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
-        environment_tools: Option<&ResolvedEnvironmentTools>,
         plan: &crate::app::build::plan::BuildPlan,
         execution: &mut crate::app::build::BuildExecution,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<crate::app::build::BuildAdvance> {
+        let resolved_tool_grants = execution.resolved_tool_grants.clone();
+        let resolved_tool_middleware_grants = execution.resolved_middleware_grants.clone();
+        let environment_tools = execution.environment_tools.clone();
         let ctx =
-            BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants)
-                .with_tool_middleware_grants(resolved_tool_middleware_grants);
-        match environment_tools {
+            BuildContext::new_with_resolved_tool_grants(self, build_config, &resolved_tool_grants)
+                .with_tool_middleware_grants(&resolved_tool_middleware_grants);
+        match environment_tools.as_ref() {
             Some(environment_tools) => {
                 build_app(
                     &ctx.with_environment_tools(environment_tools),

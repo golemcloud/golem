@@ -70,6 +70,9 @@ pub enum BuildEffect {
     HostProcess,
     FetchDependencies,
     ExecuteUserComponent,
+    RemoteRead,
+    ResolveMcpImports,
+    ConditionalGrantUpsert,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -255,12 +258,13 @@ pub struct BuildPlan {
     selection_rules: Vec<BuildSelectionRule>,
     pub(super) bridges: BTreeMap<super::BridgeRequestId, BuildAction>,
     pub(super) output_claims: Vec<super::OutputDirClaim>,
+    pub(super) preparations: super::preparation::BuildPreparations,
     limits: BuildPlanLimits,
 }
 
 #[derive(Default, Debug)]
 pub struct BuildProgress {
-    completed: BTreeSet<ComponentName>,
+    pub(super) completed: BTreeSet<ComponentName>,
     pub(super) executed_commands: BTreeMap<ComponentName, usize>,
 }
 
@@ -283,6 +287,7 @@ impl BuildPlan {
             selection_rules: Vec::new(),
             bridges: BTreeMap::new(),
             output_claims: Vec::new(),
+            preparations: super::preparation::BuildPreparations::default(),
             requirements: indexed
                 .values()
                 .flat_map(|stage| &stage.actions)
@@ -320,6 +325,7 @@ impl BuildPlan {
         }
         self.selected = selected;
         self.selection_rules = rules;
+        self.validate()?;
         Ok(self)
     }
 
@@ -341,6 +347,37 @@ impl BuildPlan {
 
     pub fn explicit_components(&self) -> &BTreeSet<ComponentName> {
         &self.selected
+    }
+
+    pub(super) fn with_preparations(
+        mut self,
+        preparations: super::preparation::BuildPreparations,
+    ) -> anyhow::Result<Self> {
+        self.preparations = preparations;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn preparation_limits(&self) -> BuildPlanLimits {
+        let fixed_edges = self.preparations.edge_count()
+            + self
+                .selection_rules
+                .iter()
+                .map(|rule| rule.components.len())
+                .sum::<usize>()
+            + self
+                .stages
+                .values()
+                .map(|stage| stage.dependencies.len() + stage.inputs.len())
+                .sum::<usize>();
+        BuildPlanLimits {
+            edges: self.limits.edges - fixed_edges,
+            ..self.limits
+        }
+    }
+
+    pub fn preparations(&self) -> &super::preparation::BuildPreparations {
+        &self.preparations
     }
 
     pub fn selected_components(
@@ -435,12 +472,18 @@ impl BuildPlan {
             self.stages.len() <= self.limits.components,
             "Build plan component limit exceeded"
         );
-        let mut actions = self.bridges.len();
+        let mut actions = self.bridges.len() + self.preparations.entries.len();
         ensure!(
             actions <= self.limits.actions,
             "Build plan action limit exceeded"
         );
-        let mut edges = 0usize;
+        let mut edges = self.preparations.edge_count()
+            + self
+                .selection_rules
+                .iter()
+                .map(|rule| rule.components.len())
+                .sum::<usize>();
+        ensure!(edges <= self.limits.edges, "Build plan edge limit exceeded");
         let mut dependents = BTreeMap::<&ComponentName, Vec<&ComponentName>>::new();
         let mut remaining = BTreeMap::new();
         for stage in self.stages.values() {

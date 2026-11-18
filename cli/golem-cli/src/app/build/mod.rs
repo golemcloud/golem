@@ -51,6 +51,7 @@ pub mod go_inputs;
 pub mod go_toolchain;
 mod inspect;
 pub mod plan;
+pub mod preparation;
 pub mod task_result_marker;
 pub mod up_to_date_check;
 
@@ -63,18 +64,57 @@ pub struct BuildExecution {
     available_guest_bridge_dependencies: BTreeSet<ComponentDependency>,
     generated_guest_target_keys: BTreeSet<BridgeSdkTargetKey>,
     completed_bridge_requests: BTreeSet<BridgeRequestId>,
+    pub(crate) resolved_tool_grants: crate::model::tool_release::ResolvedToolGrants,
+    pub(crate) resolved_middleware_grants: crate::command_handler::ResolvedToolMiddlewareGrants,
+    pub(crate) environment_tools: Option<crate::app::context::ResolvedEnvironmentTools>,
+    pub(crate) completed_preparations: BTreeSet<preparation::BuildPreparationId>,
+}
+
+pub enum BuildAdvance {
+    Complete,
+    Prepare(BTreeSet<preparation::BuildPreparationId>),
+}
+
+fn pending_preparations(
+    ctx: &BuildContext<'_>,
+    checked_plan: &plan::BuildPlan,
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
+    environment_tools: Option<&crate::app::context::ResolvedEnvironmentTools>,
+    completed: &BTreeSet<preparation::BuildPreparationId>,
+) -> anyhow::Result<BTreeSet<preparation::BuildPreparationId>> {
+    if !ctx.should_run_step(AppBuildStep::GenBridge) {
+        return Ok(BTreeSet::new());
+    }
+    Ok(checked_plan
+        .preparations
+        .selected(
+            &checked_plan.selected_components(extracted),
+            extracted,
+            environment_tools,
+            checked_plan.preparation_limits(),
+        )?
+        .difference(completed)
+        .cloned()
+        .collect())
 }
 
 /// Inspect admission requirements before authorizing project preparation. This
 /// does not construct an executable plan from unpersisted loading changes.
 pub async fn inspect_build_requirements(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    let (stages, selected) = inspect::inspect_preparation_stages(
+    let requirements = inspect::inspect_build(
         ctx,
         ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Check),
     )?;
+    let selected = requirements.selected_components(&BTreeMap::new());
+    requirements.preparations.selected(
+        &selected,
+        &BTreeMap::new(),
+        None,
+        requirements.preparation_limits(),
+    )?;
     // Conditional candidates reserve their programs now, but their artifacts are
     // required only when metadata activates the corresponding selection rule.
-    for stage in &stages {
+    for stage in requirements.stages() {
         for requirement in stage.actions.iter().flat_map(|action| &action.requirements) {
             if selected.contains(&stage.component)
                 || !matches!(requirement, plan::BuildRequirement::ExistingFile { .. })
@@ -86,8 +126,8 @@ pub async fn inspect_build_requirements(ctx: &BuildContext<'_>) -> anyhow::Resul
     if ctx.should_run_step(AppBuildStep::Check) {
         check_build_tool_requirements(
             ctx,
-            stages
-                .iter()
+            requirements
+                .stages()
                 .filter(|stage| {
                     stage
                         .actions
@@ -129,12 +169,19 @@ pub async fn build_app(
     ctx: &BuildContext<'_>,
     checked_plan: &plan::BuildPlan,
     execution: &mut BuildExecution,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<BuildAdvance> {
     ctx.extracted_metadata
         .lock()
         .unwrap()
         .extend(execution.extracted.clone());
-    execute_component_stages(ctx, checked_plan, execution).await?;
+    for (component, metadata) in &execution.extracted {
+        validate_no_ambient_tool_collisions(ctx, component, &metadata.tools)?;
+    }
+    if let BuildAdvance::Prepare(inputs) =
+        execute_component_stages(ctx, checked_plan, execution).await?
+    {
+        return Ok(BuildAdvance::Prepare(inputs));
+    }
     let explicit_bridge_component_names = checked_plan
         .explicit_components()
         .iter()
@@ -239,7 +286,7 @@ pub async fn build_app(
         completed_bridge_requests.insert(request_id);
     }
 
-    Ok(())
+    Ok(BuildAdvance::Complete)
 }
 
 fn target_dependency(target: &BridgeSdkTarget) -> ComponentDependency {
@@ -271,7 +318,7 @@ async fn execute_component_stages(
     ctx: &BuildContext<'_>,
     checked_plan: &plan::BuildPlan,
     execution: &mut BuildExecution,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<BuildAdvance> {
     let BuildExecution {
         progress,
         extracted,
@@ -279,6 +326,8 @@ async fn execute_component_stages(
         validated_targets,
         available_guest_bridge_dependencies,
         generated_guest_target_keys,
+        completed_preparations,
+        environment_tools,
         ..
     } = execution;
     let has_dependency_guest_request = checked_plan
@@ -286,7 +335,7 @@ async fn execute_component_stages(
         .contains_key(&BridgeRequestId::DependencyGuest);
     let mut pending_components = checked_plan
         .selected_components(extracted)
-        .difference(built_components)
+        .difference(&progress.completed)
         .cloned()
         .collect::<BTreeSet<_>>();
     let _indent = if ctx.should_run_step(AppBuildStep::Build) {
@@ -296,7 +345,7 @@ async fn execute_component_stages(
         None
     };
 
-    while !pending_components.is_empty() {
+    loop {
         for name in pending_components.iter() {
             for requirement in checked_plan
                 .stage(name)?
@@ -306,6 +355,19 @@ async fn execute_component_stages(
             {
                 inspect::check_requirement(requirement, ctx.application_config())?;
             }
+        }
+        let inputs = pending_preparations(
+            ctx,
+            checked_plan,
+            extracted,
+            environment_tools.as_ref(),
+            completed_preparations,
+        )?;
+        if !inputs.is_empty() {
+            return Ok(BuildAdvance::Prepare(inputs));
+        }
+        if pending_components.is_empty() {
+            return Ok(BuildAdvance::Complete);
         }
         if has_dependency_guest_request && !ctx.should_run_step(AppBuildStep::Build) {
             for component_name in pending_components
@@ -321,6 +383,16 @@ async fn execute_component_stages(
                 let metadata = extract_and_store_component_metadata(ctx, &component_name).await?;
                 extracted.insert(component_name.clone(), metadata);
                 built_components.insert(component_name);
+            }
+            let inputs = pending_preparations(
+                ctx,
+                checked_plan,
+                extracted,
+                environment_tools.as_ref(),
+                completed_preparations,
+            )?;
+            if !inputs.is_empty() {
+                return Ok(BuildAdvance::Prepare(inputs));
             }
         }
         let mut made_progress = false;
@@ -397,8 +469,6 @@ async fn execute_component_stages(
             )?;
         }
     }
-
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

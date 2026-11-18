@@ -652,7 +652,7 @@ fn collect_remote_tool_manifest_targets_for_entry(
         }
         let grant = ctx
             .release_grant_by_name(name)
-            .ok_or_else(|| crate::app::context::BuildMetadataRequired::Tool(name.clone()))?;
+            .with_context(|| format!("Remote tool '{name}' has no resolved build preparation"))?;
         targets.push(BridgeSdkTarget {
             source: BridgeSdkTargetSource::RemoteRelease {
                 release_id: grant.release.id,
@@ -1021,9 +1021,9 @@ pub(super) fn resolve_dependency_guest_bridge_inputs(
         else {
             unreachable!()
         };
-        let grant = ctx
-            .release_grant_by_name(tool_name)
-            .ok_or_else(|| crate::app::context::BuildMetadataRequired::Tool(tool_name.clone()))?;
+        let grant = ctx.release_grant_by_name(tool_name).with_context(|| {
+            format!("Remote tool '{tool_name}' has no resolved build preparation")
+        })?;
         for target_language in dependency_guest_bridge_target_languages(
             ctx,
             &dependency,
@@ -1383,8 +1383,8 @@ pub(crate) fn validate_dependency_tool_bridge_presentations(
             BridgeSdkTargetSource::RemoteRelease { .. } => (
                 crate::model::app::SubjectSource::RemoteRelease,
                 ctx.release_grant_by_name(&tool_name)
-                    .ok_or_else(|| {
-                        crate::app::context::BuildMetadataRequired::Tool(tool_name.clone())
+                    .with_context(|| {
+                        format!("Remote tool '{tool_name}' has no resolved build preparation")
                     })?
                     .release
                     .definition

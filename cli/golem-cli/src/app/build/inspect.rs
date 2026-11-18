@@ -92,21 +92,6 @@ fn inspect_selection(
     Ok((components, rules))
 }
 
-pub(super) fn inspect_preparation_stages(
-    ctx: &BuildContext<'_>,
-    with_dependencies: bool,
-) -> anyhow::Result<(Vec<BuildStage>, BTreeSet<ComponentName>)> {
-    let (components, rules) = inspect_selection(ctx, with_dependencies)?;
-    let stages = inspect_stages(ctx, components.iter(), with_dependencies)?;
-    let selected = super::plan::selected_components(
-        ctx.application_context().selected_component_names(),
-        &rules,
-        stages.iter(),
-        &BTreeMap::new(),
-    );
-    Ok((stages, selected))
-}
-
 pub(super) fn inspect_build(
     ctx: &BuildContext<'_>,
     with_dependencies: bool,
@@ -179,9 +164,17 @@ pub(super) fn inspect_build(
     } else {
         Vec::new()
     };
+    let preparations = if ctx.should_run_step(AppBuildStep::GenBridge)
+        || ctx.should_run_step(AppBuildStep::Check)
+    {
+        super::preparation::BuildPreparations::inspect(ctx, stages.iter())?
+    } else {
+        Default::default()
+    };
     BuildPlan::new(stages, BuildPlanLimits::default())?
         .with_selection(selected, rules)?
-        .with_bridges(bridges, claims)
+        .with_bridges(bridges, claims)?
+        .with_preparations(preparations)
 }
 
 pub(super) fn inspect_stages<'a>(
@@ -423,6 +416,7 @@ pub(super) fn check_requirement(
 
 pub(super) fn log_build_plan(plan: &BuildPlan) {
     log_action("Planned", "checked host build stages (no files changed)");
+    plan.preparations.log();
     for stage in plan.stages() {
         logln(format!(
             "  {}: {} actions; dependencies: {}",

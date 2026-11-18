@@ -15,9 +15,7 @@
 use crate::app::build::check::{
     create_claude_symlink_if_needed, plan_dependency_fixes, resolve_claude_skills_context,
 };
-use crate::app::context::{
-    BuildContext, BuildMetadataRequired, ResolvedEnvironmentTools, ResolvedMcpDiagnostic,
-};
+use crate::app::context::{BuildContext, ResolvedEnvironmentTools, ResolvedMcpDiagnostic};
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
 use crate::app::template::TemplateDescription;
@@ -3800,111 +3798,8 @@ impl AppCommandHandler {
         {
             return Ok(());
         }
-        let mut demanded_tools = BTreeSet::new();
-        let mut demanded_middlewares = BTreeSet::new();
-        let mut environment_tool_names = BTreeSet::new();
-        let mut execution = crate::app::build::BuildExecution::default();
-        loop {
-            let resolved_tool_grants = if !demanded_tools.is_empty() {
-                log_action(
-                    "Preparing",
-                    "remote tool bridge access through the selected environment",
-                );
-                let environment = self
-                    .ctx
-                    .environment_handler()
-                    .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-                    .await?;
-                // A build does not use the default tools.
-                let mut plan = self
-                    .plan_tool_grant_reconciliation(&environment, None, Some(&demanded_tools))
-                    .await?;
-                plan.retain_access_changes();
-                self.validate_tool_grant_reconciliation(&environment, &plan)
-                    .await?;
-                if plan.has_changes() {
-                    log_action("Planning", "environment tool grants required by the build");
-                    let _indent = self.ctx.log_handler().decorated_indent_primary();
-                    self.ctx.log_handler().log_output(plan.view.clone())?;
-                    if !self
-                        .ctx
-                        .interactive_handler()
-                        .confirm_tool_grant_plan_apply()?
-                    {
-                        bail!(NonSuccessfulExit);
-                    }
-                    self.apply_tool_grant_reconciliation(&environment, &mut plan)
-                        .await?;
-                }
-                plan.resolved_grants
-            } else {
-                ResolvedToolGrants::default()
-            };
-
-            let resolved_middleware_grants = if !demanded_middlewares.is_empty() {
-                let environment = self
-                    .ctx
-                    .environment_handler()
-                    .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-                    .await?;
-                let mut plan = self
-                    .plan_tool_middleware_grant_reconciliation(
-                        &environment,
-                        Some(&demanded_middlewares),
-                    )
-                    .await?;
-                // A build needs release access, not removal of other environment grants.
-                plan.deletions.clear();
-                self.validate_tool_middleware_grant_reconciliation(&environment, &plan)
-                    .await?;
-                if plan.has_changes() {
-                    if !self
-                        .ctx
-                        .interactive_handler()
-                        .confirm_tool_grant_plan_apply()?
-                    {
-                        bail!(NonSuccessfulExit);
-                    }
-                    self.apply_tool_middleware_grant_reconciliation(&environment, &mut plan)
-                        .await?;
-                }
-                plan.resolved
-            } else {
-                ResolvedToolMiddlewareGrants::default()
-            };
-            let result = self
-                .build_selected(
-                    build_config,
-                    &resolved_tool_grants,
-                    &resolved_middleware_grants,
-                    Some(&environment_tool_names),
-                    &checked_plan,
-                    &mut execution,
-                )
-                .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    // Compilation can reveal owner bindings and middleware dependencies.
-                    // Resume preparation only for a new requirement, never for a repeated failure.
-                    let added = match error.downcast_ref::<BuildMetadataRequired>() {
-                        Some(BuildMetadataRequired::Tool(name)) => {
-                            demanded_tools.insert(name.clone())
-                        }
-                        Some(BuildMetadataRequired::Middleware(name)) => {
-                            demanded_middlewares.insert(name.clone())
-                        }
-                        Some(BuildMetadataRequired::EnvironmentTool(name)) => {
-                            environment_tool_names.insert(name.as_str().to_string())
-                        }
-                        None => false,
-                    };
-                    if !added {
-                        return Err(error);
-                    }
-                }
-            }
-        }
+        self.execute_build_plan(build_config, &checked_plan, &mut Default::default())
+            .await
     }
 
     async fn build_with_resolved_tool_grants(
@@ -3925,15 +3820,11 @@ impl AppCommandHandler {
         {
             return Ok(());
         }
-        self.build_selected(
-            build_config,
-            resolved_tool_grants,
-            resolved_tool_middleware_grants,
-            None,
-            &checked_plan,
-            &mut crate::app::build::BuildExecution::default(),
-        )
-        .await
+        let mut execution = crate::app::build::BuildExecution::default();
+        execution.resolved_tool_grants = resolved_tool_grants.clone();
+        execution.resolved_middleware_grants = resolved_tool_middleware_grants.clone();
+        self.execute_build_plan(build_config, &checked_plan, &mut execution)
+            .await
     }
 
     async fn prepare_build_project(
@@ -3991,61 +3882,228 @@ impl AppCommandHandler {
             .map(Some)
     }
 
-    async fn build_selected(
+    async fn execute_build_plan(
         &self,
         build_config: &BuildConfig,
-        resolved_tool_grants: &ResolvedToolGrants,
-        resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
-        environment_tool_names: Option<&BTreeSet<String>>,
         checked_plan: &crate::app::build::plan::BuildPlan,
         execution: &mut crate::app::build::BuildExecution,
     ) -> anyhow::Result<()> {
-        let environment_tools = self
-            .resolve_build_environment_tools(build_config, environment_tool_names)
-            .await?;
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
+        use crate::app::build::BuildAdvance;
+        use crate::app::build::preparation::BuildPreparationOperation;
+        for (id, entry) in &checked_plan.preparations().entries {
+            let supplied = match &entry.operation {
+                BuildPreparationOperation::ToolRelease(reference) => {
+                    execution.resolved_tool_grants.get(reference).is_some()
+                }
+                BuildPreparationOperation::MiddlewareRelease(reference) => execution
+                    .resolved_middleware_grants
+                    .get(reference)
+                    .is_some(),
+                BuildPreparationOperation::EnvironmentTools { .. } => false,
+            };
+            if supplied {
+                execution.completed_preparations.insert(id.clone());
+            }
+        }
+        loop {
+            let advance = {
+                let app_ctx = self.ctx.app_context_lock().await;
+                app_ctx
+                    .some_or_err()?
+                    .build(build_config, checked_plan, execution)
+                    .await?
+            };
+            match advance {
+                BuildAdvance::Complete => return Ok(()),
+                BuildAdvance::Prepare(inputs) => {
+                    self.deliver_build_preparations(checked_plan, execution, &inputs)
+                        .await?
+                }
+            }
+        }
+    }
 
-        app_ctx
-            .build(
-                build_config,
-                resolved_tool_grants,
-                resolved_tool_middleware_grants,
-                environment_tools.as_ref(),
-                checked_plan,
-                execution,
-            )
-            .await
+    async fn deliver_build_preparations(
+        &self,
+        checked_plan: &crate::app::build::plan::BuildPlan,
+        execution: &mut crate::app::build::BuildExecution,
+        inputs: &BTreeSet<crate::app::build::preparation::BuildPreparationId>,
+    ) -> anyhow::Result<()> {
+        use crate::app::build::preparation::{BuildPreparationId, BuildPreparationOperation};
+        let inventory = checked_plan.preparations();
+        inventory.validate_selection(inputs, checked_plan.preparation_limits())?;
+        let mut tools = BTreeSet::new();
+        let mut middlewares = BTreeSet::new();
+        {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app = app_ctx.some_or_err()?.application();
+            anyhow::ensure!(
+                inventory.environment.as_ref() == Some(app.environment_name()),
+                "Build preparation environment changed"
+            );
+            for id in inputs {
+                match (id, &inventory.entries[id].operation) {
+                    (
+                        BuildPreparationId::Tool(name),
+                        BuildPreparationOperation::ToolRelease(reference),
+                    ) => {
+                        let actual = app
+                            .remote_release_reference(name)
+                            .map(|reference| reference.to_release_reference())
+                            .transpose()
+                            .map_err(anyhow::Error::msg)?;
+                        anyhow::ensure!(
+                            actual.as_ref() == Some(reference),
+                            "Build preparation tool reference changed for '{name}'"
+                        );
+                        tools.insert(name.clone());
+                    }
+                    (
+                        BuildPreparationId::Middleware(name),
+                        BuildPreparationOperation::MiddlewareRelease(reference),
+                    ) => {
+                        let actual = app
+                            .remote_tool_middleware_release_references()
+                            .find(|(candidate, _)| *candidate == name)
+                            .map(|(_, reference)| reference.to_release_reference())
+                            .transpose()
+                            .map_err(anyhow::Error::msg)?;
+                        anyhow::ensure!(
+                            actual.as_ref() == Some(reference),
+                            "Build preparation middleware reference changed for '{name}'"
+                        );
+                        middlewares.insert(name.clone());
+                    }
+                    (
+                        BuildPreparationId::EnvironmentTools,
+                        BuildPreparationOperation::EnvironmentTools { .. },
+                    ) => {}
+                    _ => bail!("Invalid build preparation identity {id:?}"),
+                }
+            }
+        }
+        // Resolver output can select middleware entries. Validate that output before
+        // any grant upsert, then let the fixed inventory select its consumers.
+        if inputs.contains(&BuildPreparationId::EnvironmentTools) {
+            let result = self
+                .resolve_build_environment_tools(
+                    &inventory.environment_requests().expect("checked resolver"),
+                )
+                .await?;
+            inventory.validate_environment_result(&result, checked_plan.preparation_limits())?;
+            execution.environment_tools = Some(result);
+            execution
+                .completed_preparations
+                .insert(BuildPreparationId::EnvironmentTools);
+            return Ok(());
+        }
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+        let tool_plan = if !tools.is_empty() {
+            let mut plan = self
+                .plan_tool_grant_reconciliation(&environment, None, Some(&tools))
+                .await?;
+            plan.retain_access_changes();
+            self.validate_tool_grant_reconciliation(&environment, &plan)
+                .await?;
+            Some(plan)
+        } else {
+            None
+        };
+        let middleware_plan = if !middlewares.is_empty() {
+            let mut plan = self
+                .plan_tool_middleware_grant_reconciliation(&environment, Some(&middlewares))
+                .await?;
+            plan.deletions.clear();
+            self.validate_tool_middleware_grant_reconciliation(&environment, &plan)
+                .await?;
+            Some(plan)
+        } else {
+            None
+        };
+        // Validate every selected release before applying either kind of grant.
+        if let Some(mut plan) = tool_plan {
+            if plan.has_changes() {
+                log_action(
+                    "Planning",
+                    "environment tool grants required by the checked build",
+                );
+                self.ctx.log_handler().log_output(plan.view.clone())?;
+                if !self
+                    .ctx
+                    .interactive_handler()
+                    .confirm_tool_grant_plan_apply()?
+                {
+                    bail!(NonSuccessfulExit);
+                }
+                self.apply_tool_grant_reconciliation(&environment, &mut plan)
+                    .await?;
+            }
+            for name in tools {
+                let id = BuildPreparationId::Tool(name);
+                let BuildPreparationOperation::ToolRelease(reference) =
+                    &inventory.entries[&id].operation
+                else {
+                    unreachable!()
+                };
+                let grant = plan
+                    .resolved_grants
+                    .get(reference)
+                    .context("Tool preparation returned no grant")?;
+                execution
+                    .resolved_tool_grants
+                    .insert(reference.clone(), grant.clone());
+                execution.completed_preparations.insert(id);
+            }
+        }
+        if let Some(mut plan) = middleware_plan {
+            if plan.has_changes() {
+                if !self
+                    .ctx
+                    .interactive_handler()
+                    .confirm_tool_grant_plan_apply()?
+                {
+                    bail!(NonSuccessfulExit);
+                }
+                self.apply_tool_middleware_grant_reconciliation(&environment, &mut plan)
+                    .await?;
+            }
+            for name in middlewares {
+                let id = BuildPreparationId::Middleware(name);
+                let BuildPreparationOperation::MiddlewareRelease(reference) =
+                    &inventory.entries[&id].operation
+                else {
+                    unreachable!()
+                };
+                let grant = plan
+                    .resolved
+                    .get(reference)
+                    .context("Middleware preparation returned no grant")?;
+                execution
+                    .resolved_middleware_grants
+                    .insert(reference.clone(), grant.clone());
+                execution.completed_preparations.insert(id);
+            }
+        }
+        Ok(())
     }
 
     async fn resolve_build_environment_tools(
         &self,
-        build_config: &BuildConfig,
-        environment_tool_names: Option<&BTreeSet<String>>,
-    ) -> anyhow::Result<Option<ResolvedEnvironmentTools>> {
-        if !build_config.should_run_step(AppBuildStep::GenBridge) {
-            return Ok(None);
-        }
-        let (imports, application_tool_names, requests) = {
+        requests: &EnvironmentToolBridgeRequests,
+    ) -> anyhow::Result<ResolvedEnvironmentTools> {
+        let (imports, application_tool_names) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
             let app = app_ctx.application();
-            let mut requests = app.environment_tool_bridge_requests(
-                app_ctx.selected_component_names(),
-                build_config.custom_bridge_sdk_target.is_none(),
-            );
-            requests
-                .names
-                .extend(environment_tool_names.into_iter().flatten().cloned());
-            if !requests.wildcard && requests.names.is_empty() {
-                return Ok(None);
-            }
             (
                 app.mcp_imports(app.environment_name())
                     .cloned()
                     .unwrap_or_default(),
                 app.known_application_tool_names(),
-                requests,
             )
         };
         let environment = self
@@ -4070,14 +4128,14 @@ impl AppCommandHandler {
         }
 
         let should_resolve_mcp =
-            should_resolve_mcp_imports(!imports.is_empty(), &requests, &ambient_names);
+            should_resolve_mcp_imports(!imports.is_empty(), requests, &ambient_names);
         if !should_resolve_mcp {
-            return Ok(Some(ResolvedEnvironmentTools {
+            return Ok(ResolvedEnvironmentTools {
                 environment_id: environment.environment_id,
                 ambient_tools: plan.ambient_tools,
                 mcp_tools: Vec::new(),
                 mcp_diagnostics: Vec::new(),
-            }));
+            });
         }
 
         let imports = imports
@@ -4109,19 +4167,19 @@ impl AppCommandHandler {
             .await
             .map_service_error()?;
         let diagnostics =
-            resolved_mcp_diagnostics(&import_prefixes, resolution.diagnostics, &requests);
+            resolved_mcp_diagnostics(&import_prefixes, resolution.diagnostics, requests);
         for diagnostic in &diagnostics {
             log_warn(format!(
                 "MCP import {} tool '{}': {}",
                 diagnostic.import_index, diagnostic.upstream_name, diagnostic.reason
             ));
         }
-        Ok(Some(ResolvedEnvironmentTools {
+        Ok(ResolvedEnvironmentTools {
             environment_id: environment.environment_id,
             ambient_tools: plan.ambient_tools,
             mcp_tools: resolution.tools,
             mcp_diagnostics: diagnostics,
-        }))
+        })
     }
 
     fn plan_and_apply_dependency_fixes(
