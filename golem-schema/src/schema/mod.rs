@@ -22,7 +22,7 @@ pub mod graph;
 pub mod host_managed;
 pub mod metadata;
 pub mod multimodal;
-#[cfg(feature = "full")]
+#[cfg(feature = "protobuf")]
 pub mod protobuf;
 pub mod render;
 pub mod schema_type;
@@ -68,6 +68,6 @@ pub use schema_value::{
     ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
     VariantValuePayload,
 };
-pub use stream::SchemaValueStream;
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use stream::SchemaValueStreamHandleRep;
+pub use stream::{SchemaValueStream, StreamError};

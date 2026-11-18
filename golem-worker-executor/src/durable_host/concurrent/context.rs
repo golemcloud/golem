@@ -221,10 +221,10 @@ impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
         &self,
     ) -> Result<Option<CustomInvocationScope>, WorkerExecutorError> {
         Ok(self
-            .guest_task_context::<CustomInvocationContext>()
+            .guest_task_context::<GuestTaskContext>()
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
             .as_deref()
-            .and_then(CustomInvocationContext::current))
+            .and_then(GuestTaskContext::current))
     }
 
     fn call_invocation_id<Ctx: WorkerCtx>(
@@ -537,7 +537,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::tool::{SecretKeyScope, ToolFilesystemAccess};
-    use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+    use golem_common::model::{AgentId, OwnedAgentId};
     use std::sync::{Arc, Mutex};
     use test_r::test;
 
@@ -581,9 +581,9 @@ mod tests {
                 },
             ),
             InvocationExecutionMode::Live,
-            IdempotencyKey::fresh(),
+            uuid::Uuid::new_v4().into(),
             false,
-            IdempotencyKey::fresh(),
+            uuid::Uuid::new_v4().into(),
         )
         .unwrap();
         let registration = slot.register(&scope, Default::default()).unwrap();

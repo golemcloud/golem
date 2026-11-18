@@ -31,6 +31,7 @@ import {
   __setGetConfigValueImpl,
   __setParseAgentIdImpl,
 } from "./mocks/golem-agent-host.js"
+import { __setCaller } from "./mocks/golem-agent-invocation-context.js"
 import { __setEnvironment } from "./mocks/wasi-cli-environment.js"
 
 const corpus = JSON.parse(
@@ -132,6 +133,7 @@ describe("portable static config", () => {
   beforeEach(async () => {
     await __resetAgents()
     __resetGetConfigValueImpl()
+    __setCaller(principal)
   })
 
   it.effect("exports schema-equivalent declarations and defaults from the independent corpus", () =>
@@ -476,11 +478,11 @@ describe("portable static config", () => {
     })
     const id = () => schemaValueToWit(v.record([v.string("owner")]))
     const read = async () => {
-      const result = schemaValueFromWit((await guest.invoke("read", empty(), principal))!)
+      const result = schemaValueFromWit((await guest.invoke("read", empty()))!)
       if (result.tag !== "string") throw new Error("expected JSON string")
       return JSON.parse(result.value)
     }
-    await guest.initialize("EffectStaticDefaultsAgent", id(), principal)
+    await guest.initialize("EffectStaticDefaultsAgent", id())
     expect(await read()).toEqual(corpus.staticCases[0].expected)
     const snapshot = await saveSnapshot.save()
     expect(new TextDecoder().decode(snapshot.payload)).not.toContain("code-default")
@@ -492,7 +494,7 @@ describe("portable static config", () => {
     values = corpus.staticCases[3].expected
     expect(await read()).toEqual(corpus.staticCases[0].expected)
     await __resetAgents()
-    await guest.initialize("EffectStaticDefaultsAgent", id(), principal)
+    await guest.initialize("EffectStaticDefaultsAgent", id())
     expect(await read()).toEqual(values)
   })
 
@@ -513,10 +515,10 @@ describe("portable static config", () => {
       methods: (settings) => ({ read: () => settings.count }),
     })
     __setGetConfigValueImpl(() => schemaValueToWit(v.u32(11)))
-    await guest.initialize("RetainedStaticConfig", empty(), principal)
-    expect(schemaValueFromWit((await guest.invoke("read", empty(), principal))!)).toEqual(v.u32(11))
+    await guest.initialize("RetainedStaticConfig", empty())
+    expect(schemaValueFromWit((await guest.invoke("read", empty()))!)).toEqual(v.u32(11))
     await __resetAgents()
-    await guest.initialize("RetainedStaticConfig", empty(), principal)
-    await expect(guest.invoke("read", empty(), principal)).rejects.toBeDefined()
+    await guest.initialize("RetainedStaticConfig", empty())
+    await expect(guest.invoke("read", empty())).rejects.toBeDefined()
   })
 })

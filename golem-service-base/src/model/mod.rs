@@ -33,7 +33,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::filesystem::{FileReadError, FileReadHead};
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
+use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -53,6 +53,8 @@ pub struct WorkerCreationResponse {
 #[oai(rename_all = "camelCase")]
 pub struct CompleteParameters {
     pub oplog_idx: u64,
+    /// Fingerprint of the agent incarnation that created the promise.
+    pub fingerprint: AgentFingerprint,
     pub data: Vec<u8>,
 }
 
@@ -60,6 +62,7 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
     fn from(value: CompleteParameters) -> Self {
         Self {
             oplog_idx: value.oplog_idx,
+            fingerprint: Some(value.fingerprint.0.into()),
             data: value.data,
         }
     }

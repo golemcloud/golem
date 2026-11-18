@@ -2041,9 +2041,15 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
   ]
   let output = @formatter.impls_to_string(generate_agent_registration(agents))
   // GET endpoint with a query variable.
-  assert_true(output.contains("http_method: @common.HttpMethod::Get"))
   assert_true(
-    output.contains("path_suffix: [@common.PathSegment::Literal(\"current\")]"),
+    output.contains(
+      "http_method: @common.HttpMethod::Method(@coreHttp.HttpMethod::Get)",
+    ),
+  )
+  assert_true(
+    strip_whitespace(output).contains(
+      "path_suffix:[@common.PathSegment::Segment(@coreHttp.PathSegment::Literal(\"current\"),),]",
+    ),
   )
   assert_true(
     output.contains(
@@ -2051,7 +2057,11 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
     ),
   )
   // POST endpoint with a header variable.
-  assert_true(output.contains("http_method: @common.HttpMethod::Post"))
+  assert_true(
+    output.contains(
+      "http_method: @common.HttpMethod::Method(@coreHttp.HttpMethod::Post)",
+    ),
+  )
   assert_true(
     output.contains("{ header_name: \"X-Source\", variable_name: \"source\" }"),
   )
@@ -2059,8 +2069,8 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
   // (the formatter appends a trailing comma to single-field record literals,
   // so match only up to the field value, not the closing brace)
   assert_true(
-    output.contains(
-      "@common.PathSegment::PathVariable({ variable_name: \"city\"",
+    strip_whitespace(output).contains(
+      "@common.PathSegment::Segment(@coreHttp.PathSegment::PathVariable({variable_name:\"city\"",
     ),
   )
   assert_true(output.contains("auth_details: Some({ required: false"))
@@ -2142,7 +2152,7 @@ test "generate_agent_registration emits remaining/system path vars, required aut
   // Remaining-path variable ({*rest}).
   assert_true(
     output.contains(
-      "@common.PathSegment::RemainingPathVariable({variable_name:\"rest\"",
+      "@common.PathSegment::Segment(@coreHttp.PathSegment::RemainingPathVariable({variable_name:\"rest\"",
     ),
   )
   // Required auth on the endpoint.
@@ -2151,7 +2161,7 @@ test "generate_agent_registration emits remaining/system path vars, required aut
   assert_true(output.contains("phantom_agent:true"))
   assert_true(
     output.contains(
-      "webhook_suffix:[@common.PathSegment::Literal(\"events\"),@common.PathSegment::PathVariable({variable_name:\"id\"",
+      "webhook_suffix:[@common.PathSegment::Segment(@coreHttp.PathSegment::Literal(\"events\")),@common.PathSegment::Segment(@coreHttp.PathSegment::PathVariable({variable_name:\"id\"",
     ),
   )
 }

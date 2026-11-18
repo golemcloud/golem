@@ -12,6 +12,7 @@ import { AgentHostClient } from "../host/AgentHostClient.js"
 import { decodeAgentId } from "./agentIdentity.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "../host/HostLive.js"
+import { immediateCaller } from "../host/InvocationContextClient.js"
 import { SqliteHostExtClient } from "../host/SqliteHostExtClient.js"
 import {
   HttpRouteError,
@@ -75,9 +76,10 @@ import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../
 import { ConfigOwner } from "./compiledConfig.js"
 import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
+import { withCustomScopes } from "./customScope.js"
 import { mergeGraphDefs } from "./schema-model/builder.js"
-import type { SchemaGraph } from "./schema-model/model.js"
-import { GraphEncoder } from "./schema-model/wit.js"
+import { t, v, type SchemaGraph } from "./schema-model/model.js"
+import { GraphEncoder, typedSchemaValueToWit } from "./schema-model/wit.js"
 
 /**
  * Combined Logger + Tracer layer applied automatically to every piece
@@ -134,8 +136,8 @@ const runUserPromise = <A, E, R>(
   owner: object | undefined = activeAgent?.configOwner,
 ): Promise<A> =>
   userRuntime.runPromise(
-    GolemTracing.withInvocationParent(
-      Effect.provideService(eff, ConfigOwner, owner),
+    withCustomScopes(
+      GolemTracing.withInvocationParent(Effect.provideService(eff, ConfigOwner, owner)),
     ) as Effect.Effect<A, E, never>,
   )
 
@@ -1149,7 +1151,6 @@ const initAgentInstance = async (
 export const dispatchInitialize = async (
   agentTypeName: string,
   input: CoreTypes.SchemaValueTree,
-  principal: AgentCommon.Principal,
 ): Promise<void> => {
   const compiled = registry.get(agentTypeName)
   if (!compiled) {
@@ -1161,6 +1162,7 @@ export const dispatchInitialize = async (
     throw new Error(`agent already initialized in this container: ${activeAgent.name}`)
   }
 
+  const principal = await runUserPromise(immediateCaller)
   const constructorInput = await decodeConstructorInput(compiled, input)
   const { scope, handlers, snapshot, state, configOwner } = await initAgentInstance(
     agentTypeName,
@@ -1181,7 +1183,6 @@ export const dispatchInitialize = async (
 export const dispatchInvoke = async (
   methodName: string,
   input: CoreTypes.SchemaValueTree,
-  principal: AgentCommon.Principal,
 ): Promise<CoreTypes.SchemaValueTree | undefined> => {
   if (activeAgent === null) {
     throw new Error(`agent is not initialized; cannot invoke ${methodName}`)
@@ -1214,10 +1215,27 @@ export const dispatchInvoke = async (
       inputSchema: compiled.agentType.methods.find((method) => method.name === methodName)!
         .inputSchema,
     },
-    handler,
+    (decoded) =>
+      Effect.suspend(() => handler(decoded)).pipe(
+        Effect.catchCause((cause) => {
+          // Declared failures remain result values. Interruption stays separate
+          // from application errors for cooperative cancellation.
+          if (Cause.hasInterrupts(cause) || (mc.errorWrapped && !Cause.hasDies(cause))) {
+            return Effect.failCause(cause)
+          }
+          return Effect.die({
+            tag: "custom-error",
+            val: typedSchemaValueToWit({
+              graph: { defs: new Map(), root: t.string() },
+              value: v.string(Cause.pretty(cause)),
+            }),
+          } satisfies AgentCommon.AgentError)
+        }),
+      ),
     input,
   ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
   if (mc.readOnly === undefined || mc.readOnly.usesPrincipal) {
+    const principal = await runUserPromise(immediateCaller)
     program = program.pipe(Effect.provideService(Principal, principal)) as typeof program
   }
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
@@ -1492,7 +1510,9 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   )
   const agentIdEntry = env.find(([k]) => k === "GOLEM_AGENT_ID")
   if (agentIdEntry === undefined) {
-    throw new Error("load-snapshot: GOLEM_AGENT_ID is not set in the process environment")
+    throw new Error(
+      "load-snapshot: GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+    )
   }
   const agentIdString = agentIdEntry[1]
   const [agentTypeName, typedConstructor, phantomId] = decodeAgentId(

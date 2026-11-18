@@ -16,7 +16,11 @@
 
 package golem
 
-import "os"
+import (
+	"os"
+
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+)
 
 // Off the wasm target there is no host; binding the generated calls here would
 // drag their //go:wasmimport declarations into a native link that has no bodies
@@ -26,5 +30,8 @@ var hostOps agentHost = noHost{}
 // selfAgentID off the wasm target reads the process environment; tests may
 // replace it.
 var selfAgentID = func() string { return os.Getenv(agentIDEnvVar) }
+
+// immediateCaller off the wasm target is anonymous; tests may replace it.
+var immediateCaller = func() common.Principal { return common.MakePrincipalAnonymous() }
 
 type noHost struct{ agentHost }

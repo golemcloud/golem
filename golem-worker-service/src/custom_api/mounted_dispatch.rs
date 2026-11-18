@@ -18,8 +18,8 @@ use super::raw_handler::RawHandler;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RichRouteBehaviour, RouteExecutionResult};
 use golem_common::model::AgentId;
-use golem_common::model::agent::{FileMapping, FileResponseHeader};
-use golem_service_base::custom_api::RouterFileIndexEntry;
+use golem_schema::http::{FileMapping, FileResponseHeader};
+use golem_service_base::custom_api::{MountFileSource, MountTarget, RouterFileIndexEntry};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use http::{HeaderName, HeaderValue, Method, StatusCode};
 use std::sync::Arc;
@@ -45,7 +45,7 @@ impl MountedDispatch {
         Self {
             worker_service,
             initial_files,
-            file_timeout: limits.exchange_timeout,
+            file_timeout: limits.file_lookup_timeout,
         }
     }
 
@@ -63,8 +63,8 @@ impl MountedDispatch {
         };
         let dispatch = dispatch_mount(request, selected, &mut backend);
         if matches!(
-            selected.route.behavior,
-            RichRouteBehaviour::AgentFilesystem(_)
+            &selected.route.behavior,
+            RichRouteBehaviour::Mount(mount) if matches!(mount.files, MountFileSource::Live { .. })
         ) {
             tokio::time::timeout_at(deadline, dispatch)
                 .await
@@ -121,11 +121,10 @@ impl MountBackend for MountedBackend<'_> {
         &mut self,
         request: &mut RichRequest,
         selected: &ResolvedRouteEntry,
+        target: &MountTarget,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let RichRouteBehaviour::HttpRouter(router) = &selected.route.behavior else {
-            return Err(RequestHandlerError::RawInternal);
-        };
-        self.raw_handler.invoke(request, selected, router).await
+        let MountTarget::AgentMethod(target) = target;
+        self.raw_handler.invoke(request, selected, target).await
     }
 }
 
@@ -152,6 +151,7 @@ pub(super) trait MountBackend {
         &mut self,
         request: &mut RichRequest,
         selected: &ResolvedRouteEntry,
+        target: &MountTarget,
     ) -> Result<RouteExecutionResult, RequestHandlerError>;
 }
 
@@ -173,6 +173,7 @@ impl MountBackend for PendingMountBackend {
         &mut self,
         _: &mut RichRequest,
         _: &ResolvedRouteEntry,
+        _: &MountTarget,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         Ok(empty_response(StatusCode::NOT_IMPLEMENTED))
     }
@@ -184,82 +185,70 @@ pub(super) async fn dispatch_mount(
     selected: &ResolvedRouteEntry,
     backend: &mut impl MountBackend,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
-    let (mappings, response_headers, router, agent_id) = match &selected.route.behavior {
-        RichRouteBehaviour::HttpRouter(router) => (
-            &router.static_bindings,
-            &router.file_response_headers,
-            Some(router),
+    let RichRouteBehaviour::Mount(mount) = &selected.route.behavior else {
+        return Err(RequestHandlerError::invariant_violated(
+            "Expected mounted behavior",
+        ));
+    };
+    let agent_id = match &mount.files {
+        MountFileSource::Router { .. } => None,
+        MountFileSource::Live { agent } => Some(CallAgentHandler::build_agent_id(
+            selected,
+            agent.component_id,
+            &agent.agent_type,
+            &agent.constructor_input,
+            &agent.constructor_parameters,
             None,
-        ),
-        RichRouteBehaviour::AgentFilesystem(filesystem) => {
-            let agent_id = CallAgentHandler::build_agent_id(
-                selected,
-                filesystem.component_id,
-                &filesystem.agent_type,
-                &filesystem.constructor_input,
-                &filesystem.constructor_parameters,
-                None,
-            )?;
-            (
-                &filesystem.filesystem_bindings,
-                &filesystem.file_response_headers,
-                None,
-                Some(agent_id),
-            )
-        }
-        _ => {
-            return Err(RequestHandlerError::invariant_violated(
-                "Expected mounted behavior",
-            ));
-        }
+        )?),
     };
     let relative = &selected.request_target.segments()[selected.route.path.len()..];
     let directory_request = !relative.is_empty() && selected.request_target.trailing_slash();
     if matches!(*request.underlying.method(), Method::GET | Method::HEAD) {
-        for mapping in mappings {
+        for mapping in &mount.file_bindings {
             let Some(path) = mapping_target(mapping, relative, directory_request) else {
                 continue;
             };
-            let file = if let Some(router) = router {
-                if let Some(entry) = router.file_index.iter().find(|entry| entry.path == path) {
-                    if directory_request {
+            let file = match &mount.files {
+                MountFileSource::Router { file_index, .. } => {
+                    if let Some(entry) = file_index.iter().find(|entry| entry.path == path) {
+                        if directory_request {
+                            return Ok(empty_response(StatusCode::FORBIDDEN));
+                        }
+                        MountFile::Initial(entry)
+                    } else if file_index.iter().any(|entry| {
+                        entry
+                            .path
+                            .strip_prefix(path.trim_end_matches('/'))
+                            .is_some_and(|rest| rest.starts_with('/'))
+                    }) {
                         return Ok(empty_response(StatusCode::FORBIDDEN));
+                    } else {
+                        continue;
                     }
-                    MountFile::Initial(entry)
-                } else if router.file_index.iter().any(|entry| {
-                    entry
-                        .path
-                        .strip_prefix(path.trim_end_matches('/'))
-                        .is_some_and(|rest| rest.starts_with('/'))
-                }) {
-                    return Ok(empty_response(StatusCode::FORBIDDEN));
-                } else {
-                    continue;
                 }
-            } else {
-                MountFile::Live {
+                MountFileSource::Live { .. } => MountFile::Live {
                     agent_id: agent_id.as_ref().unwrap(),
                     path,
                     directory_request,
-                }
+                },
             };
             if let Some(mut response) = backend.file(request, selected, file).await? {
                 if matches!(
                     response.status,
                     StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED
                 ) {
-                    apply_file_response_headers(&mut response, response_headers);
+                    apply_file_response_headers(&mut response, &mount.file_response_headers);
                 }
                 return Ok(response);
             }
-            if router.is_some() {
+            if matches!(mount.files, MountFileSource::Router { .. }) {
                 // The immutable index promised a blob. Missing storage is not a mapping miss.
                 return Ok(empty_response(StatusCode::INTERNAL_SERVER_ERROR));
             }
         }
     }
-    if router.is_some_and(|router| router.handler.is_some()) {
-        backend.handler(request, selected).await
+    if let Some(target) = &mount.handler {
+        backend.handler(request, selected, target).await
     } else {
         Ok(empty_response(StatusCode::NOT_FOUND))
     }
@@ -319,7 +308,8 @@ mod tests {
     use golem_common::model::agent::AgentFileContentHash;
     use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
     use golem_service_base::custom_api::{
-        CompiledInputSchema, CompiledOutputSchema, RouteBehaviour, RouterMethod,
+        CompiledInputSchema, CompiledOutputSchema, MountAgent, MountAgentMethod, RouteBehaviour,
+        RouterMethod,
     };
     use std::collections::HashMap;
     use test_r::test;
@@ -375,6 +365,7 @@ mod tests {
             &mut self,
             _: &mut RichRequest,
             _: &ResolvedRouteEntry,
+            _: &MountTarget,
         ) -> Result<RouteExecutionResult, RequestHandlerError> {
             self.handler_calls += 1;
             Ok(empty_response(StatusCode::ACCEPTED))
@@ -389,18 +380,21 @@ mod tests {
         }
     }
 
-    fn handler(name: &str) -> RouterMethod {
-        RouterMethod {
-            method_name: name.into(),
-            input: CompiledInputSchema {
-                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
-                input_schema: InputSchema::Parameters(vec![]),
+    fn handler(name: &str, agent: &MountAgent) -> MountTarget {
+        MountTarget::AgentMethod(MountAgentMethod {
+            agent: agent.clone(),
+            method: RouterMethod {
+                method_name: name.into(),
+                input: CompiledInputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                output: CompiledOutputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                    output_schema: OutputSchema::Unit,
+                },
             },
-            output: CompiledOutputSchema {
-                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
-                output_schema: OutputSchema::Unit,
-            },
-        }
+        })
     }
 
     #[test]
@@ -445,10 +439,10 @@ mod tests {
                 .map(|(i, mount)| {
                     let mut route =
                         test_route(i as i32, mount["path"].as_str().unwrap(), None, "router");
-                    let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+                    let RouteBehaviour::Mount(router) = &mut route.behavior else {
                         unreachable!()
                     };
-                    router.static_bindings = mount["mappings"]
+                    router.file_bindings = mount["mappings"]
                         .as_array()
                         .unwrap()
                         .iter()
@@ -457,8 +451,13 @@ mod tests {
                                 .unwrap()
                         })
                         .collect();
-                    router.handler = mount["handler"].as_str().map(handler);
-                    router.file_index = backend
+                    router.handler = mount["handler"]
+                        .as_str()
+                        .map(|name| handler(name, router.files.agent()));
+                    let MountFileSource::Router { file_index, .. } = &mut router.files else {
+                        unreachable!()
+                    };
+                    *file_index = backend
                         .states
                         .iter()
                         .filter(|(_, state)| *state != "absent")
@@ -524,7 +523,10 @@ mod tests {
             ("initialization", 500),
         ] {
             let mut route = test_route(1, "/users/{id}", None, "filesystem");
-            let RouteBehaviour::AgentFilesystem(filesystem) = &mut route.behavior else {
+            let RouteBehaviour::Mount(mount) = &mut route.behavior else {
+                unreachable!()
+            };
+            let MountFileSource::Live { agent: filesystem } = &mut mount.files else {
                 unreachable!()
             };
             let input =
@@ -546,7 +548,7 @@ mod tests {
                 path_segment_index: golem_service_base::model::SafeIndex::new(0),
                 parameter_type: PathSegmentType::U64,
             }];
-            filesystem.filesystem_bindings =
+            mount.file_bindings =
                 FileMapping::compile_list([("/*", "/public/$1"), ("/*", "/other/$1")]).unwrap();
             let resolver = test_resolver(vec![route]);
             for (id, directory) in [("42", true), ("invalid", false)] {
@@ -600,11 +602,14 @@ mod tests {
             ("range", StatusCode::RANGE_NOT_SATISFIABLE, false),
         ] {
             let mut route = test_route(1, "/site", None, "router");
-            let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+            let RouteBehaviour::Mount(router) = &mut route.behavior else {
                 unreachable!()
             };
-            router.static_bindings = FileMapping::compile_list([("/app.js", "/app.js")]).unwrap();
-            router.file_index = vec![index_entry("/app.js")];
+            router.file_bindings = FileMapping::compile_list([("/app.js", "/app.js")]).unwrap();
+            let MountFileSource::Router { file_index, .. } = &mut router.files else {
+                unreachable!()
+            };
+            *file_index = vec![index_entry("/app.js")];
             router.file_response_headers = vec![
                 FileResponseHeader {
                     name: "content-security-policy".into(),
@@ -640,11 +645,11 @@ mod tests {
         }
 
         let mut route = test_route(1, "/site", None, "router");
-        let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+        let RouteBehaviour::Mount(router) = &mut route.behavior else {
             unreachable!()
         };
-        router.static_bindings = FileMapping::compile_list([("/app.js", "/app.js")]).unwrap();
-        router.handler = Some(handler("serve"));
+        router.file_bindings = FileMapping::compile_list([("/app.js", "/app.js")]).unwrap();
+        router.handler = Some(handler("serve", router.files.agent()));
         router.file_response_headers = vec![FileResponseHeader {
             name: "referrer-policy".into(),
             value: "no-referrer".into(),
@@ -669,12 +674,15 @@ mod tests {
     #[test]
     async fn immutable_directories_and_pending_actions_are_terminal() {
         let mut route = test_route(1, "/m", None, "router");
-        let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+        let RouteBehaviour::Mount(router) = &mut route.behavior else {
             unreachable!()
         };
-        router.static_bindings = FileMapping::compile_list([("/*", "/public/$1")]).unwrap();
-        router.file_index = vec![index_entry("/public/a/file")];
-        router.handler = Some(handler("fallback"));
+        router.file_bindings = FileMapping::compile_list([("/*", "/public/$1")]).unwrap();
+        router.handler = Some(handler("fallback", router.files.agent()));
+        let MountFileSource::Router { file_index, .. } = &mut router.files else {
+            unreachable!()
+        };
+        *file_index = vec![index_entry("/public/a/file")];
         let resolver = test_resolver(vec![route]);
         for (path, status) in [
             ("/m/a", 403),

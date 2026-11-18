@@ -135,7 +135,7 @@ impl Supervisor {
 
     fn run(&mut self, repl_spec: ReplCommandSpec) -> anyhow::Result<ReplSessionResult> {
         let (event_tx, event_rx) = mpsc::channel::<SupervisorEvent>();
-        spawn_input_reader(event_tx.clone());
+        spawn_input_reader(event_tx.clone())?;
         spawn_resize_watcher(event_tx.clone());
         self.control
             .take()
@@ -560,9 +560,9 @@ impl SessionRuntime {
     }
 }
 
-fn spawn_input_reader(event_tx: Sender<SupervisorEvent>) {
+fn spawn_input_reader(event_tx: Sender<SupervisorEvent>) -> anyhow::Result<()> {
+    let mut stdin = crate::command_handler::interactive::stdin("the REPL's input")?;
     thread::spawn(move || {
-        let mut stdin = std::io::stdin();
         let mut buffer = [0_u8; 4096];
         loop {
             match stdin.read(&mut buffer) {
@@ -588,6 +588,7 @@ fn spawn_input_reader(event_tx: Sender<SupervisorEvent>) {
             }
         }
     });
+    Ok(())
 }
 
 fn normalize_terminal_line() {

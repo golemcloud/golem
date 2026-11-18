@@ -64,7 +64,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.durability_is_suppressed() {
-            self.state.current_retry_point = self.state.current_oplog_index().await;
+            let retry_point = self.state.current_oplog_index().await;
+            self.state.invocation_state_mut().retry_point = retry_point;
             return Ok(());
         }
 
@@ -84,7 +85,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .last_added_non_hint_entry()
             .await
             .unwrap_or(self.state.replay_state.last_replayed_non_hint_index());
-        self.state.current_retry_point = new_retry_point;
+        self.state.invocation_state_mut().retry_point = new_retry_point;
         Ok(())
     }
 
@@ -165,6 +166,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+        self.state.refuse_on_bootstrap_cursor(&scope_name)?;
         let invocation_id = self.direct_call_invocation_id()?;
         // A transaction begun after the live transition claims first while unclaimed retained
         // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live
@@ -207,7 +209,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // live, so there is no recorded scope `End` to await on close.
             self.state
                 .open_transaction_protocol(begin_index, invocation_id, None);
-            self.state.current_retry_point = begin_index;
+            self.state.invocation_state_mut().retry_point = begin_index;
 
             let (tx_id, tx) = match handler.create_new().await {
                 Ok(tx) => tx,
@@ -276,7 +278,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await?;
-            self.state.current_retry_point = scope_start_index;
+            self.state.invocation_state_mut().retry_point = scope_start_index;
             return Ok((scope_start_index, tx));
         };
         let original_begin_index = scope_start_index;
@@ -297,7 +299,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // Historical statements replay before the terminal resolves external transaction status.
         self.state
             .open_transaction_protocol(result, invocation_id, scope_replay_handle);
-        self.state.current_retry_point = original_begin_index;
+        self.state.invocation_state_mut().retry_point = original_begin_index;
 
         Ok((result, tx))
     }

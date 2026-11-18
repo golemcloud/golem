@@ -7,6 +7,7 @@ import { method } from '../src/method';
 import { s } from '../src/schema/markers';
 import { compileSchema } from '../src/schema/adapter';
 import { schemaValueFromWit, schemaValueToWit } from '../src/internal/schema-model';
+import { hostInvocationMetadata } from './invocationMetadataTestSupport';
 
 describe('invocation-equivalent RPC wire codecs', () => {
   it('matches ordinary records without rerunning transforms and uses fresh arenas', async () => {
@@ -33,7 +34,7 @@ describe('invocation-equivalent RPC wire codecs', () => {
     for (const bytes of [[7, 31, 255], [9]]) {
       const value = { bytes, label: 'ready!', rounded: 1.1, extra: 'ignored' };
       rpc.asyncInvokeAndAwait.mockReturnValue({
-        metadata: { agentId: 'wire-rpc', idempotencyKey: 'key' },
+        metadata: hostInvocationMetadata('wire-rpc'),
         future: {
           get: vi.fn().mockResolvedValue(schemaValueToWit(codec.toValue(value))),
           cancel: vi.fn(),
@@ -63,7 +64,7 @@ describe('invocation-equivalent RPC wire codecs', () => {
     const client = definition.client.get({});
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'wire-rpc', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('wire-rpc'),
       future: {
         get: vi.fn().mockResolvedValue({
           valueNodes: [{ tag: 'string-value', val: 'valid root' }, null as never],
@@ -75,7 +76,7 @@ describe('invocation-equivalent RPC wire codecs', () => {
     await expect(client.echo({ value: 'x' })).rejects.toThrow(/invalid schema value/);
     const cancel = vi.fn();
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'wire-rpc', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('wire-rpc'),
       future: { get: vi.fn().mockReturnValue(new Promise(() => {})), cancel },
     });
     const controller = new AbortController();

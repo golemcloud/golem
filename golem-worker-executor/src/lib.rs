@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
@@ -649,6 +651,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem_api_1_x::retry_scope::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
         crate::preview2::golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
@@ -666,6 +672,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
         crate::preview2::golem::agent::durable_streams::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::agent::invocation_context::add_to_linker::<
             _,
             HasSelf<DurableWorkerCtx<Ctx>>,
         >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
@@ -1271,6 +1281,12 @@ pub async fn bootstrap_and_run_worker_executor<
     debug!("Initializing worker executor");
     golem_config.validate()?;
     golem_config.resolve_golem_issuer();
+    // The agent socket policy refuses connects to these ports. They are bound before any agent
+    // runs, so the configuration carries the bound ports also when it asks for port 0.
+    let grpc_listener = golem_service_base::net::bind_tcp_listener(golem_config.grpc_addr())?;
+    golem_config.grpc.port = grpc_listener.local_addr()?.port();
+    let http_listener = golem_service_base::net::bind_tcp_listener(golem_config.http_addr())?;
+    golem_config.http_port = http_listener.local_addr()?.port();
 
     let memory_snapshot = crate::services::active_agents::memory_probe::default_probe(
         golem_config.memory.system_memory_override,
@@ -1359,16 +1375,21 @@ pub async fn bootstrap_and_run_worker_executor<
     );
 
     let started: Result<(), anyhow::Error> = async {
-        run_details.grpc_port =
-            run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
-
-        run_details.http_port = golem_service_base::observability::start_health_and_metrics_server(
-            golem_config.http_addr(),
-            prometheus_registry,
-            "Worker executor is running",
+        run_details.grpc_port = run_grpc_server(
+            worker_executor_impl,
+            lazy_worker_activator,
+            grpc_listener,
             join_set,
         )
         .await?;
+
+        run_details.http_port =
+            golem_service_base::observability::start_health_and_metrics_server_on(
+                http_listener,
+                prometheus_registry,
+                "Worker executor is running",
+                join_set,
+            )?;
         Ok(())
     }
     .await;
@@ -1387,6 +1408,7 @@ pub async fn bootstrap_and_run_worker_executor<
 pub async fn run_grpc_server<Ctx: WorkerCtx>(
     service_dependencies: All<Ctx>,
     lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
+    listener: tokio::net::TcpListener,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<u16> {
     let golem_config = service_dependencies.config();
@@ -1398,8 +1420,6 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
         .build_v1()?;
-
-    let listener = golem_service_base::net::bind_tcp_listener(golem_config.grpc_addr())?;
 
     let grpc_port = listener.local_addr()?.port();
     let endpoint = ExecutorEndpoint {

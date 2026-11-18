@@ -102,8 +102,9 @@ this set, the binding drift check and the linters in the `build-golem-go` job
 (`.github/workflows/ci.yaml`).
 
 Generated binding code lands in `internal/wit/` and is wiped on every run. The
-hand-written export slots in `internal/exports/` survive because `--export-pkg-name`
-points the generated glue at them, and `dev-tools/go-bindgen-fixup` works around two
+standalone driver in `dev-tools/go-bindgen` enables private memory conversion helpers.
+The hand-written export slots in `internal/exports/` survive because the driver sets
+`export_pkg_name` to that package, and `dev-tools/go-bindgen-fixup` works around two
 wit-bindgen `crates/go` bugs (tag-constant collisions, and a missing `empty.s` for the
 exports package).
 
@@ -234,11 +235,19 @@ can wait on. An async task whose goroutines wait only on a timer used to exit wi
 its result, or stay suspended until an unrelated host call completed. Two forks fix
 it together, and both are pinned by the CLI:
 
-- [golemcloud/go](https://github.com/golemcloud/go) (patch 4) exposes the next timer's
-  due time to the idle callback as `runtime.wasiIdleTimer`;
+- [golemcloud/go](https://github.com/golemcloud/go) reports, for each runtime domain
+  with a pending timer, when its next timer is due (`runtime.wasiIdleWait`);
 - [golemcloud/go-pkg](https://github.com/golemcloud/go-pkg), the bindings' async
-  runtime, arms a `wasi:clocks/monotonic-clock@0.3.0` `wait-for` until then, so the
-  world must import that interface.
+  runtime, arms one `wasi:clocks/monotonic-clock@0.3.0` `wait-until` per domain until
+  then, in the domain's host context, so the world must import that interface.
+
+A domain is the clock, timers and random state of one `durability.Run` body (the root
+domain is everything else). The scheduler fires a domain's timers against the latest
+clock reading made in that domain, and the runtime never reads the host clock for
+itself on wasip1. A body that is skipped on replay therefore cannot move a clock read,
+fire a timer, or shift a random draw outside itself. The SDK links to the runtime's
+`wasi*` functions with `go:linkname` (`internal/cdctx`), so a component builds only
+with a fork release that has them. `custom_durability_concurrency.rs` covers this.
 
 Every Go component replaces `go.bytecodealliance.org/pkg` with the fork in its own
 `go.mod` (a `replace` in the SDK's `go.mod` does not reach it); the CLI's build check

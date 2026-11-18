@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::services::oplog::multilayer::{
     MultiLayerOplogService, OplogArchiveResult, OplogArchiveService, new_transfer_fiber,
@@ -441,7 +445,7 @@ async fn read_exact_combines_persisted_handed_off_and_buffer_without_reading_buf
         callee_environment_id: fixture.oplog.owned_agent_id.environment_id,
         callee: fixture.oplog.owned_agent_id.agent_id.clone(),
         callee_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
-        idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+        idempotency_key: InvocationId(Uuid::new_v4()),
     };
     let snapshot = fixture
         .oplog

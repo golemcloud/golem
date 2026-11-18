@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{AgentId, AgentInvocationOutput, IdempotencyKey};
+use golem_common::model::{AgentId, AgentInvocationOutput, InvocationId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::sync::broadcast::error::RecvError;
@@ -77,7 +77,7 @@ impl EventsSubscription {
 pub enum Event {
     InvocationCompleted {
         agent_id: AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         result: Box<Result<AgentInvocationOutput, WorkerExecutorError>>,
     },
     WorkerLoaded {

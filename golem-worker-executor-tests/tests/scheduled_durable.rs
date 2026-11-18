@@ -149,7 +149,7 @@ async fn schedule_at(
 
 /// The scheduled invocations committed in the target oplog, and the starts of each of them.
 struct Scheduled {
-    keys: Vec<IdempotencyKey>,
+    keys: Vec<golem_common::model::InvocationId>,
     not_before: Option<golem_common::model::Timestamp>,
     starts: Vec<golem_common::model::Timestamp>,
 }
@@ -162,7 +162,7 @@ fn scheduled(oplog: &[PublicOplogEntryWithIndex]) -> Scheduled {
             && pending.not_before.is_some()
             && let PublicAgentInvocation::AgentMethodInvocation(method) = &pending.invocation
         {
-            keys.push(method.idempotency_key.clone());
+            keys.push(method.invocation_id);
             not_before = pending.not_before;
         }
     }
@@ -172,7 +172,7 @@ fn scheduled(oplog: &[PublicOplogEntryWithIndex]) -> Scheduled {
             PublicOplogEntry::AgentInvocationStarted(started)
                 if matches!(&started.invocation,
                     PublicAgentInvocation::AgentMethodInvocation(method)
-                        if keys.contains(&method.idempotency_key)) =>
+                        if keys.contains(&method.invocation_id)) =>
             {
                 Some(started.timestamp)
             }
@@ -372,6 +372,69 @@ async fn scheduled_invocation_survives_a_restart_before_its_wake_fires(
     assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await
 }
 
+/// The receipt the guest gets names the invocation the target commits, which is the invocation
+/// the wake starts. After the target is deleted, the caller still replays the completed schedule
+/// from its own oplog: the replayed receipt is the same and the target is not created again.
+#[test]
+#[timeout("4m")]
+async fn schedule_receipt_names_the_scheduled_invocation_and_replays_without_the_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides::default();
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server_name = "receipt";
+    let (server, target) = start_agents(&executor, &component, server_name).await?;
+    let client = agent_id!("ScheduledInvocationClient", CLIENT);
+    let receipt = |executor: &TestWorkerExecutor| {
+        let executor = executor.clone();
+        let component = component.clone();
+        let client = client.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &client,
+                    "scheduled_invocation_id",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<Option<String>>()
+        }
+    };
+    schedule_at(
+        &executor,
+        &component,
+        server_name,
+        Utc::now() + chrono::Duration::seconds(2),
+    )
+    .await?;
+    let receipt_before_restart = receipt(&executor).await?;
+
+    wait_for_scheduled_start(&executor, &target).await?;
+    assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await?;
+    let committed = scheduled(&executor.get_oplog(&target, OplogIndex::INITIAL).await?);
+    assert_eq!(
+        receipt_before_restart,
+        Some(format!("{}.{}", target.agent_id, committed.keys[0])),
+        "the receipt must name the committed invocation, which is the one that started"
+    );
+
+    executor.delete_worker(&target).await?;
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(receipt(&executor).await?, receipt_before_restart);
+    assert_eq!(executor.get_worker_metadata_opt(&target).await?, None);
+    Ok(())
+}
+
 /// The executor is lost after the wake fired and before the target recorded the invocation's
 /// start. The invocation is still pending and due, and runs once after the restart.
 #[test]
@@ -473,11 +536,153 @@ async fn constructor_schedule_on_itself_is_accepted_and_runs(
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .without_default_host_permissions("ConstructorSelfScheduler")
+        .update_agent_provision_config("ConstructorSelfScheduler", |config| {
+            config.initial_permissions.lower_bound.positive.push(
+                golem_common::model::card::parse_polymorphic_permission(
+                    "agent(?agent) @ * : invoke : inc_global_by",
+                )
+                .expect("valid self-method permission"),
+            );
+        })
         .store()
         .await?;
-    let agent = agent_id!("ConstructorSelfScheduler", "constructor-self", 0u64);
-    let target = executor.start_agent(&component.id, agent.clone()).await?;
-    assert_ran_once(&executor, &component, &agent, &target, 1).await
+    let mut targets = Vec::new();
+    for phantom in [None, Some(uuid::Uuid::new_v4())] {
+        let agent = agent_id!("ConstructorSelfScheduler", "constructor-self", 0u64)
+            .with_phantom_id(phantom)
+            .map_err(anyhow::Error::msg)?;
+        let target = executor.start_agent(&component.id, agent.clone()).await?;
+        assert_ran_once(&executor, &component, &agent, &target, 1).await?;
+        targets.push((agent, target));
+    }
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    for (agent, target) in targets {
+        assert_ran_once(&executor, &component, &agent, &target, 1).await?;
+        let entries = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        assert_eq!(entries.iter().filter(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::Start(call) if call.function_name == "golem::rpc::wasm-rpc::bind-self"
+        )).count(), 2, "reconstruction must reuse both bindings, including the rejected typed client");
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(start)
+                        if matches!(start.invocation, PublicAgentInvocation::AgentInitialization(_))
+                ))
+                .count(),
+            1,
+            "self binding must not run another constructor"
+        );
+    }
+    Ok(())
+}
+
+/// A fork replays a self binding as the recorded source incarnation, including when its End
+/// is absent. Continuing after that binding schedules new work on the source, not on the fork.
+#[test]
+#[timeout("4m")]
+async fn fork_preserves_completed_and_incomplete_self_bindings(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for after_end in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let executor = crate::fork::start_with_local_resume_and_snapshot_policy(
+            deps,
+            &context,
+            golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled,
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_rpc_rust)
+            .store()
+            .await?;
+        let source = agent_id!("ConstructorSelfScheduler", "fork-self-binding", 0u64);
+        let source_id = executor.start_agent(&component.id, source.clone()).await?;
+        assert_ran_once(&executor, &component, &source, &source_id, 1).await?;
+        let key = IdempotencyKey::fresh();
+        let mut end = executor.gate_next_call_end(&source_id, after_end).await;
+        let invocation = {
+            let executor = executor.clone();
+            let component = component.clone();
+            let source = source.clone();
+            let key = key.clone();
+            tokio::spawn(async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &source,
+                        &key,
+                        "bind_and_schedule",
+                        data_value!(),
+                    )
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(30), end.entered()).await?;
+        let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
+        assert!(
+            prefix
+                .iter()
+                .any(|entry| entry.oplog_index == end.start_index()
+                    && matches!(&entry.entry, PublicOplogEntry::Start(call)
+                if call.function_name == "golem::rpc::wasm-rpc::bind-self"))
+        );
+        assert_eq!(
+            prefix.iter().any(|entry| matches!(&entry.entry,
+                PublicOplogEntry::End(call) if call.start_index == end.start_index())),
+            after_end,
+            "fork prefix must contain exactly the selected binding boundary"
+        );
+        let cut = prefix.last().unwrap().oplog_index;
+        drop(end);
+        assert_eq!(
+            invocation.await??.into_typed::<String>()?,
+            source.to_string()
+        );
+        let target = source
+            .with_phantom_id(Some(uuid::Uuid::new_v4()))
+            .map_err(anyhow::Error::msg)?;
+        executor
+            .fork_worker(&source_id, &target.to_string(), cut)
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &target, "last_binding_id", data_value!())
+                .await?
+                .into_typed::<Option<String>>()?,
+            Some(source.to_string()),
+            "fork replay must preserve the recorded binding ID"
+        );
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while counter(&executor, &component, &source).await? < 15 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+        assert_eq!(counter(&executor, &component, &source).await?, 15);
+        let source_schedules =
+            scheduled(&executor.get_oplog(&source_id, OplogIndex::INITIAL).await?);
+        assert_eq!(
+            source_schedules.keys.len(),
+            3,
+            "constructor, source continuation and fork continuation each schedule once"
+        );
+        assert_eq!(
+            source_schedules.starts.len(),
+            3,
+            "each source schedule executes once"
+        );
+        assert_eq!(counter(&executor, &component, &target).await?, 1);
+    }
+    Ok(())
 }
 
 /// The caller is lost after the target committed its schedule and before the caller recorded the

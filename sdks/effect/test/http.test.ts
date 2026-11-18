@@ -304,15 +304,15 @@ describe("Http compileMount / compileEndpoint", () => {
     })
     const w = compileMount(m)
     expect(w.pathPrefix).toEqual([
-      { tag: "literal", val: "api" },
-      { tag: "path-variable", val: { variableName: "tenant" } },
+      { tag: "segment", val: { tag: "literal", val: "api" } },
+      { tag: "segment", val: { tag: "path-variable", val: { variableName: "tenant" } } },
     ])
     expect(w.authDetails).toEqual({ required: true })
     expect(w.phantomAgent).toBe(true)
     expect(w.corsOptions).toEqual({ allowedPatterns: ["*", "https://acme.com"] })
     expect(w.webhookSuffix).toEqual([
-      { tag: "literal", val: "hooks" },
-      { tag: "path-variable", val: { variableName: "tenant" } },
+      { tag: "segment", val: { tag: "literal", val: "hooks" } },
+      { tag: "segment", val: { tag: "path-variable", val: { variableName: "tenant" } } },
     ])
     expect(w.staticBindings).toEqual([])
     expect(w.filesystemBindings).toEqual([])
@@ -332,10 +332,10 @@ describe("Http compileMount / compileEndpoint", () => {
       cors: ["https://x"],
     })
     const w = compileEndpoint(e)
-    expect(w.httpMethod).toEqual({ tag: "get" })
+    expect(w.httpMethod).toEqual({ tag: "method", val: { tag: "get" } })
     expect(w.pathSuffix).toEqual([
-      { tag: "literal", val: "items" },
-      { tag: "path-variable", val: { variableName: "id" } },
+      { tag: "segment", val: { tag: "literal", val: "items" } },
+      { tag: "segment", val: { tag: "path-variable", val: { variableName: "id" } } },
     ])
     expect(w.queryVars).toEqual([{ queryParamName: "q", variableName: "query" }])
     expect(w.headerVars).toEqual([{ headerName: "X-Tenant", variableName: "tenant" }])
@@ -348,33 +348,45 @@ describe("Http compileMount / compileEndpoint", () => {
     expect(w.pathSuffix).toEqual([
       { tag: "system-variable", val: "agent-type" },
       { tag: "system-variable", val: "agent-version" },
-      { tag: "literal", val: "x" },
+      { tag: "segment", val: { tag: "literal", val: "x" } },
     ])
   })
 
   it("compiles catch-all segments", () => {
     const w = compileEndpoint(endpoint("GET", "/files/{*path}"))
     expect(w.pathSuffix).toEqual([
-      { tag: "literal", val: "files" },
-      { tag: "remaining-path-variable", val: { variableName: "path" } },
+      { tag: "segment", val: { tag: "literal", val: "files" } },
+      { tag: "segment", val: { tag: "remaining-path-variable", val: { variableName: "path" } } },
     ])
   })
 
   it("compiles a custom HTTP verb", () => {
     const w = compileEndpoint(custom("PROPFIND", "/x"))
-    expect(w.httpMethod).toEqual({ tag: "custom", val: "PROPFIND" })
+    expect(w.httpMethod).toEqual({ tag: "method", val: { tag: "custom", val: "PROPFIND" } })
   })
 
   it("maps each verb shorthand to the correct WIT tag", () => {
-    expect(compileEndpoint(get("/x")).httpMethod).toEqual({ tag: "get" })
-    expect(compileEndpoint(head("/x")).httpMethod).toEqual({ tag: "head" })
-    expect(compileEndpoint(post("/x")).httpMethod).toEqual({ tag: "post" })
-    expect(compileEndpoint(put("/x")).httpMethod).toEqual({ tag: "put" })
-    expect(compileEndpoint(del("/x")).httpMethod).toEqual({ tag: "delete" })
-    expect(compileEndpoint(patch("/x")).httpMethod).toEqual({ tag: "patch" })
-    expect(compileEndpoint(opt("/x")).httpMethod).toEqual({ tag: "options" })
-    expect(compileEndpoint(trace("/x")).httpMethod).toEqual({ tag: "trace" })
-    expect(compileEndpoint(connect("/x")).httpMethod).toEqual({ tag: "connect" })
+    expect(compileEndpoint(get("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "get" } })
+    expect(compileEndpoint(head("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "head" } })
+    expect(compileEndpoint(post("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "post" } })
+    expect(compileEndpoint(put("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "put" } })
+    expect(compileEndpoint(del("/x")).httpMethod).toEqual({ tag: "method", val: { tag: "delete" } })
+    expect(compileEndpoint(patch("/x")).httpMethod).toEqual({
+      tag: "method",
+      val: { tag: "patch" },
+    })
+    expect(compileEndpoint(opt("/x")).httpMethod).toEqual({
+      tag: "method",
+      val: { tag: "options" },
+    })
+    expect(compileEndpoint(trace("/x")).httpMethod).toEqual({
+      tag: "method",
+      val: { tag: "trace" },
+    })
+    expect(compileEndpoint(connect("/x")).httpMethod).toEqual({
+      tag: "method",
+      val: { tag: "connect" },
+    })
   })
 
   it("escape-hatch segment constructors round-trip", () => {
@@ -662,8 +674,8 @@ describe("Http defineAgent integration", () => {
       expect(a.constructor.promptHint).toBe("use this counter")
       expect(a.httpMount).toBeDefined()
       expect(a.httpMount!.pathPrefix).toEqual([
-        { tag: "literal", val: "counters" },
-        { tag: "path-variable", val: { variableName: "name" } },
+        { tag: "segment", val: { tag: "literal", val: "counters" } },
+        { tag: "segment", val: { tag: "path-variable", val: { variableName: "name" } } },
       ])
       expect(a.httpMount!.corsOptions.allowedPatterns).toEqual(["*"])
       expect(a.httpMount!.authDetails).toEqual({ required: true })
@@ -671,12 +683,20 @@ describe("Http defineAgent integration", () => {
       const valueMethod = a.methods.find((m) => m.name === "value")!
       expect(valueMethod.description).toBe("current value")
       expect(valueMethod.httpEndpoint).toHaveLength(1)
-      expect(valueMethod.httpEndpoint[0]!.httpMethod).toEqual({ tag: "get" })
-      expect(valueMethod.httpEndpoint[0]!.pathSuffix).toEqual([{ tag: "literal", val: "value" }])
+      expect(valueMethod.httpEndpoint[0]!.httpMethod).toEqual({
+        tag: "method",
+        val: { tag: "get" },
+      })
+      expect(valueMethod.httpEndpoint[0]!.pathSuffix).toEqual([
+        { tag: "segment", val: { tag: "literal", val: "value" } },
+      ])
 
       const addMethod = a.methods.find((m) => m.name === "add")!
       expect(addMethod.httpEndpoint).toHaveLength(2)
-      expect(addMethod.httpEndpoint.map((e) => e.httpMethod.tag)).toEqual(["post", "get"])
+      expect(addMethod.httpEndpoint.map((e) => e.httpMethod)).toEqual([
+        { tag: "method", val: { tag: "post" } },
+        { tag: "method", val: { tag: "get" } },
+      ])
       expect(addMethod.httpEndpoint[1]!.queryVars).toEqual([
         { queryParamName: "by", variableName: "by" },
       ])

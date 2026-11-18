@@ -719,7 +719,10 @@ fn test_invocation(
   {
     metadata: {
       agent_id: { value: "test-agent", },
-      idempotency_key: "test-key",
+      invocation_id: @rpc.InvocationId::new(
+        "test-agent",
+        @schema.Uuid::from_bits(0, 1),
+      ),
     },
     value,
   }

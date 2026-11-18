@@ -19,7 +19,8 @@ use crate::model::agent::TypedAgentConfigEntry;
 use crate::model::{AgentMetadata, ScheduleId};
 
 impl From<AgentMetadata> for AgentMetadataForGuests {
-    fn from(value: AgentMetadata) -> Self {
+    fn from(mut value: AgentMetadata) -> Self {
+        value.env.sort();
         Self {
             agent_id: value.agent_id,
             args: vec![],

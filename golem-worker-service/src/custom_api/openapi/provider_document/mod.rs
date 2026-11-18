@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use golem_common::model::agent::http_files::HttpRequestTarget;
+use golem_schema::http::HttpRequestTarget;
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 use std::collections::{BTreeMap, BTreeSet};

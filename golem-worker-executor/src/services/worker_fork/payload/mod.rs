@@ -63,11 +63,11 @@ where
         OplogEntry::HostStreamFrame { payload, .. } => copy_payload(payload, &mut copy).await?,
         OplogEntry::StreamRegistered { record, .. } => copy_payload(record, &mut copy).await?,
         OplogEntry::StreamItems { record, .. } => copy_payload(record, &mut copy).await?,
-        OplogEntry::StreamEnd { record, .. } => copy_payload(record, &mut copy).await?,
-        OplogEntry::StreamCancel { record, .. } => copy_payload(record, &mut copy).await?,
+        OplogEntry::StreamTerminal { record, .. } => copy_payload(record, &mut copy).await?,
         OplogEntry::StreamSession { record, .. } => copy_payload(record, &mut copy).await?,
         // Keep exhaustive so additions to the oplog require an ownership audit.
         OplogEntry::Create { .. }
+        | OplogEntry::AgentInvocationFailed { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
         | OplogEntry::RecoverySucceeded { .. }
@@ -84,6 +84,7 @@ where
         | OplogEntry::SuccessfulUpdate { .. }
         | OplogEntry::FailedUpdate { .. }
         | OplogEntry::GrowMemory { .. }
+        | OplogEntry::MemorySizeReconciled { .. }
         | OplogEntry::CreateResource { .. }
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log { .. }

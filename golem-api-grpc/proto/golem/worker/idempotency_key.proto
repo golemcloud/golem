@@ -2,6 +2,43 @@ syntax = "proto3";
 
 package golem.worker;
 
+import "golem/common/account_id.proto";
+import "golem/common/uuid.proto";
+
 message IdempotencyKey {
   string value = 1;
+}
+
+// Prepared request input, not the identity returned when an invocation is accepted.
+// Public adapters construct external or unkeyed inputs from authenticated context.
+message InvocationRequestKey {
+  oneof value {
+    ExternalInvocationRequestKey external = 1;
+    IdempotencyKey internal = 2;
+    RouteSessionInvocationRequestKey route_session = 3;
+    golem.common.UUID unkeyed = 4;
+  }
+}
+
+message ExternalInvocationRequestKey {
+  CallerIdempotencyScope scope = 1;
+  IdempotencyKey key = 2;
+}
+
+message CallerIdempotencyScope {
+  oneof value {
+    golem.common.AccountId user = 1;
+    golem.common.AccountId agent = 2;
+    AdminImpersonationIdempotencyScope admin_impersonation = 3;
+  }
+}
+
+message AdminImpersonationIdempotencyScope {
+  golem.common.AccountId admin = 1;
+  golem.common.AccountId target = 2;
+}
+
+message RouteSessionInvocationRequestKey {
+  string scope = 1;
+  IdempotencyKey key = 2;
 }

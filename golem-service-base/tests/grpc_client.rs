@@ -14,7 +14,8 @@
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::AssignShardsRequest;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::model::{Empty, RetryConfig};
+use golem_common::model::RetryConfig;
+use golem_schema::Empty;
 use golem_service_base::grpc::client::{
     GrpcClient, GrpcClientConfig, GrpcClientTlsConfig, MultiTargetGrpcClient,
 };

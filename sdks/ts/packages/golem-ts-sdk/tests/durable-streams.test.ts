@@ -79,12 +79,12 @@ beforeEach(() => {
   vi.resetAllMocks();
   readerHandles.length = 0;
   writerHandles.length = 0;
-  readers.mockImplementation(() => {
+  readers.mockImplementation(function () {
     const handle = { read, [Symbol.dispose]: vi.fn() };
     readerHandles.push(handle);
     return handle;
   });
-  writers.mockImplementation(() => {
+  writers.mockImplementation(function () {
     const handle = { append, [Symbol.dispose]: vi.fn() };
     writerHandles.push(handle);
     return handle;
@@ -99,7 +99,7 @@ describe('external Durable Stream readers', () => {
   it('borrows auth from config without revealing plaintext and releases the owned capability', async () => {
     const dispose = vi.fn();
     const handle = { [Symbol.dispose]: dispose } as unknown as SecretHandle;
-    readers.mockImplementationOnce((_options, borrowed) => {
+    readers.mockImplementationOnce(function (_options, borrowed) {
       expect(borrowed).toBe(handle);
       expect(dispose).not.toHaveBeenCalled();
       const reader = { read, [Symbol.dispose]: vi.fn() };
@@ -129,7 +129,7 @@ describe('external Durable Stream readers', () => {
 
     const firstStream = readDurableByteStream({ url, auth: secret });
     const secondStream = readDurableByteStream({ url, auth: secret });
-    readers.mockImplementationOnce(() => {
+    readers.mockImplementationOnce(function () {
       throw new Error('constructor failed');
     });
     expect(() => readDurableByteStream({ url, auth: secret })).toThrow('constructor failed');
@@ -316,7 +316,7 @@ describe('external Durable Stream writers', () => {
     const success = { [Symbol.dispose]: successDispose } as unknown as SecretHandle;
     const failed = { [Symbol.dispose]: failedDispose } as unknown as SecretHandle;
     const secret = auth(success, failed);
-    writers.mockImplementationOnce((_options, borrowed) => {
+    writers.mockImplementationOnce(function (_options, borrowed) {
       expect(borrowed).toBe(success);
       expect(successDispose).not.toHaveBeenCalled();
       const writer = { append, [Symbol.dispose]: vi.fn() };
@@ -327,7 +327,7 @@ describe('external Durable Stream writers', () => {
     const writer = createDurableByteWriter({ url, auth: secret });
     expect(successDispose).toHaveBeenCalledTimes(1);
 
-    writers.mockImplementationOnce(() => {
+    writers.mockImplementationOnce(function () {
       throw new Error('writer construction failed');
     });
     expect(() => createDurableByteWriter({ url, auth: secret })).toThrow(

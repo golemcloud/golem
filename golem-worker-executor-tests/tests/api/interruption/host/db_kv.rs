@@ -537,11 +537,16 @@ async fn completion_stop(
         agent_id!("EphemeralDbKvCompletion", "completion-target")
     };
     let key = IdempotencyKey::fresh();
+    let method = match operation {
+        Operation::Keyvalue => "set_twice",
+        Operation::Execute => "execute_twice",
+        Operation::Commit => "commit",
+    };
     let physical = if durable {
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, method))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -556,11 +561,6 @@ async fn completion_stop(
         Principal::anonymous(),
     )
     .await?;
-    let method = match operation {
-        Operation::Keyvalue => "set_twice",
-        Operation::Execute => "execute_twice",
-        Operation::Commit => "commit",
-    };
     let input = if operation == Operation::Keyvalue {
         data_value!(format!("{}-completion", component.id))
     } else {

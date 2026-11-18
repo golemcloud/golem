@@ -493,6 +493,16 @@ async fn test_agent_secret_get_revision_include_deleted(
 }
 
 #[test]
+async fn test_shared_config_lifecycle(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::shared_config::lifecycle(deps).await;
+}
+
+#[test]
+async fn test_shared_config_schema_and_secret_identity(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::shared_config::schema_and_secret_identity(deps).await;
+}
+
+#[test]
 async fn test_retry_policy_and_agent_secret_natural_key_lookups(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {

@@ -16,11 +16,10 @@ import {
   getAllAgentTypes as hostGetAllAgentTypes,
   getAgentType as hostGetAgentType,
   getAgentTypeByAgentId as hostGetAgentTypeByAgentId,
-  type CancelableScheduledInvocationReceipt,
   type Datetime,
-  type InvocationMetadata,
   type RegisteredAgentType,
 } from 'golem:agent/host@2.0.0';
+import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
 export {
   DynamicToolClient,
   ToolCommand,

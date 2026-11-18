@@ -9,6 +9,7 @@ fn stream(chunks: Vec<Vec<u8>>) -> AgentStream<Vec<u8>> {
     let (mut writer, stream) = AgentStream::new();
     spawn_local(async move {
         let _ = writer.write_all(chunks).await;
+        let _ = writer.close().await;
     });
     stream
 }
@@ -95,6 +96,27 @@ impl HttpRouter for RawHttpRouterImpl {
         ];
         let local_path = request.path.strip_prefix("/raw").unwrap_or(&request.path);
         let (status, body) = match local_path {
+            "/catch-input" => {
+                headers.push(header(
+                    "x-echo-agent",
+                    golem_rust::agentic::get_agent_id().agent_id.as_bytes(),
+                ));
+                let mut input = request.body;
+                let mut bytes = Vec::new();
+                let mut status = 200;
+                while let Some(chunk) = input.next().await {
+                    match chunk {
+                        Ok(chunk) => bytes.extend(chunk),
+                        Err(golem_rust::schema::StreamError::Interrupted(details)) => {
+                            bytes.extend(format!("|{details}|handled").as_bytes());
+                            status = 422;
+                            break;
+                        }
+                        Err(error) => panic!("unexpected request body failure: {error}"),
+                    }
+                }
+                (status, stream(vec![bytes]))
+            }
             "/empty" => (200, stream(vec![])),
             "/known-one" => {
                 headers.push(header("content-length", b"1"));
@@ -157,11 +179,16 @@ impl HttpRouter for RawHttpRouterImpl {
                 let mut input = request.body;
                 let (mut writer, output) = AgentStream::new();
                 spawn_local(async move {
-                    while let Ok(Some(chunk)) = input.next().await {
+                    while let Some(chunk) = input.next().await {
+                        let chunk = match chunk {
+                            Ok(chunk) => chunk,
+                            Err(error) => panic!("request body failed: {error}"),
+                        };
                         if writer.write_one(chunk).await.is_err() {
-                            break;
+                            return;
                         }
                     }
+                    let _ = writer.close().await;
                 });
                 (200, output)
             }

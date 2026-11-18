@@ -176,8 +176,13 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
         progress.clone(),
         activity,
     );
+    let captured = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .attribution
+            .capture()
+    });
     store
-        .spawn(async move |store| task.run(store).await)
+        .spawn(async move |store| captured.run(task.run(store)).await)
         .map_err(HttpError::trap)?;
     Ok(
         await_recording.then_some(ReplayedRequestBodyDrainReadiness {
@@ -205,7 +210,12 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
         activity,
         _phantom: PhantomData,
     };
-    store.spawn(async move |store| task.run(store).await)?;
+    let captured = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .attribution
+            .capture()
+    });
+    store.spawn(async move |store| captured.run(task.run(store)).await)?;
     Ok(())
 }
 

@@ -19,12 +19,8 @@
 // symmetric by construction. Reuses the host `WasmRpc` resource (no decorator
 // `Type.Type`/metadata).
 
-import type {
-  Datetime,
-  CancellationToken,
-  InvocationMetadata,
-  CancelableScheduledInvocationReceipt,
-} from 'golem:agent/host@2.0.0';
+import type { Datetime, CancellationToken } from 'golem:agent/host@2.0.0';
+import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
 import {
   encodeChild,
   v,
@@ -55,6 +51,7 @@ import { MethodSpec } from './method';
 import {
   resolveRemoteAgent,
   resolveRemoteAgentFallibly,
+  bindSelfRemoteAgent,
   wireRemoteAgent,
   RemoteOutputError,
   type AgentConfigEntry,
@@ -188,6 +185,18 @@ export interface RemoteClientFactory<
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
 > {
+  /**
+   * Bind the current durable incarnation without creating it or waiting for initialization.
+   *
+   * Use this to schedule work on self from inside the constructor. Normal `get` reuses
+   * an initialized agent without rerunning its constructor, but waits for an unfinished
+   * constructor. Calling `get` on self from that constructor would therefore deadlock.
+   *
+   * Scheduled work runs after construction finishes. This does not make awaited
+   * self-calls reentrant or bypass method permissions. A different client type throws
+   * an error. Replay preserves the recorded incarnation.
+   */
+  bindSelf(options?: RemoteClientOptions): RemoteClient<Methods>;
   /** Address the durable agent with this constructor identity. */
   get(
     id: InferRecord<CallerInput<Id>>,
@@ -737,6 +746,13 @@ export function buildAgentClientSurface<
     } as EphemeralRemoteClientFactory<Id, Methods, Config>;
   } else {
     client = {
+      bindSelf: (options) =>
+        createRemoteClient<Methods, 'durable'>(
+          methodCodecs,
+          'durable',
+          bindSelfRemoteAgent(def.name),
+          options,
+        ),
       get: (id, config, options) =>
         createClient(id, undefined, config, options) as RemoteClient<Methods>,
       getPhantom: (id, phantomId, config, options) =>

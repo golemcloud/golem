@@ -732,9 +732,9 @@ pub(in crate::durable_host::durable_stream) async fn read_terminal_event(
     stream_id: StreamId,
     offset: StreamOffset,
 ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
-    let (id, sequence, recorded_offset, terminal_author, payload) =
+    let (id, sequence, recorded_offset, terminal_author, terminal_origin, payload) =
         match oplog.read(offset.producer_oplog_index()).await? {
-            OplogEntry::StreamEnd { record, .. } => {
+            OplogEntry::StreamTerminal { record, .. } => {
                 let record = oplog
                     .download_payload(record)
                     .await
@@ -744,24 +744,8 @@ pub(in crate::durable_host::durable_stream) async fn read_terminal_event(
                     record.sequence,
                     record.offset,
                     record.authored_by,
-                    CommittedProducerStreamEventPayload::End(record.result),
-                )
-            }
-            OplogEntry::StreamCancel { record, .. } => {
-                let record = oplog
-                    .download_payload(record)
-                    .await
-                    .map_err(StreamStoreError::Oplog)?;
-                (
-                    record.stream_id,
-                    record.sequence,
-                    record.offset,
-                    record.authored_by,
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: record.role,
-                        reason: record.reason,
-                        details: record.details,
-                    },
+                    record.origin,
+                    CommittedProducerStreamEventPayload::Terminal(record.terminal),
                 )
             }
             _ => {
@@ -782,6 +766,7 @@ pub(in crate::durable_host::durable_stream) async fn read_terminal_event(
         offset,
         packed_u8_batch_end: None,
         terminal_author: Some(terminal_author),
+        terminal_origin: Some(terminal_origin),
         nested_handles: Vec::new(),
         nested_references: Vec::new(),
         payload,

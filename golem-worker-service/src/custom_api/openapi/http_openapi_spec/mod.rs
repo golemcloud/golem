@@ -101,7 +101,9 @@ impl HttpApiOpenApiSpec {
                     inner.route_mode == AgentRouteMode::Plain
                         || (matches!(
                             route.route_match.method(),
-                            Some(golem_common::model::agent::HttpMethod::Put(_))
+                            Some(golem_common::model::agent::HttpMethod::Method(
+                                golem_schema::http::HttpMethod::Put(_)
+                            ))
                         ) && route
                             .path
                             .iter()

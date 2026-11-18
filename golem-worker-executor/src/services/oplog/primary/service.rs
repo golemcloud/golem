@@ -808,7 +808,7 @@ impl OplogService for PrimaryOplogService {
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         record_oplog_call("scan");
 
         let state = decode_scan_cursor(&cursor, modes)?;
@@ -843,8 +843,9 @@ impl OplogService for PrimaryOplogService {
             .await?
         };
 
-        let next_cursor = next_scan_cursor(state, modes, next_resume)?;
-        let owned_agent_ids = keys
+        let cursor = next_scan_cursor(state, modes, next_resume)?;
+        let examined_keys = keys.len() as u64;
+        let agent_ids = keys
             .into_iter()
             .map(|key| OwnedAgentId {
                 agent_id: Self::get_agent_id_from_key(&key, component_id),
@@ -852,7 +853,11 @@ impl OplogService for PrimaryOplogService {
             })
             .collect();
 
-        Ok((next_cursor, owned_agent_ids))
+        Ok(ScanPage {
+            cursor,
+            agent_ids,
+            examined_keys,
+        })
     }
 
     async fn upload_raw_payload(
