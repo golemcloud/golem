@@ -12748,6 +12748,61 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
     Ok(())
 }
 
+// A wallet read holds the worker without a task-scope bind. Once the invocation loop has taken
+// the read off the queue it answers it, and a deletion that stops the state actor before the
+// caller reads the status gets the deletion's refusal rather than a panic.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn wallet_read_answered_before_a_deletion_gets_the_deletion_refusal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let name = "wallet-read-before-delete";
+    crate::panic_watch::watch_panics_naming(name);
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Counter", name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let worker = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(
+            context.default_environment_id,
+            &worker_id,
+        ))
+        .await
+        .expect("the agent is resident");
+
+    let mut wallet = Box::pin(worker.get_wallet_cards());
+    assert!(futures::poll!(&mut wallet).is_pending());
+    // Taken off the queue, so the loop answers it before any stop does.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while worker.queued_command_count_for_test().await > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    executor.delete_worker(&worker_id).await?;
+
+    let wallet = wallet.await;
+    let panics = crate::panic_watch::panics_naming(name);
+    assert!(panics.is_empty(), "{panics:#?}");
+    let error = wallet.expect_err("the deletion stopped the state actor before the status read");
+    assert!(error.to_string().contains("being deleted"), "{error}");
+    Ok(())
+}
+
 // An external-tool lookup that names an incarnation is answered by the existing-only guard for
 // that incarnation: the matching incarnation is looked up, another one is not found, and one whose
 // deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an

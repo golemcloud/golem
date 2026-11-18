@@ -1496,10 +1496,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         drop(instance_guard);
 
-        let mut wallet = receiver.await.unwrap()?;
+        let mut wallet = receiver.await.map_err(|_| {
+            WorkerExecutorError::runtime("Worker stopped before it answered the wallet read")
+        })??;
+        // The guard is dropped, so a deletion can stop the state actor before this read.
         let revoked_cards = self
-            .get_last_known_status()
-            .await
+            .try_get_last_known_status()
+            .await?
             .pending_card_events
             .iter()
             .filter_map(|pending_event| match &pending_event.event {
