@@ -13,8 +13,139 @@
 // limitations under the License.
 
 use crate::custom_api::error::RequestHandlerError;
-use golem_common::schema::SchemaValue;
+use golem_common::schema::{FieldSource, SchemaType, SchemaValue};
 use golem_service_base::custom_api::{PathSegmentType, QueryOrHeaderType};
+use std::collections::HashMap;
+
+const SCALAR_MAP_ERROR: &str = "maps require name[key] entries, not a scalar value";
+
+/// Recognize one decoded deepObject entry, without admitting nested brackets.
+fn map_entry_key<'a>(name: &str, wire_name: &'a str) -> Option<&'a str> {
+    let key = wire_name
+        .strip_prefix(name)?
+        .strip_prefix('[')?
+        .strip_suffix(']')?;
+    (!key.is_empty() && !key.contains(['[', ']'])).then_some(key)
+}
+
+pub(in crate::custom_api) fn validate_query_parameters(
+    request: &super::RichRequest,
+    behaviour: &golem_service_base::custom_api::CallAgentBehaviour,
+    controls: &[&str],
+) -> Result<(), RequestHandlerError> {
+    use golem_service_base::custom_api::{MethodParameter, PhantomSelection};
+    let mut names: Vec<_> = request.query_params().keys().collect();
+    names.sort_unstable();
+    for name in names {
+        if controls.contains(&name.as_str())
+            || matches!(&behaviour.phantom_selection, PhantomSelection::Query { name: selector, .. } if selector == name)
+        {
+            continue;
+        }
+        if let Some((index, MethodParameter::Query { query_parameter_name, parameter_type })) =
+            behaviour.method_parameters.iter().enumerate().find(|(_, parameter)| {
+                matches!(parameter, MethodParameter::Query { query_parameter_name, parameter_type }
+                if query_parameter_name == name
+                    || (parameter_type.is_map() && map_entry_key(query_parameter_name, name).is_some()))
+            })
+        {
+            if parameter_type.is_map() && query_parameter_name == name {
+                let field = behaviour.method_input.input_schema.fields().iter()
+                    .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                    .filter(|field| !matches!(
+                        behaviour.method_input.graph.resolve_ref(&field.schema),
+                        Ok(SchemaType::Stream { .. })
+                    ))
+                    .nth(index)
+                    .ok_or_else(|| RequestHandlerError::invariant_violated("Method parameter has no input field"))?;
+                return Err(RequestHandlerError::InvalidParameter {
+                    name: field.name.clone(),
+                    error: SCALAR_MAP_ERROR.into(),
+                });
+            }
+            continue;
+        }
+        return Err(RequestHandlerError::UnknownQueryParameter { name: name.clone() });
+    }
+    Ok(())
+}
+
+/// Parse query values separately from headers so collection absence and map
+/// namespaces follow the URL binding contract without changing header parsing.
+pub(super) fn parse_query_parameter(
+    name: &str,
+    query: &HashMap<String, Vec<String>>,
+    ty: &QueryOrHeaderType,
+) -> Result<SchemaValue, RequestHandlerError> {
+    let values = query.get(name).map(Vec::as_slice).unwrap_or_default();
+    match ty {
+        QueryOrHeaderType::Option { inner, .. } => {
+            let present = if inner.is_map() {
+                query.contains_key(name)
+                    || query.keys().any(|key| map_entry_key(name, key).is_some())
+            } else {
+                !values.is_empty()
+            };
+            Ok(SchemaValue::Option {
+                inner: if present {
+                    Some(Box::new(parse_query_parameter(name, query, inner)?))
+                } else {
+                    None
+                },
+            })
+        }
+        QueryOrHeaderType::Map { key, value } => {
+            if query.contains_key(name) {
+                return Err(RequestHandlerError::InvalidParameter {
+                    name: name.into(),
+                    error: SCALAR_MAP_ERROR.into(),
+                });
+            }
+            let mut entries: Vec<(SchemaValue, SchemaValue)> = Vec::new();
+            let mut wire_entries: Vec<_> = query
+                .iter()
+                .filter_map(|(wire_name, values)| {
+                    map_entry_key(name, wire_name).map(|key| (key, values))
+                })
+                .collect();
+            // Invocation retry matching compares serialized map entries in order.
+            wire_entries.sort_unstable_by_key(|(key, _)| *key);
+            for (raw_key, values) in wire_entries {
+                if values.len() != 1 {
+                    return Err(RequestHandlerError::TooManyValues {
+                        expected: "one value per map key",
+                    });
+                }
+                let parsed_key = parse_path_segment_value(raw_key.into(), key)?;
+                if entries
+                    .iter()
+                    .any(|(k, _)| *k == parsed_key || k.bitwise_eq(&parsed_key))
+                {
+                    return Err(RequestHandlerError::InvalidParameter {
+                        name: name.into(),
+                        error: "duplicate parsed map key".into(),
+                    });
+                }
+                entries.push((
+                    parsed_key,
+                    parse_path_segment_value(values[0].clone(), value)?,
+                ));
+            }
+            if entries.is_empty() {
+                return Err(RequestHandlerError::MissingValue {
+                    expected: "map entries",
+                });
+            }
+            Ok(SchemaValue::Map { entries })
+        }
+        QueryOrHeaderType::List { .. } if values.is_empty() => {
+            Err(RequestHandlerError::MissingValue {
+                expected: "list values",
+            })
+        }
+        _ => parse_query_or_header_value(values, ty),
+    }
+}
 
 /// Parse a single HTTP path segment (or query/header scalar) into a
 /// schema-native [`SchemaValue`] according to its declared scalar type.
@@ -161,21 +292,15 @@ pub fn parse_query_or_header_value(
             parse_path_segment_value(value.clone(), inner)
         }
 
-        QueryOrHeaderType::Option { inner, .. } => match values.len() {
-            0 => Ok(SchemaValue::Option { inner: None }),
-
-            1 => {
-                let parsed =
-                    parse_path_segment_value(values.iter().next().unwrap().clone(), inner)?;
+        QueryOrHeaderType::Option { inner, .. } => {
+            if values.is_empty() {
+                Ok(SchemaValue::Option { inner: None })
+            } else {
                 Ok(SchemaValue::Option {
-                    inner: Some(Box::new(parsed)),
+                    inner: Some(Box::new(parse_query_or_header_value(values, inner)?)),
                 })
             }
-
-            _ => Err(RequestHandlerError::TooManyValues {
-                expected: "zero or one value",
-            }),
-        },
+        }
 
         QueryOrHeaderType::List { inner, .. } => {
             let mut parsed_values = Vec::with_capacity(values.len());
@@ -188,6 +313,9 @@ pub fn parse_query_or_header_value(
                 elements: parsed_values,
             })
         }
+        QueryOrHeaderType::Map { .. } => Err(RequestHandlerError::MissingValue {
+            expected: "deepObject query entries",
+        }),
     }
 }
 
@@ -299,6 +427,117 @@ mod query_or_header_tests {
     use test_r::test;
 
     #[test]
+    fn query_collections_preserve_values_and_require_presence() {
+        let list = QueryOrHeaderType::List {
+            name: None,
+            owner: None,
+            inner: Box::new(PathSegmentType::U8),
+        };
+        let map = QueryOrHeaderType::Map {
+            key: PathSegmentType::U32,
+            value: PathSegmentType::Bool,
+        };
+        let request = super::super::RichRequest::new(
+            poem::Request::builder()
+                .uri(
+                    "/?tags=3&tags=7&labels%5B42%5D=true&labels%5B9%5D=false"
+                        .parse()
+                        .unwrap(),
+                )
+                .finish(),
+        );
+        assert_eq!(
+            parse_query_parameter("tags", request.query_params(), &list).unwrap(),
+            SchemaValue::List {
+                elements: vec![SchemaValue::U8(3), SchemaValue::U8(7)],
+            }
+        );
+        let SchemaValue::Map { entries } =
+            parse_query_parameter("labels", request.query_params(), &map).unwrap()
+        else {
+            panic!("not a map")
+        };
+        assert_eq!(entries.len(), 2);
+        assert!(entries.contains(&(SchemaValue::U32(42), SchemaValue::Bool(true))));
+        assert!(entries.contains(&(SchemaValue::U32(9), SchemaValue::Bool(false))));
+        for ty in [list, map.clone()] {
+            assert!(parse_query_parameter("missing", request.query_params(), &ty).is_err());
+            let optional = QueryOrHeaderType::Option {
+                name: None,
+                owner: None,
+                inner: Box::new(ty),
+            };
+            assert_eq!(
+                parse_query_parameter("missing", request.query_params(), &optional).unwrap(),
+                SchemaValue::Option { inner: None }
+            );
+        }
+        let optional = QueryOrHeaderType::Option {
+            name: None,
+            owner: None,
+            inner: Box::new(map),
+        };
+        assert!(matches!(
+            parse_query_parameter("labels", request.query_params(), &optional).unwrap(),
+            SchemaValue::Option { inner: Some(_) }
+        ));
+    }
+
+    #[test]
+    fn identical_query_maps_produce_identical_invocation_values() {
+        let ty = QueryOrHeaderType::Map {
+            key: PathSegmentType::Str,
+            value: PathSegmentType::Bool,
+        };
+        let mut expected = None;
+        for rotation in 0..32 {
+            let mut query = HashMap::new();
+            let entries = [
+                ("labels[a]", "true"),
+                ("labels[b]", "false"),
+                ("labels[c]", "true"),
+            ];
+            for index in 0..entries.len() {
+                let (key, value) = entries[(rotation + index) % entries.len()];
+                query.insert(key.to_string(), vec![value.to_string()]);
+            }
+            let value = parse_query_parameter("labels", &query, &ty).unwrap();
+            if let Some(expected) = &expected {
+                assert_eq!(
+                    &value, expected,
+                    "map must not depend on request hash or insertion order"
+                );
+            } else {
+                expected = Some(value);
+            }
+        }
+    }
+
+    #[test]
+    fn query_map_rejects_repeated_and_equivalent_keys_and_scalar_form() {
+        let map = QueryOrHeaderType::Map {
+            key: PathSegmentType::U32,
+            value: PathSegmentType::Bool,
+        };
+        for query in [
+            "labels[1]=true&labels[1]=false",
+            "labels[1]=true&labels[01]=false",
+            "labels=true",
+            "labels[2]=invalid",
+        ] {
+            let request = super::super::RichRequest::new(
+                poem::Request::builder()
+                    .uri(format!("/?{query}").parse().unwrap())
+                    .finish(),
+            );
+            assert!(
+                parse_query_parameter("labels", request.query_params(), &map).is_err(),
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
     fn primitive_single_value_ok() {
         let values = vec!["42".to_string()];
 
@@ -346,7 +585,7 @@ mod query_or_header_tests {
             &QueryOrHeaderType::Option {
                 owner: None,
                 name: None,
-                inner: Box::new(PathSegmentType::Bool),
+                inner: Box::new(QueryOrHeaderType::Primitive(PathSegmentType::Bool)),
             },
         )
         .unwrap();
@@ -363,7 +602,7 @@ mod query_or_header_tests {
             &QueryOrHeaderType::Option {
                 owner: None,
                 name: None,
-                inner: Box::new(PathSegmentType::Bool),
+                inner: Box::new(QueryOrHeaderType::Primitive(PathSegmentType::Bool)),
             },
         )
         .unwrap();
@@ -385,12 +624,52 @@ mod query_or_header_tests {
             &QueryOrHeaderType::Option {
                 owner: None,
                 name: None,
-                inner: Box::new(PathSegmentType::Bool),
+                inner: Box::new(QueryOrHeaderType::Primitive(PathSegmentType::Bool)),
             },
         )
         .unwrap_err();
 
         assert!(let RequestHandlerError::TooManyValues { .. } = err);
+    }
+
+    #[test]
+    fn repeated_options_share_one_presence_decision() {
+        let ty = QueryOrHeaderType::Option {
+            name: None,
+            owner: None,
+            inner: Box::new(QueryOrHeaderType::Option {
+                name: None,
+                owner: None,
+                inner: Box::new(QueryOrHeaderType::Primitive(PathSegmentType::U32)),
+            }),
+        };
+        assert_eq!(
+            parse_query_or_header_value(&[], &ty).unwrap(),
+            SchemaValue::Option { inner: None }
+        );
+        let expected = SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(3))),
+            })),
+        };
+        assert_eq!(
+            parse_query_or_header_value(&["3".into()], &ty).unwrap(),
+            expected
+        );
+        let request = super::super::RichRequest::new(
+            poem::Request::builder()
+                .uri("/?limit=3".parse().unwrap())
+                .finish(),
+        );
+        assert_eq!(
+            parse_query_parameter("limit", request.query_params(), &ty).unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse_query_parameter("missing", request.query_params(), &ty).unwrap(),
+            SchemaValue::Option { inner: None }
+        );
+        assert!(parse_query_or_header_value(&[String::new()], &ty).is_err());
     }
 
     #[test]
@@ -412,6 +691,25 @@ mod query_or_header_tests {
             SchemaValue::List {
                 elements: vec![SchemaValue::U8(1), SchemaValue::U8(2), SchemaValue::U8(3),]
             }
+        );
+        let optional_list = QueryOrHeaderType::Option {
+            name: None,
+            owner: None,
+            inner: Box::new(QueryOrHeaderType::List {
+                name: None,
+                owner: None,
+                inner: Box::new(PathSegmentType::U8),
+            }),
+        };
+        assert_eq!(
+            parse_query_or_header_value(&values, &optional_list).unwrap(),
+            SchemaValue::Option {
+                inner: Some(Box::new(result)),
+            }
+        );
+        assert_eq!(
+            parse_query_or_header_value(&[], &optional_list).unwrap(),
+            SchemaValue::Option { inner: None }
         );
     }
 }

@@ -33,7 +33,7 @@ bit_vec = ["dep:bit-vec"]
 bytes = ["dep:bytes"]
 chrono = []
 derive = []
-full = ["rich-validation", "protobuf", "dep:desert_rust", "dep:http", "dep:poem", "dep:poem-openapi"]
+full = ["rich-validation", "protobuf", "dep:desert_rust", "dep:poem", "dep:poem-openapi"]
 guest = ["dep:wasip2", "dep:wit-bindgen"]
 host = ["rich-validation", "native-stream", "dep:wasmtime", "dep:wasmtime-wasi"]
 native-stream = []
@@ -58,7 +58,7 @@ blake3 = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true }
 desert_rust = { workspace = true, optional = true }
-http = { workspace = true, optional = true }
+http = { workspace = true }
 mac_address = { workspace = true, optional = true }
 nonempty-collections = { workspace = true, optional = true }
 num-bigint = { workspace = true, optional = true }

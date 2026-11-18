@@ -316,6 +316,7 @@ mod tests {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             requires_filesystem: false,
+            http_mount: None,
             version: "1.0.0".to_string(),
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),

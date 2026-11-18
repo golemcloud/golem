@@ -22,7 +22,7 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::resolve_current_observational_owner;
-use crate::durable_host::durability::CustomInvocationContext;
+use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::sockets::resolved_names::{ResolvedNames, SharedResolvedNames};
 use crate::services::golem_config::GolemConfig;
 use crate::workerctx::WorkerCtx;
@@ -123,7 +123,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// claim, does. So live execution, replay and the rebuild after a snapshot agree on the links.
     pub(crate) fn lookup_links(
         &mut self,
-        custom_invocation: Option<&CustomInvocationContext>,
+        custom_invocation: Option<&GuestTaskContext>,
     ) -> Result<bool, WorkerExecutorError> {
         Ok(!self.state.snapshotting_mode
             && resolve_current_observational_owner(self, custom_invocation)?.is_none())
@@ -134,7 +134,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// the guest when the call returns.
     pub(crate) fn link_resolved_addresses(
         &mut self,
-        custom_invocation: Option<&CustomInvocationContext>,
+        custom_invocation: Option<&GuestTaskContext>,
         name: &str,
         addresses: impl IntoIterator<Item = IpAddr>,
     ) -> Result<(), WorkerExecutorError> {

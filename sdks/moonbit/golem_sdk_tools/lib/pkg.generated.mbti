@@ -396,6 +396,7 @@ pub(all) struct ToolCommandInfo {
   examples : Array[ToolExample]
   description : String
   is_root : Bool
+  http : ToolHttpInfo?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ToolConstraintInfo {
@@ -433,12 +434,18 @@ pub(all) enum ToolHiddenType {
   ErrorStream
 } derive(Eq, @debug.Debug)
 
+pub(all) enum ToolHttpInfo {
+  Prefix(String)
+  Endpoint(HttpEndpointInfo, String?, Array[(String, String)])
+} derive(Eq, @debug.Debug)
+
 pub(all) struct ToolInfo {
   source_name : String
   name : String
   aliases : Array[String]
   version : String?
   requires_filesystem : Bool
+  http_mount : String?
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]

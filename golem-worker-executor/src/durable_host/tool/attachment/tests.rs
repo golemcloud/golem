@@ -678,6 +678,75 @@ async fn prepared_terminal_failure_fences_without_publishing_selected_cause() {
 
 #[test]
 #[test_r::timeout("30s")]
+async fn accepted_prefix_precedes_normal_abandonment_publication() {
+    let (producer, consumer, _) = pair(8);
+    producer.configure_live();
+    let controller = producer.controller();
+    let mut prepared = producer
+        .writer()
+        .prepare_write(b"aBc17!".to_vec())
+        .await
+        .unwrap()
+        .unwrap();
+    let AttachmentWriteAcceptance::Accepted(write) =
+        prepared.accept(std::convert::identity).unwrap()
+    else {
+        panic!("prefix was not accepted");
+    };
+    let abandoned = ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned);
+    let terminal = controller
+        .accept_application_terminal(abandoned.clone(), std::convert::identity)
+        .unwrap();
+    producer.retire();
+
+    let mut prefix = Box::pin(consumer.read_next());
+    assert!(futures::poll!(prefix.as_mut()).is_pending());
+    write.publish(Some(AcceptedAttachmentWriteEnd(
+        golem_common::model::OplogIndex::from_u64(7),
+    )));
+    assert!(matches!(prefix.await, AttachmentRead::Item(Ok(bytes)) if bytes == b"aBc17!"));
+
+    let mut ending = Box::pin(consumer.read_next());
+    assert!(futures::poll!(ending.as_mut()).is_pending());
+    assert!(
+        controller
+            .accept_application_terminal(ByteStreamCloseCause::Finished, |_| {
+                panic!("normal disposal must not replace a selected terminal")
+            })
+            .is_none()
+    );
+    let terminal_index = golem_common::model::OplogIndex::from_u64(11);
+    terminal.publish(terminal_index);
+    assert!(matches!(
+        ending.await,
+        AttachmentRead::Item(Err(ByteStreamFailure::Abandoned))
+    ));
+    assert!(matches!(consumer.read_next().await, AttachmentRead::End));
+
+    // Restoring a recorded terminal must not select another one.
+    let (replayed, reader, observer) = pair(8);
+    replayed.configure_live();
+    let restored = replayed.controller();
+    restored
+        .restore_terminal(abandoned.clone(), false, terminal_index, false)
+        .unwrap();
+    assert!(matches!(
+        observer.terminal(),
+        Some(ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned))
+    ));
+    assert!(
+        restored
+            .accept_application_terminal(abandoned, |_| panic!("terminal already recorded"))
+            .is_none()
+    );
+    assert!(matches!(
+        reader.read_next().await,
+        AttachmentRead::Item(Err(ByteStreamFailure::Abandoned))
+    ));
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn prepared_write_hides_terminal_and_retains_cancelled_prefix() {
     let (producer, consumer, _) = pair(4);
     producer.configure_live();

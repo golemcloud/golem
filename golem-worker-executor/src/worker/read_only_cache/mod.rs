@@ -228,10 +228,6 @@ pub fn canonicalize_schema_value(input: &SchemaValue) -> Vec<u8> {
     desert_rust::serialize_to_byte_vec(input).expect("SchemaValue serialization is infallible")
 }
 
-pub fn caller_bytes(caller: &Caller) -> Vec<u8> {
-    desert_rust::serialize_to_byte_vec(caller).expect("Caller serialization is infallible")
-}
-
 pub fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
@@ -246,7 +242,7 @@ pub fn build_read_only_cache_key(
 ) -> ReadOnlyCacheKey {
     let input_bytes = canonicalize_schema_value(input);
     let input_digest = digest_bytes(&input_bytes);
-    let caller_digest = digest_bytes(&caller_bytes(caller));
+    let caller_digest = caller.digest();
     ReadOnlyCacheKey {
         method_name: method_name.to_string(),
         component_revision,

@@ -2542,6 +2542,7 @@ fn tool_node(name: &str) -> CommandNode {
         name: name.to_string(),
         aliases: vec![],
         doc: doc(name),
+        http: None,
         globals: Globals::default(),
         subcommands: vec![],
         body: None,
@@ -2677,6 +2678,7 @@ fn grep_tool() -> Tool {
     Tool {
         version: "1".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root, replace],
         },
@@ -2713,6 +2715,7 @@ fn git_tool() -> Tool {
     Tool {
         version: "1".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root, stash, pop],
         },
@@ -2764,6 +2767,7 @@ fn colliding_names_tool() -> Tool {
     Tool {
         version: "1".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root, sub],
         },

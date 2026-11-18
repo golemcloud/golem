@@ -157,6 +157,61 @@ func TestBuildHTTPCompilesAFullMountAndEndpoints(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPImplicitQueries(t *testing.T) {
+	for _, endpoint := range []Endpoint{GET("/m?p={page}"), HEAD("/m?p={page}"), DELETE("/m?p={page}")} {
+		t.Run(endpoint.method, func(t *testing.T) {
+			inputs := append(fields("page", "size"),
+				engine.Field{Name: "tags", Typ: reflect.TypeFor[[]string]()},
+				engine.Field{Name: "bytes", Typ: reflect.TypeFor[[]uint8]()},
+				engine.Field{Name: "labels", Typ: reflect.TypeFor[Option[map[string]int32]]()},
+			)
+			e := agent("A", &Mount{Path: "/a/{id}"}, fields("id"), method("m", inputs, endpoint))
+			_, endpoints, errs := buildHTTP(e)
+			if len(errs) != 0 {
+				t.Fatalf("implicit queries rejected: %v", errs)
+			}
+			if got := endpoints["m"][0].QueryVars; len(got) != 1 || got[0].QueryParamName != "p" {
+				t.Fatalf("explicit query template changed: %v", got)
+			}
+		})
+	}
+	for _, endpoint := range []Endpoint{GET("/m?tags={tags}&labels={labels}&bytes={bytes}"), POST("/m?tags={tags}&labels={labels}&bytes={bytes}")} {
+		e := agent("A", &Mount{Path: "/a/{id}"}, fields("id"), method("m", []engine.Field{
+			{Name: "tags", Typ: reflect.TypeFor[[]string]()},
+			{Name: "labels", Typ: reflect.TypeFor[map[string]bool]()},
+			{Name: "bytes", Typ: reflect.TypeFor[[]uint8]()},
+		}, endpoint))
+		if _, _, errs := buildHTTP(e); len(errs) != 0 {
+			t.Fatalf("explicit collection query rejected: %v", errs)
+		}
+	}
+	for _, typ := range []reflect.Type{reflect.TypeFor[Text](), reflect.TypeFor[Binary](), reflect.TypeFor[[]Text](), reflect.TypeFor[map[string]Text]()} {
+		for _, endpoint := range []Endpoint{GET("/m"), POST("/m?payload={payload}")} {
+			e := agent("A", &Mount{Path: "/a/{id}"}, fields("id"), method("m", []engine.Field{{Name: "payload", Typ: typ}}, endpoint))
+			if _, _, errs := buildHTTP(e); len(errs) == 0 {
+				t.Fatalf("rich query %s accepted on %s", typ, endpoint.method)
+			}
+		}
+	}
+}
+
+func TestBuildHTTPImplicitQueryExcludesStreamResources(t *testing.T) {
+	for _, stream := range []reflect.Type{reflect.TypeFor[AgentStream[byte]](), reflect.TypeFor[AgentStream[string]]()} {
+		for _, ep := range []Endpoint{GET("/events"), HEAD("/events"), DELETE("/events"), GET("/events", DurableStreams(StreamRoute{}))} {
+			in := []engine.Field{{Name: "uploads", Typ: stream}, {Name: "label", Typ: reflect.TypeFor[string]()}}
+			e := agent("Media", &Mount{Path: "/media"}, nil, method("events", in, ep))
+			if _, _, errs := buildHTTP(e); len(errs) != 0 {
+				t.Fatalf("%s with %s stream rejected: %v", ep.method, stream, errs)
+			}
+			e = agent("Media", &Mount{Path: "/media"}, nil,
+				method("events", in, GET("/events?uploads={uploads}")))
+			if _, _, errs := buildHTTP(e); len(errs) == 0 {
+				t.Fatalf("explicit stream query binding accepted for %s", stream)
+			}
+		}
+	}
+}
+
 func TestBuildHTTPCustomVerb(t *testing.T) {
 	e := agent("A", &Mount{Path: "/a/{id}"}, fields("id"),
 		method("report", nil, Custom("REPORT", "/report")))
@@ -236,9 +291,9 @@ func TestBuildHTTPValidations(t *testing.T) {
 			"{y} is not an input field",
 		},
 		{
-			"bodyless must bind every field",
-			agent("A", &Mount{Path: "/a/{id}"}, fields("id"), method("m", fields("page", "size"), GET("/m?p={page}"))),
-			`"size" is unbound`,
+			"implicit records require a body method",
+			agent("A", &Mount{Path: "/a/{id}"}, fields("id"), method("m", []engine.Field{{Name: "payload", Typ: reflect.TypeFor[struct{ Name string }]()}}, GET("/m"))),
+			`implicit query input "payload"`,
 		},
 		{
 			"duplicate binding",

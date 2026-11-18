@@ -201,12 +201,14 @@ mod tests {
         Tool {
             version: "1".into(),
             requires_filesystem: false,
+            http_mount: None,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "test".into(),
                     aliases: vec![],
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: vec![],
                     body: Some(CommandBody {

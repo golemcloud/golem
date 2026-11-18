@@ -1,0 +1,9 @@
+{
+  "mount": "/reports",
+  "commands": [
+    { "command": "generate", "method": "POST", "suffix": "/generate" },
+    { "command": "status", "method": "GET", "suffix": "/status/{id}" },
+    { "command": "admin", "prefix": "/admin" },
+    { "command": "admin.purge", "method": "DELETE", "suffix": "/purge/{id}" }
+  ]
+}

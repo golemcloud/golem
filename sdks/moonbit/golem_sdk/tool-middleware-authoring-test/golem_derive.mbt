@@ -24,7 +24,7 @@ pub impl @schema.IntoSchema for RunError with fn register_in(b) {
         ]),
       )
     },
-    Some("tool-middleware-authoring-test.RunError"),
+    Some("RunError"),
   )
 }
 
@@ -59,4 +59,70 @@ pub impl @schema.FromSchema for RunError with fn from_value(v) {
       raise err
     }
   }
+}
+
+///|
+///
+pub impl @schema.IntoWire for RunError with fn append_wire(self, encoder) {
+  let value = match self {
+    Broken(field0) =>
+      @types.VariantValuePayload::{
+        case: 0U,
+        payload: Some(@schema.IntoWire::append_wire(field0, encoder)),
+      }
+  }
+  encoder.push(@types.SchemaValueNode::VariantValue(value))
+}
+
+///|
+///
+pub impl @schema.IntoWire for RunError with fn release_wire(self, releaser) {
+  match self {
+    Broken(field0) => @schema.IntoWire::release_wire(field0, releaser)
+  }
+}
+
+///|
+///
+pub impl @schema.FromWire for RunError with fn read_wire(tree, index) {
+  let value = @schema.wire_variant(
+    tree, index, 1, "tool-middleware-authoring-test.RunError",
+  )
+  match value.case {
+    0 =>
+      Broken(
+        @schema.FromWire::read_wire(tree, @schema.wire_payload(value.payload)),
+      )
+    _ => {
+      let error = @schema.WireError::Invalid(
+        "tool-middleware-authoring-test.RunError: variant case out of range",
+      )
+      raise error
+    }
+  }
+}
+
+///|
+///
+pub impl @schema.WireSchema for RunError with fn append_wire_type(encoder) {
+  encoder.named(
+    "tool-middleware-authoring-test.RunError",
+    () => {
+      encoder.push(
+        @types.SchemaTypeBody::VariantType([
+          {
+            name: "Broken",
+            payload: Some(
+              @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+              ),
+            ),
+            metadata: @schema.empty_wire_metadata(),
+          },
+        ]),
+      )
+    },
+    name=Some("RunError"),
+  )
 }

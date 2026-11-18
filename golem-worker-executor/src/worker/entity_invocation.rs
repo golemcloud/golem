@@ -33,16 +33,30 @@ use wasmtime::component::Instance;
 
 /// Once a guest result is observed, local abort must not discard its settlement or cleanup.
 #[derive(Clone, Default)]
-pub(crate) struct EntityBodyFinalization(Arc<std::sync::atomic::AtomicBool>);
+pub(crate) struct EntityBodyFinalization {
+    begun: Arc<std::sync::atomic::AtomicBool>,
+    guest_returned: Arc<std::sync::atomic::AtomicBool>,
+}
 
 impl EntityBodyFinalization {
     pub(crate) fn begin(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::Release);
+        self.begun.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn begin_guest_return(&self) {
+        self.guest_returned
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.begin();
+    }
+
+    pub(crate) fn guest_returned(&self) -> bool {
+        self.guest_returned
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub(crate) async fn abortable(&self, abort: &tokio_util::sync::CancellationToken) {
         abort.cancelled().await;
-        if self.0.load(std::sync::atomic::Ordering::Acquire) {
+        if self.begun.load(std::sync::atomic::Ordering::Acquire) {
             std::future::pending::<()>().await;
         }
     }
@@ -392,13 +406,17 @@ where
                             .invoke_scoped_registered_retained(scope, registration, self.body)
                             .await;
                         body_finalization.begin();
-                        if matches!(&result, Ok(EntityBodyOutcome::Cancelled))
+                        if body_finalization.guest_returned()
+                            || matches!(&result, Ok(EntityBodyOutcome::Cancelled))
                             || matches!(&result, Ok(EntityBodyOutcome::Completed(response)) if is_trapped_tool_response(response)) {
+                            let trapped = matches!(&result, Ok(EntityBodyOutcome::Cancelled))
+                                || matches!(&result, Ok(EntityBodyOutcome::Completed(response)) if is_trapped_tool_response(response));
                             let mut retained = RetainedDisposedContext {
-                                context: retained.into_cleanup_context(),
+                                context: if trapped { retained.into_cleanup_context() } else { retained.into_returned_context() },
                                 execution,
                                 invocation,
-                                drain_schema_outputs: matches!(&result, Ok(EntityBodyOutcome::Completed(_))),
+                                drain_schema_outputs: !body_finalization.guest_returned()
+                                    && matches!(&result, Ok(EntityBodyOutcome::Completed(_))),
                                 prepared: false,
                             };
                             // Cleanup host calls belong to the reconstructed body too. Join them
@@ -518,6 +536,10 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedDisposedContext<Ctx> {
             }
             if !self.drain_schema_outputs {
                 self.context.durable_ctx().begin_stream_runtime_teardown();
+            }
+            if let Some(initiations) = &self.context.durable_ctx().host_initiations {
+                initiations.close();
+                initiations.wait_closed().await;
             }
             crate::durable_host::tool::prepare_tool_parent_end_owned(
                 &self.execution,

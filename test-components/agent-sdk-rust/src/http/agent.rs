@@ -10,10 +10,40 @@ use golem_rust::{
 };
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
-#[agent_definition(mount = "/http-agents/{agent_name}")]
+#[agent_definition(
+    mount = "/http-agents/{agent_name}",
+    filesystem_bindings = [("/query-file", "/query.txt")]
+)]
 pub trait HttpAgent {
     fn new(agent_name: String) -> Self;
+
+    #[endpoint(get = "/query/{item}?q={search}", headers("x-request-id" = "trace"))]
+    fn query_values(
+        &self,
+        values: Vec<u32>,
+        item: String,
+        search: String,
+        trace: String,
+        labels: BTreeMap<u32, bool>,
+    ) -> Vec<String>;
+
+    #[endpoint(post = "/query-explicit?values={values}&labels={labels}")]
+    fn query_explicit(&self, values: Vec<u32>, labels: BTreeMap<u32, bool>) -> Vec<String>;
+
+    #[endpoint(get = "/query-optional")]
+    fn query_optional(
+        &self,
+        values: Option<Vec<u32>>,
+        labels: Option<BTreeMap<u32, bool>>,
+    ) -> Vec<String>;
+
+    #[endpoint(delete = "/query-delete")]
+    fn query_scalar(&self, value: u32) -> u32;
+
+    #[endpoint(post = "/query-body")]
+    fn query_body(&self, values: Vec<u32>, labels: BTreeMap<u32, bool>) -> Vec<String>;
 
     #[endpoint(get = "/string-path-var/{path_var}")]
     #[description("Returns the provided path variable as a response")]
@@ -128,10 +158,65 @@ pub enum MyMimeTypes {
 
 struct HttpAgentImpl;
 
+fn query_echo(values: Option<Vec<u32>>, labels: Option<BTreeMap<u32, bool>>) -> Vec<String> {
+    vec![
+        format!(
+            "values:{}",
+            values
+                .map(|v| v.iter().map(u32::to_string).collect::<Vec<_>>().join(","))
+                .unwrap_or_else(|| "none".into())
+        ),
+        format!(
+            "labels:{}",
+            labels
+                .map(|v| v
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(","))
+                .unwrap_or_else(|| "none".into())
+        ),
+    ]
+}
+
 #[agent_implementation]
 impl HttpAgent for HttpAgentImpl {
     fn new(_agent_name: String) -> Self {
+        std::fs::write("/query.txt", "query file").unwrap();
         Self
+    }
+
+    fn query_values(
+        &self,
+        values: Vec<u32>,
+        item: String,
+        search: String,
+        trace: String,
+        labels: BTreeMap<u32, bool>,
+    ) -> Vec<String> {
+        let mut result = vec![item, search, trace];
+        result.extend(query_echo(Some(values), Some(labels)));
+        result
+    }
+
+    fn query_explicit(&self, values: Vec<u32>, labels: BTreeMap<u32, bool>) -> Vec<String> {
+        query_echo(Some(values), Some(labels))
+    }
+
+    fn query_optional(
+        &self,
+        values: Option<Vec<u32>>,
+        labels: Option<BTreeMap<u32, bool>>,
+    ) -> Vec<String> {
+        query_echo(values, labels)
+    }
+
+    fn query_scalar(&self, value: u32) -> u32 {
+        value
+    }
+
+    fn query_body(&self, values: Vec<u32>, labels: BTreeMap<u32, bool>) -> Vec<String> {
+        query_echo(Some(values), Some(labels))
     }
 
     fn string_path_var(&self, path_var: String) -> StringPathVarResponse {

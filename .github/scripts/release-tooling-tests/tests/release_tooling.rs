@@ -25,6 +25,24 @@ fn copy_makefiles(repo: &Path) {
 }
 
 #[test]
+fn managed_xfs_reuses_downloads_without_reusing_vm_state() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            "integration-tests/scripts/managed-filesystem/test-run-lima.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn main_validation_dashboard_validates_and_persists_public_observations() {
     let output = Command::new("python3")
         .args([

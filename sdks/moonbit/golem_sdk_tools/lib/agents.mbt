@@ -1077,6 +1077,7 @@ fn uint_value(
   annotation : String,
   key : String,
 ) -> UInt32 raise AgentParseError {
+  let value = quoted_value(value, annotation, key)
   if value.is_empty() {
     raise AgentParseError(
       "#derive.\{annotation} property '\{key}' must be an unsigned integer",
@@ -1687,6 +1688,38 @@ pub fn parse_agents(
                   let method_name = fun_decl.name.name
                   let desc = if doc == "" { method_name } else { doc }
                   let hint = extract_prompt_hint(fun_decl.attrs)
+                  for attr in fun_decl.attrs {
+                    match attr.parsed {
+                      Some(
+                        Apply(
+                          { qual: Some("derive"), name: "endpoint", },
+                          props
+                        )
+                      ) =>
+                        for prop in props {
+                          match prop {
+                            Labeled("prefix" | "route_id", _) =>
+                              raise AgentParseError(
+                                "Tool-only endpoint option on agent method '\{method_name}'",
+                              )
+                            _ => ()
+                          }
+                        }
+                      Some(
+                        Apply(
+                          {
+                            qual: Some("derive"),
+                            name: "endpoint_response_header",
+                          },
+                          _
+                        )
+                      ) =>
+                        raise AgentParseError(
+                          "Tool-only endpoint option on agent method '\{method_name}'",
+                        )
+                      _ => ()
+                    }
+                  }
                   let endpoint = build_endpoint_info(fun_decl.attrs)
                   if has_http_annotation(fun_decl.attrs, "openapi_provider") {
                     if agent_providers.contains(name) {

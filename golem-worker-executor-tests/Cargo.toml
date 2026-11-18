@@ -44,6 +44,7 @@ futures = { workspace = true }
 goldenfile = { workspace = true }
 half = { workspace = true }
 hex = { workspace = true }
+hickory-resolver = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }

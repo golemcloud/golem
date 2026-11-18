@@ -1358,7 +1358,7 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
-Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, principal, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
+Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, the full caller record, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
 
 After admission, executor create and REST create await `Worker::await_initialization`, not
 `WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
@@ -1380,7 +1380,7 @@ holds that write until Create returns.
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
-principal and its invocation context. Callers pass a `CreateIntent`. An explicit create
+caller and its invocation context. Callers pass a `CreateIntent`. An explicit create
 (`CreateIntent::Create`) records its key. An invocation that creates its target
 (`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
 the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
@@ -1388,14 +1388,14 @@ no key. An invocation session passes the owner key of its `request_key`, from wh
 an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends the key derived
 from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
 target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
-target records `Fork`, no key and the forker's principal. A self fork also records the forking
+target records `Fork`, no key and the forking agent as its caller. A self fork also records the forking
 agent's current invocation context; a fork through the worker service records a fresh context.
 When a reload finds only `Create`, `prepare_worker_data` enqueues `AgentInitialization` with the
-recorded principal and context, not with the loading request's. The resident `unpublished_create`
+recorded caller and context, not with the loading request's. The resident `unpublished_create`
 flag only records that an attempt committed `Create` and the worker is not published yet; it
-carries no principal or context. Tests:
+carries no caller or context. Tests:
 `restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
-`grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
+`grpc_create_records_its_kind_key_and_caller` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in
 `tests/rpc/held_response_restart.rs`.
 
@@ -1414,11 +1414,23 @@ task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` o
 has completed `DurableStateRemoved`, because nothing committed to the generation can run after
 that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
 still fail and leave an invocation an earlier attempt with the same key committed. A failed
-deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
-worker's status before the bind, with or without a fingerprint, without panicking on a stopped
-status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
-deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
-as reads do, until a retried delete claims it. Failures after the bind keep
+deletion attempt and a lost-shard retirement keep their own errors. A failed deletion leaves its
+stopped generation cached until a retried delete claims it, so the reads that can reach a resident
+worker without a bound task scope use the fallible status reads. They include admission before the
+bind, with or without a fingerprint; local RPC reads, including the pinned status and the wait for
+an invocation result; the gRPC interrupt, resume, update, plugin activation and deactivation, and
+cancel calls; the wallet read, after the invocation loop answers it, which answers an executor
+shutdown with the routing miss so that the worker service retries it; the wait for initialization
+after create; a scheduled invocation wake; and durable stream session reads. `Worker::try_get_last_known_status` answers a stopped status actor with the
+routing miss when the shard was lost, with "Worker is being deleted" when a deletion owns the
+generation, and otherwise with the actor's runtime error. `try_lookup_invocation_result` gives the
+routing miss too but leaves the deletion's refusal to its caller, because its callers can hold the
+instance lock. A wake refused this way is not acknowledged and runs again after its lease.
+Interrupt refuses a generation whose deletion failed before `DurableStateRemoved` with "Worker is
+being deleted" even while its status actor runs, as update and plugin changes do; a running
+deletion answers as a missing agent. Only the
+deletion's `OwnedWorkJoined` stage and executor shutdown stop the status actor of a generation that
+is still reachable; a lost-shard retirement does not. Failures after the bind keep
 their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
 while it runs. External-tool sessions bind the same way after each acquisition. A call on an
 existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
@@ -2365,7 +2377,7 @@ Guests read their identity and caller through `golem:agent/invocation-context`
 invocation start recorded, so they are not durable calls. An entity Store answers for its
 enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
 (initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
-`principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
+`caller` parameter; the guest reads the caller from the host. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
 writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
 
 ## Invocation attribution and per-invocation state
@@ -2404,7 +2416,7 @@ did not start a task group" (an armed key not consumed while the call runs). An 
 ends in its first poll, such as one Wasmtime refused to enter, ran no guest code and logs `debug!`.
 
 Per-invocation state lives in `InvocationExecutionState` entries of `Invocations`
-(`durable_host/execution_state.rs`): start index, invocation ID, principal, invocation context and
+(`durable_host/execution_state.rs`): start index, invocation ID, caller, invocation context and
 current span, read-only strictness, retry point, per-invocation call counters, a tail-work count,
 the guest-trap retry scopes, and the invocation's `InvocationAuthority`. The `AgentLevel` entry
 always exists. The loop runs one invocation at a time. `set_current_idempotency_key` calls
@@ -3436,6 +3448,20 @@ result; only an initializer after the snapshot, such as an update target's, adds
 checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
 a port needs a portless grant for the lookup too.
 
+**DNS record lookups.** `golem:network/dns` (`durable_host/sockets/dns.rs`) queries one record
+type of one name (A, AAAA, CNAME, MX, NS, PTR, SRV, TXT, CAA, SOA, NAPTR) with `hickory-resolver`
+and returns the typed records with their TTLs. Each query is one `ReadRemote` call
+(`golem::network::dns::resolve`) with the same `dns_target(name)` check and DNS retry
+classification as an address lookup: only `temporary-resolver-failure` retries; negative answers
+(`name-not-found`, `no-data`), refusals and denials are recorded and replay. The resolver uses
+`agent_sockets.dns_servers`, else the system resolver configuration, never reads the hosts file
+and has no cache, so every live guest query is one upstream query. With agent sockets disabled a
+lookup fails with `permanent-resolver-failure`. The A and AAAA records of an answer link to the
+queried name in `ResolvedNames` as a P3 address lookup does: when the answer reaches the guest. Live
+and on replay the lookup builds a hook from the answer that the delivery observer runs only as
+`Delivered`, and `rebuild_resolved_names` links the records at the call's `CompletionDelivered` marker, and a discarded or
+undelivered answer links nothing. Tests: `tests/scope_cards/dns_records.rs`.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
@@ -3496,6 +3522,14 @@ is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
 
 P3 TCP `send` and `receive` record their one-shot stream acquisition before creating the guest-facing handles. The acquisition's `CompletionDelivery` stays deferred while the host starts the send call or spawns the receive task. `CompletionDelivery::continue_with` suppresses the token if this setup returns a host error, including while constructing handles for an acquisition error; cancelling the setup still drops the armed token and records a discard. Only a successful final host return arms its terminal observer, including when acquisition failed. Replay restores the recorded taken flag before building the handles, then delivers at that same boundary. The built-in `node:net` regression `builtin_node_tcp_replays_after_restart` checks successful traffic with sockets enabled, denial with sockets disabled, and completed tool replay without reconnecting in both cases.
+
+P3 TCP `send` is a `DurableDemandStream`, like `receive`. The host owns the reader of the guest stream (`DurableTcpSendConsumer`): each non-empty guest write, up to 64 KiB, is one demand. The durable task records it as one `send-chunk` child whose response is the write's result and the byte count the native sink accepted, never the bytes, and replies only after the child `End`, so the guest observes exactly the recorded count. The `send` parent `Start` is committed before the first byte. The parent waits for the next write at a safe park point (`TailActivity::park`), so an open send with nothing in flight leaves the agent idle and a pooled connection does not hold its invocation. Only a parent that started live in this Store owns a native sink; on replay the recorded children answer the writes, and the first write without a recorded child, or a child left incomplete by a crash, completes with `connection-broken`, closes the guest stream, and is never written. Closing the guest writer shuts the native write side down and records the parent terminal last. Tests: `p3_tcp_completed_conversation_replays_without_contacting_the_peer`, `p3_tcp_send_kept_across_invocations_is_lost_after_replay`, `p3_tcp_send_open_at_a_crash_refuses_live_writes` in `socket_replay.rs`.
+
+The `send` and `receive` imports take the native stream (`TcpSendSink::take`, `TcpReceiveSource::take`) while they still hold the socket borrow, before they spawn the durable task: the guest may drop the socket as soon as the import returns, and the native stream owns the connection from then on. Only a live Store takes it, and the task discards it unless its parent starts live. Tests: `p3_tcp_send_survives_dropping_the_socket`, `p3_tcp_receive_survives_dropping_the_socket`.
+
+The send task writes each chunk to the native `TcpSendStream` itself (`poll_write`, exposed by the Wasmtime fork). One write takes a prefix of the chunk or nothing, so the child records exactly what the kernel took. Each demand carries a cancel signal: a guest `cancel-write`, or dropping the writer, stops a write that has not taken a byte, and its child records `Ok(0)`. The guest's write then reports `Cancelled`, released at the child's delivery marker like any other chunk, so a peer that stops reading cannot hold a cancel. A recorded zero count for a write the guest did not cancel is a determinism error. Test: `p3_tcp_send_cancels_a_write_the_peer_holds_back`.
+
+Every P3 TCP `send-chunk` and `receive-chunk` child records its guest delivery (`CompletionDelivered`, or `CompletionDiscarded` when the guest dropped the stream first), like the P3 HTTP body children: `DurableDemandStream` always uses deferred child delivery. Replay releases each chunk result at its recorded boundary, at most one per blocked wait, so the order of chunk completions against other guest-visible calls (a JS event loop's idle `wait-for`, tool output writes) is the recorded one. A discarded chunk ends its stream as if the guest had closed the writer or dropped the reader. Test: `builtin_node_tcp_send_parks_between_writes_and_replays`, whose Node body interleaves reads, writes and idle waits.
 
 For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
 cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
@@ -3614,7 +3648,7 @@ mappings. The target's `Create` entry records the fork request, not the source's
 request. Entity-invocation requests do not record the internal calling principal: live execution
 and replay derive it from the current owner, including every middleware and leaf invocation.
 Request matching still checks entity, operation, call mode, input and descendant plan position.
-The separate execution `principal`, authority snapshot, guest inputs, recorded environment and
+The separate execution `caller`, authority snapshot, guest inputs, recorded environment and
 external effects remain unchanged. Inline request bytes are preserved; external payloads are copied
 from authoritative contents under the target without decoding or re-encoding them. Cached external
 values are not a substitute for copying durable bytes. Repeated forks derive the new owner without

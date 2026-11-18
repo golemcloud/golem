@@ -86,6 +86,25 @@ use wasmtime::component::{Component, Linker, Resource, ResourceTable, StreamRead
 use wasmtime::{Config, Engine, Store};
 
 #[test]
+fn underlying_capability_clones_reject_admission_after_revocation() {
+    let position = crate::durable_host::entity::tests::middleware_position();
+    for guard_exit in [false, true] {
+        let entry = UnderlyingToolEntry::new(position.clone());
+        let retained = entry.clone();
+        retained.admit().unwrap();
+        if guard_exit {
+            drop(super::UnderlyingToolRevocationGuard(entry));
+        } else {
+            entry.revoke();
+        }
+        assert_eq!(
+            retained.admit().unwrap_err().to_string(),
+            "underlying-tool capability is no longer active"
+        );
+    }
+}
+
+#[test]
 fn underlying_capability_rejects_missing_and_wrong_type_resource_handles() {
     let mut table = ResourceTable::new();
     let missing = Resource::<UnderlyingToolEntry>::new_borrow(42);
@@ -928,10 +947,12 @@ fn registered_tool() -> (RegisteredTool, ComponentId) {
     let definition = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "search".to_string(),
                 aliases: vec!["find".to_string()],
+                http: None,
                 doc: Doc {
                     summary: "Search documents".to_string(),
                     description: "Searches indexed documents".to_string(),

@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
@@ -60,7 +61,7 @@ func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []gol
 	result := witRuntime.Allocate(pinner, uintptr(length*(10*4)), 4)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -69,7 +70,7 @@ func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []gol
 	result1 := witRuntime.Allocate(pinner, uintptr(length2*(10*4)), 4)
 	for index, element := range slice0 {
 		base := unsafe.Add(result1, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -78,7 +79,7 @@ func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []gol
 	result4 := witRuntime.Allocate(pinner, uintptr(length5*(10*4)), 4)
 	for index, element := range slice3 {
 		base := unsafe.Add(result4, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -87,7 +88,7 @@ func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []gol
 	result7 := witRuntime.Allocate(pinner, uintptr(length8*(10*4)), 4)
 	for index, element := range slice6 {
 		base := unsafe.Add(result7, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -115,11 +116,11 @@ func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []gol
 	var result13 witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result11 := wasm_lift_1_t969(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result11 := wasm_lift_1_t988(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result13 = witTypes.Ok[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](result11)
 	case 1:
-		result12 := wasm_lift_1_t967(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result12 := wasm_lift_1_t986(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result13 = witTypes.Err[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](result12)
 	default:
@@ -143,7 +144,7 @@ func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowe
 	result := witRuntime.Allocate(pinner, uintptr(length*(10*4)), 4)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -152,7 +153,7 @@ func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowe
 	result1 := witRuntime.Allocate(pinner, uintptr(length2*(10*4)), 4)
 	for index, element := range slice0 {
 		base := unsafe.Add(result1, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -161,7 +162,7 @@ func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowe
 	result4 := witRuntime.Allocate(pinner, uintptr(length5*(10*4)), 4)
 	for index, element := range slice3 {
 		base := unsafe.Add(result4, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -170,7 +171,7 @@ func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowe
 	result7 := witRuntime.Allocate(pinner, uintptr(length8*(10*4)), 4)
 	for index, element := range slice6 {
 		base := unsafe.Add(result7, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -198,11 +199,11 @@ func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowe
 	var result13 witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result11 := wasm_lift_1_t969(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result11 := wasm_lift_1_t988(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result13 = witTypes.Ok[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](result11)
 	case 1:
-		result12 := wasm_lift_1_t967(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result12 := wasm_lift_1_t986(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result13 = witTypes.Err[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](result12)
 	default:
@@ -235,7 +236,7 @@ func DeriveScope(parents []*golem_core_types.PermissionCard, lowerPositive []gol
 	result1 := witRuntime.Allocate(pinner, uintptr(length2*(10*4)), 4)
 	for index, element := range slice0 {
 		base := unsafe.Add(result1, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -244,7 +245,7 @@ func DeriveScope(parents []*golem_core_types.PermissionCard, lowerPositive []gol
 	result4 := witRuntime.Allocate(pinner, uintptr(length5*(10*4)), 4)
 	for index, element := range slice3 {
 		base := unsafe.Add(result4, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -253,7 +254,7 @@ func DeriveScope(parents []*golem_core_types.PermissionCard, lowerPositive []gol
 	result7 := witRuntime.Allocate(pinner, uintptr(length8*(10*4)), 4)
 	for index, element := range slice6 {
 		base := unsafe.Add(result7, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -262,7 +263,7 @@ func DeriveScope(parents []*golem_core_types.PermissionCard, lowerPositive []gol
 	result10 := witRuntime.Allocate(pinner, uintptr(length11*(10*4)), 4)
 	for index, element := range slice9 {
 		base := unsafe.Add(result10, index*(10*4))
-		wasm_lower_1_t962(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t981(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -273,7 +274,7 @@ func DeriveScope(parents []*golem_core_types.PermissionCard, lowerPositive []gol
 
 		result13 = witTypes.Ok[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result12 := wasm_lift_1_t967(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result12 := wasm_lift_1_t986(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result13 = witTypes.Err[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](result12)
 	default:
@@ -285,7 +286,7 @@ func DeriveScope(parents []*golem_core_types.PermissionCard, lowerPositive []gol
 }
 
 //go:noinline
-func wasm_lower_1_t962(pinner *runtime.Pinner, value golem_permissions_types.PatternGrant, dst unsafe.Pointer) {
+func wasm_lower_1_t981(pinner *runtime.Pinner, value golem_permissions_types.PatternGrant, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Class))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Class)))
@@ -310,7 +311,7 @@ func wasm_lower_1_t962(pinner *runtime.Pinner, value golem_permissions_types.Pat
 }
 
 //go:noinline
-func wasm_lift_1_t969(src unsafe.Pointer) golem_permissions_types.PersistentCard {
+func wasm_lift_1_t988(src unsafe.Pointer) golem_permissions_types.PersistentCard {
 	var variant golem_permissions_types.PersistentCard
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -329,7 +330,7 @@ func wasm_lift_1_t969(src unsafe.Pointer) golem_permissions_types.PersistentCard
 }
 
 //go:noinline
-func wasm_lift_1_t967(src unsafe.Pointer) golem_permissions_types.PermissionError {
+func wasm_lift_1_t986(src unsafe.Pointer) golem_permissions_types.PermissionError {
 	var variant golem_permissions_types.PermissionError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

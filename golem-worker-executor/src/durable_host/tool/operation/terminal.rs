@@ -146,6 +146,22 @@ impl OwnerToolOperation {
             .and_then(|operation| operation.invocation_id.clone())
     }
 
+    pub(in crate::durable_host::tool) fn cancel_unrecorded_stdin(&self) {
+        let stdin = self
+            .owner
+            .state
+            .lock()
+            .unwrap()
+            .operations
+            .get(&self.id)
+            .and_then(|operation| operation.stdin.clone());
+        if let Some(stdin) = stdin
+            && stdin.observer().identity().is_none()
+        {
+            let _ = stdin.cancel();
+        }
+    }
+
     pub(crate) fn begin_cancel(&self) -> bool {
         let attachments = {
             let mut state = self.owner.state.lock().unwrap();

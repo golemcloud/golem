@@ -434,7 +434,7 @@
           {
             "allowEmptyValue": false,
             "description": "Query parameter: offset",
-            "explode": false,
+            "explode": true,
             "in": "query",
             "name": "offset",
             "required": false,
@@ -446,7 +446,7 @@
           {
             "allowEmptyValue": false,
             "description": "Query parameter: live",
-            "explode": false,
+            "explode": true,
             "in": "query",
             "name": "live",
             "required": false,
@@ -462,7 +462,7 @@
           {
             "allowEmptyValue": false,
             "description": "Query parameter: cursor",
-            "explode": false,
+            "explode": true,
             "in": "query",
             "name": "cursor",
             "required": false,
@@ -1434,7 +1434,7 @@
           {
             "allowEmptyValue": false,
             "description": "Query parameter: offset",
-            "explode": false,
+            "explode": true,
             "in": "query",
             "name": "offset",
             "required": false,
@@ -1446,7 +1446,7 @@
           {
             "allowEmptyValue": false,
             "description": "Query parameter: live",
-            "explode": false,
+            "explode": true,
             "in": "query",
             "name": "live",
             "required": false,
@@ -1462,7 +1462,7 @@
           {
             "allowEmptyValue": false,
             "description": "Query parameter: cursor",
-            "explode": false,
+            "explode": true,
             "in": "query",
             "name": "cursor",
             "required": false,

@@ -15,12 +15,14 @@ fn tool(result: SchemaType) -> Tool {
     Tool {
         version: "1".into(),
         requires_filesystem: false,
+        http_mount: None,
         schema: SchemaGraph::empty(),
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "demo".into(),
                 aliases: vec![],
                 doc: Default::default(),
+                http: None,
                 globals: Globals::default(),
                 subcommands: vec![],
                 body: Some(CommandBody {
@@ -287,6 +289,69 @@ fn nominal_matches_named_command_structure_and_rejects_a_different_name() {
 }
 
 #[test]
+fn http_publication_does_not_change_invocation_compatibility_or_plans() {
+    use crate::Empty;
+    use crate::http::{FileResponseHeader, HttpMethod, HttpRouteMode, LiteralSegment, PathSegment};
+    use crate::schema::tool::{CommandHttp, ToolHttpEndpoint, ToolHttpMount, ToolHttpPrefix};
+
+    let expected = tool(SchemaType::string());
+    for mode in [
+        ToolCompatibilityMode::StrictEquality,
+        ToolCompatibilityMode::StructuralSubtype,
+    ] {
+        let baseline = compile_tool_compatibility(&expected, &expected, mode).unwrap();
+        let mut published = expected.clone();
+        published.http_mount = Some(ToolHttpMount {
+            path_prefix: vec![PathSegment::Literal(LiteralSegment {
+                value: "reports".into(),
+            })],
+        });
+        for declaration in [
+            CommandHttp::Prefix(ToolHttpPrefix {
+                path_suffix: vec![],
+            }),
+            CommandHttp::Endpoint(ToolHttpEndpoint {
+                route_id: Some("summary".into()),
+                http_method: HttpMethod::Post(Empty {}),
+                path_suffix: vec![PathSegment::Literal(LiteralSegment {
+                    value: "generate".into(),
+                })],
+                query_vars: vec![],
+                header_vars: vec![],
+                response_headers: vec![FileResponseHeader {
+                    name: "X-Report".into(),
+                    value: "ready".into(),
+                }],
+                mode: Some(HttpRouteMode::Plain),
+                durable_streams: None,
+            }),
+        ] {
+            published.commands.nodes[0].http = Some(declaration);
+            assert_ne!(
+                serde_json::to_value(&published).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            assert_eq!(
+                compile_tool_compatibility(&expected, &published, mode).unwrap(),
+                baseline
+            );
+            assert_eq!(
+                compile_tool_compatibility(&published, &expected, mode).unwrap(),
+                baseline
+            );
+        }
+        body(&mut published, 0)
+            .positionals
+            .fixed
+            .push(positional("required", SchemaType::bool()));
+        assert!(
+            compile_tool_compatibility(&expected, &published, mode).is_err(),
+            "HTTP exclusion must not hide invocation input changes"
+        );
+    }
+}
+
+#[test]
 fn strict_equality_ignores_version_and_documentation() {
     let expected = tool(SchemaType::string());
     let mut inner = expected.clone();
@@ -541,6 +606,7 @@ fn structural_command_matching_includes_inherited_global_inputs() {
         name: "run".into(),
         aliases: vec![],
         doc: Default::default(),
+        http: None,
         globals: Globals::default(),
         subcommands: vec![],
         body: tool(SchemaType::string()).commands.nodes.remove(0).body,
