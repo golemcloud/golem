@@ -295,7 +295,7 @@ async fn run_tool_command<Ctx: WorkerCtx>(
             Ok(Err(error)) => Ok(Err(error)),
             Err(error) => Err(error),
         },
-        SettlementDeadline::GuestTasksExited => {
+        SettlementDeadline::GuestTasksExited | SettlementDeadline::AfterResult => {
             run_guest_call_settled_at(
                 store,
                 async move |accessor| {

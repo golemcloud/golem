@@ -761,6 +761,7 @@ pub trait ToolStreamingCaller {
     async fn collect_capable(&self, path: String, input: Vec<u8>) -> StreamEvidence;
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
     async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8>;
+    async fn tool_calls_after_return(&self, value: String) -> String;
     async fn permanent_tool_trap_isolation(&self) -> Vec<String>;
     async fn clean_stdout_then_trap(&self);
     async fn trap_with_blocked_sibling(&self);
@@ -4826,6 +4827,30 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("capable tool has stdout");
         wait_at_promise_checkpoint("completed-capable-tool").await;
         output
+    }
+
+    async fn tool_calls_after_return(&self, value: String) -> String {
+        let background = value.clone();
+        spawn_local(async move {
+            wait_at_promise_checkpoint("tool-calls-after-return").await;
+            let incapable = StreamingClient::default()
+                .no_stream(background.clone())
+                .await
+                .expect("incapable tool call after the return");
+            let capable = CapableStreamingClient::default()
+                .run_capable(
+                    "/after-return-capable.bin".to_string(),
+                    input_stream(vec![background.into_bytes()]),
+                )
+                .await
+                .expect("start capable tool call after the return")
+                .collect()
+                .await;
+            capable.result.expect("capable tool call after the return");
+            std::fs::write("/after-return-incapable.txt", incapable)
+                .expect("record the incapable tool result after the return");
+        });
+        format!("returned({value})")
     }
 
     async fn clean_stdout_then_trap(&self) {

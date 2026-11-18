@@ -1897,6 +1897,34 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
 }
 
 #[test]
+fn giving_up_after_a_recorded_result_fails_only_the_other_invocations() {
+    let current = InvocationId(Uuid::new_v4());
+    let queued = InvocationId(Uuid::new_v4());
+    let status = AgentStatusRecord {
+        pending_invocations: vec![PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            not_before: None,
+            oplog_index: OplogIndex::from_u64(2),
+            idempotency_key: Some(queued),
+            manual_update_target_revision: None,
+            operation: None,
+        }],
+        ..status_with_current_key(AgentStatus::Running, &current)
+    };
+
+    assert_eq!(
+        invocation_keys_failed_on_giving_up(&status, Some(&current), true),
+        vec![queued],
+        "the invocation that recorded its result keeps it"
+    );
+    assert_eq!(
+        invocation_keys_failed_on_giving_up(&status, Some(&current), false),
+        vec![current, queued],
+        "without a recorded result the current invocation fails first"
+    );
+}
+
+#[test]
 fn startup_charge_revision_uses_last_known_without_pending_update() {
     let last_known = ComponentRevision::INITIAL.next().unwrap();
     assert_eq!(

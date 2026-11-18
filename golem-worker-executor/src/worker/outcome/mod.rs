@@ -431,8 +431,42 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // Called by the invocation loop, or by the retiring owner after the loop has stopped.
     pub async fn store_invocation_failure(&self, key: &InvocationId, trap_type: &TrapType) {
         let status = self.last_known_status.load_full();
-        let keys_to_fail =
-            invocation_keys_to_fail(&status, Some(key), !trap_type.is_invocation_rejection());
+        // A rejection of an invocation that a user cancellation had already withdrawn: the
+        // committed cancellation stays its result, and its waiters were told so.
+        if trap_type.is_invocation_rejection()
+            && self.has_committed_cancellation(&status, key).await
+        {
+            self.external_invocation_origins.write().await.remove(key);
+            return;
+        }
+        let keys_to_fail = if trap_type.is_invocation_rejection() {
+            invocation_keys_to_fail(&status, Some(key), false)
+        } else {
+            invocation_keys_failed_on_giving_up(&status, Some(key), false)
+        };
+        self.fail_invocations(&status, keys_to_fail, trap_type)
+            .await;
+    }
+
+    /// Fails the pending and running invocations of a terminal agent failure, except
+    /// `recorded`, the invocation that recorded its result before its background work failed.
+    pub async fn store_queued_invocation_failures(
+        &self,
+        recorded: Option<&InvocationId>,
+        trap_type: &TrapType,
+    ) {
+        let status = self.last_known_status.load_full();
+        let keys_to_fail = invocation_keys_failed_on_giving_up(&status, recorded, true);
+        self.fail_invocations(&status, keys_to_fail, trap_type)
+            .await;
+    }
+
+    async fn fail_invocations(
+        &self,
+        status: &AgentStatusRecord,
+        keys_to_fail: Vec<InvocationId>,
+        trap_type: &TrapType,
+    ) {
         let stderr = self.worker_event_service.get_last_invocation_errors();
         let golem_error = trap_type.as_golem_error(&stderr);
         // A lost shard is not the invocation's outcome: the new owner resumes it. The waiters are
@@ -441,14 +475,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             for key in &keys_to_fail {
                 self.publish_completion(key, Err(WorkerExecutorError::ShardingNotReady));
             }
-            return;
-        }
-        // A rejection of an invocation that a user cancellation had already withdrawn: the
-        // committed cancellation stays its result, and its waiters were told so.
-        if trap_type.is_invocation_rejection()
-            && self.has_committed_cancellation(&status, key).await
-        {
-            self.external_invocation_origins.write().await.remove(key);
             return;
         }
         let mut map = self.hydrated_invocation_results.write().await;

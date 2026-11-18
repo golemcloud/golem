@@ -1236,7 +1236,19 @@ impl ReplayState {
             .get_oplog_entry_agent_invocation_terminal(invocation_id)
             .await?
         {
-            Some((index, OplogEntry::AgentInvocationFinished { result, .. })) => {
+            Some(terminal) => self.agent_invocation_finished(terminal).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// The index and result of `terminal`, an invocation terminal the cursor consumed, when it
+    /// is an `AgentInvocationFinished`. Any other entry is a divergence.
+    pub async fn agent_invocation_finished(
+        &self,
+        terminal: (OplogIndex, OplogEntry),
+    ) -> Result<(OplogIndex, AgentInvocationResult), WorkerExecutorError> {
+        match terminal {
+            (index, OplogEntry::AgentInvocationFinished { result, .. }) => {
                 let result = self
                     .cursor
                     .oplog
@@ -1247,10 +1259,9 @@ impl ReplayState {
                             "failed to deserialize agent invocation result payload: {err}"
                         ))
                     })?;
-                Ok(Some((index, result)))
+                Ok((index, result))
             }
-            None => Ok(None),
-            Some((index, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
+            (index, entry) => Err(WorkerExecutorError::unexpected_oplog_entry(
                 index,
                 format!("{entry:?}"),
                 "AgentInvocationFinished",
@@ -1265,11 +1276,23 @@ impl ReplayState {
         error: &golem_common::model::oplog::AgentError,
         parent: Option<OplogIndex>,
     ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
-        match self
-            .get_oplog_entry_agent_invocation_terminal(invocation_id)
+        self.get_oplog_entry_agent_invocation_terminal(invocation_id)
             .await?
-        {
-            Some((
+            .map(|terminal| Self::agent_method_failure(terminal, anchor, error, parent))
+            .transpose()
+    }
+
+    /// The index of `terminal`, an invocation terminal the cursor consumed, when it is the
+    /// `AgentInvocationFailed` that records `error` for the invocation started at `anchor` with
+    /// the entity parent `parent`. Any other entry is a divergence.
+    pub fn agent_method_failure(
+        terminal: (OplogIndex, OplogEntry),
+        anchor: OplogIndex,
+        error: &golem_common::model::oplog::AgentError,
+        parent: Option<OplogIndex>,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        match terminal {
+            (
                 index,
                 OplogEntry::AgentInvocationFailed {
                     error: recorded,
@@ -1277,14 +1300,13 @@ impl ReplayState {
                     entity_parent_start_index,
                     ..
                 },
-            )) if start_index == anchor
+            ) if start_index == anchor
                 && &recorded == error
                 && entity_parent_start_index == parent =>
             {
-                Ok(Some(index))
+                Ok(index)
             }
-            None => Ok(None),
-            Some((index, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
+            (index, entry) => Err(WorkerExecutorError::unexpected_oplog_entry(
                 index,
                 format!("{entry:?}"),
                 format!("invocation-local error {error:?} for {anchor} with parent {parent:?}"),
@@ -1562,7 +1584,6 @@ impl ReplayState {
     /// wallet replay of the invocation stays open until [`Self::close_invocation_anchor`].
     ///
     /// The driver marks the returned [`ExportReturned`] when the invocation's export returns.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn open_invocation_anchor(
         &self,
         anchor: OplogIndex,
@@ -1621,10 +1642,13 @@ impl ReplayState {
     /// Like the ordinary reader, it waits on an agent-attributed or unattributed head that a
     /// background task may still consume. Once every guest task exited, the driver's deadlock
     /// detection turns a wait on a head nobody consumes into an error.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) async fn get_oplog_entry_agent_invocation_terminal_in_open_anchor(
+    ///
+    /// The reader holds the value `park` returns while it waits for cursor progress, and only
+    /// then.
+    pub(crate) async fn get_oplog_entry_agent_invocation_terminal_in_open_anchor<P>(
         &self,
         invocation_id: &golem_common::model::InvocationId,
+        park: impl Fn() -> P,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
         let invocation_id = *invocation_id;
         loop {
@@ -1644,6 +1668,7 @@ impl ReplayState {
             if self.at_replay_tail() {
                 return Ok(None);
             }
+            let _parked = park();
             self.wait_while_blocked(BlockedOn::CursorProgress, progress)
                 .await?;
         }
@@ -1666,7 +1691,6 @@ impl ReplayState {
     /// divergence, including a reserved delivery marker or a guest stream observation, which only
     /// an exited guest task could consume. At [`SettledAt::ReplayTail`] the retained `Start`s are
     /// kept. Either way the wallet replay of the invocation finishes and the anchor is closed.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn close_invocation_anchor(
         &self,
         anchor: OplogIndex,

@@ -1012,7 +1012,6 @@ impl WorkerProxy for RemoteWorkerProxy {
                     resolved_revert: resolved_revert.clone().map(|resolved| {
                         golem_api_grpc::proto::golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
-                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
                         }
                     }),
                 }))

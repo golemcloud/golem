@@ -2080,7 +2080,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     resolved_revert: resolved_revert.map(|resolved| {
                         golem_api_grpc::proto::golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
-                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
                         }
                     }),
                 }))
@@ -2132,7 +2131,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         ),
                 } => Ok(ResolvedRevert {
                     last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
-                    observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
                 }),
                 workerexecutor::v1::ResolveRevertLastInvocationsResponse {
                     result:

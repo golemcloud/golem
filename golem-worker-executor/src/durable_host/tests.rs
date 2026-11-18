@@ -461,6 +461,104 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
 }
 
 #[test]
+fn a_rejection_after_the_result_is_an_ordinary_trap_of_the_agent() {
+    let current = Some(golem_common::model::InvocationId::new());
+    let retry_from = OplogIndex::from_u64(11);
+    for error in [
+        AgentError::PermissionDenied("card-revoked".to_string()),
+        AgentError::InvalidRequest("invalid".to_string()),
+    ] {
+        let trap = TrapType::Error {
+            error,
+            retry_from,
+            semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
+        };
+        assert_eq!(
+            failure_attribution(current, &trap, false),
+            FailureAttribution {
+                failed_invocation: current,
+                rejection: true,
+            },
+            "before the result, a rejection trap rejects its invocation"
+        );
+        assert_eq!(
+            failure_attribution(current, &trap, true),
+            FailureAttribution {
+                failed_invocation: None,
+                rejection: false,
+            },
+            "after the result, a rejection trap names and rejects no invocation"
+        );
+    }
+    // The status fold reads an `Invocation` permission denial as a rejection only when it names
+    // the invocation it rejects. After the result, the denial is an ordinary trap of the agent.
+    let denied = TrapType::Error {
+        error: AgentError::PermissionDenied("card-revoked".to_string()),
+        retry_from,
+        semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
+    };
+    let folded_status = |after_result| {
+        let running = AgentStatusRecord {
+            status: AgentStatus::Running,
+            running: current.map(|key| golem_common::model::RunningInvocation {
+                key,
+                request: golem_common::model::InvocationRequestRef {
+                    index: OplogIndex::INITIAL,
+                    accepted_at: Timestamp::from(0),
+                    operation: None,
+                },
+                last_change: OplogIndex::INITIAL,
+                last_change_at: Timestamp::from(0),
+            }),
+            ..AgentStatusRecord::default()
+        };
+        let error = OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            failure_attribution(current, &denied, after_result).failed_invocation,
+            AgentError::PermissionDenied("card-revoked".to_string()),
+            retry_from,
+            None,
+            None,
+            None,
+        );
+        crate::worker::status::update_status_with_new_entries(
+            AgentMode::Durable,
+            running,
+            std::collections::BTreeMap::from([(OplogIndex::from_u64(12), error)]),
+            &golem_common::model::RetryConfig::default(),
+        )
+        .expect("the status folds")
+        .expect("the status folds from the new entries")
+        .status
+    };
+    assert_eq!(folded_status(false), AgentStatus::Idle);
+    assert_eq!(folded_status(true), AgentStatus::Failed);
+    let trap = TrapType::Error {
+        error: AgentError::OutOfMemory,
+        retry_from,
+        semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
+    };
+    assert_eq!(
+        failure_attribution(current, &trap, true),
+        FailureAttribution {
+            failed_invocation: None,
+            rejection: false,
+        }
+    );
+    assert_eq!(
+        failure_attribution(current, &trap, false),
+        FailureAttribution {
+            failed_invocation: current,
+            rejection: false,
+        }
+    );
+}
+
+#[test]
 fn ephemeral_active_suspend_becomes_an_invocation_failure() {
     let start_index = OplogIndex::from_u64(37);
     let trap = TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()));

@@ -14,16 +14,202 @@
 
 use super::*;
 
+/// Reads the recorded terminal of the invocation the loop replays from its open invocation
+/// anchor, while the background work of the invocation replays.
+pub(crate) struct InvocationTerminalReader {
+    replay_state: ReplayState,
+    invocation_id: golem_common::model::InvocationId,
+    runtime: Option<Arc<crate::worker::suspension::RuntimeStore>>,
+}
+
+impl InvocationTerminalReader {
+    /// The recorded terminal of the invocation, or `None` at the replay tail.
+    ///
+    /// The read runs cursor operations and oplog reads outside the Store's runtime. Only while
+    /// it waits for cursor progress, which only the owner's runtime makes, can the driver of
+    /// the Store report a deadlock.
+    pub(crate) async fn read(
+        &self,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        let outside = self
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.root_waits_outside());
+        self.replay_state
+            .get_oplog_entry_agent_invocation_terminal_in_open_anchor(&self.invocation_id, || {
+                outside.as_ref().map(|outside| outside.parked())
+            })
+            .await
+    }
+}
+
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Opens the invocation anchor at `anchor` for the invocation the loop replays, which
+    /// records its result at the export's return and drains its background work after it.
+    pub(crate) async fn open_invocation_anchor(
+        &mut self,
+        anchor: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        let export_returned = self
+            .state
+            .replay_state
+            .open_invocation_anchor(anchor)
+            .await?;
+        self.state.open_invocation_anchor = Some((anchor, export_returned));
+        Ok(())
+    }
+
+    /// The reader of the recorded terminal of the invocation the loop replays, when the Store
+    /// replays and the invocation has an open invocation anchor.
+    pub(crate) fn invocation_terminal_reader(&self) -> Option<InvocationTerminalReader> {
+        if self.state.is_live() || self.state.open_invocation_anchor.is_none() {
+            return None;
+        }
+        Some(InvocationTerminalReader {
+            replay_state: self.state.replay_state.clone(),
+            invocation_id: self.state.get_current_idempotency_key()?,
+            runtime: self.runtime_suspension.clone(),
+        })
+    }
+
+    /// Keeps the terminal that replay consumed when the export of the invocation returned, for
+    /// the result reader of the invocation.
+    pub(crate) fn stash_replayed_invocation_terminal(
+        &mut self,
+        terminal: Result<(OplogIndex, OplogEntry), WorkerExecutorError>,
+    ) {
+        self.state.replayed_invocation_terminal = Some(terminal);
+    }
+
+    /// Marks the [`replay_state::ExportReturned`] of the open invocation anchor, when the export
+    /// of the invocation the loop replays returned.
+    pub(crate) fn mark_export_returned(&self) {
+        if let Some((_, export_returned)) = &self.state.open_invocation_anchor {
+            export_returned.mark();
+        }
+    }
+
+    /// Whether replay stashed the terminal of the invocation, or the failure of reading it, for
+    /// the result reader of the invocation.
+    pub(crate) fn has_replayed_invocation_terminal(&self) -> bool {
+        self.state.replayed_invocation_terminal.is_some()
+    }
+
+    /// Takes the terminal that replay stashed for the result reader of the invocation.
+    pub(crate) fn take_replayed_invocation_terminal(
+        &mut self,
+    ) -> Option<Result<(OplogIndex, OplogEntry), WorkerExecutorError>> {
+        self.state.replayed_invocation_terminal.take()
+    }
+
+    /// Marks that the result recorded now is recorded at the export's return.
+    pub(crate) fn set_recording_result_at_return(&mut self, recording: bool) {
+        self.state.recording_result_at_return = recording;
+    }
+
+    /// Marks that the loop's invocation recorded its result at the export's return. A later
+    /// failure of the invocation's background work is then an ordinary trap of the agent: it
+    /// neither replaces nor publishes the recorded result.
+    pub(crate) fn mark_result_recorded_at_return(&mut self) {
+        self.state.result_recorded_at_return = true;
+    }
+
+    /// Whether the loop's invocation recorded its result at the export's return.
+    pub(crate) fn result_recorded_at_return(&self) -> bool {
+        self.state.result_recorded_at_return
+    }
+
+    /// Ends an invocation whose result was recorded at the export's return, after its
+    /// background work drained, with `consumed_fuel` the fuel of the drain.
+    ///
+    /// A replayed invocation closes its invocation anchor. A recorded `AgentInvocationSettled`
+    /// ends it. At the replay tail the Store switches to live and ends it as a live invocation
+    /// does: the producers are disposed, the open custom durable scopes are checked, the
+    /// retained `Start`s are released, and `AgentInvocationSettled` is appended and committed at
+    /// the level of `AgentInvocationFinished`.
+    pub(crate) async fn on_agent_invocation_settled(
+        &mut self,
+        consumed_fuel: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        self.state.replayed_invocation_terminal = None;
+        let invocation_id = self.state.get_current_idempotency_key().ok_or_else(|| {
+            WorkerExecutorError::runtime("agent invocation settled without a current invocation")
+        })?;
+        let invocation = self.invocation_key();
+        if let Some((anchor, _)) = self.state.open_invocation_anchor.take() {
+            match self
+                .state
+                .replay_state
+                .close_invocation_anchor(anchor, &invocation_id)
+                .await?
+            {
+                replay_state::SettledAt::Recorded(_) => {
+                    return self.close_custom_durability_state(invocation);
+                }
+                replay_state::SettledAt::ReplayTail => {
+                    if !self.state.is_live() {
+                        self.switch_to_live().await?;
+                    }
+                }
+            }
+        } else if !self.state.is_live() {
+            return Err(WorkerExecutorError::runtime(
+                "agent invocation settled in replay without an open invocation anchor",
+            ));
+        }
+
+        tool::durability::finish_producer_disposals(self).await?;
+        self.close_custom_durability_state(invocation)?;
+        if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
+            self.state
+                .replay_state
+                .release_retained_starts_at_live_invocation_end()
+                .await?;
+        }
+        let worker = self.public_state.worker();
+        worker
+            .oplog()
+            .add_agent_invocation_settled(invocation_id, consumed_fuel)
+            .await
+            .map_err(|error| match error.into_refusal() {
+                Ok(refusal) => worker.refused_by(refusal),
+                Err(error) => error,
+            })?;
+        let commit_level = match worker.agent_mode() {
+            AgentMode::Durable => CommitLevel::Always,
+            AgentMode::Ephemeral => CommitLevel::Deferred,
+        };
+        worker
+            .commit_oplog_before_status_update(commit_level)
+            .await?;
+        Ok(())
+    }
+
+    /// Fails when `invocation` still has an open custom durable invocation or ownership scope,
+    /// after closing them.
+    fn close_custom_durability_state(
+        &mut self,
+        invocation: attribution::InvocationKey,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.has_open_custom_durability_state(invocation) {
+            self.cleanup_custom_durability_state(invocation);
+            return Err(WorkerExecutorError::runtime(
+                "agent invocation returned while a custom durable invocation ownership scope was still open",
+            ));
+        }
+        Ok(())
+    }
+
     /// Settles a returned method error, including session work that must keep driving the Store.
     pub(crate) async fn on_agent_method_failure(
-        store: &mut Store<Ctx>,
+        store: &mut impl AsContextMut<Data = Ctx>,
         full_function_name: &str,
         error: AgentError,
         uses_streams: bool,
     ) -> Result<(), crate::worker::MethodFailureSettlementError> {
         use crate::worker::MethodFailureSettlementError;
 
+        let mut store = store.as_context_mut();
         store
             .data_mut()
             .record_agent_method_failure(full_function_name, error.clone())
@@ -43,6 +229,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .expect("a settled method failure has an invocation key");
             let session_worker = worker.clone();
             store
+                .as_context_mut()
                 .run_concurrent(async move |_accessor| {
                     session_worker
                         .fail_durable_streaming_session(&key, error.message().to_owned())
@@ -623,7 +810,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The oplog failed for good, so the invocation fails here with the trap, and the
             // agent stops with the error, which reaches the other waiting callers.
             TerminalEntryRefusal::OplogFailed(error) => {
-                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                if let Some(idempotency_key) = self
+                    .state
+                    .get_current_idempotency_key()
+                    .filter(|_| !self.state.result_recorded_at_return)
+                {
                     self.public_state
                         .worker()
                         .store_invocation_failure(&idempotency_key, trap_type)
@@ -848,6 +1039,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         };
         let decision = terminal_decision;
 
+        let after_result = self.state.result_recorded_at_return;
+        let FailureAttribution {
+            failed_invocation,
+            rejection,
+        } = failure_attribution(current_idempotency_key, trap_type, after_result);
+
         let entity_parent_start_index = self.entity_parent_start_index();
         // A rejected invocation is recorded as its cancellation followed by the rejection error,
         // so the status fold keeps the rejection as its result even when it never started.
@@ -856,8 +1053,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Error {
                 error, retry_from, ..
             },
-        ) = (&current_idempotency_key, trap_type)
-            && trap_type.is_invocation_rejection()
+        ) = (&failed_invocation, trap_type)
+            && rejection
         {
             let rejection_recorded = self
                 .state
@@ -929,15 +1126,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::ShardLost) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
             TrapType::Error { .. } if rejection_persisted => None,
-            TrapType::Error { .. } if trap_type.is_invocation_rejection() => {
-                current_idempotency_key.map(OplogEntry::cancel_pending_invocation)
+            TrapType::Error { .. } if rejection => {
+                failed_invocation.map(OplogEntry::cancel_pending_invocation)
             }
             TrapType::Error {
                 error, retry_from, ..
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
                 OplogErrorKind::Invocation,
-                current_idempotency_key,
+                failed_invocation,
                 error.clone(),
                 *retry_from,
                 retry_policy_state,
@@ -956,7 +1153,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         let latest_status = self.public_state.worker().get_last_known_status().await;
 
-        let giving_up = trap_type.is_invocation_rejection()
+        let giving_up = rejection
             || matches!(
                 latest_status.status,
                 AgentStatus::Interrupted | AgentStatus::Exited
@@ -970,8 +1167,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .reach_final_outcome();
             self.rederive_agent_effective_surface_from_wallet();
             // Terminal worker failures also fail queued invocations. A rejected request completes
-            // only its own idempotency key so later queued work remains available.
-            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+            // only its own idempotency key so later queued work remains available. An invocation
+            // that recorded its result keeps it.
+            if after_result {
+                self.public_state
+                    .worker()
+                    .store_queued_invocation_failures(current_idempotency_key.as_ref(), trap_type)
+                    .await;
+            } else if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                 self.public_state
                     .worker()
                     .store_invocation_failure(&idempotency_key, trap_type)
@@ -1009,12 +1212,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 "method failure while durability is suppressed",
             ));
         }
+        // An invocation that records its result at the export's return checks its custom durable
+        // scopes, disposes its producers and releases its retained `Start`s when its background
+        // work drained (`on_agent_invocation_settled`).
+        let at_return = self.state.recording_result_at_return;
         let invocation = self.invocation_key();
-        if self.has_open_custom_durability_state(invocation) {
-            self.cleanup_custom_durability_state(invocation);
-            return Err(WorkerExecutorError::runtime(
-                "agent invocation returned while a custom durable invocation ownership scope was still open",
-            ));
+        if !at_return {
+            self.close_custom_durability_state(invocation)?;
         }
         let anchor = self.invocation_anchor().ok_or_else(|| {
             WorkerExecutorError::runtime("method failure has no invocation start")
@@ -1027,17 +1231,19 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             concurrent::drain_queued_dropped_call_events(self)
                 .await
                 .map_err(|error| error.source)?;
-            if let Some(finished_index) = self
-                .state
-                .replay_state
-                .get_oplog_entry_agent_method_failure(
-                    &key,
-                    anchor,
-                    &error,
-                    self.entity_parent_start_index(),
-                )
-                .await?
-            {
+            let parent = self.entity_parent_start_index();
+            let recorded = match self.state.replayed_invocation_terminal.take() {
+                Some(terminal) => Some(ReplayState::agent_method_failure(
+                    terminal?, anchor, &error, parent,
+                )?),
+                None => {
+                    self.state
+                        .replay_state
+                        .get_oplog_entry_agent_method_failure(&key, anchor, &error, parent)
+                        .await?
+                }
+            };
+            if let Some(finished_index) = recorded {
                 if self
                     .public_state
                     .worker()
@@ -1052,8 +1258,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         // Both a fresh invocation and an incomplete replay now follow the same live path.
-        tool::durability::finish_producer_disposals(self).await?;
-        if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
+        if !at_return {
+            tool::durability::finish_producer_disposals(self).await?;
+        }
+        if !at_return && matches!(self.state.store_replay_state, StoreReplayState::Primary) {
             self.state
                 .replay_state
                 .release_retained_starts_at_live_invocation_end()
@@ -1124,16 +1332,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
+        // An invocation that records its result at the export's return disposes its producers,
+        // checks its custom durable scopes and releases its retained `Start`s when its background
+        // work drained (`on_agent_invocation_settled`).
+        let at_return = self.state.recording_result_at_return;
         let mut is_live = self.state.is_live();
-        if is_live && !self.state.snapshotting_mode {
+        if is_live && !self.state.snapshotting_mode && !at_return {
             tool::durability::finish_producer_disposals(self).await?;
         }
         let invocation = self.invocation_key();
-        if self.has_open_custom_durability_state(invocation) {
-            self.cleanup_custom_durability_state(invocation);
-            return Err(WorkerExecutorError::runtime(
-                "agent invocation returned while a custom durable invocation ownership scope was still open",
-            ));
+        if !at_return {
+            self.close_custom_durability_state(invocation)?;
         }
 
         let invocation_id = self.state.get_current_idempotency_key().ok_or_else(|| {
@@ -1149,11 +1358,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(|err| err.source)?;
 
-            let response = self
-                .state
-                .replay_state
-                .get_oplog_entry_agent_invocation_finished(&invocation_id)
-                .await?;
+            let response = match self.state.replayed_invocation_terminal.take() {
+                Some(terminal) => Some(
+                    self.state
+                        .replay_state
+                        .agent_invocation_finished(terminal?)
+                        .await?,
+                ),
+                None => {
+                    self.state
+                        .replay_state
+                        .get_oplog_entry_agent_invocation_finished(&invocation_id)
+                        .await?
+                }
+            };
             if let Some((finished_index, recorded_result)) = response {
                 if !recorded_result.replay_equivalent(&output.result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -1180,11 +1398,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // publishing this newly repaired invocation as a live success.
             self.switch_to_live().await?;
             is_live = true;
-            tool::durability::finish_producer_disposals(self).await?;
+            if !at_return {
+                tool::durability::finish_producer_disposals(self).await?;
+            }
         }
 
         if is_live && !self.state.durability_is_suppressed() {
-            if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
+            if !at_return && matches!(self.state.store_replay_state, StoreReplayState::Primary) {
                 self.state
                     .replay_state
                     .release_retained_starts_at_live_invocation_end()
@@ -1364,6 +1584,30 @@ pub(crate) fn terminal_entry_refusal(
         }
         Some(error) => TerminalEntryRefusal::OplogFailed(error),
         None => TerminalEntryRefusal::Unpublished,
+    }
+}
+
+/// To what an invocation failure is attributed.
+#[derive(Debug, PartialEq)]
+pub(in crate::durable_host) struct FailureAttribution {
+    /// The invocation the failure entry names.
+    pub failed_invocation: Option<golem_common::model::InvocationId>,
+    /// Whether the failure rejects the invocation: it cancels it with `CancelPendingInvocation`
+    /// and completes only its key.
+    pub rejection: bool,
+}
+
+/// Attributes a failure of the invocation `current`. After the invocation recorded its result
+/// (`after_result`), a failure of its background work names no invocation and rejects nothing:
+/// it is an ordinary trap of the agent, which the retry policy handles.
+pub(in crate::durable_host) fn failure_attribution(
+    current: Option<golem_common::model::InvocationId>,
+    trap_type: &TrapType,
+    after_result: bool,
+) -> FailureAttribution {
+    FailureAttribution {
+        failed_invocation: current.filter(|_| !after_result),
+        rejection: trap_type.is_invocation_rejection() && !after_result,
     }
 }
 

@@ -13,6 +13,75 @@
 // limitations under the License.
 
 use super::*;
+use std::future::Future;
+use std::pin::Pin;
+use wasmtime::StoreContextMut;
+
+/// The outcome of recording a replayed result at the export's return.
+enum ReplayRecorded {
+    Succeeded(Result<(), WorkerExecutorError>),
+    MethodFailed(Result<(), WorkerExecutorError>),
+}
+
+/// Records a replayed result at the export's return: it consumes the recorded terminal, or at
+/// the replay tail records the result live.
+struct ReplayRecorder {
+    uses_streams: bool,
+    outcome: Option<ReplayRecorded>,
+}
+
+impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for ReplayRecorder {
+    fn record<'a>(
+        &'a mut self,
+        store: &'a mut StoreContextMut<'_, Ctx>,
+        display_name: &'a str,
+        result: &'a InvokeResult,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            match result {
+                InvokeResult::Succeeded {
+                    result,
+                    consumed_fuel,
+                } => {
+                    let mut output = AgentInvocationOutput {
+                        result: (**result).clone(),
+                        consumed_fuel: Some(*consumed_fuel),
+                        invocation_status: None,
+                        component_revision: Some(store.data().component_metadata().revision),
+                        agent_id: None,
+                        idempotency_key: None,
+                        oplog_index: None,
+                        agent_fingerprint: None,
+                    };
+                    let recorded = store
+                        .data_mut()
+                        .on_agent_invocation_success(display_name, *consumed_fuel, &mut output)
+                        .await;
+                    let ok = recorded.is_ok();
+                    self.outcome = Some(ReplayRecorded::Succeeded(recorded));
+                    ok
+                }
+                InvokeResult::MethodFailed { error, .. } => {
+                    let recorded = DurableWorkerCtx::<Ctx>::on_agent_method_failure(
+                        store,
+                        display_name,
+                        error.clone(),
+                        self.uses_streams,
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        crate::worker::MethodFailureSettlementError::Invocation(error)
+                        | crate::worker::MethodFailureSettlementError::Recovery(error) => error,
+                    });
+                    let ok = recorded.is_ok();
+                    self.outcome = Some(ReplayRecorded::MethodFailed(recorded));
+                    ok
+                }
+                _ => false,
+            }
+        })
+    }
+}
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Replays the recorded invocations of the start. A failure says
@@ -166,6 +235,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             }
                         };
                         let full_function_name = lowered.display_name.clone();
+                        let stream_session = uses_streams.then_some(&idempotency_key);
+                        if lowered.records_result_at_return(stream_session)
+                            && let Err(error) = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .open_invocation_anchor(oplog_index)
+                                .await
+                        {
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .clear_invocation_scope_card()
+                                .await;
+                            break Err(error);
+                        }
+                        let mut recorder = ReplayRecorder {
+                            uses_streams,
+                            outcome: None,
+                        };
 
                         debug!("Replaying function {}", &full_function_name);
                         debug!(
@@ -217,7 +307,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            uses_streams.then_some(&idempotency_key),
+                            stream_session,
+                            Some(&mut recorder),
                         )
                         .instrument(span)
                         .await;
@@ -231,7 +322,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
 
+                        let recorded_success = match recorder.outcome.take() {
+                            Some(
+                                ReplayRecorded::Succeeded(Err(error))
+                                | ReplayRecorded::MethodFailed(Err(error)),
+                            ) => break Err(error),
+                            Some(ReplayRecorded::Succeeded(Ok(())))
+                                if matches!(invoke_result, Ok(InvokeResult::Succeeded { .. })) =>
+                            {
+                                Some(true)
+                            }
+                            Some(ReplayRecorded::MethodFailed(Ok(())))
+                                if matches!(invoke_result, Ok(InvokeResult::MethodFailed { .. })) =>
+                            {
+                                Some(false)
+                            }
+                            // The result was recorded at the export's return and the drain of the
+                            // background work failed: the failure is handled below.
+                            Some(_) => None,
+                            None => None,
+                        };
                         match invoke_result {
+                            Ok(InvokeResult::MethodFailed { .. }) if recorded_success == Some(false) => {
+                                number_of_replayed_functions += 1;
+                                continue;
+                            }
                             Ok(InvokeResult::Succeeded {
                                 result: invocation_result,
                                 consumed_fuel,
@@ -248,15 +363,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     oplog_index: None,
                                     agent_fingerprint: None,
                                 };
-                                if let Err(err) = store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_agent_invocation_success(
-                                        &full_function_name,
-                                        consumed_fuel,
-                                        &mut output,
-                                    )
-                                    .await
+                                if recorded_success != Some(true)
+                                    && let Err(err) = store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .on_agent_invocation_success(
+                                            &full_function_name,
+                                            consumed_fuel,
+                                            &mut output,
+                                        )
+                                        .await
                                 {
                                     break Err(err);
                                 }

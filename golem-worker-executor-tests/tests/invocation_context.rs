@@ -507,13 +507,26 @@ fn idempotency_key_starts(
         .collect()
 }
 
-/// The index of the first `AgentInvocationFinished` after `start`.
-fn finished_after(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Option<OplogIndex> {
+/// The index of the `AgentInvocationSettled` of the method invocation whose
+/// `AgentInvocationStarted` is at `start`.
+fn settled_of(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Option<OplogIndex> {
+    let invocation_id = oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationStarted(params) if entry.oplog_index == start => {
+            match &params.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(call) => Some(call.invocation_id),
+                _ => None,
+            }
+        }
+        _ => None,
+    })?;
     oplog
         .iter()
         .find(|entry| {
-            entry.oplog_index > start
-                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationSettled(params)
+                    if params.invocation_id == invocation_id
+            )
         })
         .map(|entry| entry.oplog_index)
 }
@@ -522,8 +535,9 @@ fn finished_after(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Opt
 /// a guest future that makes a durable call and observes the invocation context; `reports`
 /// returns the observations, and so does `method` itself when `returns_observation` is set.
 /// Checks that each future reads the ID and the caller of the method it ran in, that its
-/// durable call is numbered under that invocation and recorded before the invocation finishes,
-/// and that a real restart replays the same observations and calls.
+/// durable call is numbered under that invocation and recorded before the background work of the
+/// invocation settles (it may follow the invocation's result), and that a real restart replays
+/// the same observations and calls.
 async fn check_spawned_futures_read_their_method_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -584,11 +598,11 @@ async fn check_spawned_futures_read_their_method_invocation(
         "the durable calls of a spawned future are numbered under the method's invocation"
     );
     for ((start, _), (invocation, _)) in starts.iter().zip(&invocations) {
-        let finished = finished_after(&oplog, *invocation)
-            .expect("each invocation of the method should finish");
+        let settled = settled_of(&oplog, *invocation)
+            .expect("the background work of each invocation of the method should settle");
         assert!(
-            start < &finished,
-            "the durable call at {start} should be recorded before its invocation finishes at {finished}"
+            start < &settled,
+            "the durable call at {start} should be recorded before its invocation settles at {settled}"
         );
     }
     assert!(

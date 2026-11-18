@@ -10953,6 +10953,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
     };
     use golem_api_grpc::proto::golem::worker::{
         AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
+        invocation_session_result,
     };
     use golem_common::model::card::{Card, CardId, ScopeCard, StoredCard};
     use golem_common::model::oplog::OplogEntry;
@@ -11104,8 +11105,17 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         // Executable fetch precedes context/Store creation. The parent's next checkpoint
         // authorization invalidated its whole scope; only the accepted child retains marker.
         assert!(executor.active_agents().tracked_card_ids().await.contains(&marker));
+        // The parent records its result at its export's return and admits the staged
+        // fire-and-forget body only at the end of its drain, so the observer may already have
+        // its result here. Either way it detaches before the body's Store exists.
         observer.abort();
-        assert!(observer.await.unwrap_err().is_cancelled());
+        match observer.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(result) => assert!(matches!(
+                result?.result,
+                Some(invocation_session_result::Result::MethodResult(_))
+            )),
+        }
         assert!(executor.active_agents().tracked_card_ids().await.contains(&marker),
             "detaching the invocation observer must not drop accepted pre-Store interest");
         load.release();
@@ -11121,6 +11131,56 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
             }
         }).await?;
         assert_eq!(executor.get_file_contents(&worker, "/fire-capable-staging.bin").await?, input);
+
+        // The parent stages the call before its result; the staged body runs and the call ends
+        // after the result and before the parent's settlement.
+        let parent = executor.get_oplog(&worker, OplogIndex::INITIAL).await?.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name.replace('-', "_") == "hold_fire_and_forget_capable_staging" => Some(method.invocation_id),
+                _ => None,
+            },
+            _ => None,
+        }).expect("the parent invocation started");
+        let settled_of = |oplog: &[PublicOplogEntryWithIndex]| oplog.iter().filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationSettled(settled) if settled.invocation_id == parent))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        let oplog = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                if !settled_of(&oplog).is_empty() {
+                    return Ok::<_, anyhow::Error>(oplog);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }).await??;
+        let finished = oplog.iter().filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finished) if finished.invocation_id == parent))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        let settled = settled_of(&oplog);
+        assert_eq!(finished.len(), 1, "the parent records one result");
+        assert_eq!(settled.len(), 1, "the parent settles once");
+        let (finished, settled) = (finished[0], settled[0]);
+        let calls = oplog.iter().filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::entity::invoke")
+                && matches!(&entry.attribution, PublicOplogEntryAttribution::Entity(entity)
+                    if entity.invocation.entity.kind == PublicAgentEntityKind::Tool))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1, "the fire-and-forget tool call starts once");
+        let call = calls[0];
+        assert!(call < finished, "the parent stages the call at {call} before its result at {finished}");
+        let body = oplog.iter().filter(|entry| entry.oplog_index != call && matches!(&entry.attribution,
+                PublicOplogEntryAttribution::Entity(entity) if entity.invocation.start_index == call))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        assert!(oplog.iter().any(|entry| matches!(&entry.entry,
+                PublicOplogEntry::Start(parameters) if parameters.parent_start_index == Some(call))),
+            "the staged body records its own work");
+        assert!(body.iter().all(|index| finished < *index && *index < settled),
+            "the staged body runs between the result at {finished} and the settlement at {settled}: {body:?}");
+        let ends = oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == call))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        assert!(ends.len() == 1 && finished < ends[0] && ends[0] < settled,
+            "the staged call ends once between the result at {finished} and the settlement at {settled}: {ends:?}");
         Ok::<_, anyhow::Error>(())
     }.await;
     load.release();
@@ -11139,24 +11199,20 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_agent_sockets(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            configure: Some(Arc::new(|config| {
-                config.retry = RetryConfig {
-                    max_attempts: 0,
-                    min_delay: std::time::Duration::from_millis(1),
-                    max_delay: std::time::Duration::from_millis(1),
-                    multiplier: 1.0,
-                    max_jitter_factor: None,
-                };
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 0,
+                min_delay: std::time::Duration::from_millis(1),
+                max_delay: std::time::Duration::from_millis(1),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
         start_crash_checkpoint_server().await;
 
@@ -11559,6 +11615,23 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(active.lane.active_invocation_count, 0);
         assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
     }
+
+    // The fire-and-forget body ran at its parent's end, after the parent's result and before
+    // its settlement. Replay reads that result first and admits the body at the parent's end
+    // too, after the drain.
+    drop(executor);
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &fire_agent,
+            "principal_context",
+            data_value!(),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the fire-and-forget parent did not replay"))??;
 
     checkpoint_server.abort();
     provider_checkpoint_server.abort();
@@ -24820,4 +24893,319 @@ async fn a_native_tool_reads_a_cancelled_stdin_of_a_client_call_as_cancelled(
         "the call did not fail on the interrupted read of the tool: {failure}"
     );
     Ok(())
+}
+
+/// The tool calls that background work makes after its method returned run in the method's tool
+/// parent, which stays open until the background work drained: the caller gets the result first,
+/// then an incapable and a capable tool call complete, both live and after an executor restart
+/// that replays the recorded result. Each call starts and ends between the method's
+/// `AgentInvocationFinished` and its single `AgentInvocationSettled`. A second executor restart
+/// after the settlement replays those calls without making them again.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn tool_calls_after_the_return_settle_between_the_result_and_settled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let mut executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (promise_port, promise_server, mut promise_checkpoints) =
+        start_promise_checkpoint_server().await;
+
+    for restart in [false, true] {
+        let value = if restart { "replayed" } else { "live" };
+        let agent_id = agent_key!(
+            "ToolStreamingCaller",
+            format!("tool-calls-after-return-{value}")
+        );
+        let worker_id = executor
+            .start_agent_with(
+                &caller_component.id,
+                agent_id.clone(),
+                HashMap::from([(
+                    "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    promise_port.to_string(),
+                )]),
+                Vec::new(),
+            )
+            .await?;
+        let result: String = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            executor.invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "tool_calls_after_return",
+                data_value!(value),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("the result waited for the background tool calls"))??
+        .into_typed()?;
+        assert_eq!(result, format!("returned({value})"));
+        let checkpoint =
+            next_promise_checkpoint(&mut promise_checkpoints, "tool-calls-after-return").await?;
+
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let invocation = after_return_invocation(&oplog);
+        let finished = after_return_finished(&oplog, &invocation)
+            .expect("the result is recorded before the background tool calls");
+        assert!(
+            after_return_settled(&oplog, &invocation).is_empty(),
+            "the method is not settled while its background work waits"
+        );
+        assert!(
+            after_return_tool_starts(&oplog).is_empty(),
+            "no tool call starts before the background work continues"
+        );
+
+        if restart {
+            drop(executor);
+            executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+        }
+        executor
+            .complete_promise(
+                &worker_id.environment_id,
+                &executor
+                    .promise_id(&worker_id, checkpoint.oplog_idx)
+                    .await?,
+                Vec::new(),
+            )
+            .await?;
+
+        let oplog = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                if !after_return_settled(&oplog, &invocation).is_empty() {
+                    return Ok::<_, anyhow::Error>(oplog);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("the background tool calls did not settle ({value})"))??;
+        let settled = after_return_settled(&oplog, &invocation);
+        assert_eq!(
+            settled.len(),
+            1,
+            "the method settles exactly once ({value})"
+        );
+        let settled = settled[0];
+        assert!(settled > finished);
+        let tool_starts = after_return_tool_starts(&oplog);
+        assert_eq!(
+            tool_starts.len(),
+            2,
+            "the incapable and the capable tool call each start once ({value})"
+        );
+        for start in tool_starts {
+            assert!(
+                finished < start && start < settled,
+                "the tool call at {start} starts between the result at {finished} and the \
+                 settlement at {settled} ({value})"
+            );
+            let ends = oplog
+                .iter()
+                .filter(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
+                })
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>();
+            assert!(
+                ends.len() == 1 && finished < ends[0] && ends[0] < settled,
+                "the tool call at {start} ends once between the result and the settlement: \
+                 {ends:?} ({value})"
+            );
+        }
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                .count(),
+            0,
+            "no tool call fails ({value})"
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(
+                            &started.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(method)
+                                if method.method_name.replace('-', "_") == "tool_calls_after_return"
+                        )
+                ))
+                .count(),
+            1,
+            "the method runs once ({value})"
+        );
+        assert_eq!(
+            executor
+                .get_file_contents(&worker_id, "/after-return-capable.bin")
+                .await?,
+            value.as_bytes()
+        );
+        assert_eq!(
+            executor
+                .get_file_contents(&worker_id, "/after-return-incapable.txt")
+                .await?,
+            format!("no-stream:{value}").as_bytes()
+        );
+
+        if restart {
+            // A restart after the settlement replays the tool calls that lie between the result
+            // and the settlement without making them again.
+            let starts = |oplog: &[PublicOplogEntryWithIndex]| {
+                oplog
+                    .iter()
+                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::Start(_)))
+                    .map(|entry| entry.oplog_index)
+                    .collect::<Vec<_>>()
+            };
+            drop(executor);
+            executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+            let probe: String = executor
+                .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+                .await?
+                .into_typed()?;
+            assert_eq!(probe, "replayed");
+            let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_eq!(
+                starts(&replayed),
+                starts(&oplog),
+                "the replay after the settlement makes no durable call again"
+            );
+            assert_eq!(
+                after_return_settled(&replayed, &invocation),
+                vec![settled],
+                "the replayed method keeps its single settlement"
+            );
+            assert_eq!(
+                executor
+                    .get_file_contents(&worker_id, "/after-return-capable.bin")
+                    .await?,
+                value.as_bytes()
+            );
+            assert_eq!(
+                executor
+                    .get_file_contents(&worker_id, "/after-return-incapable.txt")
+                    .await?,
+                format!("no-stream:{value}").as_bytes()
+            );
+        }
+    }
+
+    promise_server.abort();
+    Ok(())
+}
+
+/// The invocation ID of the started `tool_calls_after_return` invocation.
+fn after_return_invocation(
+    oplog: &[PublicOplogEntryWithIndex],
+) -> golem_common::model::InvocationId {
+    oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name.replace('-', "_") == "tool_calls_after_return" =>
+                {
+                    Some(method.invocation_id)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("tool_calls_after_return started")
+}
+
+fn after_return_finished(
+    oplog: &[PublicOplogEntryWithIndex],
+    invocation: &golem_common::model::InvocationId,
+) -> Option<OplogIndex> {
+    oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationFinished(finished)
+            if finished.invocation_id == *invocation =>
+        {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    })
+}
+
+fn after_return_settled(
+    oplog: &[PublicOplogEntryWithIndex],
+    invocation: &golem_common::model::InvocationId,
+) -> Vec<OplogIndex> {
+    oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationSettled(settled)
+                    if settled.invocation_id == *invocation
+            )
+        })
+        .map(|entry| entry.oplog_index)
+        .collect()
+}
+
+/// The `Start`s of the tool entity invocations in `oplog`.
+fn after_return_tool_starts(oplog: &[PublicOplogEntryWithIndex]) -> Vec<OplogIndex> {
+    oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(parameters)
+                    if parameters.function_name == "golem::entity::invoke"
+            ) && matches!(
+                &entry.attribution,
+                PublicOplogEntryAttribution::Entity(entity)
+                    if entity.invocation.entity.kind == PublicAgentEntityKind::Tool
+            )
+        })
+        .map(|entry| entry.oplog_index)
+        .collect()
 }

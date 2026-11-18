@@ -52,9 +52,11 @@ pub(crate) use error_history::{last_error, recover_stderr_logs};
 #[cfg(test)]
 use filesystem::component_file_node;
 #[cfg(test)]
-pub(crate) use invocation::{ephemeral_suspend_trap, terminal_entry_refusal};
+use invocation::{
+    FailureAttribution, ephemeral_terminal_decision, ephemeral_terminal_trap, failure_attribution,
+};
 #[cfg(test)]
-use invocation::{ephemeral_terminal_decision, ephemeral_terminal_trap};
+pub(crate) use invocation::{ephemeral_suspend_trap, terminal_entry_refusal};
 pub(crate) use recovery::selected_recovery_error;
 #[cfg(test)]
 use recovery::{
@@ -223,8 +225,8 @@ use crate::wasi_host;
 use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
-    load_load_snapshot_guest, lower_invocation,
+    AgentExportFuncs, InvokeResult, ReturnRecorder, invocation_uses_streams,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::owner_wallet::{
@@ -519,6 +521,8 @@ const UUID_V7_MAX_TIMESTAMP: u64 = (1_u64 << 48) - 1;
 /// invocation.
 pub struct InvocationDeadline {
     latch: Arc<AtomicBool>,
+    /// Set by whichever comes first: the timer firing, or [`InvocationDeadline::disarm`].
+    claim: Arc<AtomicBool>,
     duration: Option<Duration>,
     timer: Option<tokio::task::JoinHandle<()>>,
 }
@@ -1283,6 +1287,24 @@ struct PrivateDurableWorkerState {
     /// guest-call wrapper reports the dedicated tail-work timeout after the event loop unwinds.
     tail_work_deadline_exceeded: Arc<AtomicBool>,
 
+    /// The open replay anchor of the invocation the loop replays, when that invocation records
+    /// its result at the export's return and drains its background work after it. The handle is
+    /// marked when the export returns. The end of the drain closes the anchor.
+    open_invocation_anchor: Option<(OplogIndex, replay_state::ExportReturned)>,
+
+    /// The terminal of the invocation the loop replays, which replay consumed when the export
+    /// returned. The result reader of the invocation takes it.
+    replayed_invocation_terminal: Option<Result<(OplogIndex, OplogEntry), WorkerExecutorError>>,
+
+    /// Whether the result the loop records now is recorded at the export's return, before the
+    /// background work of the invocation drains. The end of the drain then disposes the
+    /// producers, checks the custom durable scopes and releases the retained `Start`s.
+    recording_result_at_return: bool,
+
+    /// Whether the loop's invocation recorded its result at the export's return, so that a
+    /// failure of its background work is no longer the outcome of the invocation.
+    result_recorded_at_return: bool,
+
     dropped_call_events: (
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
@@ -1717,6 +1739,7 @@ impl PrivateDurableWorkerState {
         &mut self,
         invocation_key: golem_common::model::InvocationId,
     ) {
+        self.result_recorded_at_return = false;
         self.invocations
             .begin(attribution::InvocationKey::Invocation(invocation_key));
     }
@@ -1724,6 +1747,7 @@ impl PrivateDurableWorkerState {
     /// Ends the loop's invocation without beginning another, as an entity Store does when its
     /// entity invocation scope is removed.
     pub fn clear_current_idempotency_key(&mut self) {
+        self.result_recorded_at_return = false;
         self.invocations
             .begin(attribution::InvocationKey::AgentLevel);
     }

@@ -16057,7 +16057,7 @@ async fn read_open_anchor_terminal(
 ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
     tokio::time::timeout(
         Duration::from_secs(2),
-        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id),
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id, || ()),
     )
     .await
     .expect("the open-anchor terminal read must not hang")
@@ -16134,8 +16134,9 @@ async fn ordinary_reader_waits_for_the_open_anchor_terminal_once_the_export_retu
     .await;
     let anchor = start_open_invocation(&rs).await;
     let invocation_id = replayed_invocation_id();
-    let mut terminal =
-        Box::pin(rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id));
+    let mut terminal = Box::pin(
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id, || ()),
+    );
     assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
 
     let (index, _) = rs.get_oplog_entry(None).await.unwrap();
@@ -16588,8 +16589,9 @@ async fn a_missing_background_start_waits_for_the_open_terminal_then_diverges() 
     .await;
     start_open_invocation(&rs).await;
     let invocation_id = replayed_invocation_id();
-    let mut terminal =
-        Box::pin(rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id));
+    let mut terminal = Box::pin(
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id, || ()),
+    );
     assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
     let (index, _) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(index, OplogIndex::from_u64(3));
@@ -16633,8 +16635,9 @@ async fn a_background_start_after_the_open_terminal_resolves_once_the_terminal_i
     .await;
     let anchor = start_open_invocation(&rs).await;
     let invocation_id = replayed_invocation_id();
-    let mut terminal =
-        Box::pin(rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id));
+    let mut terminal = Box::pin(
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id, || ()),
+    );
     assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
     rs.get_oplog_entry(None).await.unwrap();
 

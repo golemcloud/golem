@@ -64,6 +64,7 @@ struct Attempt {
 
 struct RuntimeActivity {
     activity: ActivityId,
+    kind: RuntimeActivityKind,
     root: bool,
 }
 
@@ -78,6 +79,13 @@ struct DriverState {
     runtime_run_retired: bool,
     runtime_watermark: usize,
     runtime_candidate: Option<usize>,
+    /// The [`RootOutsideWait`]s held and not parked: the root waits for work outside the Store's
+    /// runtime, so a blocked poll is not a deadlock.
+    root_outside_waits: usize,
+    /// The waker of a run with deadlock detection whose last poll blocked with only its root
+    /// open, while work outside this Store's runtime was open. The end of that work wakes it,
+    /// so that the run checks again.
+    deadlock_recheck: Option<std::task::Waker>,
 }
 
 #[derive(Default)]
@@ -115,6 +123,16 @@ impl OwnerSuspension {
 
     fn invalidate(state: &mut State) {
         state.revision = state.revision.wrapping_add(1);
+    }
+
+    /// Takes the wakers of the runs that wait to check again for a deadlock. The caller wakes
+    /// them after it releases the state lock, when work outside their Store's runtime ended.
+    fn take_deadlock_rechecks(state: &mut State) -> Vec<std::task::Waker> {
+        state
+            .stores
+            .values_mut()
+            .filter_map(|store| store.driver.deadlock_recheck.take())
+            .collect()
     }
 
     fn classify_wait(&self, activity: &ActivityId, wakeup: Wakeup) -> Option<u64> {
@@ -590,25 +608,33 @@ impl<F> Drop for ExternalReceive<'_, F> {
 
 impl Drop for ExternalActivity {
     fn drop(&mut self) {
-        let mut state = self.owner.state.lock().unwrap();
-        state.external_activities.remove(&self.activity);
-        state.activities.remove(&self.activity);
-        OwnerSuspension::invalidate(&mut state);
+        let rechecks = {
+            let mut state = self.owner.state.lock().unwrap();
+            state.external_activities.remove(&self.activity);
+            state.activities.remove(&self.activity);
+            OwnerSuspension::invalidate(&mut state);
+            OwnerSuspension::take_deadlock_rechecks(&mut state)
+        };
+        rechecks.into_iter().for_each(std::task::Waker::wake);
     }
 }
 
 impl Drop for EntityActivity {
     fn drop(&mut self) {
-        let mut state = self.owner.state.lock().unwrap();
-        state.external_activities.remove(&self.activity);
-        state.activities.remove(&self.activity);
-        if state.entity_activities.get(&self.invocation) == Some(&self.activity) {
-            state.entity_activities.remove(&self.invocation);
-        }
-        for store in state.stores.values_mut() {
-            store.delegated.remove(&self.activity);
-        }
-        OwnerSuspension::invalidate(&mut state);
+        let rechecks = {
+            let mut state = self.owner.state.lock().unwrap();
+            state.external_activities.remove(&self.activity);
+            state.activities.remove(&self.activity);
+            if state.entity_activities.get(&self.invocation) == Some(&self.activity) {
+                state.entity_activities.remove(&self.invocation);
+            }
+            for store in state.stores.values_mut() {
+                store.delegated.remove(&self.activity);
+            }
+            OwnerSuspension::invalidate(&mut state);
+            OwnerSuspension::take_deadlock_rechecks(&mut state)
+        };
+        rechecks.into_iter().for_each(std::task::Waker::wake);
     }
 }
 
@@ -750,10 +776,14 @@ impl RpcActivityRevoker {
 
 impl Drop for RpcActivity {
     fn drop(&mut self) {
-        let mut state = self.shared.owner.state.lock().unwrap();
-        state.external_activities.remove(&self.shared.activity);
-        state.activities.remove(&self.shared.activity);
-        OwnerSuspension::invalidate(&mut state);
+        let rechecks = {
+            let mut state = self.shared.owner.state.lock().unwrap();
+            state.external_activities.remove(&self.shared.activity);
+            state.activities.remove(&self.shared.activity);
+            OwnerSuspension::invalidate(&mut state);
+            OwnerSuspension::take_deadlock_rechecks(&mut state)
+        };
+        rechecks.into_iter().for_each(std::task::Waker::wake);
     }
 }
 
@@ -1126,6 +1156,41 @@ impl RuntimeStore {
         }
     }
 
+    /// Marks that the root of this Store's run waits for work outside the Store's runtime, such
+    /// as a spawned cursor operation or an oplog read, until the mark drops.
+    pub(crate) fn root_waits_outside(self: &Arc<Self>) -> RootOutsideWait {
+        self.update_root_outside_waits(|waits| waits + 1);
+        RootOutsideWait {
+            store: self.clone(),
+        }
+    }
+
+    fn update_root_outside_waits(&self, update: impl FnOnce(usize) -> usize) {
+        let recheck = {
+            let mut state = self.owner.state.lock().unwrap();
+            state.stores.get_mut(&self.store_id).and_then(|store| {
+                let waits = update(store.driver.root_outside_waits);
+                let decreased = waits < store.driver.root_outside_waits;
+                store.driver.root_outside_waits = waits;
+                decreased
+                    .then(|| store.driver.deadlock_recheck.take())
+                    .flatten()
+            })
+        };
+        if let Some(recheck) = recheck {
+            recheck.wake();
+        }
+    }
+
+    /// Drives `future`, the run of this Store's concurrent event loop, under the owner's
+    /// suspension policy.
+    ///
+    /// With `detect_deadlock`, a poll that blocks while the root is the only open activity of
+    /// this Store traps with [`wasmtime::Trap::AsyncDeadlock`]: the root of a plain
+    /// `run_concurrent` can then wait only for work that no longer exists. It is not a deadlock
+    /// while the root waits outside the Store ([`Self::root_waits_outside`]), or while another
+    /// Store or an external or delegated activity of the owner is open, because their work can
+    /// still wake the root. When that work ends, the run is woken and checks again.
     pub(crate) async fn drive<R>(
         self: &Arc<Self>,
         future: impl Future<Output = wasmtime::Result<R>>,
@@ -1134,6 +1199,7 @@ impl RuntimeStore {
             crate::durable_host::WakeupScheduler,
             crate::services::golem_config::SuspendConfig,
         )>,
+        detect_deadlock: bool,
     ) -> wasmtime::Result<R> {
         let _delegated = entity.and_then(|entity| self.delegate(entity));
         let mut future = std::pin::pin!(future);
@@ -1146,22 +1212,51 @@ impl RuntimeStore {
                     )));
                 };
                 store.driver.active_poll = true;
+                store.driver.deadlock_recheck = None;
                 store.driver.generation = store.driver.generation.wrapping_add(1);
                 store.driver.blocked_generation = None;
                 OwnerSuspension::invalidate(&mut state);
             }
             let result = future.as_mut().poll(cx);
             let mut blocked = false;
+            let mut deadlocked = false;
             {
                 let mut state = self.owner.state.lock().unwrap();
+                let mut only_root = false;
                 if let Some(store) = state.stores.get_mut(&self.store_id) {
                     store.driver.active_poll = false;
                     if result.is_pending() && store.driver.runtime_candidate.is_some() {
                         store.driver.blocked_generation = Some(store.driver.generation);
                         store.driver.blocked_seq += 1;
                         blocked = true;
+                        only_root = detect_deadlock
+                            && !store.activities.is_empty()
+                            && store
+                                .activities
+                                .values()
+                                .all(|activity| activity.kind == RuntimeActivityKind::Root);
+                        deadlocked = only_root
+                            && store.driver.root_outside_waits == 0
+                            && store.delegated.is_empty();
                     }
                 }
+                deadlocked = deadlocked
+                    && state.external_activities.is_empty()
+                    && state.stores.iter().all(|(store_id, store)| {
+                        *store_id == self.store_id
+                            || (store.activities.is_empty() && store.delegated.is_empty())
+                    });
+                // Only work outside this Store's runtime can still wake the root. Its end does
+                // not wake the root, so it wakes this run to check again.
+                if only_root
+                    && !deadlocked
+                    && let Some(store) = state.stores.get_mut(&self.store_id)
+                {
+                    store.driver.deadlock_recheck = Some(cx.waker().clone());
+                }
+            }
+            if deadlocked {
+                return std::task::Poll::Ready(Err(wasmtime::Trap::AsyncDeadlock.into()));
             }
             // A probe waker can re-enter the owner state lock.
             if blocked {
@@ -1216,6 +1311,38 @@ impl RuntimeStore {
     }
 }
 
+/// Held while the root of a Store's run waits for work outside the Store's runtime; see
+/// [`RuntimeStore::root_waits_outside`].
+pub(crate) struct RootOutsideWait {
+    store: Arc<RuntimeStore>,
+}
+
+impl RootOutsideWait {
+    /// Lifts the mark while the returned value is held, when the root waits only for work of
+    /// the owner's runtime again.
+    pub(crate) fn parked(&self) -> RootParked<'_> {
+        self.store.update_root_outside_waits(|waits| waits - 1);
+        RootParked { wait: self }
+    }
+}
+
+impl Drop for RootOutsideWait {
+    fn drop(&mut self) {
+        self.store.update_root_outside_waits(|waits| waits - 1);
+    }
+}
+
+/// See [`RootOutsideWait::parked`].
+pub(crate) struct RootParked<'a> {
+    wait: &'a RootOutsideWait,
+}
+
+impl Drop for RootParked<'_> {
+    fn drop(&mut self) {
+        self.wait.store.update_root_outside_waits(|waits| waits + 1);
+    }
+}
+
 struct DelegatedActivity {
     store: Arc<(Arc<OwnerSuspension>, u64)>,
     activity: ActivityId,
@@ -1224,29 +1351,40 @@ struct DelegatedActivity {
 impl Drop for DelegatedActivity {
     fn drop(&mut self) {
         let (owner, store_id) = &*self.store;
-        let mut state = owner.state.lock().unwrap();
-        if let Some(store) = state.stores.get_mut(store_id) {
-            store.delegated.remove(&self.activity);
-        }
-        if state.activities.contains_key(&self.activity) {
-            state.external_activities.insert(self.activity.clone());
-            state
-                .activities
-                .insert(self.activity.clone(), ActivityClass::Unknown);
-        }
-        OwnerSuspension::invalidate(&mut state);
+        let rechecks = {
+            let mut state = owner.state.lock().unwrap();
+            if let Some(store) = state.stores.get_mut(store_id) {
+                store.delegated.remove(&self.activity);
+            }
+            if state.activities.contains_key(&self.activity) {
+                state.external_activities.insert(self.activity.clone());
+                state
+                    .activities
+                    .insert(self.activity.clone(), ActivityClass::Unknown);
+            }
+            OwnerSuspension::invalidate(&mut state);
+            OwnerSuspension::take_deadlock_rechecks(&mut state)
+        };
+        rechecks.into_iter().for_each(std::task::Waker::wake);
     }
 }
 
 impl Drop for RuntimeStore {
     fn drop(&mut self) {
-        let mut state = self.owner.state.lock().unwrap();
-        if let Some(store) = state.stores.remove(&self.store_id) {
-            for activity in store.activities.values() {
-                state.activities.remove(&activity.activity);
+        let rechecks = {
+            let mut state = self.owner.state.lock().unwrap();
+            match state.stores.remove(&self.store_id) {
+                Some(store) => {
+                    for activity in store.activities.values() {
+                        state.activities.remove(&activity.activity);
+                    }
+                    OwnerSuspension::invalidate(&mut state);
+                    OwnerSuspension::take_deadlock_rechecks(&mut state)
+                }
+                None => Vec::new(),
             }
-            OwnerSuspension::invalidate(&mut state);
-        }
+        };
+        rechecks.into_iter().for_each(std::task::Waker::wake);
     }
 }
 
@@ -1338,7 +1476,7 @@ impl RuntimeObserver for RuntimeStore {
         }
         let mut state = self.owner.state.lock().unwrap();
         match event {
-            RuntimeObservation::ActivityStarted { activity, .. } => {
+            RuntimeObservation::ActivityStarted { activity, kind } => {
                 state.next_id = state.next_id.wrapping_add(1);
                 let id = ActivityId(state.next_id);
                 state.activities.insert(id.clone(), ActivityClass::Unknown);
@@ -1349,10 +1487,16 @@ impl RuntimeObserver for RuntimeStore {
                     activity,
                     RuntimeActivity {
                         activity: id,
+                        kind,
                         root: false,
                     },
                 ) {
                     state.activities.remove(&old.activity);
+                    OwnerSuspension::invalidate(&mut state);
+                    let rechecks = OwnerSuspension::take_deadlock_rechecks(&mut state);
+                    drop(state);
+                    rechecks.into_iter().for_each(std::task::Waker::wake);
+                    return;
                 }
                 OwnerSuspension::invalidate(&mut state);
             }
@@ -1364,6 +1508,9 @@ impl RuntimeObserver for RuntimeStore {
                 if let Some(activity) = removed {
                     state.activities.remove(&activity.activity);
                     OwnerSuspension::invalidate(&mut state);
+                    let rechecks = OwnerSuspension::take_deadlock_rechecks(&mut state);
+                    drop(state);
+                    rechecks.into_iter().for_each(std::task::Waker::wake);
                 }
             }
             RuntimeObservation::DriverBlocked { run, generation } => {

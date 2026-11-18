@@ -278,6 +278,12 @@ mod context {
         pub fn duration(&self) -> Option<Duration> {
             self.duration
         }
+
+        /// Disarms the deadline unless it fired first. `false` means that it fired: its
+        /// interrupt is sent, or is about to be sent.
+        pub fn disarm(self) -> bool {
+            !self.claim.swap(true, Ordering::AcqRel)
+        }
     }
 
     impl Drop for InvocationDeadline {
@@ -364,11 +370,16 @@ mod context {
             let latch = self.state.invocation_deadline_exceeded.clone();
             latch.store(false, Ordering::Release);
             let duration = self.state.config.limits.max_invocation_duration;
+            let claim = Arc::new(AtomicBool::new(false));
             let timer = duration.map(|duration| {
                 let latch = latch.clone();
+                let claim = claim.clone();
                 let execution_status = self.execution_status.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(duration).await;
+                    if claim.swap(true, Ordering::AcqRel) {
+                        return;
+                    }
                     latch.store(true, Ordering::Release);
                     let interrupt_signal = {
                         let status = execution_status.read().unwrap();
@@ -387,6 +398,7 @@ mod context {
             });
             InvocationDeadline {
                 latch,
+                claim,
                 duration,
                 timer,
             }

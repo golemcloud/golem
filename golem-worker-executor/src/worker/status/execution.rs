@@ -60,6 +60,7 @@ pub(super) fn calculate_latest_worker_status(
         if !deleted_regions.is_in_deleted_region(*idx)
             && let OplogEntry::Error {
                 kind,
+                invocation_id,
                 error,
                 retry_from,
                 retry_policy_state,
@@ -67,7 +68,10 @@ pub(super) fn calculate_latest_worker_status(
             } = entry
         {
             last_error_kind = Some(*kind);
+            // A rejection names the invocation it rejects. A rejection that names no invocation
+            // is an ordinary trap of the agent, after the invocation's recorded result.
             if *kind == OplogErrorKind::Invocation
+                && invocation_id.is_some()
                 && matches!(
                     error,
                     AgentError::InvalidRequest(_) | AgentError::PermissionDenied(_)
