@@ -2861,6 +2861,7 @@ fn durable_oplog_read_payload_pairs_roundtrip() {
             result: Err("permission denied".to_string()),
             next_oplog_index: OplogIndex::from_u64(41),
             current_component_revision: revision,
+            last_oplog_index: None,
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiSearchOplogNext>(
@@ -2875,6 +2876,7 @@ fn durable_oplog_read_payload_pairs_roundtrip() {
             result: Ok(Some(vec![1, 2, 3])),
             next_oplog_index: OplogIndex::from_u64(99),
             current_component_revision: revision,
+            last_oplog_index: Some(OplogIndex::from_u64(250)),
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiEnrichOplogEntries>(

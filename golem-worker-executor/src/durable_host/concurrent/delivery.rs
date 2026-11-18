@@ -669,6 +669,21 @@ impl CompletionDelivery {
         self.settle();
     }
 
+    /// Runs post-`End` setup before handing the token to the guest-delivery boundary.
+    /// Returned errors suppress delivery; cancelling the setup still drops the armed token.
+    pub(crate) async fn continue_with<T, E>(
+        self,
+        continuation: impl Future<Output = Result<T, E>>,
+    ) -> Result<(T, Self), E> {
+        match continuation.await {
+            Ok(value) => Ok((value, self)),
+            Err(error) => {
+                self.suppress();
+                Err(error)
+            }
+        }
+    }
+
     /// A future transferred back into a host operation no longer has a guest terminal.
     /// Its recipient owns any later guest observation. A marker-bearing replay cannot change
     /// its destination; a markerless host result must not wait for that recipient's history.

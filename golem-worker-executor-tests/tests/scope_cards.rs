@@ -8147,6 +8147,7 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
 }
 
 mod moonbit;
+mod socket_policy;
 
 const CARD_LIVENESS_FUNCTION: &str = "golem::permissions::types::card-liveness";
 

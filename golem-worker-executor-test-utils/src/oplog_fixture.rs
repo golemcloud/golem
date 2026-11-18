@@ -25,7 +25,7 @@ use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{
-    Oplog, OplogError, OplogLifecycleGuard, OplogService, RawOplogPayloadDownloadError,
+    Oplog, OplogError, OplogLifecycleGuard, OplogService, RawOplogPayloadDownloadError, ScanPage,
     StagePublication, UnreadableOplog,
 };
 use golem_worker_executor::services::stream_session_index::StreamSessionIndexService;
@@ -271,7 +271,7 @@ impl OplogService for OplogFixtureService {
         mode: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         self.inner
             .scan_for_component(environment, component, mode, cursor, count)
             .await
