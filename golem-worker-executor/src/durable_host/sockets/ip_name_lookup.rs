@@ -18,9 +18,7 @@ use crate::durable_host::authorization::targets::dns_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
-use crate::durable_host::durability::{
-    GuestTaskContext, HostFailureKind, InternalRetryResult,
-};
+use crate::durable_host::durability::{GuestTaskContext, HostFailureKind, InternalRetryResult};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;

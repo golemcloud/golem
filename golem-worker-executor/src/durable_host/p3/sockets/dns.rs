@@ -14,9 +14,7 @@
 
 use crate::durable_host::authorization::targets::dns_target;
 use crate::durable_host::concurrent::reserve_invocation_id_before_await;
-use crate::durable_host::durability::{
-    ClassifiedHostError, GuestTaskContext, HostFailureKind,
-};
+use crate::durable_host::durability::{ClassifiedHostError, GuestTaskContext, HostFailureKind};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, run_deniable_access_classified, wasi_sockets_view,
 };
