@@ -557,18 +557,41 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     /// The hint for a divergence of a replay that started from a snapshot: the oplog index of the
     /// snapshot, and that a restored state that differs from the live one is a common cause. A
-    /// replay without a snapshot gets no hint.
+    /// replay without a snapshot gets the same hint with the oplog indexes of the automatic
+    /// snapshots that the starts of this incarnation rejected, and no hint when they rejected
+    /// none.
     fn replay_snapshot_hint(store: &Store<Ctx>) -> Option<String> {
-        store
+        const HINT: &str = "a snapshot load that differs from the live state is a common cause";
+        if let Some(snapshot_index) = store.data().durable_ctx().state.last_snapshot_index {
+            return Some(format!(
+                "; replay started from the snapshot at oplog index {snapshot_index}; {HINT}"
+            ));
+        }
+        let mut rejected: Vec<OplogIndex> = store
             .data()
-            .durable_ctx()
-            .state
-            .last_snapshot_index
-            .map(|snapshot_index| {
-                format!(
-                    "; replay started from the snapshot at oplog index {snapshot_index}; a snapshot load that differs from the live state is a common cause"
-                )
-            })
+            .get_public_state()
+            .worker()
+            .read_exclusions(
+                crate::worker::snapshot_selection::SnapshotExclusions::persisted_rejections,
+            )
+            .into_iter()
+            .flatten()
+            .collect();
+        rejected.sort();
+        match rejected.as_slice() {
+            [] => None,
+            [index] => Some(format!(
+                "; replay started without a snapshot after the snapshot at oplog index {index} was rejected; {HINT}"
+            )),
+            indexes => Some(format!(
+                "; replay started without a snapshot after the snapshots at oplog indexes {} were rejected; {HINT}",
+                indexes
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
     }
 
     /// Begins the bootstrap phase of the primary Store, before its core initializer runs.
