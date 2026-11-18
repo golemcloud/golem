@@ -171,7 +171,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
-        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
+        R: Send + 'static,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
         E: DurableCallTrapError,
     {
@@ -355,29 +356,64 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     pub(super) async fn execute_access_start<T, D, Ctx, R, C, F, E>(
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        mut prepared: BegunCall<Pair, P, Ctx>,
+        prepared: BegunCall<Pair, P, Ctx>,
         build_request: F,
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
-        mut capture: Option<C>,
+        capture: Option<C>,
     ) -> Result<ExecutedAccessStart<Pair, P>, E>
     where
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
-        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
+        R: Send + 'static,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
+        E: From<WorkerExecutorError>,
+    {
+        let mut context = AccessorContext::new(store, get_ctx);
+        let mut access = super::super::initiation::InlineInitiationAccess::new(&mut context);
+        Self::execute_initiation_start(
+            &mut access,
+            prepared,
+            build_request,
+            build_span,
+            span_observer,
+            capture,
+        )
+        .await
+    }
+
+    pub(super) async fn execute_initiation_start<Ctx, R, C, F, E>(
+        access: &mut impl super::super::initiation::InitiationAccess<Ctx>,
+        mut prepared: BegunCall<Pair, P, Ctx>,
+        build_request: F,
+        build_span: Option<BuildSpanCallback>,
+        span_observer: Option<Arc<dyn CallSpanObserver>>,
+        capture: Option<C>,
+    ) -> Result<ExecutedAccessStart<Pair, P>, E>
+    where
+        Ctx: WorkerCtx,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
+        R: Send + 'static,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
         E: From<WorkerExecutorError>,
     {
         // Match borrowed admission: capture live authority before appending the Start.
         // A replaying call captures nothing until claim continuation goes live.
-        let mut captured = if let Some(capture) = &mut capture {
-            crate::durable_host::call_coordinator::capture_live_agent_authority_access(
-                store,
-                get_ctx,
-                |ctx| (DurableWorkerCtx::agent_auth_ctx(ctx), capture(ctx)),
-            )
-            .await?
+        let mut capture = capture.map(|mut capture| {
+            move |ctx: &mut DurableWorkerCtx<Ctx>| {
+                (DurableWorkerCtx::agent_auth_ctx(ctx), capture(ctx))
+            }
+        });
+        let mut captured = if let Some(capture_fn) = capture.take() {
+            let (returned_capture, captured) =
+                crate::durable_host::call_coordinator::capture_live_agent_authority_initiation(
+                    access, capture_fn,
+                )
+                .await?;
+            capture = Some(returned_capture);
+            captured
         } else {
             None
         };
@@ -385,12 +421,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             capture.is_none() && prepared.is_live && !prepared.unpersisted;
         if synchronized_at_admission {
             let _boundary_guard =
-                lock_synchronized_card_event_boundary_access(store, get_ctx).await?;
+                crate::durable_host::call_coordinator::lock_synchronized_card_event_boundary_initiation(access).await?;
         }
         let admission_hook = if prepared.is_live {
             None
         } else {
-            store.with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
+            access.window(|ctx| ctx.replay_admission_hook()).await?
         };
         if let Some(hook) = &admission_hook {
             hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeScope)
@@ -406,10 +442,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // cursor transaction lets an incomplete entity continuation build with live semantics.
         // Missing claims while the cursor remains replaying are still strict divergence.
         let replay = prepared
-            .resolve_against_history(
-                &mut AccessorContext::new(store, get_ctx),
-                span_observer.clone(),
-            )
+            .resolve_against_history_initiation(access, span_observer.clone())
             .await?;
         let live_call_permit = prepared.live_call_permit.take();
         let execution_scope = prepared.execution_scope;
@@ -422,25 +455,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .await;
         }
 
-        if let Some(capture) = &mut capture
+        if let Some(mut capture_fn) = capture.take()
             && captured.is_none()
             && is_live
         {
-            captured = if prepared.unpersisted
-                && store.with(|mut access| get_ctx(access.data_mut()).state.is_replay())
+            captured = if prepared.unpersisted && access.window(|ctx| ctx.state.is_replay()).await?
             {
                 // Snapshot loading uses reconstructed authority, not current card state.
-                Some(store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    (DurableWorkerCtx::agent_auth_ctx(ctx), capture(ctx))
-                }))
+                Some(access.window(move |ctx| capture_fn(ctx)).await?)
             } else {
-                crate::durable_host::call_coordinator::capture_live_agent_authority_access(
-                    store,
-                    get_ctx,
-                    |ctx| (DurableWorkerCtx::agent_auth_ctx(ctx), capture(ctx)),
+                crate::durable_host::call_coordinator::capture_live_agent_authority_initiation(
+                    access, capture_fn,
                 )
                 .await
+                .map(|(_, captured)| captured)
                 .and_then(|captured| {
                     captured.ok_or_else(|| {
                         WorkerExecutorError::runtime(
@@ -469,12 +497,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
         if let Some(check) = prepared.claim_options.permission_check.take() {
             let decision = if is_live
-                && !(prepared.unpersisted
-                    && store.with(|mut access| !get_ctx(access.data_mut()).state.is_live()))
+                && !(prepared.unpersisted && access.window(|ctx| !ctx.state.is_live()).await?)
             {
                 Some(match check.targets {
                     Ok(targets) => {
-                        authorize_live_permissions_at_serialized_access(store, get_ctx, &targets)
+                        crate::durable_host::call_coordinator::authorize_live_permissions_at_serialized_initiation(access, &targets)
                             .await?
                             .map_err(|error| error.to_safe_string())
                     }
@@ -503,8 +530,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
         if is_live
             && !prepared.unpersisted
-            && let Some(hook) =
-                store.with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
+            && let Some(hook) = access.window(|ctx| ctx.replay_admission_hook()).await?
         {
             hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeLiveStart)
                 .await;
@@ -532,7 +558,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     _phantom: PhantomData,
                 })
             } else {
-                if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
+                if !access.window(|ctx| ctx.state.is_live()).await? {
                     return Err(WorkerExecutorError::runtime(
                         "live accessor start returned to replay during boundary synchronization",
                     )
@@ -544,28 +570,33 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let observational_owner = execution_scope.observational_owner;
                 let invocation_id = execution_scope.invocation_id;
                 let denial = prepared.claim_options.denial.clone();
-                let span_activity = span_observer.as_ref().map(|_| {
-                    store.with(|mut access| {
-                        get_ctx(access.data_mut()).tail_work_tracker().activity()
-                    })
-                });
-                let (owner, worker, inputs, adopted) = store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    (
-                        ctx.state.owner_wallet.clone(),
-                        ctx.public_state.worker().clone(),
-                        ctx.authority_scope_inputs(),
-                        // The authority this call synchronized at admission. The boundary check
-                        // below accepts it only if nothing was published since; otherwise the
-                        // owner synchronizes again.
-                        synchronized_at_admission.then(|| {
-                            (
-                                ctx.state.authority().synchronized_generation(),
-                                ctx.state.authority_wallet.clone(),
-                            )
-                        }),
+                let span_activity = if span_observer.is_some() {
+                    Some(
+                        access
+                            .window(|ctx| ctx.tail_work_tracker().activity())
+                            .await?,
                     )
-                });
+                } else {
+                    None
+                };
+                let (owner, worker, inputs, adopted) = access
+                    .window(move |ctx| {
+                        (
+                            ctx.state.owner_wallet.clone(),
+                            ctx.public_state.worker().clone(),
+                            ctx.authority_scope_inputs(),
+                            // The authority this call synchronized at admission. The boundary check
+                            // below accepts it only if nothing was published since; otherwise the
+                            // owner synchronizes again.
+                            synchronized_at_admission.then(|| {
+                                (
+                                    ctx.state.authority().synchronized_generation(),
+                                    ctx.state.authority_wallet.clone(),
+                                )
+                            }),
+                        )
+                    })
+                    .await?;
                 let synchronize = {
                     let (owner, worker, inputs) = (owner.clone(), worker.clone(), inputs.clone());
                     move || {
@@ -587,17 +618,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 };
                 let oplog = prepared.oplog.clone();
                 let tasks = worker.tasks.clone();
-                let (marker, teardown, initiation_context) = store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    (
-                        ctx.tool_trap_disposal.clone(),
-                        TeardownProbe::new(
-                            ctx.public_state.worker().shutdown_token(),
-                            ctx.stream_runtime_teardown_probe(),
-                        ),
-                        ambient_trap_context(ctx),
-                    )
-                });
+                let (marker, teardown, initiation_context) = access
+                    .window(|ctx| {
+                        (
+                            ctx.tool_trap_disposal.clone(),
+                            TeardownProbe::new(
+                                ctx.public_state.worker().shutdown_token(),
+                                ctx.stream_runtime_teardown_probe(),
+                            ),
+                            ambient_trap_context(ctx),
+                        )
+                    })
+                    .await?;
                 let initiation_permit = Some(live_call_permit.clone());
                 let initiation_scope = execution_scope.clone();
                 let initiation_type = retry.function_type().clone();
@@ -714,13 +746,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if let Some(cleanup) = &mut cleanup {
                     cleanup.disarm();
                 }
-                let (start_idx, request_upload) = accepted?.take();
+                let (start_idx, state) = accepted?.into_executing(live_call_permit);
                 Ok(ExecutedAccessStart {
                     start_idx,
-                    state: SessionState::executing(
-                        CallRecording::Recorded { request_upload },
-                        live_call_permit,
-                    ),
+                    state,
                     requires_agent_authority: prepared.requires_agent_authority,
                     agent_auth_ctx,
                     execution_scope: execution_scope.finish(start_idx),
