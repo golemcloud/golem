@@ -3,7 +3,7 @@
     "dashboard": {
       "on": "vigoo/golem-ci",
       "name": "golem-ci-status",
-      "branch": "gol-1971-observer-dashboard",
+      "branch": "main",
       "root": ".github/main-validation/observer/dashboard"
     }
   }
