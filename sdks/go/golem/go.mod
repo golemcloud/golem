@@ -6,6 +6,7 @@ tool github.com/bytecodealliance/componentize-go
 
 require (
 	github.com/golemcloud/golem/sdks/go/core v0.1.2
+	// Must match the runtime of the generator pinned in dev-tools/go-bindgen.
 	go.bytecodealliance.org/pkg v0.2.3
 )
 
@@ -24,4 +25,4 @@ replace github.com/golemcloud/golem/sdks/go/core => ../core
 // The bindings' async runtime comes from Golem's fork, which resumes a task when
 // a Go timer is due (it needs Golem's Go toolchain fork). Downstream main
 // modules carry the same replace; the Golem CLI adds it to every component.
-replace go.bytecodealliance.org/pkg => github.com/golemcloud/go-pkg v0.2.3-golem.1
+replace go.bytecodealliance.org/pkg => github.com/golemcloud/go-pkg v0.2.3-golem.2

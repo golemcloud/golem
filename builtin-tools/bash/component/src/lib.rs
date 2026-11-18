@@ -80,8 +80,8 @@ pub trait Bash {
     /// `timeout` defaults to 600 seconds and must be between 1 and 3600 seconds.
     /// A script still running after `timeout` seconds is stopped with TERM, then
     /// KILL a second later, and the call returns exit code 124. `stdin` is not the script's
-    /// input: a caller that cancels it stops the script with INT, then KILL a second later, and
-    /// the call returns exit code 130.
+    /// input: a caller that fails it stops the script with INT, then KILL a second later, and
+    /// the call returns exit code 130. Clean EOF does not stop the script.
     #[arg(cwd = "option", default = "")]
     #[arg(script = "positional")]
     #[arg(timeout = "option", default = 600)]
@@ -109,15 +109,15 @@ impl Bash for BashImpl {
     }
 }
 
-/// Completes when the caller cancels `stdin`. Data is not the script's input and is dropped; a
-/// stream that ends in any other way asks for nothing, so this then never completes.
+/// Completes when the caller fails or cancels `stdin`. Data is not the script's input and is
+/// dropped; clean EOF and other terminal kinds ask for nothing, so this then never completes.
 #[cfg(target_arch = "wasm32")]
 async fn stop_requested(mut stdin: InputStream) {
     use golem_rust::golem_agentic::golem::tool::streams::ByteStreamFailure;
     loop {
         match stdin.next().await {
             Some(Ok(_)) => {}
-            Some(Err(ByteStreamFailure::Cancelled)) => return,
+            Some(Err(ByteStreamFailure::Failed(_) | ByteStreamFailure::Cancelled)) => return,
             Some(Err(_)) | None => std::future::pending::<()>().await,
         }
     }

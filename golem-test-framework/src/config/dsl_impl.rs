@@ -795,6 +795,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &promise_id.agent_id.agent_id,
                 &CompleteParameters {
                     oplog_idx: promise_id.oplog_idx.as_u64(),
+                    fingerprint: promise_id.fingerprint.0,
                     data,
                 },
             )
@@ -951,7 +952,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &golem_common::model::InvocationId,
     ) -> anyhow::Result<bool> {
         let client = self
             .deps
@@ -962,7 +963,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .cancel_invocation(
                 &agent_id.component_id.0,
                 &agent_id.agent_id,
-                &idempotency_key.value,
+                &idempotency_key.to_string(),
             )
             .await?;
         Ok(result.canceled)

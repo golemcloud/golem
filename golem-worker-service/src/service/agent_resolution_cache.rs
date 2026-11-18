@@ -280,7 +280,6 @@ mod tests {
     use super::*;
     use golem_common::base_model::account::AccountId;
     use golem_common::base_model::application::ApplicationId;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{
         AgentMode, AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
         ResolvedAgentType, Snapshotting,
@@ -291,6 +290,7 @@ mod tests {
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
     use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+    use golem_schema::Empty;
     use golem_service_base::clients::registry::RegistryServiceError;
     use golem_service_base::model::auth::AuthCtx;
     use std::sync::atomic::{AtomicU64, Ordering};

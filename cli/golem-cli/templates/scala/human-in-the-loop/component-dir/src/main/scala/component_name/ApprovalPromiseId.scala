@@ -10,11 +10,13 @@ import scala.scalajs.js
 final case class ApprovalPromiseId(
   componentId: UUID,
   agentId: String,
+  fingerprint: UUID,
   oplogIdx: String
 ) {
   def toHost: HostApi.PromiseId =
     JsPromiseId(
       JsAgentId(JsComponentId(JsUuid.fromUuid(componentId)), agentId),
+      JsUuid.fromUuid(fingerprint),
       js.BigInt(oplogIdx)
     )
 }
@@ -26,6 +28,7 @@ object ApprovalPromiseId {
     ApprovalPromiseId(
       JsUuid.toUuid(id.agentId.componentId.uuid),
       id.agentId.agentId,
+      JsUuid.toUuid(id.fingerprint),
       id.oplogIdx.toString
     )
 }

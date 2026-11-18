@@ -16,7 +16,6 @@ use super::ApiResult;
 use crate::services::account::AccountService;
 use crate::services::auth::AuthService;
 use crate::services::token::TokenService;
-use golem_common::model::Empty;
 use golem_common::model::Page;
 use golem_common::model::account::{
     Account, AccountCreation, AccountEmail, AccountId, AccountRevision, AccountSetPlan,
@@ -25,6 +24,7 @@ use golem_common::model::account::{
 use golem_common::model::auth::{Token, TokenCreation, TokenWithSecret};
 use golem_common::model::plan::Plan;
 use golem_common::recorded_http_api_request;
+use golem_schema::Empty;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;

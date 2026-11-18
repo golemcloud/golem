@@ -125,7 +125,13 @@ impl RedisKeyValueStorage {
                 agent_id.to_redis_key()
             )),
             KeyValueStorageNamespace::RunningWorkers => None,
-            KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
+            KeyValueStorageNamespace::Promise {
+                agent_id,
+                fingerprint,
+            } => Some(format!(
+                "promises:{}:{fingerprint}",
+                agent_id.to_redis_key()
+            )),
             KeyValueStorageNamespace::Schedule => None,
             KeyValueStorageNamespace::UserDefined {
                 environment_id,

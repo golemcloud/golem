@@ -572,11 +572,17 @@ impl OplogService for MultiLayerOplogService {
             .read_source(owned_agent_id, agent_mode, idx, n)
             .await?;
         for layer in &self.lower {
-            if result.len() >= n as usize {
+            // Each layer holds an older part of the oplog than the layer above it and reads a
+            // suffix of the range it is given, so it is given the range below what is covered.
+            let count = match result.first_key_value() {
+                Some((first, _)) => first.as_u64().saturating_sub(idx.as_u64()),
+                None => n,
+            };
+            if count == 0 {
                 break;
             }
             let entries = layer
-                .read_source(owned_agent_id, agent_mode, idx, n)
+                .read_source(owned_agent_id, agent_mode, idx, count)
                 .await
                 .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
             for (index, entry) in entries {
@@ -641,7 +647,7 @@ impl OplogService for MultiLayerOplogService {
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         let state = decode_scan_cursor(&cursor, modes)?;
         let layer = state.layer;
         if layer > self.lower.len().get() {
@@ -652,36 +658,48 @@ impl OplogService for MultiLayerOplogService {
         let active_mode = state.mode;
 
         match layer {
+            // The examined count is taken before the agents that a lower layer lists are left
+            // out: those keys were scanned too.
             0 => {
-                let (new_cursor, unfiltered_ids) = self
+                let page = self
                     .primary
                     .scan_for_component(environment_id, component_id, modes, cursor.clone(), count)
                     .await?;
-                let ids = self
-                    .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, 0)
+                let agent_ids = self
+                    .filter_ids_existing_on_lower_layers(page.agent_ids, active_mode, 0)
                     .await?;
-
-                if new_cursor.is_finished() {
-                    Ok((first_scan_cursor(1, modes)?, ids))
+                let cursor = if page.cursor.is_finished() {
+                    first_scan_cursor(1, modes)?
                 } else {
-                    Ok((new_cursor, ids))
-                }
+                    page.cursor
+                };
+                Ok(ScanPage {
+                    cursor,
+                    agent_ids,
+                    examined_keys: page.examined_keys,
+                })
             }
             layer if layer <= self.lower.len().get() => {
                 let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
                     .scan_for_component(environment_id, component_id, modes, cursor.clone(), count)
                     .await?;
+                let examined_keys = unfiltered_ids.len() as u64;
 
-                let ids = self
+                let agent_ids = self
                     .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, layer)
                     .await?;
-                if new_cursor.is_finished() && (layer + 1) <= self.lower.len().get() {
-                    Ok((first_scan_cursor(layer + 1, modes)?, ids))
+                let cursor = if new_cursor.is_finished() && (layer + 1) <= self.lower.len().get() {
+                    first_scan_cursor(layer + 1, modes)?
                 } else if new_cursor.is_finished() {
-                    Ok((ScanCursor::default(), ids))
+                    ScanCursor::default()
                 } else {
-                    Ok((new_cursor, ids))
-                }
+                    new_cursor
+                };
+                Ok(ScanPage {
+                    cursor,
+                    agent_ids,
+                    examined_keys,
+                })
             }
             _ => unreachable!(),
         }

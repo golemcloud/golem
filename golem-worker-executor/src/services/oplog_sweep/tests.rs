@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::model::ExecutionStatus;
 
@@ -33,7 +35,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{
-    AgentFingerprint, AgentMetadata, AgentStatusRecord, IdempotencyKey, RetryConfig, ShardEpoch,
+    AgentFingerprint, AgentMetadata, AgentStatusRecord, RetryConfig, ShardEpoch,
     ShardLeaseRevision, Timestamp,
 };
 use golem_common::read_only_lock;
@@ -1007,7 +1009,7 @@ impl SchedulerWorkerAccess for DirectAccess {
         _owned_agent_id: &OwnedAgentId,
         _target_agent_fingerprint: AgentFingerprint,
         _public_session_id: String,
-        _session_key: IdempotencyKey,
+        _session_key: InvocationId,
         _expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         unreachable!("the sweep never expires durable stream sessions")

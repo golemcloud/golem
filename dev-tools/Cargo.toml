@@ -5,3 +5,4 @@
 [workspace]
 resolver = "2"
 members = ["dir-mirror", "go-bindgen-fixup"]
+exclude = ["go-bindgen"]

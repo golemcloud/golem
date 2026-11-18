@@ -1,0 +1,27 @@
+---
+import Icon from "./Icon.astro";
+import TextLink from "./TextLink.astro";
+import { golemLinks as links } from "../../data/home-preview/golem-links";
+import { text, paragraphs } from "../../data/home-preview/golem-2";
+interface Props {
+  index: number;
+}
+const { index } = Astro.props;
+const name = ["Agents and tools", "Disposable apps", "Distributed systems"][index];
+const content = paragraphs(text(4, name));
+---
+
+<article class:list={["use-case", { featured: index === 1 }]}>
+  <div class="use-case-index">
+    <span>0{index + 1}</span><Icon name={["actor", "apps", "server"][index]} />
+  </div>
+  <h3>{name}</h3>
+  {
+    content
+      .slice(index === 1 ? 1 : 0, index === 1 ? 2 : -1)
+      .map((p) => (
+        <p class={p === "Ask for an app. Keep shaping it." ? "app-thesis" : undefined}>{p}</p>
+      ))
+  }
+  <TextLink href={[links.agents, links.apps, links.distributed][index]} label={content.at(-1)!} />
+</article>

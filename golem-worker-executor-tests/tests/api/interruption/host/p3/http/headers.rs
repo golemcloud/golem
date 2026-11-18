@@ -69,7 +69,7 @@ const SEND: &str = "http::client::send";
 
 fn assert_invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<()> {
     let mut current = false;
@@ -78,7 +78,7 @@ fn assert_invocation(
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.idempotency_key == key);
+                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.invocation_id == key);
                 started += usize::from(current);
             }
             PublicOplogEntry::AgentInvocationFinished(_) if current => terminals += 1,
@@ -216,7 +216,11 @@ async fn pending_headers(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "get_for_quota_wait",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -232,6 +236,9 @@ async fn pending_headers(
         Principal::anonymous(),
     )
     .await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "get_for_quota_wait")
+        .await?;
     let admitted_revision = registry.current_limits().monthly_policy_revision;
     let mut peer = Peer::start().await?;
     let mut invocation = tokio::spawn({
@@ -261,7 +268,7 @@ async fn pending_headers(
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == SEND)) {
                     let start = send_start(&entries, 0)?;
-                    assert_invocation(&entries, &key, 0)?;
+                    assert_invocation(&entries, &stored_key, 0)?;
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     return Ok::<_, anyhow::Error>(start);
                 }
@@ -323,7 +330,7 @@ async fn pending_headers(
             refresh.await?;
         }
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        assert_invocation(&stopped, &key, 0)?;
+        assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             self::send_start(&stopped, 0)? == send_start,
             "interruption must leave the original send Start open"
@@ -434,7 +441,7 @@ async fn pending_headers(
             info!(?recovered, "HTTP recovery oplog after body and request finalization");
             ensure!(self::send_start(&recovered, 1)? == send_start);
             assert_settled_history(&recovered)?;
-            assert_invocation(&recovered, &key, 1)?;
+            assert_invocation(&recovered, &stored_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_quota_wait", data_value!(peer.url.clone())).await?;
             ensure!(cached.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
@@ -452,6 +459,7 @@ async fn pending_headers(
             tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
             let fresh_key = IdempotencyKey::fresh();
+            let stored_fresh_key = executor.external_invocation_key(&id, &fresh_key, "get_for_quota_wait").await?;
             let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "get_for_quota_wait", data_value!(peer.url.clone()));
             let response = async {
                 let third = peer.request().await?;
@@ -472,8 +480,8 @@ async fn pending_headers(
             ensure!(starts.len() == 2 && starts[0] == send_start);
             for start in starts { ensure!(terminal_count(&history, start) == 1); }
             assert_settled_history(&history)?;
-            assert_invocation(&history, &key, 1)?;
-            assert_invocation(&history, &fresh_key, 1)?;
+            assert_invocation(&history, &stored_key, 1)?;
+            assert_invocation(&history, &stored_fresh_key, 1)?;
             info!(?resource, %key, %send_start, requests = 3, "Completed HTTP history made no external request; fresh invocation completed");
         } else {
             // A different durable Worker must be able to acquire the single HTTP pool slot.
@@ -497,7 +505,7 @@ async fn pending_headers(
             ensure!(probe.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::send_start(&failed, 0)? == send_start);
-            assert_invocation(&failed, &key, 0)?;
+            assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(!worker.is_loaded().await);
             peer.assert_counts(2)?;

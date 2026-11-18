@@ -19,7 +19,7 @@ package golem
 import golem.host.RetryApi
 import golem.host.js.{JsPredicateValue, JsUuid}
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 import scala.scalajs.js.typedarray.Uint8Array

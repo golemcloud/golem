@@ -1061,6 +1061,9 @@ fn decode_quota_state(bytes: &[u8]) -> FsQuotaStatV {
 }
 
 #[cfg(test)]
+// The PID namespace child inherits every open file description until it exits, including locks
+// and socket ends that other tests close to signal a peer. Keep it from overlapping those tests.
+#[test_r::sequential]
 mod tests {
     use super::*;
     use assert2::{assert, let_assert};

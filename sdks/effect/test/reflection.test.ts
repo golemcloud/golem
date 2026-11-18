@@ -13,6 +13,7 @@ import { SchemaRef } from "../src/SchemaRef.js"
 import { emptyMetadata, field, t, type SchemaGraph } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 import { createScopeCard } from "../src/internal/scopeCard.js"
+import { hostInvocationMetadata, sdkInvocationMetadata } from "./invocation-metadata.js"
 
 const metadata = emptyMetadata()
 const recursive: SchemaGraph = {
@@ -165,6 +166,7 @@ describe("reflection", () => {
     const rpc = Layer.succeed(
       RpcClient,
       RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: (name, input, phantom) =>
           Effect.sync(() => {
             expect(name).toBe("Recursive")
@@ -272,6 +274,7 @@ describe("reflection", () => {
     const rpc = Layer.succeed(
       RpcClient,
       RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: (_name, _input, _phantom, config) =>
           Effect.sync(() => {
             connections.push(config)
@@ -338,7 +341,7 @@ describe("reflection", () => {
           root: 0,
           valueNodes: [{ tag: "string-value", val: "answer" }],
         }
-        const invocationMetadata = { agentId: "actual-id", idempotencyKey: "actual-key" }
+        const invocationMetadata = hostInvocationMetadata("actual-id")
         const connection: RpcConnection = {
           invokeAndAwait: () => {
             throw new Error("must use interruptible async call")
@@ -373,7 +376,10 @@ describe("reflection", () => {
             events.push("connection-drop")
           },
         }
-        const rpc = Layer.succeed(RpcClient, { connect: () => Effect.succeed(connection) })
+        const rpc = Layer.succeed(RpcClient, {
+          bindSelf: () => Effect.die("unexpected self binding"),
+          connect: () => Effect.succeed(connection),
+        })
         const host = Layer.succeed(AgentHostClient, {
           getAgentType: () => registration(),
           parseAgentId: () => ["Recursive", { value: { root: 0, valueNodes: [] } }, undefined],
@@ -387,7 +393,7 @@ describe("reflection", () => {
             expect(Result.isFailure(yield* Effect.result(method.invoke({ node: {} })))).toBe(true)
             expect(events).toEqual([])
             expect(yield* method.invoke({ node: { label: "first", next: null } })).toEqual({
-              metadata: invocationMetadata,
+              metadata: sdkInvocationMetadata("actual-id"),
               value: "answer",
             })
             output = { root: 0, valueNodes: [{ tag: "bool-value", val: true }] }
@@ -422,7 +428,7 @@ describe("reflection", () => {
       const scopeCards: Array<unknown> = []
       const raw = { scope: 1 } as unknown as CoreTypes.PermissionCard
       const scope = createScopeCard(raw)
-      const invocationMetadata = { agentId: "actual-id", idempotencyKey: "actual-key" }
+      const invocationMetadata = hostInvocationMetadata("actual-id")
       const connection = {
         asyncInvokeAndAwait: (_name: string, _input: unknown, scopeCard: unknown) => {
           scopeCards.push(scopeCard)
@@ -437,7 +443,10 @@ describe("reflection", () => {
         invoke: () => invocationMetadata,
         drop: () => {},
       } as unknown as RpcConnection
-      const rpc = Layer.succeed(RpcClient, { connect: () => Effect.succeed(connection) })
+      const rpc = Layer.succeed(RpcClient, {
+        bindSelf: () => Effect.die("unexpected self binding"),
+        connect: () => Effect.succeed(connection),
+      })
       const host = Layer.succeed(AgentHostClient, {
         getAgentType: () => registration(),
         makeAgentId: () => 'Recursive("unique")',

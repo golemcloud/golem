@@ -46,12 +46,36 @@ type Connection struct {
 
 // Function fields keep native linking independent of generated host imports.
 type operations struct {
+	bindSelf  func() witTypes.Result[witTypes.Tuple2[string, *host.WasmRpc], host.RpcError]
+	drop      func(*host.WasmRpc)
 	parse     func(string) witTypes.Result[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError]
 	construct func(string, types.SchemaValueTree, witTypes.Option[types.Uuid]) witTypes.Result[string, common.AgentError]
 	connect   func(string, types.SchemaValueTree, witTypes.Option[types.Uuid], []common.TypedAgentConfigValue) witTypes.Result[*host.WasmRpc, host.RpcError]
 }
 
 func Parse(agentID string) (Parsed, *Failure) { return platform.parseID(agentID) }
+
+// BindSelf binds the recorded current incarnation and validates its type without creation.
+func BindSelf(expectedType string) (Connection, *Failure) { return platform.self(expectedType) }
+
+func (o operations) self(expectedType string) (Connection, *Failure) {
+	res := o.bindSelf()
+	if res.IsErr() {
+		return Connection{}, &Failure{Stage: ConnectStage, TypeName: expectedType, RPCError: res.Err()}
+	}
+	bound := res.Ok()
+	parsed, failure := o.parseID(bound.F0)
+	if failure != nil {
+		o.drop(bound.F1)
+		return Connection{}, failure
+	}
+	if parsed.TypeName != expectedType {
+		o.drop(bound.F1)
+		return Connection{}, &Failure{Stage: ParseStage, TypeName: expectedType,
+			AgentError: common.MakeAgentErrorInvalidType("self binding expects " + expectedType + ", identity is " + parsed.TypeName)}
+	}
+	return Connection{AgentID: bound.F0, TypeName: parsed.TypeName, PhantomID: parsed.PhantomID, RPC: bound.F1}, nil
+}
 
 func Render(name string, ctor types.SchemaValueTree, phantom witTypes.Option[types.Uuid]) (string, *Failure) {
 	return platform.render(name, ctor, phantom)

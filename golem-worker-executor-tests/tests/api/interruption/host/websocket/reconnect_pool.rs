@@ -284,6 +284,7 @@ async fn pending_reconnect(
     let result = async {
         // Persist a genuine completed Connect and the saved guest handle, then discard its Store.
         let first_key = IdempotencyKey::fresh();
+        let stored_first_key = executor.external_invocation_key(&id, &first_key, "connect_and_receive_first").await?;
         let first_call = executor.invoke_and_await_agent_with_key(&component, &name, &first_key, "connect_and_receive_first", data_value!(peer.url.clone()));
         let first_frame = async {
             let first = peer.handshake().await?;
@@ -296,7 +297,7 @@ async fn pending_reconnect(
         let original = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         pool::connect_start(&original, 1, 1)?;
         assert_receive_terminal(&original, starts_named(&original, RECEIVE)[0], 1)?;
-        assert_invocation(&original, &first_key, 1)?;
+        assert_invocation(&original, &stored_first_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&original, OplogIndex::INITIAL) == (2, 2));
         tokio::time::timeout(Duration::from_secs(10), async { while !worker.stop_if_idle().await { tokio::task::yield_now().await; } }).await.context("target idle eviction")?;
         peer.closed(1).await?;
@@ -331,6 +332,7 @@ async fn pending_reconnect(
         }
         let key = IdempotencyKey::fresh();
         let method = if path == Path::Accessor { "receive_next_from_persisted" } else { "close_persisted_result" };
+        let stored_key = executor.external_invocation_key(&id, &key, method).await?;
         invocation = Some(tokio::spawn({
             let executor = executor.clone(); let component = component.clone(); let key = key.clone(); let name = name.clone();
             async move { executor.invoke_and_await_agent_with_key(&component, &name, &key, method, data_value!()).await }
@@ -344,8 +346,8 @@ async fn pending_reconnect(
             }
         }).await??;
         let start = operation_start(&open, path, 0, 0)?;
-        assert_invocation(&open, &key, 0)?;
-        assert_invocation(&open, &first_key, 1)?;
+        assert_invocation(&open, &stored_key, 0)?;
+        assert_invocation(&open, &stored_first_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&open, OplogIndex::INITIAL) == (3, 2));
         let initial = worker.owner_runtime_resources().with_monthly_capacity(AgentMode::Durable, |capacity| capacity);
         ensure!(initial.exhaustion.is_none());
@@ -368,7 +370,7 @@ async fn pending_reconnect(
             if path == Path::Accessor {
                 assert_receive_terminal(&completed, start, 1)?;
             }
-            assert_invocation(&completed, &key, 1)?;
+            assert_invocation(&completed, &stored_key, 1)?;
             peer.assert_effects(3, 3, if path == Path::Accessor { 3 } else { 2 })?;
             let mut exhausted = policy;
             exhausted.available_memory_gb_seconds = 0;
@@ -414,7 +416,7 @@ async fn pending_reconnect(
         peer.assert_counts(2, 2)?;
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(operation_start(&stopped, path, 0, 0)? == start);
-        assert_invocation(&stopped, &key, 0)?;
+        assert_invocation(&stopped, &stored_key, 0)?;
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         ensure!(entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count() == 1);
         ensure!(!entries.values().any(|entry| matches!(entry, OplogEntry::Error { .. } | OplogEntry::Interrupted { .. } | OplogEntry::Exited { .. })));
@@ -445,7 +447,7 @@ async fn pending_reconnect(
         let intermediate_terminals = if path == Path::Accessor { 0 } else { terminal_count(&repairing, start) };
         let intermediate_deliveries = usize::from(repairing.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)));
         ensure!(intermediate_terminals <= 1 && operation_start(&repairing, path, intermediate_terminals, intermediate_deliveries)? == start);
-        if path == Path::Accessor { assert_invocation(&repairing, &key, 0)?; }
+        if path == Path::Accessor { assert_invocation(&repairing, &stored_key, 0)?; }
         peer.assert_effects(3, 3, 2)?;
         if path == Path::Accessor { third.send.send("repaired".into()).map_err(|_| anyhow::anyhow!("repair frame gate closed"))?; }
         let done = tokio::time::timeout(Duration::from_secs(15), invocation.as_mut().unwrap()).await.context("retained target invocation")??;
@@ -459,8 +461,8 @@ async fn pending_reconnect(
             assert_receive_terminal(&repaired, start, 1)?;
         }
         assert_settled_history(&repaired)?;
-        assert_invocation(&repaired, &first_key, 1)?;
-        assert_invocation(&repaired, &key, 1)?;
+        assert_invocation(&repaired, &stored_first_key, 1)?;
+        assert_invocation(&repaired, &stored_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&repaired, OplogIndex::INITIAL) == (3, 3));
         let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, method, data_value!()).await?;
         if path == Path::Accessor { ensure!(cached.into_typed::<String>()? == "repaired"); }
@@ -472,13 +474,14 @@ async fn pending_reconnect(
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         let noop_key = IdempotencyKey::fresh();
+        let stored_noop_key = executor.external_invocation_key(&id, &noop_key, "noop").await?;
         let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
         ensure!(noop.into_typed::<String>()? == "ok");
         peer.assert_effects(3, 3, if path == Path::Accessor { 3 } else { 2 })?;
         let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(operation_start(&replayed, path, 1, 1)? == start);
-        assert_invocation(&replayed, &key, 1)?;
-        assert_invocation(&replayed, &noop_key, 1)?;
+        assert_invocation(&replayed, &stored_key, 1)?;
+        assert_invocation(&replayed, &stored_noop_key, 1)?;
         assert_settled_history(&replayed)?;
         ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (4, 4));
         Ok::<_, anyhow::Error>(())

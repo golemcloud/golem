@@ -10,4 +10,8 @@ import {
   "golemcloud/golem_sdk/schema_model" @model,
 }
 
+// Test host buffers use the same allocator as the generated bindings.
+
+warnings = "-44"
+
 supported_targets = "+wasm"

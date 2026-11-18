@@ -17,7 +17,7 @@ use crate::preview2::golem::agent::host::InvocationMetadata;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::OwnedAgentId;
+use golem_common::model::OwnedInvocationId;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::SpanId;
@@ -27,16 +27,18 @@ use golem_common::model::oplog::SpanKind;
 use golem_common::model::oplog::SpanOutcome;
 use golem_common::model::oplog::SpanStarted;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub(super) fn invocation_metadata(
-    remote_agent_id: &OwnedAgentId,
-    idempotency_key: &IdempotencyKey,
-) -> InvocationMetadata {
+pub(super) fn invocation_metadata(invocation_id: &OwnedInvocationId) -> InvocationMetadata {
     InvocationMetadata {
-        agent_id: remote_agent_id.agent_id.agent_id.clone(),
-        idempotency_key: idempotency_key.value.clone(),
+        agent_id: invocation_id.agent_id().agent_id.clone(),
+        invocation_id: golem_schema::schema::wit::wire::InvocationId {
+            owner: golem_schema::schema::wit::wire::InvocationOwner::Agent(
+                invocation_id.agent_id().clone().into(),
+            ),
+            id: invocation_id.uuid().into(),
+        },
     }
 }
 
@@ -65,12 +67,23 @@ pub(super) fn embedded_invocation_span_builder<Ctx: WorkerCtx>(
 ) -> Result<impl Fn(&IdempotencyKey) -> SpanStarted + Send + Sync + 'static, WorkerExecutorError> {
     let connection_origin = ctx
         .state
+        .invocation_state()
         .invocation_context
         .span_origin(connection_span_id)
         .ok_or_else(|| WorkerExecutorError::runtime("RPC connection span has no trace origin"))?;
-    let trace_id = ctx.state.invocation_context.trace_id.clone();
-    let trace_states = ctx.state.invocation_context.trace_states.clone();
-    let current_span_id = ctx.state.current_span_id.clone();
+    let trace_id = ctx
+        .state
+        .invocation_state()
+        .invocation_context
+        .trace_id
+        .clone();
+    let trace_states = ctx
+        .state
+        .invocation_state()
+        .invocation_context
+        .trace_states
+        .clone();
+    let current_span_id = ctx.state.invocation_state().current_span_id.clone();
     let connection_span_id = connection_span_id.clone();
     let function_name = function_name.to_string();
     Ok(move |idempotency_key: &IdempotencyKey| {
@@ -98,7 +111,7 @@ pub(super) fn embedded_invocation_span_started(
     function_name: &str,
     idempotency_key: &IdempotencyKey,
 ) -> SpanStarted {
-    let attributes = HashMap::from([
+    let attributes = BTreeMap::from([
         (
             "name".to_string(),
             AttributeValue::String("rpc-invocation".to_string()),
@@ -158,7 +171,7 @@ pub(super) fn install_embedded_span<Ctx: WorkerCtx>(
     let parent = started
         .parent_span_id
         .as_ref()
-        .map(|parent| ctx.state.invocation_context.get(parent))
+        .map(|parent| ctx.state.invocation_state().invocation_context.get(parent))
         .transpose()
         .map_err(WorkerExecutorError::runtime)?;
     let mut builder = InvocationContextSpan::local()
@@ -171,16 +184,20 @@ pub(super) fn install_embedded_span<Ctx: WorkerCtx>(
     if !started.links.is_empty() {
         let connection = ctx
             .state
+            .invocation_state()
             .invocation_context
             .get(connection_span_id)
             .map_err(WorkerExecutorError::runtime)?;
         builder = builder.with_linked_context(connection);
     }
     let span = builder.build();
-    ctx.state.invocation_context.add_span_with_origin(
-        span.clone(),
-        started.trace_id.clone(),
-        started.trace_states.clone(),
-    );
+    ctx.state
+        .invocation_state_mut()
+        .invocation_context
+        .add_span_with_origin(
+            span.clone(),
+            started.trace_id.clone(),
+            started.trace_states.clone(),
+        );
     Ok(span)
 }

@@ -9,6 +9,8 @@ import {
   ToolInvokeError,
 } from "../src/Tool.js"
 import { invokeRegistered } from "../src/internal/tool/runtime.js"
+import * as Durability from "../src/Durability.js"
+import * as Host from "./mocks/golem-durability.js"
 
 const input = () => {
   const codec = Effect.runSync(compile(Schema.Struct({})))
@@ -64,10 +66,35 @@ describe("registered tool guest runtime", () => {
       undefined,
       undefined,
       undefined,
-      {},
     )
     const codec = Effect.runSync(compile(Schema.String))
     await expect(Effect.runPromise(codec.decode(result.result!.value))).resolves.toBe("value!")
+  })
+
+  it("runs custom durability in registered layer acquisition and release", async () => {
+    Host.__resetAll()
+    const durable = (name: string) =>
+      Durability.wrapInfallible(
+        {
+          iface: "",
+          function: name,
+          functionType: Durability.FunctionType.writeRemote,
+          requestSchema: Schema.Struct({}),
+          success: Schema.String,
+        },
+        {},
+        Effect.succeed(name),
+      )
+    toolDefinition("layer-durability")
+      .body((body) => body)
+      .implement(
+        { layerDurability: () => Effect.void },
+        Layer.effectDiscard(Effect.acquireRelease(durable("acquire"), () => durable("release"))),
+      )
+    await expect(
+      invokeRegistered("layer-durability", [], input(), undefined, undefined, undefined),
+    ).resolves.toEqual({ result: undefined })
+    expect(Host.__getBeginCalls().map((call) => call.functionName)).toEqual(["acquire", "release"])
   })
 
   it("closes the registered layer scope after output encoding", async () => {
@@ -92,7 +119,7 @@ describe("registered tool guest runtime", () => {
         layer,
       )
 
-    await invokeRegistered("scoped", [], input(), undefined, undefined, undefined, {})
+    await invokeRegistered("scoped", [], input(), undefined, undefined, undefined)
     expect(finalized).toBe(true)
   })
 
@@ -102,7 +129,7 @@ describe("registered tool guest runtime", () => {
       .implement({ failure: () => Effect.fail(err("rejected", { reason: "no" })) })
 
     await expect(
-      invokeRegistered("failure", [], input(), undefined, undefined, undefined, {}),
+      invokeRegistered("failure", [], input(), undefined, undefined, undefined),
     ).rejects.toMatchObject({
       tag: "custom-error",
       val: { name: "rejected" },
@@ -115,7 +142,7 @@ describe("registered tool guest runtime", () => {
       .body((body) => body.input({ required: true }).output({ required: true }))
       .implement({ requiredStreams: requiredHandler })
     await expect(
-      invokeRegistered("required-streams", [], input(), undefined, undefined, undefined, {}),
+      invokeRegistered("required-streams", [], input(), undefined, undefined, undefined),
     ).rejects.toMatchObject({ tag: "invalid-input" })
     expect(requiredHandler).not.toHaveBeenCalled()
 
@@ -126,15 +153,7 @@ describe("registered tool guest runtime", () => {
     const supplied = iterator()
     const stdout = writer()
     await expect(
-      invokeRegistered(
-        "absent-streams",
-        [],
-        input(),
-        supplied.value,
-        stdout as never,
-        undefined,
-        {},
-      ),
+      invokeRegistered("absent-streams", [], input(), supplied.value, stdout as never, undefined),
     ).rejects.toMatchObject({ tag: "invalid-input" })
     expect(absentHandler).not.toHaveBeenCalled()
     expect(supplied.return_).toHaveBeenCalledOnce()
@@ -146,21 +165,13 @@ describe("registered tool guest runtime", () => {
       .body((body) => body.input())
       .implement({ streams: () => Effect.void })
     const unused = iterator()
-    await invokeRegistered("streams", [], input(), unused.value, undefined, undefined, {})
+    await invokeRegistered("streams", [], input(), unused.value, undefined, undefined)
     expect(unused.return_).toHaveBeenCalledOnce()
 
     const rejected = iterator()
     const stdout = writer()
     await expect(
-      invokeRegistered(
-        "streams",
-        ["missing"],
-        input(),
-        rejected.value,
-        stdout as never,
-        undefined,
-        {},
-      ),
+      invokeRegistered("streams", ["missing"], input(), rejected.value, stdout as never, undefined),
     ).rejects.toMatchObject({ tag: "invalid-command-path" })
     expect(rejected.return_).toHaveBeenCalledOnce()
     expect(stdout.finish).toHaveBeenCalledOnce()
@@ -180,7 +191,7 @@ describe("registered tool guest runtime", () => {
     }
 
     await expect(
-      invokeRegistered("empty-stdin-chunk", [], input(), stdin, undefined, undefined, {}),
+      invokeRegistered("empty-stdin-chunk", [], input(), stdin, undefined, undefined),
     ).rejects.toMatchObject({ tag: "invalid-input" })
   })
 
@@ -226,7 +237,6 @@ describe("registered tool guest runtime", () => {
         undefined,
         stdout as never,
         stderr as never,
-        {},
       ).finally(() => (settled = true))
       await bothTerminalsStarted
       expect(stdout.finish).toHaveBeenCalledOnce()
@@ -264,7 +274,6 @@ describe("registered tool guest runtime", () => {
         undefined,
         outputs[0] as never,
         outputs[1] as never,
-        {},
       )
       if (declared) await expect(invocation).rejects.toMatchObject({ tag: "custom-error" })
       else await expect(invocation).resolves.toEqual({ result: undefined })
@@ -310,7 +319,6 @@ describe("registered tool guest runtime", () => {
         undefined,
         stdout as never,
         stderr as never,
-        {},
       )
       const malformed = ["result", "error-payload", "undeclared"].includes(kind)
       if (malformed) await expect(invocation).rejects.toMatchObject({ tag: "invalid-result" })
@@ -351,7 +359,6 @@ describe("registered tool guest runtime", () => {
           undefined,
           stdout as never,
           stderr as never,
-          {},
         )
         if (fault === "interrupt")
           await expect(invocation).rejects.not.toMatchObject({ tag: "invalid-result" })
@@ -408,7 +415,6 @@ describe("registered tool guest runtime", () => {
         stdin.value,
         stdout.writer as never,
         stderr.writer as never,
-        {},
       ).then(
         (result) => ({ tag: "success" as const, result }),
         (error) => ({ tag: "failure" as const, error }),

@@ -2,6 +2,74 @@ syntax = "proto3";
 
 package golem.http;
 
+enum StandardHttpMethod {
+  STANDARD_HTTP_METHOD_UNSPECIFIED = 0;
+  STANDARD_HTTP_METHOD_GET = 1;
+  STANDARD_HTTP_METHOD_HEAD = 2;
+  STANDARD_HTTP_METHOD_POST = 3;
+  STANDARD_HTTP_METHOD_PUT = 4;
+  STANDARD_HTTP_METHOD_DELETE = 5;
+  STANDARD_HTTP_METHOD_CONNECT = 6;
+  STANDARD_HTTP_METHOD_OPTIONS = 7;
+  STANDARD_HTTP_METHOD_TRACE = 8;
+  STANDARD_HTTP_METHOD_PATCH = 9;
+}
+
+message HttpMethod {
+  oneof value {
+    StandardHttpMethod standard = 1;
+    string custom = 2;
+  }
+}
+
+message PathSegment {
+  oneof value {
+    LiteralSegment literal = 1;
+    PathVariable path_variable = 2;
+    PathVariable remaining_path_variable = 3;
+  }
+}
+
+message LiteralSegment {
+  string value = 1;
+}
+
+message PathVariable {
+  string variable_name = 1;
+}
+
+message HeaderVariable {
+  string header_name = 1;
+  string variable_name = 2;
+}
+
+message QueryVariable {
+  string query_param_name = 1;
+  string variable_name = 2;
+}
+
+message FileMapping {
+  oneof value {
+    ExactFileMapping exact = 1;
+    SubtreeFileMapping subtree = 2;
+  }
+}
+
+message ExactFileMapping {
+  repeated string public_path = 1;
+  string file_path = 2;
+}
+
+message SubtreeFileMapping {
+  repeated string public_prefix = 1;
+  string filesystem_root = 2;
+}
+
+message FileResponseHeader {
+  string name = 1;
+  string value = 2;
+}
+
 enum HttpRouteMode {
   HTTP_ROUTE_MODE_UNSPECIFIED = 0;
   HTTP_ROUTE_MODE_DURABLE_STREAMS = 1;

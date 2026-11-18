@@ -64,6 +64,7 @@ fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 heck = { workspace = true }
+hmac = { workspace = true }
 http = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
@@ -82,11 +83,13 @@ prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 prost = { workspace = true }
 quote = { workspace = true }
+rand = { workspace = true }
 reedline = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
 reqwest-retry = { workspace = true }
+rmcp = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
@@ -96,6 +99,7 @@ semver = { workspace = true }
 sha2 = { workspace = true }
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
+stacker = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
@@ -143,18 +147,23 @@ rustix = { workspace = true, features = ["event", "termios"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true, features = ["pipe"] }
+
 [dev-dependencies]
 axum = { workspace = true }
 expectrl = { workspace = true }
 flate2 = { workspace = true }
 goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
+golem-model-mock = { workspace = true }
 golem-native-tool = { workspace = true }
 log = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }

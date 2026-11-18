@@ -529,6 +529,7 @@ async fn underlying_handle_is_revoked_after_return_and_cannot_cross_invocations(
         .complete_promise(
             &golem_common::model::PromiseId {
                 agent_id: fixture.owner_id.clone(),
+                fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint),
             },
             Vec::new(),

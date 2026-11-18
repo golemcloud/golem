@@ -30,7 +30,7 @@ fn assert_interrupt(result: wasmtime::Result<SocketResult<Vec<u8>>>, expected: I
         error.root_cause().downcast_ref::<InterruptKind>(),
         Some(&expected)
     );
-    // run_read_access's invoke_access driver abandons the Start with this marker.
+    // The durable-call driver abandons the Start with this marker.
     // Classification must still see the original typed cause, never a socket error value.
     let marked = mark_durable_call_trap_context(
         error.into(),

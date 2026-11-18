@@ -17,7 +17,8 @@
 package golem.runtime.rpc.host
 
 import golem.Datetime
-import golem.host.js.JsDatetime
+import golem.InvocationId
+import golem.host.js.{JsDatetime, JsUuid}
 import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.rpc.{InvocationMetadata, InvocationReceipt}
 import zio.test._
@@ -26,14 +27,18 @@ import scala.scalajs.js
 
 object WasmRpcApiSpec extends ZIOSpecDefault {
 
-  private val expectedMetadata = InvocationMetadata("agent-id", "idempotency-key")
+  private val invocationUuid   = java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
+  private val expectedMetadata = InvocationMetadata("Agent(\"a.b\")", InvocationId("Agent(\"a.b\")", invocationUuid))
 
   private def scheduledReceipt: js.Object =
     js.Dynamic
       .literal(
         "metadata" -> js.Dynamic.literal(
-          "agentId"        -> expectedMetadata.agentId,
-          "idempotencyKey" -> expectedMetadata.idempotencyKey
+          "agentId"      -> expectedMetadata.agentId,
+          "invocationId" -> js.Dynamic.literal(
+            "owner" -> js.Dynamic.literal("tag" -> "agent", "val" -> js.Dynamic.literal()),
+            "id"    -> JsUuid.fromUuid(invocationUuid)
+          )
         )
       )
       .asInstanceOf[js.Object]

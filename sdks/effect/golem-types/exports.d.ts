@@ -47,19 +47,17 @@ declare module 'agent-guest' {
      * running and explicitly finishes or fails the endpoint. Dropping an open
      * writer abandons it. The first selected terminal is immutable.
      * `stderr` follows the same independent attachment contract as `stdout`.
-     * `principal` carries the caller's authenticated identity for
-     * authorization and audit, identical in semantics to the parameter
-     * of the same name in `golem:agent/guest.invoke`.
+     * The caller's authenticated identity, for authorization and audit, is
+     * available from `golem:agent/invocation-context.caller`.
      * @throws ToolError
      */
-    export function invoke(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolOutputWriter | undefined, stderr: ToolOutputWriter | undefined, principal: Principal): Promise<InvocationResult>;
+    export function invoke(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolOutputWriter | undefined, stderr: ToolOutputWriter | undefined): Promise<InvocationResult>;
     export type Tool = golemTool010Common.Tool;
     export type ToolError = golemTool010Common.ToolError;
     export type InvocationResult = golemTool010Common.InvocationResult;
     export type ByteStreamItem = golemTool010Streams.ByteStreamItem;
     export type ToolOutputWriter = golemTool010Streams.ToolOutputWriter;
     export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
-    export type Principal = golemAgent200Common.Principal;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
   /**
@@ -78,9 +76,11 @@ declare module 'agent-guest' {
     export function getToolMiddleware(name: string): ToolMiddleware;
     /**
      * Invoke one middleware layer around its runtime-bound next inner layer.
+     * `golem:agent/invocation-context.caller` answers with the caller of the
+     * wrapped tool invocation.
      * @throws ToolError
      */
-    export function invokeToolMiddleware(middlewareName: string, toolName: string, toolMetadata: Tool, parameters: TypedSchemaValue, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolOutputWriter | undefined, stderr: ToolOutputWriter | undefined, principal: Principal, wrapped: UnderlyingTool): Promise<InvocationResult>;
+    export function invokeToolMiddleware(middlewareName: string, toolName: string, toolMetadata: Tool, parameters: TypedSchemaValue, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<ByteStreamItem> | undefined, stdout: ToolOutputWriter | undefined, stderr: ToolOutputWriter | undefined, wrapped: UnderlyingTool): Promise<InvocationResult>;
     export type InvocationResult = golemTool010Common.InvocationResult;
     export type Tool = golemTool010Common.Tool;
     export type ToolError = golemTool010Common.ToolError;
@@ -88,7 +88,6 @@ declare module 'agent-guest' {
     export type ByteStreamItem = golemTool010Streams.ByteStreamItem;
     export type ToolOutputWriter = golemTool010Streams.ToolOutputWriter;
     export type UnderlyingTool = golemTool010Underlying.UnderlyingTool;
-    export type Principal = golemAgent200Common.Principal;
     export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
@@ -124,18 +123,19 @@ declare module 'agent-guest' {
      * `input` is a value tree whose root encodes the constructor's parameter
      * list (one record field per declared `named-field`, in declaration order).
      * The guest interprets it against its own constructor `input-schema`.
+     * The creator's principal is available from `invocation-context.caller`.
      * @throws AgentError
      */
-    export function initialize(agentType: string, input: SchemaValueTree, principal: Principal): Promise<void>;
+    export function initialize(agentType: string, input: SchemaValueTree): Promise<void>;
     /**
      * Invokes an agent. If create was not called before, it fails.
      * `input` is a value tree whose root encodes the method's parameter list.
      * Streams are represented recursively by `stream-value` nodes. The result
      * is `none` when the method's `output-schema` is `unit`, and `some(value)`
-     * for a `single` output.
+     * for a `single` output. The caller is available from `invocation-context.caller`.
      * @throws AgentError
      */
-    export function invoke(methodName: string, input: SchemaValueTree, principal: Principal): Promise<SchemaValueTree | undefined>;
+    export function invoke(methodName: string, input: SchemaValueTree): Promise<SchemaValueTree | undefined>;
     /**
      * Gets the agent type. If create was not called before, it fails
      */
@@ -148,7 +148,6 @@ declare module 'agent-guest' {
     export type SchemaValueTree = golemCore200Types.SchemaValueTree;
     export type AgentError = golemAgent200Common.AgentError;
     export type AgentType = golemAgent200Common.AgentType;
-    export type Principal = golemAgent200Common.Principal;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
 }

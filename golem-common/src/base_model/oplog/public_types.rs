@@ -20,9 +20,10 @@ use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::tool::{SerializableToolInvocationResult, SerializableToolRpcError};
-use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
+use crate::base_model::{InvocationId, OplogIndex, Timestamp};
 use crate::schema::TypedSchemaValue;
 use crate::{declare_structs, declare_unions};
+use golem_schema::Empty;
 use golem_schema_derive::{FromSchema, IntoSchema};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -223,8 +224,7 @@ impl PublicOplogEntry {
             Self::HostStreamFrame(params) => redact_typed_value(&mut params.payload),
             Self::StreamRegistered(params) => redact_typed_value(&mut params.record),
             Self::StreamItems(params) => redact_typed_value(&mut params.record),
-            Self::StreamEnd(params) => redact_typed_value(&mut params.record),
-            Self::StreamCancel(params) => redact_typed_value(&mut params.record),
+            Self::StreamTerminal(params) => redact_typed_value(&mut params.record),
             Self::StreamSession(params) => redact_typed_value(&mut params.record),
             _ => {}
         }
@@ -288,6 +288,7 @@ mod host_managed_redaction_tests {
     fn public_oplog_redacts_external_tool_custom_error() {
         let mut entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: Timestamp::now_utc(),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543210)),
             result: PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
                 result: PublicExternalToolResult::Failure(
                     SerializableToolRpcError::RemoteToolError(Box::new(
@@ -344,15 +345,63 @@ impl TryFrom<PublicTypedAgentConfigEntry> for crate::base_model::worker::Untyped
 pub struct OplogCursor {
     pub next_oplog_index: u64,
     pub current_component_revision: u64,
+    /// The hash of the search query of the pages that gave the cursor, or empty for the pages of
+    /// an oplog read without a query. A read refuses a cursor of another query.
+    pub query_hash: String,
+}
+
+impl OplogCursor {
+    /// The query hash of the pages of `query`: the first 8 bytes of the SHA-256 of the query as
+    /// the caller sent it, in lowercase hex, or empty for a read without a query.
+    pub fn query_hash(query: Option<&str>) -> String {
+        use sha2::Digest as _;
+        query
+            .map(|query| {
+                sha2::Sha256::digest(query.as_bytes())[..8]
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl Display for OplogCursor {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}-{}",
-            self.next_oplog_index, self.current_component_revision
+            "{}-{}-{}",
+            self.next_oplog_index, self.current_component_revision, self.query_hash
         )
+    }
+}
+
+/// Parses the string form `<index>-<revision>-<query hash>` of `Display`.
+impl std::str::FromStr for OplogCursor {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let [index, revision, query_hash] = value.split('-').collect::<Vec<_>>()[..] else {
+            return Err("Invalid oplog cursor".to_string());
+        };
+        let next_oplog_index = index
+            .parse()
+            .map_err(|_| "Invalid index in the oplog cursor".to_string())?;
+        let current_component_revision = revision
+            .parse()
+            .map_err(|_| "Invalid component revision in the oplog cursor".to_string())?;
+        let is_hash = query_hash.len() == 16
+            && query_hash
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        if !query_hash.is_empty() && !is_hash {
+            return Err("Invalid query hash in the oplog cursor".to_string());
+        }
+        Ok(OplogCursor {
+            next_oplog_index,
+            current_component_revision,
+            query_hash: query_hash.to_string(),
+        })
     }
 }
 
@@ -717,7 +766,7 @@ impl From<PublicNamedRetryPolicy> for crate::model::retry_policy::NamedRetryPoli
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInitializationParameters {
-    pub idempotency_key: IdempotencyKey,
+    pub invocation_id: InvocationId,
     pub constructor_parameters: TypedSchemaValue,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
@@ -729,7 +778,7 @@ pub struct AgentInitializationParameters {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMethodInvocationParameters {
-    pub idempotency_key: IdempotencyKey,
+    pub invocation_id: InvocationId,
     pub method_name: String,
     pub function_input: TypedSchemaValue,
     pub trace_id: TraceId,
@@ -750,7 +799,7 @@ pub struct LoadSnapshotParameters {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessOplogEntriesParameters {
-    pub idempotency_key: IdempotencyKey,
+    pub invocation_id: InvocationId,
     // TODO
 }
 
@@ -767,7 +816,7 @@ pub struct ManualUpdateParameters {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalToolInvocationParameters {
-    pub idempotency_key: IdempotencyKey,
+    pub invocation_id: InvocationId,
     pub tool_name: String,
     pub command_path: Vec<String>,
     pub input: TypedSchemaValue,

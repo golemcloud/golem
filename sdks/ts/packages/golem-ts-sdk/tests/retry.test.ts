@@ -170,16 +170,19 @@ describe('retry host helpers', () => {
   let setRetryPolicyMock: ReturnType<typeof vi.fn>;
   let removeRetryPolicyMock: ReturnType<typeof vi.fn>;
   let trapMock: ReturnType<typeof vi.fn>;
+  let scopeEvents: string[];
 
   beforeEach(() => {
     getRetryPolicyByNameMock = vi.fn();
     setRetryPolicyMock = vi.fn();
     removeRetryPolicyMock = vi.fn();
     trapMock = vi.fn();
+    scopeEvents = [];
   });
 
   afterEach(() => {
     vi.doUnmock('golem:api/retry@1.5.0');
+    vi.doUnmock('golem:api/retry-scope@1.5.0');
     vi.doUnmock('golem:api/host@1.5.0');
     vi.resetModules();
   });
@@ -192,6 +195,16 @@ describe('retry host helpers', () => {
       resolveRetryPolicy: vi.fn(),
       setRetryPolicy: setRetryPolicyMock,
       removeRetryPolicy: removeRetryPolicyMock,
+    }));
+    vi.doMock('golem:api/retry-scope@1.5.0', () => ({
+      RetryPolicyScope: class {
+        constructor(private policy: { name: string }) {
+          scopeEvents.push(`open ${policy.name}`);
+        }
+        [Symbol.dispose]() {
+          scopeEvents.push(`close ${this.policy.name}`);
+        }
+      },
     }));
     vi.doMock('golem:api/host@1.5.0', () => ({
       trap: trapMock,
@@ -214,49 +227,36 @@ describe('retry host helpers', () => {
     });
   });
 
-  it('useRetryPolicy restores the previous raw policy on drop', async () => {
-    const previous = {
-      name: 'builder',
-      priority: 1,
-      predicate: { nodes: [{ tag: 'pred-true' as const }] },
-      policy: { nodes: [{ tag: 'never' as const }] },
-    };
-
-    getRetryPolicyByNameMock.mockReturnValue(previous);
-
+  it('useRetryPolicy opens a scope for the raw policy and closes it on the first drop', async () => {
     const retry = await loadRetryModule();
     const guard = retry.useRetryPolicy(NamedPolicy.named('builder', Policy.immediate()));
 
-    expect(setRetryPolicyMock).toHaveBeenNthCalledWith(1, {
-      name: 'builder',
-      priority: 0,
-      predicate: { nodes: [{ tag: 'pred-true' }] },
-      policy: { nodes: [{ tag: 'immediate' }] },
-    });
-
+    expect(scopeEvents).toEqual(['open builder']);
+    guard.drop();
     guard.drop();
 
-    expect(setRetryPolicyMock).toHaveBeenNthCalledWith(2, previous);
+    expect(scopeEvents).toEqual(['open builder', 'close builder']);
+    expect(getRetryPolicyByNameMock).not.toHaveBeenCalled();
+    expect(setRetryPolicyMock).not.toHaveBeenCalled();
     expect(removeRetryPolicyMock).not.toHaveBeenCalled();
   });
 
-  it('withRetryPolicy removes newly added policies after the callback completes', async () => {
-    getRetryPolicyByNameMock.mockReturnValue(undefined);
-
+  it('withRetryPolicy keeps the scope open only while the callback runs', async () => {
     const retry = await loadRetryModule();
     const result = retry.withRetryPolicy(NamedPolicy.named('temporary', Policy.immediate()), () => {
+      expect(scopeEvents).toEqual(['open temporary']);
       return 'ok';
     });
 
     expect(result).toBe('ok');
-    expect(removeRetryPolicyMock).toHaveBeenCalledWith('temporary');
+    expect(scopeEvents).toEqual(['open temporary', 'close temporary']);
+    expect(setRetryPolicyMock).not.toHaveBeenCalled();
+    expect(removeRetryPolicyMock).not.toHaveBeenCalled();
     expect(trapMock).not.toHaveBeenCalled();
   });
 
-  it('withRetryPolicy restores the policy on sync throw', async () => {
-    getRetryPolicyByNameMock.mockReturnValue(undefined);
+  it('withRetryPolicy closes the scope on sync throw', async () => {
     const error = new Error('boom');
-
     const retry = await loadRetryModule();
 
     expect(() =>
@@ -265,24 +265,25 @@ describe('retry host helpers', () => {
       }),
     ).toThrow(error);
 
-    // policy is cleaned up (removed) on error — the old behaviour
-    expect(removeRetryPolicyMock).toHaveBeenCalledWith('temporary');
+    expect(scopeEvents).toEqual(['open temporary', 'close temporary']);
     expect(trapMock).not.toHaveBeenCalled();
   });
 
-  it('withRetryPolicy restores the policy on async rejection', async () => {
-    getRetryPolicyByNameMock.mockReturnValue(undefined);
+  it('withRetryPolicy closes the scope only after an async callback settles', async () => {
     const error = new Error('async-boom');
-
     const retry = await loadRetryModule();
 
-    await expect(
-      retry.withRetryPolicy(NamedPolicy.named('temporary', Policy.immediate()), async () => {
+    const pending = retry.withRetryPolicy(
+      NamedPolicy.named('temporary', Policy.immediate()),
+      async () => {
+        await Promise.resolve();
         throw error;
-      }),
-    ).rejects.toThrow(error);
+      },
+    );
+    expect(scopeEvents).toEqual(['open temporary']);
 
-    expect(removeRetryPolicyMock).toHaveBeenCalledWith('temporary');
+    await expect(pending).rejects.toThrow(error);
+    expect(scopeEvents).toEqual(['open temporary', 'close temporary']);
     expect(trapMock).not.toHaveBeenCalled();
   });
 });

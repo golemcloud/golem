@@ -84,7 +84,7 @@ The setting applies to the custom request port, the MCP port and, in the single
 Test disconnect/reset through the actual proxy, including while waiting for a
 response head. A client timeout alone does not prove upstream cancellation. Keep
 HTTP/2 enabled: some pending live-file requests over HTTP/1 detect disconnect only
-at the exchange deadline.
+at the live-file deadline (`file_lookup_timeout`).
 
 ## Serving HTTP APIs and MCP on one port
 
@@ -198,7 +198,8 @@ Worker-service defaults are:
 
 ```toml
 [http_session]
-exchange_timeout = "5m"
+request_body_idle_timeout = "1m"
+file_lookup_timeout = "5m"
 retry_deadline = "10s"
 retry_delay = "100ms"
 max_resume_attempts = 4
@@ -210,11 +211,39 @@ command_queue_frames = 16
 max_event_bytes = 17825792
 ```
 
-`exchange_timeout` bounds the whole handler or live-file exchange, including
-initialization, queueing, and streaming. There is no separate executor file-read
-deadline. Expiry returns 504 before response commitment or aborts a started response.
+`request_body_idle_timeout` bounds each active wait for request-body bytes after
+the invocation accepts the request. Nonempty bytes reset the idle interval. Time
+spent waiting for invocation input credits does not count. On expiry, after any
+bytes already received, the body read returns an `Interrupted` stream error, not
+EOF. It does not interrupt the invocation or cancel another stream; the handler
+can catch the error and return its own response. There is no whole-handler or
+streaming-response deadline.
+
+A request with a nonzero `Content-Length` or a chunked HTTP/1 body also waits at
+most `request_body_idle_timeout` for the invocation to accept it, for example
+while no executor owns the agent's shard or while the agent's instance loads. On
+expiry the gateway returns 504 and cancels the request, so a client that
+disconnects in the middle of a body does not hold the request for the whole
+outage. A request without a body keeps waiting for acceptance. Raise the limit
+for agents whose instances take longer than that to load.
+
+When the handler drops its input, or after the idle timeout, an HTTP/1 gateway
+keeps reading the rest of the request body and discards it. While part of a
+request body is unread, an HTTP/1 server notices a disconnect only when it reads
+the body, so this lets the gateway cancel the invocation when the client
+disconnects, with no deadline for a client that stays connected. The discarded
+bytes count toward the request body limit: an overflow returns 413 before the
+response head, and later cancels the invocation like any other request-body read
+failure. HTTP/2 detects disconnects without reading, so in the same cases the
+gateway stops reading an HTTP/2 body.
+
+`file_lookup_timeout` separately bounds a live-file exchange: lookup, response
+preparation and response-body delivery. There is no separate executor file-read
+deadline. Expiry returns 504 before response commitment or aborts a started
+response. Both timeout settings must be nonzero.
+
 Recovery resumes the same surviving invocation, with four reattachments allowed
-over the exchange's lifetime; it cannot replace a lost executor invocation.
+over the handler session's lifetime; it cannot replace a lost executor invocation.
 
 Use ingress concurrency limits for live-file load. There is no dedicated per-agent
 read queue cap or executor-wide outstanding-read limit. Slow readers can delay an
@@ -226,12 +255,12 @@ Input encoding includes schema and frame overhead. Queued output is bounded by
 
 For `golem server run`, nest worker-service sections under `worker_service`, for
 example `[worker_service.http_session]`. Environment variable paths also include
-`WORKER_SERVICE`, for example `GOLEM__WORKER_SERVICE__HTTP_SESSION__EXCHANGE_TIMEOUT`.
+`WORKER_SERVICE`, for example `GOLEM__WORKER_SERVICE__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT`.
 
 ## OpenAPI and route caches
 
 OpenAPI generation uses [separate document limits](/next/invoke/making-custom-apis/http-routers/semantics#caching-and-limits)
-and is not bounded by `exchange_timeout`. There is no provider-specific or whole-generation
+and is not bounded by `file_lookup_timeout`. There is no provider-specific or whole-generation
 timeout or global generation admission limit. An HTTP disconnect does not cancel a
 shared generation; ingress timeouts alone do not bound provider execution.
 

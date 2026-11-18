@@ -19,6 +19,7 @@ import {
 } from "../../src/internal/schema-model/wit.js"
 import { compile, type CompiledWitCodec } from "../../src/WitCodec.js"
 import { Uint64 } from "../../src/WitTypes.js"
+import { withCaller } from "../mocks/golem-agent-invocation-context.js"
 
 const Request = Schema.Struct({
   source: Schema.String,
@@ -181,14 +182,15 @@ export const loopbackTransport = (principal: unknown): ToolTransport => ({
       return {
         result: Effect.tryPromise({
           try: () =>
-            invokeRegistered(
-              tool,
-              [...path],
-              input,
-              stdin,
-              stdout?.writer as Streams.ToolOutputWriter | undefined,
-              stderr?.writer as Streams.ToolOutputWriter | undefined,
-              principal,
+            withCaller(principal, () =>
+              invokeRegistered(
+                tool,
+                [...path],
+                input,
+                stdin,
+                stdout?.writer as Streams.ToolOutputWriter | undefined,
+                stderr?.writer as Streams.ToolOutputWriter | undefined,
+              ),
             ),
           catch: (error) => error,
         }),

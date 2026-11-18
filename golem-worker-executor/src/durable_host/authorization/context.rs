@@ -18,7 +18,7 @@ use golem_common::model::card::RdbmsVerb;
 /// The ID of the runtime card that the durable call at `oplog_index` derives.
 pub(crate) fn derived_card_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> CardId {
     CardId(derive_permission_uuid(
@@ -32,7 +32,7 @@ pub(crate) fn derived_card_id(
 /// The ID of the card transfer that the durable call at `oplog_index` performs.
 pub(crate) fn transfer_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> Uuid {
     derive_permission_uuid(
@@ -46,7 +46,7 @@ pub(crate) fn transfer_id(
 /// The ID of the child card that the durable call at `oplog_index` installs.
 pub(crate) fn installed_child_card_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> CardId {
     CardId(derive_permission_uuid(
@@ -60,7 +60,7 @@ pub(crate) fn installed_child_card_id(
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn derive_scope_card_id(
         &self,
-        invocation_key: &IdempotencyKey,
+        invocation_key: &golem_common::model::InvocationId,
         ordinal: u64,
     ) -> CardId {
         CardId(derive_permission_uuid_for_sequence(
@@ -72,7 +72,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_effective_surface(&self) -> golem_common::model::card::EffectiveSurface {
-        self.state.agent_effective_surface.clone()
+        self.state.authority().effective_surface().clone()
     }
 
     pub fn agent_auth_ctx(&self) -> AuthCtx {
@@ -235,12 +235,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .published_authority_generation
             .load(Ordering::Acquire);
         let now = Utc::now();
-        if authority_snapshot_is_current_at(
-            self.state.authority_initialized,
+        if self.state.authority().is_current_at(
             self.state.card_interest_index.authority_is_open(),
-            self.state.processed_authority_generation,
             published_generation,
-            self.state.next_authority_expiration,
             now,
         ) {
             let captured = capture(self);
@@ -286,7 +283,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state
                     .published_authority_generation
                     .load(Ordering::Acquire),
-                self.state.next_authority_expiration,
+                self.state.authority().next_expiration(),
                 Utc::now(),
             )
     }
@@ -297,9 +294,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             &self.state.agent_wallet_cards
         };
-        self.state.next_authority_expiration = self
+        let next_expiration = self
             .state
-            .invocation_scope_root_cards
+            .authority()
+            .scope_root_cards()
             .values()
             .chain(cards.values().map(Arc::as_ref))
             .chain(
@@ -312,12 +310,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .filter_map(StoredCard::expires_at)
             .min();
+        self.state
+            .authority_mut()
+            .set_next_expiration(next_expiration);
     }
 
     pub(in crate::durable_host) fn adopt_authority_generation(&mut self, generation: u64) {
         self.refresh_authority_expiration_deadline();
-        self.state.processed_authority_generation = generation;
-        self.state.authority_initialized = true;
+        self.state.authority_mut().synchronize_at(generation);
     }
 
     pub(crate) async fn authorize_live_permission(
@@ -354,15 +354,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .published_authority_generation
             .load(Ordering::Acquire);
         let now = Utc::now();
-        if authority_snapshot_is_current_at(
-            self.state.authority_initialized,
+        if self.state.authority().is_current_at(
             self.state.card_interest_index.authority_is_open(),
-            self.state.processed_authority_generation,
             published_generation,
-            self.state.next_authority_expiration,
             now,
         ) {
-            let result = authorize_effective_surface(&self.state.agent_effective_surface, targets);
+            let result =
+                authorize_effective_surface(self.state.authority().effective_surface(), targets);
             if self.authority_snapshot_is_stable(published_generation) {
                 crate::metrics::wasm::record_agent_permission_authority_fast_path();
                 record_permission_decisions(targets, result.is_ok());
@@ -379,7 +377,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .state
                 .published_authority_generation
                 .load(Ordering::Acquire);
-            let result = authorize_effective_surface(&self.state.agent_effective_surface, targets);
+            let result =
+                authorize_effective_surface(self.state.authority().effective_surface(), targets);
             // The previous cached deadline may be due even though synchronization just removed
             // every expired card. Refresh it before validating the synchronized snapshot.
             self.refresh_authority_expiration_deadline();
@@ -410,7 +409,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .iter()
                 .map(|target| {
                     ctx.state
-                        .agent_effective_surface
+                        .authority()
+                        .effective_surface()
                         .authorize(target)
                         .unwrap_or(false)
                 })
@@ -428,7 +428,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .lock_synchronized_card_event_boundary_with_authority()
             .await?;
         let result = capture(self);
-        self.state.authority_initialized = false;
+        self.state.invalidate_authority();
         Ok(result)
     }
 
@@ -526,7 +526,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             scope: self.current_invocation_scope_card(),
             roots: self
                 .state
-                .invocation_scope_root_cards
+                .authority()
+                .scope_root_cards()
                 .values()
                 .chain(
                     self.state
@@ -565,7 +566,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.authority_wallet = observation.wallet;
         self.apply_owner_authority_synchronization(observation.revoked, observation.root_states)?;
         self.adopt_authority_generation(observation.generation);
-        self.state.authority_initialized = self.state.card_interest_index.authority_is_open();
+        if !self.state.card_interest_index.authority_is_open() {
+            self.state.authority_mut().invalidate();
+        }
         Ok(observation.generation
             == self
                 .state
@@ -591,7 +594,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         owner
             .commit(&self.public_state.worker(), boundary, entry)
             .await?;
-        self.state.authority_initialized = false;
+        self.state.invalidate_authority();
         self.state.authority_wallet = owner.snapshot();
         self.rederive_agent_effective_surface_from_wallet();
         Ok(())
@@ -611,38 +614,50 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
             }
         };
-        let surface = {
-            let wallet = self.authority_wallet_cards();
-            match &self.runtime {
-                OwnerRuntime::Agent => {
-                    golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
-                        &context,
-                        wallet,
-                        self.state.invocation_scope_card.as_ref(),
-                    )
-                }
-                OwnerRuntime::Entity(_) => match &self.state.inherited_invocation_scope {
-                    None => golem_common::model::card::agent_effective_surface_from_wallet(
-                        &context, wallet,
-                    ),
-                    Some(scope) => {
+        let surfaces = self
+            .state
+            .invocations
+            .entries()
+            .map(|(key, entry)| {
+                let wallet = self.authority_wallet_cards();
+                let surface = match &self.runtime {
+                    OwnerRuntime::Agent => {
                         golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
                             &context,
                             wallet,
-                            Some(&scope.card),
+                            entry.authority.bound_scope_card(),
                         )
                     }
-                },
-            }
-        };
-        self.state.agent_effective_surface = surface;
+                    OwnerRuntime::Entity(_) => match &self.state.inherited_invocation_scope {
+                        None => golem_common::model::card::agent_effective_surface_from_wallet(
+                            &context, wallet,
+                        ),
+                        Some(scope) => {
+                            golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
+                                &context,
+                                wallet,
+                                Some(&scope.card),
+                            )
+                        }
+                    },
+                };
+                (*key, surface)
+            })
+            .collect::<Vec<_>>();
+        for (key, surface) in surfaces {
+            self.state
+                .invocations
+                .entry_mut(key)
+                .authority
+                .replace_surface(surface);
+        }
     }
 
     /// The invocation scope that bounds this Store's current invocation: the primary Store's
     /// admitted scope, or the scope an entity Store inherited from its caller.
     pub(crate) fn current_invocation_scope_card(&self) -> Option<ScopeCard> {
         match &self.runtime {
-            OwnerRuntime::Agent => self.state.invocation_scope_card.clone(),
+            OwnerRuntime::Agent => self.state.authority().bound_scope_card().cloned(),
             OwnerRuntime::Entity(_) => self
                 .state
                 .inherited_invocation_scope
@@ -689,7 +704,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         if remove_inherited_scope {
             self.state.inherited_invocation_scope = None;
-            if let Some(interest) = &self.state.scope_interest {
+            if let Some(interest) = self.state.authority().scope_interest() {
                 interest.invalidate();
             }
         }
@@ -710,14 +725,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .iter()
             .map(StoredCard::card_id)
             .collect::<BTreeSet<_>>();
-        if let Some(scope_card) = &self.state.invocation_scope_card {
-            card_ids.extend(scope_card.root_card_ids.iter().copied());
+        for (_, entry) in self.state.invocations.entries() {
+            if let Some(scope_card) = entry.authority.admitted_scope_card() {
+                card_ids.extend(scope_card.root_card_ids.iter().copied());
+            }
+            if let Some(interest) = entry.authority.scope_interest() {
+                card_ids.extend(interest.roots().iter().copied());
+            }
         }
         if let Some(scope) = &self.state.inherited_invocation_scope {
             card_ids.extend(scope.card.root_card_ids.iter().copied());
-        }
-        if let Some(interest) = &self.state.scope_interest {
-            card_ids.extend(interest.roots().iter().copied());
         }
         card_ids.into_iter().collect()
     }
@@ -731,58 +748,57 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // Invocation scope is part of the effective authority but is not represented by a
         // worker-status generation. Force the first live authorization for this invocation
         // through the synchronized path so the cached expiration deadline includes its roots.
-        self.state.authority_initialized = false;
-        let (_, handles) = clear_invocation_scope_state(
-            &mut self.state.invocation_scope_card,
-            &mut self.state.invocation_scope_handles,
-        );
-        for rep in handles {
-            permissions::retire_invocation_scope_handle(self.table(), rep);
-        }
-        self.state.invocation_scope_card = scope_card;
-        self.state.invocation_scope_root_cards = root_cards
-            .into_iter()
-            .map(|card| (card.card_id(), card))
-            .collect();
-        self.state.scope_interest = candidate_interest.or_else(|| {
-            self.state.invocation_scope_card.as_ref().map(|scope| {
+        let scope_interest = candidate_interest.or_else(|| {
+            scope_card.as_ref().map(|scope| {
                 self.state
                     .owner_wallet
                     .interest
                     .contribute(None, &scope.root_card_ids)
             })
         });
+        let handles =
+            self.state
+                .authority_mut()
+                .install_scope(scope_card, root_cards, scope_interest);
+        for rep in handles {
+            permissions::retire_invocation_scope_handle(self.table(), rep);
+        }
         self.rederive_agent_effective_surface_from_wallet();
     }
 
     pub(in crate::durable_host) async fn clear_invocation_scope_card(&mut self) {
-        self.state.authority_initialized = false;
-        let (scope_changed, handles) = clear_invocation_scope_state(
-            &mut self.state.invocation_scope_card,
-            &mut self.state.invocation_scope_handles,
-        );
-        for rep in handles {
+        let removal = self.state.authority_mut().clear_scope();
+        for rep in removal.handles {
             permissions::retire_invocation_scope_handle(self.table(), rep);
         }
-        if scope_changed {
-            self.state.invocation_scope_root_cards.clear();
+        if removal.card_removed {
             self.rederive_agent_effective_surface_from_wallet();
         }
-        self.state.scope_interest = None;
     }
 
     pub(in crate::durable_host) fn clear_invocation_scope_if_roots_include(
         &mut self,
         card_ids: &[CardId],
     ) -> bool {
-        let interest_removed = self.state.scope_interest.as_ref().is_some_and(|interest| {
-            if interest.roots_include(card_ids) {
+        let mut interest_removed = false;
+        let mut scope_changed = false;
+        let mut retired = Vec::new();
+        for entry in self.state.invocations.entries_mut() {
+            let authority = &mut entry.authority;
+            if let Some(interest) = authority
+                .scope_interest()
+                .filter(|interest| interest.roots_include(card_ids))
+            {
                 interest.invalidate();
-                true
-            } else {
-                false
+                interest_removed = true;
             }
-        });
+            let removal = authority.remove_scope_for_revoked_roots(card_ids);
+            scope_changed |= removal.card_removed;
+            retired.extend(removal.handles);
+        }
+        for rep in retired {
+            permissions::retire_invocation_scope_handle(self.table(), rep);
+        }
         let inherited_scope_removed = self
             .state
             .inherited_invocation_scope
@@ -790,17 +806,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .is_some_and(|scope| scope.roots_include(&card_ids.iter().copied().collect()));
         if inherited_scope_removed {
             self.state.inherited_invocation_scope = None;
-        }
-        let (scope_changed, handles) = remove_invocation_scope_for_revoked_roots(
-            &mut self.state.invocation_scope_card,
-            &mut self.state.invocation_scope_handles,
-            card_ids,
-        );
-        for rep in handles {
-            permissions::retire_invocation_scope_handle(self.table(), rep);
-        }
-        if scope_changed {
-            self.state.invocation_scope_root_cards.clear();
         }
         scope_changed || inherited_scope_removed || interest_removed
     }
@@ -829,8 +834,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn remove_expired_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
-        let expired_root_ids =
-            expired_wallet_card_ids_at(self.state.invocation_scope_root_cards.values(), Utc::now());
+        let expired_root_ids = expired_wallet_card_ids_at(
+            self.state.authority().scope_root_cards().values(),
+            Utc::now(),
+        );
         if !expired_root_ids.is_empty() {
             self.apply_card_revoked_cascade(
                 self.entity_parent_start_index(),
@@ -1082,7 +1089,7 @@ fn missing_agent_initial_card_error(
 pub(in crate::durable_host) fn derive_permission_uuid(
     context: &'static str,
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> Uuid {
     derive_permission_uuid_for_sequence(
@@ -1096,11 +1103,12 @@ pub(in crate::durable_host) fn derive_permission_uuid(
 pub(in crate::durable_host) fn derive_permission_uuid_for_sequence(
     context: &'static str,
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     sequence: u64,
 ) -> Uuid {
     let agent_name = owned_agent_id.agent_id.agent_id.as_bytes();
-    let invocation_key = invocation_key.value.as_bytes();
+    let invocation_key = invocation_key.to_string();
+    let invocation_key = invocation_key.as_bytes();
     let mut hasher = blake3::Hasher::new_derive_key(context);
     hasher.update(owned_agent_id.environment_id.0.as_bytes());
     hasher.update(owned_agent_id.agent_id.component_id.0.as_bytes());
@@ -1188,44 +1196,6 @@ pub(crate) fn record_permission_decisions(targets: &[PermissionTarget], allowed:
             .unwrap_or("unknown");
         crate::metrics::wasm::record_agent_permission_authorization(permission_class, false);
     }
-}
-
-pub(in crate::durable_host) fn clear_invocation_scope_state(
-    scope_card: &mut Option<ScopeCard>,
-    scope_handles: &mut HashMap<u32, Vec<CardId>>,
-) -> (bool, HashSet<u32>) {
-    let scope_changed = scope_card.take().is_some();
-    let handles = std::mem::take(scope_handles).into_keys().collect();
-    (scope_changed, handles)
-}
-
-pub(in crate::durable_host) fn remove_invocation_scope_for_revoked_roots(
-    scope_card: &mut Option<ScopeCard>,
-    scope_handles: &mut HashMap<u32, Vec<CardId>>,
-    revoked_card_ids: &[CardId],
-) -> (bool, HashSet<u32>) {
-    let affected = scope_card.as_ref().is_some_and(|scope_card| {
-        scope_card
-            .root_card_ids
-            .iter()
-            .any(|root_id| revoked_card_ids.contains(root_id))
-    });
-    if affected {
-        *scope_card = None;
-    }
-    let handles = scope_handles
-        .iter()
-        .filter_map(|(rep, root_card_ids)| {
-            root_card_ids
-                .iter()
-                .any(|root_id| revoked_card_ids.contains(root_id))
-                .then_some(*rep)
-        })
-        .collect::<HashSet<_>>();
-    for rep in &handles {
-        scope_handles.remove(rep);
-    }
-    (affected, handles)
 }
 
 pub(crate) fn owner_revoked_card_ids(

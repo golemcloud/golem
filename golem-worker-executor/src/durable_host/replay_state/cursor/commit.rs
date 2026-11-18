@@ -310,7 +310,11 @@ impl CursorTx<'_> {
                     wallet.record_derivation(*entity_parent_start_index, card.as_ref().clone())?;
                 }
             }
-            OplogEntry::AgentInvocationFinished { .. } => {
+            OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationFailed {
+                entity_parent_start_index: None,
+                ..
+            } => {
                 if let Some(wallet) = &self.cursor.wallet {
                     wallet.finish_replayed_invocation();
                 }
@@ -705,6 +709,11 @@ impl CursorTx<'_> {
         &mut self,
         event: ReplayEvent,
     ) {
+        // A bootstrap cursor replays only the durable calls of a core initializer; the replay
+        // events of the history belong to the main cursor.
+        if self.cursor.bootstrap.is_some() {
+            return;
+        }
         if let Some((start_idx, entry_idx)) = self.retaining_for
             && !matches!(event, ReplayEvent::ReplayFinished)
         {

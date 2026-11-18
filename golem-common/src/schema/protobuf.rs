@@ -15,7 +15,6 @@
 //! Conversions between common agent schema types and their protobuf mirror.
 
 use crate::base_model::agent::{AgentConfigSource, AgentTypeName, Snapshotting};
-use crate::model::Empty as ModelEmpty;
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
     AgentTypeKind, AgentTypeSchema, AutoInjectedKind, ComponentConfigSchema, FieldSource,
@@ -24,6 +23,7 @@ use crate::schema::agent::{
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::MetadataEnvelope;
 use golem_api_grpc::proto::golem::schema as proto;
+use golem_schema::Empty as ModelEmpty;
 use golem_schema::proto::golem::common::Empty as ProtoEmpty;
 use golem_schema::proto::golem::schema::MetadataEnvelope as ProtoMetadataEnvelope;
 

@@ -22,11 +22,11 @@ import {
 } from "../src/Unstructured.js"
 import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
+import { hostInvocationMetadata, sdkInvocationMetadata } from "./invocation-metadata.js"
 
-const metadata = (suffix: string): AgentHost.InvocationMetadata => ({
-  agentId: `agent-${suffix}`,
-  idempotencyKey: `key-${suffix}`,
-})
+const metadata = (suffix: string): AgentHost.InvocationMetadata =>
+  hostInvocationMetadata(`agent-${suffix}`)
+const expectedMetadata = (suffix: string) => sdkInvocationMetadata(`agent-${suffix}`)
 
 interface Call {
   readonly kind: "await" | "trigger" | "schedule"
@@ -44,6 +44,7 @@ const makeRuntime = (
     readonly response?: CoreTypes.SchemaValueTree | undefined
     readonly error?: unknown
     readonly pending?: boolean
+    readonly rejected?: boolean
   } = {},
 ) => {
   const calls: Call[] = []
@@ -55,10 +56,7 @@ const makeRuntime = (
     tokenCancel: 0,
     tokenDrop: 0,
   }
-  const awaitedMetadata = metadata("await") as {
-    agentId: string
-    idempotencyKey: string
-  }
+  const awaitedMetadata = metadata("await")
   let resolvePending: ((value: CoreTypes.SchemaValueTree | undefined) => void) | undefined
   const connect = (
     agentType: string,
@@ -93,7 +91,7 @@ const makeRuntime = (
       asyncInvokeAndAwait: (methodName, input) => {
         record("await", methodName, input)
         return {
-          metadata: awaitedMetadata,
+          metadata: options.rejected ? undefined : awaitedMetadata,
           get: () => {
             if (options.error !== undefined) return Promise.reject(options.error)
             if (!options.pending) return Promise.resolve(options.response)
@@ -122,6 +120,7 @@ const makeRuntime = (
   const rpc = Layer.succeed(
     RpcClient,
     RpcClient.of({
+      bindSelf: () => Effect.die("unexpected self binding"),
       connect: (agentType, constructor, phantom, config) =>
         Effect.succeed(connect(agentType, constructor, phantom, config)),
     }),
@@ -176,6 +175,89 @@ const encode = <S extends Schema.Top>(schema: S, value: S["Type"]) =>
   })
 
 describe("Client 1.6 durable lifecycle", () => {
+  it.effect(
+    "binds the returned self identity, rejects another type, and releases the resource",
+    () =>
+      Effect.gen(function* () {
+        for (const typeName of ["Counter", "Other", "host-refusal"]) {
+          let drops = 0
+          let invoked = false
+          const layer = Layer.merge(
+            Layer.succeed(RpcClient, {
+              bindSelf: () =>
+                typeName === "host-refusal"
+                  ? Effect.fail(
+                      new RpcHostError(
+                        { tag: "denied", val: "ephemeral owner" },
+                        "WasmRpc.bindSelf",
+                      ),
+                    )
+                  : Effect.succeed([
+                      "recorded-phantom-id",
+                      {
+                        invokeAndAwait: () => {
+                          throw new Error("unexpected awaited invocation")
+                        },
+                        asyncInvokeAndAwait: () => {
+                          throw new Error("unexpected async invocation")
+                        },
+                        scheduleInvocation: () => {
+                          throw new Error("unexpected scheduled invocation")
+                        },
+                        scheduleCancelableInvocation: () => {
+                          throw new Error("unexpected cancelable invocation")
+                        },
+                        invoke: (name: string) => {
+                          expect(name).toBe("add")
+                          invoked = true
+                          return metadata("self")
+                        },
+                        drop: () => {
+                          drops++
+                        },
+                      } satisfies RpcConnection,
+                    ] as const),
+              connect: () => Effect.die("self binding must not create a connection"),
+            }),
+            Layer.succeed(AgentHostClient, {
+              parseAgentId: (id: string) => {
+                expect(id).toBe("recorded-phantom-id")
+                return [
+                  typeName,
+                  {
+                    value: { valueNodes: [], root: 0 },
+                    graph: { typeNodes: [], defs: [], root: 0 },
+                  },
+                  { highBits: 17n, lowBits: 29n },
+                ]
+              },
+            } as never),
+          )
+          const result = yield* Counter.client.bindSelf().pipe(
+            Effect.flatMap((client) => client.add.trigger({ by: 7 })),
+            Effect.scoped,
+            Effect.provide(layer),
+            Effect.result,
+          )
+          expect(invoked).toBe(typeName === "Counter")
+          if (typeName === "Counter") {
+            expect(result._tag).toBe("Success")
+            expect(drops).toBe(1)
+          } else {
+            expect(result).toMatchObject({
+              _tag: "Failure",
+              failure: {
+                _tag: "RpcCallError",
+                cause: { tag: typeName === "Other" ? "remote-agent-error" : "denied" },
+              },
+            })
+            if (typeName === "Other")
+              expect(result).toMatchObject({ failure: { cause: { val: { tag: "invalid-type" } } } })
+            expect(drops).toBe(typeName === "Other" ? 1 : 0)
+          }
+        }
+      }),
+  )
   it.effect("rejects nested input streams before invoking or consuming sibling streams", () =>
     Effect.gen(function* () {
       const StreamingInput = defineAgent({
@@ -504,7 +586,7 @@ describe("Client 1.6 durable lifecycle", () => {
         runtime.resolve(response)
         return yield* Fiber.join(fiber)
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
-      expect(result.metadata).toEqual(metadata("await"))
+      expect(result.metadata).toEqual(expectedMetadata("await"))
       expect(Object.isFrozen(result.metadata)).toBe(true)
     }),
   )
@@ -553,6 +635,31 @@ describe("Client 1.6 durable lifecycle", () => {
           expect(runtime.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
         }
       }
+    }),
+  )
+
+  it.effect("fails a rejected invocation with the error from its future", () =>
+    Effect.gen(function* () {
+      const response = yield* encode(Schema.String, "done")
+      const failureOf = (options: Parameters<typeof makeRuntime>[0]) => {
+        const runtime = makeRuntime({ ...options, rejected: true })
+        return Worker.client.newPhantom({ job: "rejected" }).pipe(
+          Effect.flatMap((remote) => remote.run({ times: 1 })),
+          Effect.scoped,
+          Effect.provide(runtime.layer),
+          Effect.flip,
+          Effect.map((failure) => ({ failure: failure as any, lifecycle: runtime.lifecycle })),
+        )
+      }
+      const denied = yield* failureOf({ error: { tag: "denied", val: "no permission" } })
+      expect(denied.failure).toEqual({
+        _tag: "RpcCallError",
+        cause: { tag: "denied", val: "no permission" },
+      })
+      expect(denied.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
+      const completed = yield* failureOf({ response })
+      expect(completed.failure._tag).toBe("RpcCallError")
+      expect(completed.failure.cause.tag).toBe("protocol-error")
     }),
   )
 
@@ -692,10 +799,10 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         expect((Worker.client as any).getPhantom).toBeTypeOf("function")
         const remote = yield* Worker.client.newPhantom({ job: "j" })
         const awaited = yield* remote.run({ times: 1 })
-        expect(awaited).toEqual({ metadata: metadata("await"), value: "done" })
-        expect(yield* remote.run.trigger({ times: 2 })).toEqual(metadata("trigger"))
+        expect(awaited).toEqual({ metadata: expectedMetadata("await"), value: "done" })
+        expect(yield* remote.run.trigger({ times: 2 })).toEqual(expectedMetadata("trigger"))
         const receipt = yield* remote.run.schedule({ seconds: 1n, nanoseconds: 0 }, { times: 3 })
-        expect(receipt.metadata).toEqual(metadata("scheduled"))
+        expect(receipt.metadata).toEqual(expectedMetadata("scheduled"))
         yield* receipt.cancel()
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.calls.every((call) => call.phantom === undefined)).toBe(true)
@@ -861,7 +968,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         const remote = yield* Worker.client.getPhantom({ job: "j" }, phantomId)
         const result = yield* remote.run({ times: 1 })
         expect(result).toEqual({
-          metadata: metadata("await"),
+          metadata: expectedMetadata("await"),
           value: "done",
         })
         expect(Object.isFrozen(result.metadata)).toBe(true)
@@ -875,6 +982,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const layer = Layer.succeed(
         RpcClient,
         RpcClient.of({
+          bindSelf: () => Effect.die("unexpected self binding"),
           connect: () =>
             Effect.fail(
               new RpcHostError({ tag: "not-found", val: "missing" }, "WasmRpc.constructor"),

@@ -49,6 +49,12 @@ pub trait WorkerExecutor: Send + Sync {
         anyhow::bail!("storage mutation requires a reaped spawned executor")
     }
 
+    /// The process ID of the running executor process, or `None` when it is not running or the
+    /// executor is not a spawned process.
+    fn pid(&self) -> Option<u32> {
+        None
+    }
+
     /// URL and generation of the spawned process, for reset-aware metrics.
     fn metrics_endpoint(&self) -> Option<(String, u64)> {
         None
@@ -118,9 +124,12 @@ async fn env_vars(
     let mut env = EnvVarBuilder::golem_service(verbosity)
         .with_str("ENVIRONMENT", "local")
         .with_str("WASMTIME_BACKTRACE_DETAILS", "1")
-        .with_str(
+        .with(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
-            "/tmp/ittest-local-object-store/golem",
+            std::env::temp_dir()
+                .join("ittest-local-object-store/golem")
+                .to_string_lossy()
+                .to_string(),
         )
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
         .with_str(
