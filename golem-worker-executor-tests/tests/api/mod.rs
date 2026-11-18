@@ -13128,3 +13128,57 @@ async fn measured_duplicate_reads(
     );
     Ok(reads)
 }
+
+// A wallet read that the invocation loop answered before the executor shut down finds the status
+// actor stopped. It answers with the routing miss, which the worker service retries on the
+// agent's next owner, rather than with an error it would pass to the user.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn wallet_read_answered_before_an_executor_shutdown_is_retried_elsewhere(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let name = "wallet-read-before-shutdown";
+    crate::panic_watch::watch_panics_naming(name);
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Counter", name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let worker = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(
+            context.default_environment_id,
+            &worker_id,
+        ))
+        .await
+        .expect("the agent is resident");
+    let mut wallet = Box::pin(worker.get_wallet_cards());
+    assert!(futures::poll!(&mut wallet).is_pending());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while worker.queued_command_count_for_test().await > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    let wallet = wallet.await;
+    let panics = crate::panic_watch::panics_naming(name);
+    assert!(panics.is_empty(), "{panics:#?}");
+    assert!(
+        matches!(wallet, Err(WorkerExecutorError::ShardingNotReady)),
+        "{wallet:?}"
+    );
+    Ok(())
+}

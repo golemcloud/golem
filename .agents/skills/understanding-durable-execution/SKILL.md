@@ -1419,7 +1419,8 @@ stopped generation cached until a retried delete claims it, so the reads that ca
 worker without a bound task scope use the fallible status reads. They include admission before the
 bind, with or without a fingerprint; local RPC reads, including the pinned status and the wait for
 an invocation result; the gRPC interrupt, resume, update, plugin activation and deactivation, and
-cancel calls; the wallet read, after the invocation loop answers it; the wait for initialization
+cancel calls; the wallet read, after the invocation loop answers it, which answers an executor
+shutdown with the routing miss so that the worker service retries it; the wait for initialization
 after create; a scheduled invocation wake; and durable stream session reads. `Worker::try_get_last_known_status` answers a stopped status actor with the
 routing miss when the shard was lost, with "Worker is being deleted" when a deletion owns the
 generation, and otherwise with the actor's runtime error. `try_lookup_invocation_result` gives the
