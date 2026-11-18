@@ -30,18 +30,30 @@ async fn deploy_streaming_and_bash(
     context: &TestContext,
     environment: &TestEnvironmentStateService,
     caller_component: &golem_common::model::component::ComponentDto,
+    provider_component: &golem_common::model::component::ComponentDto,
     streaming: &PrecompiledComponent,
     bash: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let mut deployment: Option<ToolDeploymentState> = None;
-    for (component, package) in [
-        (streaming, "golem-it:tool-streaming-rust-provider"),
-        (bash, "golem:bash"),
+    // The streaming tools run in the provider component that the tests read: a second stored
+    // copy would also hold the provider's agent types, and calls could reach either copy.
+    for (component, package, stored) in [
+        (
+            streaming,
+            "golem-it:tool-streaming-rust-provider",
+            Some(provider_component),
+        ),
+        (bash, "golem:bash", None),
     ] {
-        let provider = executor
-            .component_dep(&context.default_environment_id, component)
-            .store()
-            .await?;
+        let provider = match stored {
+            Some(stored) => stored.clone(),
+            None => {
+                executor
+                    .component_dep(&context.default_environment_id, component)
+                    .store()
+                    .await?
+            }
+        };
         let metadata = extract_component_metadata(
             &deps
                 .component_directory
@@ -127,6 +139,7 @@ impl ChainHarness {
             &context,
             &environment,
             &caller_component,
+            &provider_component,
             streaming,
             bash,
         )
