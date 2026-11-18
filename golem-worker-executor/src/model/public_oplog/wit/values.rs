@@ -46,16 +46,20 @@ pub(super) fn decode_untyped_schema_value(
 ///
 /// `enrich-oplog-entries` is the only guest-reachable caller of that conversion,
 /// and it returns the conversion error as a non-trapping `result::err` — so the
-/// instance, and its resource table, stay alive. The only live
-/// `schema-value-tree` carried by a *raw* oplog entry is each
-/// `create.local-agent-config[].value`; every other raw payload is an opaque
-/// `oplog-payload` byte blob. Quota tokens are never permitted in agent config,
-/// so any owned handle found there is deleted from the resource table (rather
-/// than leaked) and the whole batch is rejected. All entries are drained before
-/// the first error is surfaced, so a handle in a later entry cannot leak when an
-/// earlier entry is rejected.
+/// instance, and its resource table, stay alive. Each
+/// `create.local-agent-config[].value` and each request of the divergence of a
+/// `failed-update` is a live `schema-value-tree`. Capability handles are never
+/// permitted there, so any owned handle found is deleted from the resource
+/// table (rather than leaked) and the whole batch is rejected. A divergence
+/// request does not permit an owned stream either, and its streams are disposed
+/// of as a guest drop of the resource does. All entries are drained before the first error is
+/// surfaced, so a handle in a later entry cannot leak when an earlier entry is
+/// rejected.
 pub(crate) fn reject_quota_handles_in_oplog_entries<
-    D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
+    D: QuotaTokenHandleDropper
+        + SecretHandleDropper
+        + PermissionCardHandleDropper
+        + SchemaValueStreamResolver,
 >(
     entries: Vec<(u64, oplog::OplogEntry)>,
     dropper: &mut D,
@@ -85,6 +89,38 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
                 params.local_agent_config = new_configs;
                 oplog::OplogEntry::Create(params)
             }
+            oplog::OplogEntry::FailedUpdate(mut params) => {
+                if let Some(divergence) = params.divergence.as_mut() {
+                    for step in [&mut divergence.expected, &mut divergence.actual] {
+                        if let oplog::ReplayStep::HostCall(call) = step
+                            && let Some(mut request) = call.request.take()
+                        {
+                            let stream =
+                                drop_stream_handles_in_value_tree(&mut request.value, dropper);
+                            match (
+                                stream,
+                                reject_quota_handles_in_value_tree(request.value, dropper),
+                            ) {
+                                (None, Ok(tree)) => {
+                                    request.value = tree;
+                                    call.request = Some(request);
+                                }
+                                (_, Err(e)) => {
+                                    first_error.get_or_insert_with(|| {
+                                        format!("a divergence request must not contain an owned handle: {e}")
+                                    });
+                                }
+                                (Some(node), Ok(_)) => {
+                                    first_error.get_or_insert_with(|| {
+                                        format!("a divergence request must not contain an owned handle: stream at value node {node}")
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                oplog::OplogEntry::FailedUpdate(params)
+            }
             other => other,
         };
         sanitized.push((index, entry));
@@ -93,6 +129,25 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
         Some(e) => Err(e),
         None => Ok(sanitized),
     }
+}
+
+/// Disposes of every owned stream of `tree` through the resolver, as a guest drop of the resource
+/// does, and returns the index of the first one. Unreachable nodes are disposed of too.
+fn drop_stream_handles_in_value_tree<D: SchemaValueStreamResolver>(
+    tree: &mut wire::SchemaValueTree,
+    dropper: &mut D,
+) -> Option<usize> {
+    let mut first = None;
+    for (index, node) in tree.value_nodes.iter_mut().enumerate() {
+        if matches!(node, wire::SchemaValueNode::StreamValue(_))
+            && let wire::SchemaValueNode::StreamValue(handle) =
+                std::mem::replace(node, wire::SchemaValueNode::BoolValue(false))
+        {
+            dropper.drop_stream_handle(handle);
+            first.get_or_insert(index);
+        }
+    }
+    first
 }
 
 pub(super) fn oplog_payload_from_wit<

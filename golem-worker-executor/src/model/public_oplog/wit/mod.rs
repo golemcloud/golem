@@ -90,8 +90,9 @@ use golem_common::schema::{
 };
 use golem_schema::Empty;
 use golem_schema::schema::wit::{
-    PermissionCardHandleDropper, QuotaTokenHandleDropper, SecretHandleDropper, decode_value,
-    encode_typed, encode_value, reject_quota_handles_in_value_tree, wire,
+    PermissionCardHandleDropper, QuotaTokenHandleDropper, SchemaValueStreamResolver,
+    SecretHandleDropper, decode_value, encode_typed, encode_value,
+    reject_quota_handles_in_value_tree, wire,
 };
 
 fn durable_invocation_id_to_wit(

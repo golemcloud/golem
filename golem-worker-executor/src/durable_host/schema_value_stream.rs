@@ -495,12 +495,10 @@ impl<Ctx: WorkerCtx> SchemaValueStreamResolver for StoreValueResolver<'_, '_, Ct
     }
 
     fn drop_stream_handle(&mut self, handle: Resource<SchemaValueStreamHandleRep>) {
-        let _ = self
-            .store
+        self.store
             .data_mut()
             .durable_ctx_mut()
-            .table()
-            .delete(handle);
+            .drop_stream_handle(handle)
     }
 }
 
@@ -533,8 +531,26 @@ impl<Ctx: WorkerCtx> SchemaValueStreamResolver for DurableWorkerCtx<Ctx> {
     }
 
     fn drop_stream_handle(&mut self, handle: Resource<SchemaValueStreamHandleRep>) {
-        let _ = self.table().delete(handle);
+        let drop_event_sink = self
+            .state
+            .dropped_call_event_sender()
+            .expect("dropped-call event sender is always available");
+        let runtime_teardown = self.stream_runtime_teardown_probe();
+        let _ = dispose_stream_handle(self.table(), handle, drop_event_sink, runtime_teardown);
     }
+}
+
+/// Deletes `handle` from `table` and disposes of its stream as a guest drop of the resource does:
+/// the endpoint of an unread durable input queues the cancellation of its source.
+pub(crate) fn dispose_stream_handle(
+    table: &mut wasmtime::component::ResourceTable,
+    handle: Resource<SchemaValueStreamHandleRep>,
+    drop_event_sink: mpsc::UnboundedSender<DropEvent>,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Result<(), wasmtime::component::ResourceTableError> {
+    let stream = table.delete(handle)?.into_stream();
+    DurableInputProducer::drop_unread(stream, drop_event_sink, runtime_teardown);
+    Ok(())
 }
 
 pub struct CoreTypesHost<Ctx: WorkerCtx>(PhantomData<Ctx>);
@@ -649,20 +665,14 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
         rep: Resource<SchemaValueStreamHandleRep>,
     ) -> anyhow::Result<()> {
         accessor.with(|mut access| -> anyhow::Result<()> {
-            let stream = access
-                .get()
-                .table()
-                .delete(rep)
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?
-                .into_stream();
-            let drop_event_sink = access
-                .get()
+            let ctx = access.get();
+            let drop_event_sink = ctx
                 .state
                 .dropped_call_event_sender()
                 .expect("dropped-call event sender is always available");
-            let runtime_teardown = access.get().stream_runtime_teardown_probe();
-            DurableInputProducer::drop_unread(stream, drop_event_sink, runtime_teardown);
-            Ok(())
+            let runtime_teardown = ctx.stream_runtime_teardown_probe();
+            dispose_stream_handle(ctx.table(), rep, drop_event_sink, runtime_teardown)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
         })?;
         Ok(())
     }

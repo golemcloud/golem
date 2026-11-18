@@ -8248,12 +8248,19 @@ async fn packed_u8_consumer_values_share_one_durable_journal_record() {
 
 #[test]
 async fn dropping_unfinished_input_producer_cancels_the_durable_source_after_cleanup_drain() {
-    check_dropped_input_cancellation(false).await;
+    check_dropped_input_cancellation(DroppedInput::Producer).await;
 }
 
 #[test]
 async fn dropping_unread_input_resource_cancels_the_durable_source_after_cleanup_drain() {
-    check_dropped_input_cancellation(true).await;
+    check_dropped_input_cancellation(DroppedInput::UnreadResource).await;
+}
+
+/// A host that rejects a value with an owned stream, such as the request of a forged divergence,
+/// disposes of the stream as a guest drop does.
+#[test]
+async fn a_rejected_unread_input_handle_cancels_the_durable_source_after_cleanup_drain() {
+    check_dropped_input_cancellation(DroppedInput::RejectedHandle).await;
 }
 
 #[test]
@@ -8768,7 +8775,17 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
     }
 }
 
-async fn check_dropped_input_cancellation(unread_resource: bool) {
+/// How `check_dropped_input_cancellation` drops the durable input endpoint.
+enum DroppedInput {
+    /// A producer that was never finished.
+    Producer,
+    /// An unread stream resource, after a copy was moved out for transfer.
+    UnreadResource,
+    /// A stream handle in the resource table that the host rejects.
+    RejectedHandle,
+}
+
+async fn check_dropped_input_cancellation(dropped: DroppedInput) {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
     let producer = DurableStreamStore::load(
@@ -8855,18 +8872,34 @@ async fn check_dropped_input_cancellation(unread_resource: bool) {
         .endpoint(handle.clone(), 0, SessionStreamRole::Output)
         .await
         .unwrap();
-    if unread_resource {
-        let stream = SchemaValueStream::from_host_endpoint(endpoint);
-        let moved = stream.take_for_transfer().unwrap();
-        DurableInputProducer::drop_unread(stream, drop_event_sink.clone(), Arc::new(|| false));
-        assert!(drop_events.try_recv().is_err());
-        assert!(!source_cancelled.is_cancelled());
-        DurableInputProducer::drop_unread(moved, drop_event_sink, Arc::new(|| false));
-    } else {
-        drop(
+    match dropped {
+        DroppedInput::UnreadResource => {
+            let stream = SchemaValueStream::from_host_endpoint(endpoint);
+            let moved = stream.take_for_transfer().unwrap();
+            DurableInputProducer::drop_unread(stream, drop_event_sink.clone(), Arc::new(|| false));
+            assert!(drop_events.try_recv().is_err());
+            assert!(!source_cancelled.is_cancelled());
+            DurableInputProducer::drop_unread(moved, drop_event_sink, Arc::new(|| false));
+        }
+        DroppedInput::Producer => drop(
             DurableInputProducer::new(endpoint)
                 .with_drop_cleanup(drop_event_sink, Arc::new(|| false)),
-        );
+        ),
+        DroppedInput::RejectedHandle => {
+            let mut table = wasmtime::component::ResourceTable::new();
+            let handle = table
+                .push(golem_schema::schema::SchemaValueStreamHandleRep::new(
+                    SchemaValueStream::from_host_endpoint(endpoint),
+                ))
+                .unwrap();
+            crate::durable_host::schema_value_stream::dispose_stream_handle(
+                &mut table,
+                handle,
+                drop_event_sink,
+                Arc::new(|| false),
+            )
+            .unwrap();
+        }
     }
     let cancellation = match drop_events.recv().await.unwrap() {
         DropEvent::CancelDroppedDurableInput { cancellation } => cancellation,
