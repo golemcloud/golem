@@ -31,8 +31,11 @@ final class PrincipalAgentImpl(input: String, context: InvocationContext) extend
     case Principal.Anonymous              => "anonymous"
   }
 
+  // The constructor's context belongs to the constructor call, so the creator is read now and kept.
+  private val creator: String = describe(context.caller.original)
+
   override def whoCreated(): Future[String] =
-    Future.successful(s"Agent '$input' was created by: ${describe(context.caller.original)}")
+    Future.successful(s"Agent '$input' was created by: $creator")
 
   override def currentCaller(caller: InvocationContext): Future[String] =
     Future.successful(s"Current caller: ${describe(caller.caller.immediate)}")
