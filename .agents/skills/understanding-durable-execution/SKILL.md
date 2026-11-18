@@ -3436,6 +3436,20 @@ result; only an initializer after the snapshot, such as an update target's, adds
 checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
 a port needs a portless grant for the lookup too.
 
+**DNS record lookups.** `golem:network/dns` (`durable_host/sockets/dns.rs`) queries one record
+type of one name (A, AAAA, CNAME, MX, NS, PTR, SRV, TXT, CAA, SOA, NAPTR) with `hickory-resolver`
+and returns the typed records with their TTLs. Each query is one `ReadRemote` call
+(`golem::network::dns::resolve`) with the same `dns_target(name)` check and DNS retry
+classification as an address lookup: only `temporary-resolver-failure` retries; negative answers
+(`name-not-found`, `no-data`), refusals and denials are recorded and replay. The resolver uses
+`agent_sockets.dns_servers`, else the system resolver configuration, never reads the hosts file
+and has no cache, so every live guest query is one upstream query. With agent sockets disabled a
+lookup fails with `permanent-resolver-failure`. The A and AAAA records of an answer link to the
+queried name in `ResolvedNames` as a P3 address lookup does: when the answer reaches the guest. Live
+and on replay the lookup builds a hook from the answer that the delivery observer runs only as
+`Delivered`, and `rebuild_resolved_names` links the records at the call's `CompletionDelivered` marker, and a discarded or
+undelivered answer links nothing. Tests: `tests/scope_cards/dns_records.rs`.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can

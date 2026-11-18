@@ -19,7 +19,7 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -123,6 +123,9 @@ impl Default for WorkerServiceGrpcConfig {
 /// - Cloud metadata addresses, link-local addresses, and the executor's gRPC and HTTP ports and
 ///   `refused_ports` on loopback, unspecified and this host's own addresses are refused even
 ///   against a grant that names them.
+///
+/// The `golem:network/dns` record lookups follow the same switch and the same lookup grants as
+/// the address lookups.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AgentSocketsConfig {
     pub enabled: bool,
@@ -130,6 +133,11 @@ pub struct AgentSocketsConfig {
     /// The single executable sets the ports of its other services here.
     #[serde(default)]
     pub refused_ports: Vec<u16>,
+    /// The upstream servers (`address:port`) of the `golem:network/dns` record lookups. When
+    /// empty, the lookups use the system resolver configuration (`/etc/resolv.conf`), the
+    /// servers of the address lookups.
+    #[serde(default)]
+    pub dns_servers: Vec<SocketAddr>,
 }
 
 impl SafeDisplay for AgentSocketsConfig {
@@ -137,6 +145,7 @@ impl SafeDisplay for AgentSocketsConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "enabled: {}", self.enabled);
         let _ = writeln!(&mut result, "refused ports: {:?}", self.refused_ports);
+        let _ = writeln!(&mut result, "DNS servers: {:?}", self.dns_servers);
         result
     }
 }

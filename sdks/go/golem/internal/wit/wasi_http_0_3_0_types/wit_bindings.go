@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
@@ -110,7 +111,7 @@ func wasm_future_lift_result_option_fields_error_code(src unsafe.Pointer) witTyp
 
 		result0 = witTypes.Ok[witTypes.Option[*Fields], ErrorCode](option)
 	case 1:
-		result := wasm_lift_1_t1260(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t1275(unsafe.Add(unsafe.Pointer(src), 8))
 
 		result0 = witTypes.Err[witTypes.Option[*Fields], ErrorCode](result)
 	default:
@@ -153,7 +154,7 @@ func wasm_future_lower_result_option_fields_error_code(
 	case witTypes.ResultErr:
 		payload := value.Err()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t1260(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t1275(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -211,7 +212,7 @@ func wasm_future_lift_result_unit_error_code(src unsafe.Pointer) witTypes.Result
 
 		result0 = witTypes.Ok[witTypes.Unit, ErrorCode](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t1260(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t1275(unsafe.Add(unsafe.Pointer(src), 8))
 
 		result0 = witTypes.Err[witTypes.Unit, ErrorCode](result)
 	default:
@@ -235,7 +236,7 @@ func wasm_future_lower_result_unit_error_code(
 	case witTypes.ResultErr:
 		payload := value.Err()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t1260(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t1275(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -1011,7 +1012,7 @@ func FieldsFromList(entries []witTypes.Tuple2[string, []uint8]) witTypes.Result[
 
 		result1 = witTypes.Ok[*Fields, HeaderError](FieldsFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result0 := wasm_lift_1_t1261(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t1276(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[*Fields, HeaderError](result0)
 	default:
@@ -1089,7 +1090,7 @@ func (self *Fields) Set(name string, value [][]uint8) witTypes.Result[witTypes.U
 
 		result1 = witTypes.Ok[witTypes.Unit, HeaderError](witTypes.Unit{})
 	case 1:
-		result0 := wasm_lift_1_t1261(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t1276(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[witTypes.Unit, HeaderError](result0)
 	default:
@@ -1117,7 +1118,7 @@ func (self *Fields) Delete(name string) witTypes.Result[witTypes.Unit, HeaderErr
 
 		result0 = witTypes.Ok[witTypes.Unit, HeaderError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t1261(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1276(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, HeaderError](result)
 	default:
@@ -1152,7 +1153,7 @@ func (self *Fields) GetAndDelete(name string) witTypes.Result[[][]uint8, HeaderE
 
 		result1 = witTypes.Ok[[][]uint8, HeaderError](result)
 	case 1:
-		result0 := wasm_lift_1_t1261(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t1276(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[[][]uint8, HeaderError](result0)
 	default:
@@ -1182,7 +1183,7 @@ func (self *Fields) Append(name string, value []uint8) witTypes.Result[witTypes.
 
 		result0 = witTypes.Ok[witTypes.Unit, HeaderError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t1261(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1276(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, HeaderError](result)
 	default:
@@ -1280,7 +1281,7 @@ func (self *Request) GetMethod() Method {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (3 * 4), 4))
 	wasm_import_method_request_get_method((self).Handle(), returnArea)
-	result := wasm_lift_1_t1249(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t1264(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
 	return result0
 
@@ -1463,7 +1464,7 @@ func (self *Request) GetScheme() witTypes.Option[Scheme] {
 
 		option = witTypes.None[Scheme]()
 	case 1:
-		result := wasm_lift_1_t1250(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1265(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		option = witTypes.Some[Scheme](result)
 	default:
@@ -1730,7 +1731,7 @@ func (self *RequestOptions) SetConnectTimeout(duration witTypes.Option[uint64]) 
 
 		result1 = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t1262(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1277(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[witTypes.Unit, RequestOptionsError](result)
 	default:
@@ -1796,7 +1797,7 @@ func (self *RequestOptions) SetFirstByteTimeout(duration witTypes.Option[uint64]
 
 		result1 = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t1262(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1277(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[witTypes.Unit, RequestOptionsError](result)
 	default:
@@ -1862,7 +1863,7 @@ func (self *RequestOptions) SetBetweenBytesTimeout(duration witTypes.Option[uint
 
 		result1 = witTypes.Ok[witTypes.Unit, RequestOptionsError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t1262(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1277(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[witTypes.Unit, RequestOptionsError](result)
 	default:
@@ -1970,7 +1971,7 @@ func ResponseConsumeBody(this *Response, res *witTypes.FutureReader[witTypes.Res
 }
 
 //go:noinline
-func wasm_lift_1_t1261(src unsafe.Pointer) HeaderError {
+func wasm_lift_1_t1276(src unsafe.Pointer) HeaderError {
 	var variant HeaderError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2013,7 +2014,7 @@ func wasm_lift_1_t1261(src unsafe.Pointer) HeaderError {
 }
 
 //go:noinline
-func wasm_lift_1_t1260(src unsafe.Pointer) ErrorCode {
+func wasm_lift_1_t1275(src unsafe.Pointer) ErrorCode {
 	var variant ErrorCode
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2021,7 +2022,7 @@ func wasm_lift_1_t1260(src unsafe.Pointer) ErrorCode {
 		variant = MakeErrorCodeDnsTimeout()
 
 	case 1:
-		result := wasm_lift_1_t1253(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t1268(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeErrorCodeDnsError(result)
 
@@ -2074,7 +2075,7 @@ func wasm_lift_1_t1260(src unsafe.Pointer) ErrorCode {
 		variant = MakeErrorCodeTlsCertificateError()
 
 	case 14:
-		result0 := wasm_lift_1_t1255(unsafe.Add(unsafe.Pointer(src), 8))
+		result0 := wasm_lift_1_t1270(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeErrorCodeTlsAlertReceived(result0)
 
@@ -2135,7 +2136,7 @@ func wasm_lift_1_t1260(src unsafe.Pointer) ErrorCode {
 
 			option3 = witTypes.None[FieldSizePayload]()
 		case 1:
-			result2 := wasm_lift_1_t1257(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))
+			result2 := wasm_lift_1_t1272(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))
 
 			option3 = witTypes.Some[FieldSizePayload](result2)
 		default:
@@ -2160,7 +2161,7 @@ func wasm_lift_1_t1260(src unsafe.Pointer) ErrorCode {
 		variant = MakeErrorCodeHttpRequestTrailerSectionSize(option4)
 
 	case 24:
-		result5 := wasm_lift_1_t1257(unsafe.Add(unsafe.Pointer(src), 8))
+		result5 := wasm_lift_1_t1272(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeErrorCodeHttpRequestTrailerSize(result5)
 
@@ -2184,7 +2185,7 @@ func wasm_lift_1_t1260(src unsafe.Pointer) ErrorCode {
 		variant = MakeErrorCodeHttpResponseHeaderSectionSize(option6)
 
 	case 27:
-		result7 := wasm_lift_1_t1257(unsafe.Add(unsafe.Pointer(src), 8))
+		result7 := wasm_lift_1_t1272(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeErrorCodeHttpResponseHeaderSize(result7)
 
@@ -2219,7 +2220,7 @@ func wasm_lift_1_t1260(src unsafe.Pointer) ErrorCode {
 		variant = MakeErrorCodeHttpResponseTrailerSectionSize(option9)
 
 	case 30:
-		result10 := wasm_lift_1_t1257(unsafe.Add(unsafe.Pointer(src), 8))
+		result10 := wasm_lift_1_t1272(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeErrorCodeHttpResponseTrailerSize(result10)
 
@@ -2299,7 +2300,7 @@ func wasm_lift_1_t1260(src unsafe.Pointer) ErrorCode {
 }
 
 //go:noinline
-func wasm_lower_1_t1260(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Pointer) {
+func wasm_lower_1_t1275(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case ErrorCodeDnsTimeout:
@@ -2309,7 +2310,7 @@ func wasm_lower_1_t1260(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Poin
 	case ErrorCodeDnsError:
 		payload := value.DnsError()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t1253(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t1268(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case ErrorCodeDestinationNotFound:
 
@@ -2362,7 +2363,7 @@ func wasm_lower_1_t1260(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Poin
 	case ErrorCodeTlsAlertReceived:
 		payload := value.TlsAlertReceived()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(14))
-		wasm_lower_1_t1255(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t1270(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case ErrorCodeHttpRequestDenied:
 
@@ -2429,7 +2430,7 @@ func wasm_lower_1_t1260(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Poin
 		case witTypes.OptionSome:
 			payload := payload.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(1))
-			wasm_lower_1_t1257(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (8+1*4)))
+			wasm_lower_1_t1272(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (8+1*4)))
 
 		default:
 			panic("unreachable")
@@ -2455,7 +2456,7 @@ func wasm_lower_1_t1260(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Poin
 	case ErrorCodeHttpRequestTrailerSize:
 		payload := value.HttpRequestTrailerSize()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(24))
-		wasm_lower_1_t1257(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t1272(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case ErrorCodeHttpResponseIncomplete:
 
@@ -2481,7 +2482,7 @@ func wasm_lower_1_t1260(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Poin
 	case ErrorCodeHttpResponseHeaderSize:
 		payload := value.HttpResponseHeaderSize()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(27))
-		wasm_lower_1_t1257(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t1272(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case ErrorCodeHttpResponseBodySize:
 		payload := value.HttpResponseBodySize()
@@ -2520,7 +2521,7 @@ func wasm_lower_1_t1260(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Poin
 	case ErrorCodeHttpResponseTrailerSize:
 		payload := value.HttpResponseTrailerSize()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
-		wasm_lower_1_t1257(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t1272(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case ErrorCodeHttpResponseTransferCoding:
 		payload := value.HttpResponseTransferCoding()
@@ -2609,7 +2610,7 @@ func wasm_lower_1_t1260(pinner *runtime.Pinner, value ErrorCode, dst unsafe.Poin
 }
 
 //go:noinline
-func wasm_lift_1_t1249(src unsafe.Pointer) Method {
+func wasm_lift_1_t1264(src unsafe.Pointer) Method {
 	var variant Method
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2661,7 +2662,7 @@ func wasm_lift_1_t1249(src unsafe.Pointer) Method {
 }
 
 //go:noinline
-func wasm_lift_1_t1250(src unsafe.Pointer) Scheme {
+func wasm_lift_1_t1265(src unsafe.Pointer) Scheme {
 	var variant Scheme
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2685,7 +2686,7 @@ func wasm_lift_1_t1250(src unsafe.Pointer) Scheme {
 }
 
 //go:noinline
-func wasm_lift_1_t1262(src unsafe.Pointer) RequestOptionsError {
+func wasm_lift_1_t1277(src unsafe.Pointer) RequestOptionsError {
 	var variant RequestOptionsError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2720,7 +2721,7 @@ func wasm_lift_1_t1262(src unsafe.Pointer) RequestOptionsError {
 }
 
 //go:noinline
-func wasm_lift_1_t1253(src unsafe.Pointer) DnsErrorPayload {
+func wasm_lift_1_t1268(src unsafe.Pointer) DnsErrorPayload {
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2749,7 +2750,7 @@ func wasm_lift_1_t1253(src unsafe.Pointer) DnsErrorPayload {
 }
 
 //go:noinline
-func wasm_lift_1_t1255(src unsafe.Pointer) TlsAlertReceivedPayload {
+func wasm_lift_1_t1270(src unsafe.Pointer) TlsAlertReceivedPayload {
 	var option witTypes.Option[uint8]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2778,7 +2779,7 @@ func wasm_lift_1_t1255(src unsafe.Pointer) TlsAlertReceivedPayload {
 }
 
 //go:noinline
-func wasm_lift_1_t1257(src unsafe.Pointer) FieldSizePayload {
+func wasm_lift_1_t1272(src unsafe.Pointer) FieldSizePayload {
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2807,7 +2808,7 @@ func wasm_lift_1_t1257(src unsafe.Pointer) FieldSizePayload {
 }
 
 //go:noinline
-func wasm_lower_1_t1253(pinner *runtime.Pinner, value DnsErrorPayload, dst unsafe.Pointer) {
+func wasm_lower_1_t1268(pinner *runtime.Pinner, value DnsErrorPayload, dst unsafe.Pointer) {
 
 	switch (value).Rcode.Tag() {
 	case witTypes.OptionNone:
@@ -2841,7 +2842,7 @@ func wasm_lower_1_t1253(pinner *runtime.Pinner, value DnsErrorPayload, dst unsaf
 }
 
 //go:noinline
-func wasm_lower_1_t1255(pinner *runtime.Pinner, value TlsAlertReceivedPayload, dst unsafe.Pointer) {
+func wasm_lower_1_t1270(pinner *runtime.Pinner, value TlsAlertReceivedPayload, dst unsafe.Pointer) {
 
 	switch (value).AlertId.Tag() {
 	case witTypes.OptionNone:
@@ -2875,7 +2876,7 @@ func wasm_lower_1_t1255(pinner *runtime.Pinner, value TlsAlertReceivedPayload, d
 }
 
 //go:noinline
-func wasm_lower_1_t1257(pinner *runtime.Pinner, value FieldSizePayload, dst unsafe.Pointer) {
+func wasm_lower_1_t1272(pinner *runtime.Pinner, value FieldSizePayload, dst unsafe.Pointer) {
 
 	switch (value).FieldName.Tag() {
 	case witTypes.OptionNone:
