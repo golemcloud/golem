@@ -21,10 +21,10 @@ use golem_client::api::{
     AgentTypesClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
     ApplicationClientLive, CardClientLive, ComponentClientLive, DeploymentClientLive,
     EnvironmentClientLive, EnvironmentToolGrantsClientLive,
-    EnvironmentToolMiddlewareGrantsClientLive, LoginClientLive, McpDeploymentClientLive,
-    MeClientLive, PermissionSharesClientLive, PluginClientLive, ResourcesClientLive,
-    RetryPoliciesClientLive, TokenClientLive, ToolMiddlewareReleasesClientLive,
-    ToolReleasesClientLive, WorkerClientLive,
+    EnvironmentToolMiddlewareGrantsClientLive, InvocationClientLive, LoginClientLive,
+    McpDeploymentClientLive, MeClientLive, PermissionSharesClientLive, PluginClientLive,
+    ResourcesClientLive, RetryPoliciesClientLive, TokenClientLive,
+    ToolMiddlewareReleasesClientLive, ToolReleasesClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::base_model::api;
@@ -419,6 +419,7 @@ pub struct GolemClients {
     pub token: TokenClientLive,
     pub worker: WorkerClientLive,
     pub worker_invoke: WorkerClientLive,
+    pub invocation: InvocationClientLive,
 }
 
 impl GolemClients {
@@ -569,6 +570,9 @@ impl GolemClients {
             },
             worker_invoke: WorkerClientLive {
                 context: worker_invoke_context(),
+            },
+            invocation: InvocationClientLive {
+                context: worker_context(),
             },
         })
     }

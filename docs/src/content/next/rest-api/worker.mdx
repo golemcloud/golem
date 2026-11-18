@@ -1051,23 +1051,6 @@ Fork a worker by creating a new worker with the oplog up to the provided index
 {}
 ```
 
-## Cancels a pending invocation if it has not started yet
-
-Path|Method|Protected
----|---|---
-`/v1/components/{component_id}/workers/{agent_name}/invocations/{idempotency_key}`|DELETE|Yes
-
-The invocation to be cancelled is identified by the idempotency key returned when the
-invoke API accepted it.
-
-**Example Response JSON**
-
-```json copy
-{
-  "canceled": true
-}
-```
-
 ## Connect to a worker using a websocket and stream events
 
 Path|Method|Protected

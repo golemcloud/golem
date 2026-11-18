@@ -60,6 +60,7 @@ test-r = { workspace = true }
 url = { workspace = true }
 assert2 = { workspace = true }
 convert_case = { workspace = true }
+urlencoding = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 backtrace-on-stack-overflow = { workspace = true }

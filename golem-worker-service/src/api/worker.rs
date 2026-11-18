@@ -35,7 +35,7 @@ use golem_common::model::component::{
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, PromiseId, ScanCursor};
+use golem_common::model::{AgentFilter, AgentId, PromiseId, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
@@ -1075,56 +1075,6 @@ impl WorkerApi {
             .await?;
 
         Ok(Json(ForkWorkerResponse {}))
-    }
-
-    /// Cancels a pending invocation if it has not started yet
-    ///
-    /// The invocation to be cancelled is identified by the idempotency key returned when the
-    /// invoke API accepted it.
-    #[oai(
-        path = "/:component_id/workers/:agent_name/invocations/:idempotency_key",
-        method = "delete",
-        operation_id = "cancel_invocation"
-    )]
-    async fn cancel_invocation(
-        &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
-        idempotency_key: Path<IdempotencyKey>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<CancelInvocationResponse>> {
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
-        let record = recorded_http_api_request!(
-            "cancel_invocation",
-            agent_id = agent_id.to_string(),
-            idempotency_key = idempotency_key.0.to_string(),
-        );
-
-        let response = self
-            .cancel_invocation_internal(agent_id, idempotency_key.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn cancel_invocation_internal(
-        &self,
-        agent_id: AgentId,
-        idempotency_key: IdempotencyKey,
-        auth: AuthCtx,
-    ) -> Result<Json<CancelInvocationResponse>> {
-        let canceled = self
-            .worker_service
-            .cancel_invocation(&agent_id, &idempotency_key, auth)
-            .await?;
-
-        Ok(Json(CancelInvocationResponse { canceled }))
     }
 
     /// Connect to a worker using a websocket and stream events

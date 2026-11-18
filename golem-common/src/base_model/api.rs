@@ -66,6 +66,7 @@ pub mod error_code {
     pub const RESOURCE_DEFINITION_NOT_FOUND: &str = "RESOURCE_DEFINITION_NOT_FOUND";
     pub const RETRY_POLICY_NOT_FOUND: &str = "RETRY_POLICY_NOT_FOUND";
     pub const RESOURCE_NOT_FOUND: &str = "RESOURCE_NOT_FOUND";
+    pub const INVOCATION_NOT_FOUND: &str = "INVOCATION_NOT_FOUND";
     pub const ROUTE_NOT_FOUND: &str = "ROUTE_NOT_FOUND";
     pub const SECURITY_SCHEME_NOT_FOUND: &str = "SECURITY_SCHEME_NOT_FOUND";
     pub const TOKEN_NOT_FOUND: &str = "TOKEN_NOT_FOUND";

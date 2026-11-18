@@ -61,7 +61,7 @@ use crate::log::{
 };
 use crate::model::agent::RawAgentId;
 use anyhow::anyhow;
-use golem_client::api::WorkerClient;
+use golem_client::api::{InvocationClient, WorkerClient};
 use golem_client::model::NativeToolInvocationMode;
 use golem_common::base_model::tool::ToolName;
 use golem_common::model::{AgentStatus, IdempotencyKey};
@@ -249,14 +249,13 @@ async fn cancel_call(ctx: &Arc<Context>, owner: &ToolOwner, key: &CallKey) -> an
     Ok(ctx
         .golem_clients()
         .await?
-        .worker
+        .invocation
         .cancel_invocation(
-            &agent.component_id.0,
-            &agent.agent_id,
-            &accepted.to_string(),
+            &owner.environment.environment_id.0,
+            &format!("{agent}.{accepted}"),
         )
         .await
-        .map(|result| result.canceled)
+        .map(|invocation| invocation.state == golem_client::model::InvocationState::Cancelled)
         .map_service_error()?)
 }
 

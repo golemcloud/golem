@@ -104,6 +104,7 @@ pub struct InvocationSessionState {
     outputs: HashMap<u64, OutputState>,
     expected_tool: Option<(String, Vec<String>, bool, bool, bool)>,
     allows_no_result: bool,
+    allows_any_result_kind: bool,
 }
 
 impl Default for InvocationSessionState {
@@ -128,6 +129,7 @@ impl Default for InvocationSessionState {
             outputs: HashMap::new(),
             expected_tool: None,
             allows_no_result: false,
+            allows_any_result_kind: false,
         }
     }
 }
@@ -424,6 +426,7 @@ impl InvocationSessionState {
                     (None, None)
                         if mode == crate::proto::golem::worker::AgentInvocationMode::Lookup =>
                     {
+                        self.allows_any_result_kind = true;
                         Ok(())
                     }
                     (Some(_), Some(_)) | (None, None) => Err(
@@ -979,7 +982,7 @@ impl InvocationSessionState {
                 Vec::new()
             }
             Some(invocation_session_result::Result::ToolResult(tool_result)) => {
-                if self.expected_tool.is_none() {
+                if self.expected_tool.is_none() && !self.allows_any_result_kind {
                     return Err(
                         "agent-method invocation returned an external-tool result".to_string()
                     );
@@ -4599,6 +4602,56 @@ mod tests {
                 mode != AgentInvocationMode::Await
             );
         }
+    }
+
+    #[test]
+    fn only_a_lookup_without_method_or_tool_accepts_both_result_kinds() {
+        use crate::proto::golem::worker::{
+            AgentInvocationMode, PublicExternalToolResult, PublicToolInvocationResult,
+        };
+
+        let tool_result = response(invocation_response::Response::Result(
+            InvocationSessionResult {
+                result: Some(invocation_session_result::Result::ToolResult(
+                    PublicExternalToolResult {
+                        result: Some(public_external_tool_result::Result::Success(
+                            PublicToolInvocationResult { result: None },
+                        )),
+                    },
+                )),
+                agent_id: Some(agent_id()),
+                idempotency_key: invocation_key(),
+                ..Default::default()
+            },
+        ));
+        for (method_name, valid) in [(None, true), (Some("run".to_string()), false)] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&trusted_request(invocation_request::Request::Start(
+                    InvocationStart {
+                        idempotency_key: key(),
+                        mode: AgentInvocationMode::Lookup as i32,
+                        method_name,
+                        ..Default::default()
+                    },
+                )))
+                .unwrap();
+            state.validate_response(&accepted()).unwrap();
+            assert_eq!(state.validate_response(&tool_result).is_ok(), valid);
+        }
+
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&trusted_request(invocation_request::Request::Start(
+                InvocationStart {
+                    idempotency_key: key(),
+                    mode: AgentInvocationMode::Lookup as i32,
+                    ..Default::default()
+                },
+            )))
+            .unwrap();
+        state.validate_response(&accepted()).unwrap();
+        state.validate_response(&result(scalar(1))).unwrap();
     }
 
     #[test]

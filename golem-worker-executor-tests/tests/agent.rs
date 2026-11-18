@@ -1102,6 +1102,64 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
     Ok(())
 }
 
+#[test]
+#[timeout("2m")]
+async fn lookup_of_a_completed_method_returns_its_value_and_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStatus,
+        invocation_session_result,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("RpcBlockingCounter", "lookup-value");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "inc_by", data_value!(5u64))
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let awaited = executor
+        .invoke_and_await_agent_with_key(&component, &agent, &key, "get_value", data_value!())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "inc_by", data_value!(2u64))
+        .await?;
+    let invocation_id = external_invocation_id(&executor, &worker, &key, "get_value").await?;
+
+    let lookup = executor
+        .invoke_agent_session(InvocationStart {
+            agent_id: Some(worker.clone().into()),
+            mode: AgentInvocationMode::Lookup as i32,
+            idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(lookup.status, Some(InvocationStatus::Complete as i32));
+    assert_eq!(lookup.component_revision, Some(component.revision.get()));
+    let Some(invocation_session_result::Result::MethodResult(value)) = lookup.result else {
+        anyhow::bail!("expected the method result, got {:?}", lookup.result);
+    };
+    assert_eq!(
+        Some(&SchemaValue::try_from(value).map_err(anyhow::Error::msg)?),
+        awaited.value()
+    );
+    assert_eq!(awaited.into_typed::<u64>()?, 5);
+    Ok(())
+}
+
 method_failure_test!(
     ts_method_error_fails_only_its_invocation,
     "agent_sdk_ts",

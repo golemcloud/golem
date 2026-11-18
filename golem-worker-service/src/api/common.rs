@@ -247,6 +247,9 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::AgentNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
+            WorkerServiceError::InvocationNotFound(_) => {
+                Self::not_found(api::error_code::INVOCATION_NOT_FOUND, error)
+            }
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
             WorkerServiceError::InternalCallError(inner) => inner.into(),

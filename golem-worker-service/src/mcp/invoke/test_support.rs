@@ -676,6 +676,40 @@ impl WorkerClient for RecordingWorkerClient {
         unimplemented!()
     }
 
+    async fn get_invocation(
+        &self,
+        _: &AgentId,
+        _: &golem_common::model::InvocationId,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+    {
+        unimplemented!()
+    }
+
+    async fn list_invocations(
+        &self,
+        _: &AgentId,
+        _: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess>
+    {
+        unimplemented!()
+    }
+
+    async fn lookup_invocations(
+        &self,
+        _: &AgentId,
+        _: &IdempotencyKey,
+        _: Option<String>,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+    {
+        unimplemented!()
+    }
+
     async fn invoke_agent(
         &self,
         agent_id: &AgentTarget,

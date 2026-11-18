@@ -2665,11 +2665,11 @@ impl WorkerService {
         let env_name = EnvironmentName::try_from(start.environment)
             .map_err(WorkerServiceError::TypeChecker)?;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
-        let owner_key = request_key.owner_key(&format!(
-            "tool:{}/{}",
-            start.tool_name,
-            start.command_path.join("/")
-        ));
+        let owner_key =
+            request_key.owner_key(&golem_common::model::InvocationOperation::tool_operation(
+                &start.tool_name,
+                &start.command_path,
+            ));
         let (component_id, existing_agent_id) = match start.target {
             PublicNativeToolTarget::Agent {
                 component_id,
@@ -3273,7 +3273,7 @@ impl WorkerService {
         &self,
         request: NativeToolInvocationRequest,
         auth: AuthCtx,
-    ) -> WorkerResult<NativeToolInvocationResponse> {
+    ) -> WorkerResult<(NativeToolInvocationResponse, EnvironmentId)> {
         let lookup = matches!(request.mode, NativeToolInvocationMode::Lookup);
         if lookup
             && (request.idempotency_key.is_none()
@@ -3309,10 +3309,9 @@ impl WorkerService {
             parse_final_invocation_id(&key.value)?;
             key
         } else {
-            request_key.owner_key(&format!(
-                "tool:{}/{}",
-                request.tool_name,
-                request.command_path.join("/")
+            request_key.owner_key(&golem_common::model::InvocationOperation::tool_operation(
+                &request.tool_name,
+                &request.command_path,
             ))
         };
         let (component_id, fresh_owner) = match (&request.agent_id, request.component_id) {
@@ -3440,30 +3439,7 @@ impl WorkerService {
             .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
         let result = match output.result {
             golem_common::model::AgentInvocationResult::ExternalTool { result } => {
-                Some(match result {
-                    Ok(success) => NativeToolResult::Success(NativeToolSuccess {
-                        result: success
-                            .result
-                            .map(|value| (*value).try_into().map(Box::new))
-                            .transpose()
-                            .map_err(|error| {
-                                WorkerServiceError::Internal(format!(
-                                    "external tool result cannot cross the external JSON boundary: {error}"
-                                ))
-                            })?,
-                    }),
-                    Err(error) => {
-                        if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) = &error
-                            && let golem_common::model::tool::SerializableToolError::CustomError(value) = tool_error.as_ref()
-                        {
-                            golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
-                                .map_err(|error| WorkerServiceError::Internal(format!(
-                                    "external tool error cannot cross the external JSON boundary: {error}"
-                                )))?;
-                        }
-                        NativeToolResult::Failure(NativeToolFailure { error })
-                    }
-                })
+                Some(native_tool_result(result)?)
             }
             _ if proto_mode
                 != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32 =>
@@ -3476,15 +3452,18 @@ impl WorkerService {
                 ));
             }
         };
-        Ok(NativeToolInvocationResponse {
-            agent_id: response_agent_id,
-            idempotency_key: response_key,
-            result,
-            status: output.invocation_status,
-            component_revision: output.component_revision,
-            agent_fingerprint: output.agent_fingerprint,
-            oplog_index: output.oplog_index,
-        })
+        Ok((
+            NativeToolInvocationResponse {
+                agent_id: response_agent_id,
+                idempotency_key: response_key,
+                result,
+                status: output.invocation_status,
+                component_revision: output.component_revision,
+                agent_fingerprint: output.agent_fingerprint,
+                oplog_index: output.oplog_index,
+            },
+            component.environment_id,
+        ))
     }
 
     pub async fn describe_tool_rest(
@@ -3606,7 +3585,7 @@ impl WorkerService {
         &self,
         request: AgentInvocationRequest,
         auth: AuthCtx,
-    ) -> WorkerResult<AgentInvocationResult> {
+    ) -> WorkerResult<(AgentInvocationResult, EnvironmentId)> {
         let deployment_revision = request
             .deployment_revision
             .map(|rev| {
@@ -3829,55 +3808,124 @@ impl WorkerService {
                 let decode_revision = output
                     .component_revision
                     .unwrap_or(registered_agent_type.implemented_by.component_revision);
-                let component_metadata_for_decode = self
-                    .component_service
-                    .get_revision(component_id, decode_revision)
+                let typed_output = self
+                    .agent_method_output_to_external(
+                        component_id,
+                        decode_revision,
+                        &agent_type_name,
+                        &method_name,
+                        output_value,
+                    )
                     .await?;
-                let decode_agent_type = component_metadata_for_decode
-                    .metadata
-                    .find_agent_type_by_name_ref(&agent_type_name)
-                    .ok_or_else(|| {
-                        WorkerServiceError::Internal(format!(
-                            "Agent type {agent_type_name} not found in component metadata at revision {decode_revision}",
-                        ))
-                    })?;
-                let decode_method = decode_agent_type
-                    .methods
-                    .iter()
-                    .find(|m| m.name == method_name)
-                    .ok_or_else(|| {
-                        WorkerServiceError::Internal(format!(
-                            "Agent method {method_name} not found in agent type {agent_type_name} at revision {decode_revision}",
-                        ))
-                    })?;
-                let mut output_graph = decode_agent_type.schema.clone();
-                output_graph.root = decode_method
-                    .output_schema
-                    .schema()
-                    .cloned()
-                    .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
-                let typed_output = TypedSchemaValue::new(output_graph, output_value);
-                let typed_output = typed_output.try_into().map_err(|error| {
-                    WorkerServiceError::Internal(format!(
-                        "Agent method result cannot cross the external JSON boundary: {error}"
-                    ))
-                })?;
-                Ok(AgentInvocationResult {
+                Ok((
+                    AgentInvocationResult {
+                        agent_id: response_agent_id,
+                        idempotency_key: response_idempotency_key,
+                        result: Some(typed_output),
+                        component_revision: Some(decode_revision),
+                    },
+                    environment_id,
+                ))
+            }
+            _ => Ok((
+                AgentInvocationResult {
                     agent_id: response_agent_id,
                     idempotency_key: response_idempotency_key,
-                    result: Some(typed_output),
-                    component_revision: Some(decode_revision),
-                })
-            }
-            _ => Ok(AgentInvocationResult {
-                agent_id: response_agent_id,
-                idempotency_key: response_idempotency_key,
-                result: None,
-                component_revision: output.component_revision,
-            }),
+                    result: None,
+                    component_revision: output.component_revision,
+                },
+                environment_id,
+            )),
         }
     }
+
+    /// Decodes an agent method's result with the method's output schema at the revision that
+    /// produced it, so a method that a later revision removed still decodes.
+    async fn agent_method_output_to_external(
+        &self,
+        component_id: ComponentId,
+        revision: ComponentRevision,
+        agent_type_name: &AgentTypeName,
+        method_name: &str,
+        output_value: golem_common::schema::SchemaValue,
+    ) -> WorkerResult<golem_common::schema::ExternalTypedSchemaValue> {
+        let component = self
+            .component_service
+            .get_revision(component_id, revision)
+            .await?;
+        let agent_type = component
+            .metadata
+            .find_agent_type_by_name_ref(agent_type_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent type {agent_type_name} not found in component metadata at revision {revision}",
+                ))
+            })?;
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method {method_name} not found in agent type {agent_type_name} at revision {revision}",
+                ))
+            })?;
+        let mut output_graph = agent_type.schema.clone();
+        output_graph.root = method
+            .output_schema
+            .schema()
+            .cloned()
+            .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
+        TypedSchemaValue::new(output_graph, output_value)
+            .try_into()
+            .map_err(|error| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method result cannot cross the external JSON boundary: {error}"
+                ))
+            })
+    }
 }
+
+/// Converts a tool invocation's result to its REST form.
+fn native_tool_result(
+    result: Result<
+        golem_common::model::tool::SerializableToolInvocationResult,
+        golem_common::model::tool::SerializableToolRpcError,
+    >,
+) -> WorkerResult<NativeToolResult> {
+    Ok(match result {
+        Ok(success) => NativeToolResult::Success(NativeToolSuccess {
+            result: success
+                .result
+                .map(|value| (*value).try_into().map(Box::new))
+                .transpose()
+                .map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "external tool result cannot cross the external JSON boundary: {error}"
+                    ))
+                })?,
+        }),
+        Err(error) => {
+            if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) =
+                &error
+                && let golem_common::model::tool::SerializableToolError::CustomError(value) =
+                    tool_error.as_ref()
+            {
+                golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
+                    .map_err(|error| {
+                        WorkerServiceError::Internal(format!(
+                            "external tool error cannot cross the external JSON boundary: {error}"
+                        ))
+                    })?;
+            }
+            NativeToolResult::Failure(NativeToolFailure { error })
+        }
+    })
+}
+
+mod invocations;
+
+pub use invocations::InvocationListQuery;
 
 #[cfg(test)]
 mod tests {
@@ -4572,6 +4620,8 @@ mod tests {
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
         oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
+        invocation_summary:
+            Mutex<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>,
     }
 
     impl RecordingWorkerClient {
@@ -4595,6 +4645,7 @@ mod tests {
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
+                invocation_summary: Mutex::new(None),
             }
         }
 
@@ -4621,6 +4672,7 @@ mod tests {
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
+                invocation_summary: Mutex::new(None),
             }
         }
 
@@ -5038,6 +5090,40 @@ mod tests {
         ) -> WorkerResult<bool> {
             self.effects.lock().unwrap().push("cancel-invocation");
             Ok(true)
+        }
+
+        async fn get_invocation(
+            &self,
+            _: &AgentId,
+            _: &golem_common::model::InvocationId,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+        {
+            Ok(self.invocation_summary.lock().unwrap().clone())
+        }
+
+        async fn list_invocations(
+            &self,
+            _: &AgentId,
+            _: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess>
+        {
+            unimplemented!()
+        }
+
+        async fn lookup_invocations(
+            &self,
+            _: &AgentId,
+            _: &IdempotencyKey,
+            _: Option<String>,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+        {
+            unimplemented!()
         }
 
         async fn invoke_agent(
@@ -6445,7 +6531,8 @@ mod tests {
             .worker_service
             .invoke_agent_rest(harness.invoke_request(), AuthCtx::system())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(response.agent_id.component_id, harness.component_id);
         assert_eq!(
@@ -7531,12 +7618,14 @@ mod tests {
             .worker_service
             .invoke_agent_rest(harness.invoke_request(), AuthCtx::system())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         let second = harness
             .worker_service
             .invoke_agent_rest(harness.invoke_request(), AuthCtx::system())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         let invocations = harness.worker_client.invocations();
         assert_eq!(invocations.len(), 2);
@@ -7607,7 +7696,8 @@ mod tests {
             .worker_service
             .invoke_agent_rest(request, auth)
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         let invocations = harness.worker_client.invocations();
         assert_eq!(invocations.len(), 1);
@@ -7936,7 +8026,8 @@ mod tests {
             .worker_service
             .invoke_agent_rest(harness.invoke_request(), AuthCtx::system())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(
             create_response.agent_id,
@@ -8303,7 +8394,8 @@ mod tests {
             .worker_service
             .invoke_tool_rest(request, AuthCtx::system())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         let starts = harness
             .worker_client
             .invocation_session_starts
@@ -8454,5 +8546,66 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    fn invocation_summary_proto(
+        invocation_id: golem_common::model::InvocationId,
+        state: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState,
+        kind: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationKind,
+        operation: Option<String>,
+    ) -> golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary {
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary {
+            invocation_id: Some(invocation_id.0.into()),
+            state: state as i32,
+            kind: kind as i32,
+            operation,
+            changed_at: Some(::prost_types::Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A completed method result whose operation is not known cannot be decoded, so the read
+    /// answers the summary with no result instead of failing.
+    #[test]
+    async fn a_completed_invocation_with_an_unknown_operation_keeps_its_summary() {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationKind as ProtoKind, InvocationLifecycleState as ProtoState,
+        };
+        let harness = RestHarness::new(AgentMode::Durable);
+        let invocation_id = golem_common::model::InvocationId(Uuid::new_v4());
+        let owned =
+            golem_common::model::OwnedInvocationId::new(harness.some_agent_id(), invocation_id);
+        *harness.worker_client.invocation_summary.lock().unwrap() = Some(invocation_summary_proto(
+            invocation_id,
+            ProtoState::Completed,
+            ProtoKind::Unspecified,
+            None,
+        ));
+        harness
+            .worker_client
+            .set_invocation_output(AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::Tuple { elements: vec![] },
+                },
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: Some(harness.component_revision),
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            });
+
+        let got = harness
+            .worker_service
+            .get_invocation(harness.environment_id, &owned, AuthCtx::system())
+            .await;
+        let got = got.unwrap_or_else(|error| {
+            panic!("get of a completed invocation with unknown operation failed: {error}")
+        });
+        assert!(got.result.is_none());
     }
 }

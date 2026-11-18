@@ -26,8 +26,8 @@ use futures::stream::SplitStream;
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{
-    AgentClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive,
-    WorkerError,
+    AgentClient, InvocationClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient,
+    WorkerClientLive, WorkerError,
 };
 use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -954,19 +954,20 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         agent_id: &AgentId,
         idempotency_key: &golem_common::model::InvocationId,
     ) -> anyhow::Result<bool> {
+        let component = self
+            .get_latest_component_revision(&agent_id.component_id)
+            .await?;
         let client = self
             .deps
             .worker_service()
-            .worker_http_client(&self.token)
+            .invocation_http_client(&self.token)
             .await;
-        let result = client
-            .cancel_invocation(
-                &agent_id.component_id.0,
-                &agent_id.agent_id,
-                &idempotency_key.to_string(),
-            )
+        let invocation_id =
+            golem_common::model::OwnedInvocationId::new(agent_id.clone(), *idempotency_key);
+        let invocation = client
+            .cancel_invocation(&component.environment_id.0, &invocation_id.to_string())
             .await?;
-        Ok(result.canceled)
+        Ok(invocation.state == golem_client::model::InvocationState::Cancelled)
     }
 
     async fn get_file_system_node(

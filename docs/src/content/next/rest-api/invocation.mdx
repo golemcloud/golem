@@ -1,0 +1,208 @@
+# Invocation API
+API working on the invocations of agents
+## List the invocations of one agent
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/invocations`|GET|Yes
+
+Newest change first, with the invocation ID as tie-breaker. Pass `nextCursor` of a page as
+`cursor` to get the next one; an invocation that changes while paging appears at most once.
+`since` and `until` are inclusive bounds on the last change.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+agent|string|Yes|The agent, as `<component UUID>/<agent name>`
+operation|string|No|Only invocations of this method name or `tool:<tool>/<command path>`
+state|array|No|Only invocations in one of these states
+kind|#/components/schemas/InvocationKind|No|-
+since|string|No|-
+until|string|No|-
+pageSize|integer|No|At most 1000; the default is 100
+cursor|string|No|-
+
+**Example Response JSON**
+
+```json copy
+{
+  "invocations": [
+    {
+      "invocationId": "string",
+      "agentId": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "agentId": "string"
+      },
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "state": "scheduled",
+      "kind": "method",
+      "operation": "string",
+      "acceptedAt": "2019-08-24T14:15:22Z",
+      "changedAt": "2019-08-24T14:15:22Z"
+    }
+  ],
+  "nextCursor": "string"
+}
+```
+
+## Find the invocations that the caller started on an agent with an idempotency key
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/invocations/lookup`|GET|Yes
+
+The key is matched in the caller's own idempotency scope, against every method and tool
+command the agent ran, including those a later revision removed. A caller without a
+scope, and a key used through an HTTP route, find nothing. No match is `404`.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+agent|string|Yes|The agent, as `<component UUID>/<agent name>`
+operation|string|No|Only the invocation of this method name or `tool:<tool>/<command path>`
+
+**Example Response JSON**
+
+```json copy
+{
+  "invocations": [
+    {
+      "invocationId": "string",
+      "agentId": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "agentId": "string"
+      },
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "state": "scheduled",
+      "kind": "method",
+      "operation": "string",
+      "acceptedAt": "2019-08-24T14:15:22Z",
+      "changedAt": "2019-08-24T14:15:22Z"
+    }
+  ]
+}
+```
+
+## Get an invocation, with its result once it is terminal
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/invocations/{invocation_id}`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "summary": {
+    "invocationId": "string",
+    "agentId": {
+      "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+      "agentId": "string"
+    },
+    "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+    "state": "scheduled",
+    "kind": "method",
+    "operation": "string",
+    "acceptedAt": "2019-08-24T14:15:22Z",
+    "changedAt": "2019-08-24T14:15:22Z"
+  },
+  "result": {
+    "type": "Method",
+    "value": {
+      "graph": {
+        "defs": [
+          {
+            "id": "string",
+            "name": "string",
+            "body": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "root": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
+      },
+      "value": {
+        "kind": "bool",
+        "value": true
+      }
+    }
+  }
+}
+```
+
+## Cancel an invocation
+
+Path|Method|Protected
+---|---|---
+`/v1/runtime/envs/{environment_id}/invocations/{invocation_id}/cancel`|POST|Yes
+
+A `pending` or `scheduled` invocation becomes `cancelled` at once and never runs. A
+terminal invocation keeps its state. Both answer `200` with the invocation's state.
+Cancelling an invocation that already started is not supported yet and answers `409`
+with the code `CANNOT_CANCEL_RUNNING_INVOCATION`.
+
+**Example Response JSON**
+
+```json copy
+{
+  "invocationId": "string",
+  "agentId": {
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "agentId": "string"
+  },
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "state": "scheduled",
+  "kind": "method",
+  "operation": "string",
+  "acceptedAt": "2019-08-24T14:15:22Z",
+  "changedAt": "2019-08-24T14:15:22Z"
+}
+```
+## Invocation API Errors
+Status Code|Description|Body
+---|---|---
+400||`{"code":"string","errors":["string"]}`
+401||`{"code":"string","error":"string"}`
+403||`{"code":"string","error":"string"}`
+404||`{"code":"string","error":"string"}`
+409||`{"code":"string","error":"string"}`
+413||`{"code":"string","error":"string"}`
+415||`{"code":"string","error":"string"}`
+422|A limit was exceeded, or the idempotency key was already used for a different request.|`{"code":"string","error":"string"}`
+500||`{"code":"string","error":"string","workerError":{"cause":"string","stderr":"string"}}`

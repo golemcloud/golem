@@ -169,6 +169,22 @@ impl StartingRouter {
                 worker_service_api.clone(),
             )
             .at(
+                "/v1/runtime/envs/:environment_id/invocations",
+                worker_service_api.clone(),
+            )
+            .at(
+                "/v1/runtime/envs/:environment_id/invocations/lookup",
+                worker_service_api.clone(),
+            )
+            .at(
+                "/v1/runtime/envs/:environment_id/invocations/:invocation_id",
+                worker_service_api.clone(),
+            )
+            .at(
+                "/v1/runtime/envs/:environment_id/invocations/:invocation_id/cancel",
+                worker_service_api.clone(),
+            )
+            .at(
                 "/v1/components/:component_id/workers",
                 worker_service_api.clone(),
             )
@@ -210,10 +226,6 @@ impl StartingRouter {
             )
             .at(
                 "/v1/components/:component_id/workers/:agent_name/interrupt",
-                worker_service_api.clone(),
-            )
-            .at(
-                "/v1/components/:component_id/workers/:agent_name/invocations/:idempotency_key",
                 worker_service_api.clone(),
             )
             .at(

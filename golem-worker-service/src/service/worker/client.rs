@@ -672,6 +672,33 @@ pub trait WorkerClient: Send + Sync {
         scheduled: Option<ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool>;
 
+    /// `None` when the agent has no invocation with this ID.
+    async fn get_invocation(
+        &self,
+        agent_id: &AgentId,
+        invocation_id: &golem_common::model::InvocationId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Option<workerexecutor::v1::InvocationSummary>>;
+
+    /// Lists one page. The agent, environment and caller of `request` are filled in here.
+    async fn list_invocations(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::ListInvocationsRequest,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<workerexecutor::v1::ListInvocationsSuccess>;
+
+    async fn lookup_invocations(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+        operation: Option<String>,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<workerexecutor::v1::InvocationSummary>>;
+
     async fn invoke_agent(
         &self,
         agent_id: &AgentTarget,
@@ -2078,6 +2105,110 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         )
             .await?;
         Ok(canceled)
+    }
+
+    async fn get_invocation(
+        &self,
+        agent_id: &AgentId,
+        invocation_id: &golem_common::model::InvocationId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Option<workerexecutor::v1::InvocationSummary>> {
+        let agent_id = agent_id.clone();
+        let invocation_id = *invocation_id;
+        self.call_worker_executor(
+            agent_id.clone(),
+            "get_invocation",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.get_invocation(
+                    workerexecutor::v1::GetInvocationRequest {
+                        agent_id: Some(agent_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        invocation_id: Some(invocation_id.0.into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner().result {
+                Some(workerexecutor::v1::get_invocation_response::Result::Success(success)) => {
+                    Ok(success.invocation)
+                }
+                Some(workerexecutor::v1::get_invocation_response::Result::Failure(err)) => {
+                    Err(err.into())
+                }
+                None => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn list_invocations(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::ListInvocationsRequest,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<workerexecutor::v1::ListInvocationsSuccess> {
+        let request = workerexecutor::v1::ListInvocationsRequest {
+            agent_id: Some(agent_id.clone().into()),
+            environment_id: Some(environment_id.into()),
+            auth_ctx: Some(auth_ctx.into()),
+            ..request
+        };
+        self.call_worker_executor(
+            agent_id.clone(),
+            "list_invocations",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.list_invocations(request.clone()))
+            },
+            |response| match response.into_inner().result {
+                Some(workerexecutor::v1::list_invocations_response::Result::Success(success)) => {
+                    Ok(success)
+                }
+                Some(workerexecutor::v1::list_invocations_response::Result::Failure(err)) => {
+                    Err(err.into())
+                }
+                None => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn lookup_invocations(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+        operation: Option<String>,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<workerexecutor::v1::InvocationSummary>> {
+        let request = workerexecutor::v1::LookupInvocationsRequest {
+            agent_id: Some(agent_id.clone().into()),
+            environment_id: Some(environment_id.into()),
+            auth_ctx: Some(auth_ctx.into()),
+            idempotency_key: Some(idempotency_key.clone().into()),
+            operation,
+        };
+        self.call_worker_executor(
+            agent_id.clone(),
+            "lookup_invocations",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.lookup_invocations(request.clone()))
+            },
+            |response| match response.into_inner().result {
+                Some(workerexecutor::v1::lookup_invocations_response::Result::Success(success)) => {
+                    Ok(success.invocations)
+                }
+                Some(workerexecutor::v1::lookup_invocations_response::Result::Failure(err)) => {
+                    Err(err.into())
+                }
+                None => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn create_stream_session(

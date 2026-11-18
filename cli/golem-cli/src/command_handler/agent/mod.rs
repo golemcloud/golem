@@ -73,10 +73,10 @@ use crate::model::agent::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
+use golem_client::api::{AgentClient, ComponentClient, InvocationClient, WorkerClient};
 use golem_client::model::ScanCursor;
 use golem_client::model::{
-    AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
+    AgentInvocationMode, AgentInvocationRequest, ComponentDto, InvocationState, RevertWorkerTarget,
     UpdateWorkerRequest, WorkersMetadataRequest,
 };
 use golem_common::model::account::AccountId;
@@ -1217,10 +1217,16 @@ impl AgentCommandHandler {
         let clients = self.ctx.golem_clients().await?;
 
         let canceled = clients
-            .worker
-            .cancel_invocation(&component.id.0, &agent_id.0, &idempotency_key.value)
+            .invocation
+            .cancel_invocation(
+                &component.environment_id.0,
+                &format!(
+                    "{}/{}.{}",
+                    component.id.0, agent_id.0, idempotency_key.value
+                ),
+            )
             .await
-            .map(|result| result.canceled)
+            .map(|invocation| invocation.state == InvocationState::Cancelled)
             .map_service_error()?;
 
         if canceled {
