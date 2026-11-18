@@ -152,7 +152,7 @@ Native driver events are preferred when available; otherwise watcher events and 
 
 Normal runs write per-scenario JSON (`<agent>-<language>-<scenario>.json`), `summary.json`, and `report.html`; `--ctrf` adds CTRF JSON, and `GITHUB_STEP_SUMMARY` receives a summary. Merge mode writes `merged-summary.json`, `scenario-reports.json`, and `report.html`.
 
-- `.github/workflows/ci.yaml` runs harness build, formatting, and unit tests when `golem-skills/**` changes.
+- Main validation runs harness build, formatting, and unit tests through `validate-skill-harness` in `Makefile.sdk-validation.toml`.
 - `.github/workflows/skill-harness.yaml` is manually dispatched (scheduled runs are disabled), runs provider/language matrices, merges artifacts, and publishes the report.
 - `.github/actions/run-skill-harness/action.yml` defines integration prerequisites and executes the harness from an isolated `/tmp/harness-run` while `GOLEM_PATH` points at the checkout.
 

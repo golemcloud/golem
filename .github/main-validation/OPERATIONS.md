@@ -98,8 +98,10 @@ for skill-harness, billing tests and Bash oracle checks; those do not run on mai
 The merged code activates the ten-minute schedule without a variable update and
 stops automatic full-platform/heavy Bash checks on ordinary main PRs and pushes.
 Main PRs run no tests, including skill-harness, billing and Bash oracle tests.
-It retains manual/reusable CI, maintenance full CI and the existing main-push
-billing and Bash oracle paths. No optional PR tests are introduced.
+Main removes the legacy platform and built-in Bash workflows, including their
+manual/reusable entry points. Existing maintenance branches retain their own
+copies; new branches from main do not inherit them. The existing main-push
+billing and Bash oracle paths remain. No optional PR tests are introduced.
 Release preparation always requires the exact-source production result and
 release-only prerequisites. Existing activation variables no longer control it.
 

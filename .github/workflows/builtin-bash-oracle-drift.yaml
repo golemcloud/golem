@@ -1,20 +1,8 @@
 name: Built-in Bash Oracle Drift
 
-# A separate workflow, not a job folded into builtin-bash.yaml: `stale` re-runs the ENTIRE oracle
-# corpus (both tiers) against live Docker containers, which is too slow and too noisy (a
-# non-deterministic case can flip on its own, per-commit-independent of anything this PR touched)
-# to run on every push/PR the way the other builtin-bash.yaml jobs do. It needs to run only when
-# something that could actually change the oracle's answers changes: the oracle Dockerfile itself,
-# a recorded golden, or conformance.py's own comparison logic. GitHub's `on.push.paths` /
-# `on.pull_request.paths` filters already do exactly that at the workflow level -- no need for
-# dorny/paths-filter, which exists to gate individual JOBS sharing one workflow's trigger, not to
-# scope an entire workflow's trigger by path (the native filter already does that). Folding this
-# into builtin-bash.yaml instead would mean either giving that shared workflow a `schedule:`
-# trigger (which fires ALL of its jobs, not just this one, since job-level schedule filtering
-# isn't a thing) or bolting per-job `if:` conditions onto its four existing jobs to suppress them
-# on a schedule/dispatch meant only for this one -- both riskier to those jobs than a workflow of
-# its own. A weekly `schedule:` plus `workflow_dispatch:` cover the "oracle changed on its own,
-# nothing in the repo did" case that a paths filter can never catch.
+# Oracle regeneration runs the entire corpus against live Docker containers.
+# Path filters cover changes to its inputs and comparison logic; the weekly
+# schedule and manual dispatch also detect drift in the external oracle.
 
 on:
   push:

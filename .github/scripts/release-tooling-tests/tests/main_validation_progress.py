@@ -182,8 +182,14 @@ if name.startswith('worker-executor-tests-'):
     assert os.environ['GOLEM_TEST_PORT_OFFSET'] == '0'
     assert os.environ['TMPDIR'].endswith('/worker')
 elif name.startswith('integration-tests-group'):
-    assert os.environ['GOLEM_TEST_PORT_OFFSET'] == '10000'
-    assert os.environ['TMPDIR'].endswith('/service')
+    recovery = name == 'integration-tests-group4'
+    assert os.environ['GOLEM_TEST_PORT_OFFSET'] == ('23000' if recovery else '10000')
+    assert os.environ['TMPDIR'].endswith('/recovery' if recovery else '/service')
+    assert os.environ['TEST_R_BUILD_OPTS'].endswith('/service-binaries.json')
+    if recovery:
+        assert (Path(os.environ['MAIN_VALIDATION_REPORT_DIR']) / 'worker.status').is_file()
+        with open('recovery-invocations', 'a') as log:
+            log.write('once\\n')
 elif name.startswith('cli-integration-tests-'):
     assert os.environ['GOLEM_TEST_PORT_OFFSET'] == '20000'
     assert os.environ['TMPDIR'].endswith('/cli')
@@ -221,6 +227,13 @@ if os.environ.get('MAIN_VALIDATION_PARALLEL') == 'true' and name in ('cli-integr
     while not Path(other + '.started').exists():
         assert time.monotonic() < deadline, 'Bash checks did not overlap CLI tests'
         time.sleep(.05)
+if os.environ.get('MAIN_VALIDATION_PARALLEL') == 'true' and name in ('integration-tests-group1', 'integration-tests-group4'):
+    Path(name + '.started').touch()
+    other = 'integration-tests-group4' if name == 'integration-tests-group1' else 'integration-tests-group1'
+    deadline = time.monotonic() + 15
+    while not Path(other + '.started').exists():
+        assert time.monotonic() < deadline, 'isolated service invocations did not overlap'
+        time.sleep(.05)
 sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
 ''')
 
@@ -245,21 +258,29 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
         self.assertEqual(tasks["worker--tool-streaming"]["status"], "passed")
         self.assertEqual(tasks["exclusive--main-validation-docker"]["status"], "passed")
         self.assertEqual(tasks["prepare--unit-tests-and-checks"]["status"], "passed")
-        self.assertEqual(tasks["service-build--main-validation-service-native"]["status"], "passed" if parallel else "failed")
-        self.assertEqual(tasks["cli--agents"]["status"], "passed" if parallel else "blocked")
-        self.assertEqual(tasks["cli--core"]["status"], "passed" if parallel else "blocked")
-        self.assertEqual(tasks["service--13"]["status"], "passed" if parallel else "blocked")
+        producer_ok = failed_task != "main-validation-service-native"
+        self.assertEqual(tasks["service-build--main-validation-service-native"]["status"], "passed" if producer_ok else "failed")
+        self.assertEqual(tasks["cli--agents"]["status"], "passed" if producer_ok else "blocked")
+        self.assertEqual(tasks["cli--core"]["status"], "passed" if producer_ok else "blocked")
+        self.assertEqual(tasks["service--13"]["status"], "passed" if producer_ok else "blocked")
+        self.assertEqual(tasks["service--4"]["status"],
+                         ("failed" if failed_task == "integration-tests-group4" else "passed") if producer_ok else "blocked")
         self.assertEqual(tasks["worker--group1"]["status"],
                          "failed" if failed_task == "worker-executor-tests-group1" else "passed")
         self.assertEqual(tasks["exclusive--main-validation-bash"]["status"],
                          "failed" if failed_task == "main-validation-bash" else "passed")
         self.assertEqual((self.directory / "bash-invocations").read_text(), "once\n")
+        if producer_ok:
+            self.assertEqual((self.directory / "recovery-invocations").read_text(), "once\n")
         worker = tasks["worker--misc"]
         service = tasks["service-build--main-validation-service-native"]
         self.assertEqual(worker["started_at"] < service["completed_at"] and service["started_at"] < worker["completed_at"], parallel)
         worker_end = max(task["completed_at"] for task in tasks.values() if task["lane"] == "worker")
         for name in ("check", "main-validation-bash"):
             self.assertGreaterEqual(tasks[f"exclusive--{name}"]["started_at"], worker_end)
+        if parallel:
+            self.assertGreaterEqual(tasks["service--4"]["started_at"], worker_end)
+            self.assertLess(tasks["service--4"]["started_at"], tasks["service--1"]["completed_at"])
         exclusive_start = tasks["exclusive--dev-tools-tests"]["started_at"]
         self.assertTrue(all(task["completed_at"] <= exclusive_start for task in tasks.values()
                             if task["lane"] in ("worker", "service-build", "service", "cli") and task["started_at"]))
@@ -299,6 +320,61 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
 
     def test_parallel_graph_succeeds_when_every_task_passes(self):
         self.check_graph(True, "")
+
+    def test_serial_graph_runs_isolated_recovery_once(self):
+        self.check_graph(False, "")
+
+    def test_isolated_recovery_failure_is_collected_without_rerunning_the_group(self):
+        self.check_graph(True, "integration-tests-group4")
+
+    def test_absolute_endpoint_overrides_are_rejected_before_dependencies_start(self):
+        self.prepare_cargo_fixture()
+        for key in ("REDIS_PORT", "REGISTRY_HTTP_PORT"):
+            with self.subTest(key=key):
+                self.env[key] = "16379"
+                result = self.execute(["observe", "--", "cargo", "make", "--disable-check-for-updates", "--no-workspace",
+                                       "--profile", "ci", "main-validation"])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"Unset {key}".encode(), result.stdout)
+                self.assertFalse((self.report / "temporary-root.txt").exists())
+                del self.env[key]
+
+    def test_embedded_task_retains_current_build_timings_and_test_failures(self):
+        (self.directory / "Makefile.toml").write_text(
+            'extend = "Makefile.main-validation.toml"\n[config]\ndefault_to_workspace = false\nskip_core_tasks = true\n')
+        (self.directory / "Cargo.toml").write_text('''[package]
+name = "golem-registry-service"
+version = "0.1.0"
+[workspace]
+[lib]
+path = "lib.rs"
+harness = false
+[features]
+embed-builtin-artifacts = []
+[profile.dev-ci]
+inherits = "dev"
+''')
+        (self.directory / "lib.rs").write_text('''#[cfg(not(feature = "embed-builtin-artifacts"))]
+compile_error!("embedded coverage was not selected");
+fn main() {
+    assert!(std::env::args().any(|arg| arg == "builtin_artifact"));
+    if std::env::var_os("FAIL_TIMED_TEST").is_some() { std::process::exit(7); }
+}
+''')
+        self.report.mkdir()
+        report = self.report / "embedded-cargo-timing.html"
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                report.write_text("stale report")
+                self.env["FAIL_TIMED_TEST"] = "yes" if fail else ""
+                if not fail:
+                    del self.env["FAIL_TIMED_TEST"]
+                result = subprocess.run(["cargo", "make", "--disable-check-for-updates", "--no-workspace",
+                                         "--allow-private", "main-validation-embedded"], cwd=self.directory,
+                                        env=self.env, capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode == 0, not fail, result.stdout + result.stderr)
+                self.assertNotEqual(report.read_text(), "stale report")
+                self.assertGreater(report.stat().st_size, 0)
 
     def test_apfs_wrapper_requires_executed_tests_with_console_or_ctrf_output(self):
         binaries = self.directory / "bin"
