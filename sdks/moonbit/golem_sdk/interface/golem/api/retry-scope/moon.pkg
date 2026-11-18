@@ -1,0 +1,7 @@
+warnings = "-44"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/api/retry",
+}
+
+supported_targets = "+wasm"

@@ -41,7 +41,7 @@ where
             ctx.state.owned_agent_id.environment_id,
             NamedRetryPolicy::default_from_config(&ctx.state.config.retry),
             ctx.state.agent_config_retry_policies(),
-            ctx.state.runtime_retry_policy_mutations.clone(),
+            ctx.state.retry_policy_mutations(),
             ctx.state.config.max_in_function_retry_delay,
             ctx.entity_parent_start_index(),
             ctx.state.get_current_idempotency_key(),

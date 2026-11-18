@@ -278,9 +278,12 @@ oplog_payload! {
         PermissionCardLiveness {
             card_id: Uuid,
         },
-        /// The ids of the cards behind the handles that a card operation decides on, in argument
-        /// order.
+        /// The invocation that a card operation decides for, and the ids of the cards behind the
+        /// handles that it decides on, in argument order. `invocation_id` is the ID of the agent
+        /// or entity invocation that the deciding host call is attributed to, or `None` for work
+        /// that no invocation is attributed to.
         PermissionCardDecision {
+            invocation_id: Option<InvocationId>,
             card_ids: Vec<Uuid>,
         },
         PermissionCardTransfer {

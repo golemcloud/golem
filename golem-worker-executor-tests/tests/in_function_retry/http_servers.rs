@@ -128,6 +128,78 @@ pub(crate) async fn start_status_code_retry_http_server(
     (port, counter, idempotency_keys)
 }
 
+/// Starts a server that answers every request with HTTP 500, except the `held_attempt`-th request,
+/// which it answers never. The returned [`Notify`] fires when the held request arrives.
+pub(crate) async fn start_status_500_http_server_holding_attempt(
+    held_attempt: usize,
+) -> (u16, Arc<AtomicUsize>, Arc<Notify>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let held = Arc::new(Notify::new());
+
+    spawn(
+        {
+            let counter = counter.clone();
+            let held = held.clone();
+            async move {
+                loop {
+                    let (mut stream, _) = match listener.accept().await {
+                        Ok(connection) => connection,
+                        Err(_) => break,
+                    };
+                    let counter = counter.clone();
+                    let held = held.clone();
+                    spawn(async move {
+                        let mut data = Vec::new();
+                        let mut buf = [0u8; 4096];
+                        let (header_end, content_length) = loop {
+                            match stream.read(&mut buf).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => data.extend_from_slice(&buf[..n]),
+                            }
+                            if let Some(position) =
+                                data.windows(4).position(|window| window == b"\r\n\r\n")
+                            {
+                                let header_end = position + 4;
+                                let header_text = String::from_utf8_lossy(&data[..header_end]);
+                                break (header_end, parse_content_length(&header_text).unwrap_or(0));
+                            }
+                        };
+                        while data.len().saturating_sub(header_end) < content_length {
+                            match stream.read(&mut buf).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => data.extend_from_slice(&buf[..n]),
+                            }
+                        }
+
+                        let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                        if attempt == held_attempt {
+                            held.notify_one();
+                            while let Ok(n) = stream.read(&mut buf).await {
+                                if n == 0 {
+                                    break;
+                                }
+                            }
+                            return;
+                        }
+                        let body = "retry-me";
+                        let response = format!(
+                            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                        let _ = stream.shutdown().await;
+                    });
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    (port, counter, held)
+}
+
 #[derive(Debug)]
 pub(crate) struct CapturedStatusRetryRequest {
     pub(crate) request_line: String,

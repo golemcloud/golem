@@ -43,7 +43,12 @@ pub(super) fn capture_revoke_authority<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<Vec<CardId>, permissions_types::PermissionError> {
     ensure_card_permission(ctx, CardVerb::Revoke, CardResourcePattern::Any)?;
-    Ok(ctx.state.agent_effective_surface.source_card_ids.clone())
+    Ok(ctx
+        .state
+        .authority()
+        .effective_surface()
+        .source_card_ids
+        .clone())
 }
 
 pub(super) async fn permission_card_revoke_response<Ctx: WorkerCtx>(

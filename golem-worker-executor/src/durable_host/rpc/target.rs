@@ -668,15 +668,25 @@ where
             ]);
             let started = SpanStarted {
                 span_id: SpanId::generate(),
-                trace_id: ctx.state.invocation_context.trace_id.clone(),
-                trace_states: ctx.state.invocation_context.trace_states.clone(),
-                parent_span_id: Some(ctx.state.current_span_id.clone()),
+                trace_id: ctx
+                    .state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_id
+                    .clone(),
+                trace_states: ctx
+                    .state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_states
+                    .clone(),
+                parent_span_id: Some(ctx.state.invocation_state().current_span_id.clone()),
                 links: Vec::new(),
                 started_at: golem_common::model::Timestamp::now_utc(),
                 attributes: AttributeMap(attributes),
                 kind: SpanKind::Client,
             };
-            let parent = ctx.state.current_span_id.clone();
+            let parent = ctx.state.invocation_state().current_span_id.clone();
             let span = install_embedded_span(ctx, &started, &parent)?;
             match begun
                 .start_live_with_span(ctx, request.clone(), started)

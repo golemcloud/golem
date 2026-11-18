@@ -591,10 +591,11 @@ impl DurableInputProducer {
                 },
                 live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
             };
+            let captured = ctx.attribution.capture();
             self.pending_guest_value = Some(item);
             store
                 .as_context_mut()
-                .spawn(async move |store| task.run(store).await)?;
+                .spawn(async move |store| captured.run(task.run(store)).await)?;
             self.guest_delivery = Some(receiver);
         }
         let result = std::task::ready!(Pin::new(self.guest_delivery.as_mut().unwrap()).poll(cx));
@@ -661,9 +662,10 @@ impl DurableInputProducer {
                     },
                     result,
                 };
+                let captured = store.data().durable_ctx().attribution.capture();
                 store
                     .as_context_mut()
-                    .spawn(async move |store| task.run(store).await)?;
+                    .spawn(async move |store| captured.run(task.run(store)).await)?;
                 self.pending_drop = Some(Box::pin(async move {
                     receiver
                         .await
@@ -716,9 +718,10 @@ impl DurableInputProducer {
                         result,
                         _ctx: PhantomData,
                     };
+                    let captured = ctx.attribution.capture();
                     store
                         .as_context_mut()
-                        .spawn(async move |store| task.run(store).await)?;
+                        .spawn(async move |store| captured.run(task.run(store)).await)?;
                     self.live_admission = Some(receiver);
                 }
             }

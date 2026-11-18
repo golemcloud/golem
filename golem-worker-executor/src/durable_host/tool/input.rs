@@ -205,9 +205,10 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                     oplog: ctx.state.oplog.clone(),
                     result,
                 };
+                let captured = ctx.attribution.capture();
                 store
                     .as_context_mut()
-                    .spawn(async move |store| task.run(store).await)?;
+                    .spawn(async move |store| captured.run(task.run(store)).await)?;
                 self.pending = Some(pending);
             }
             let prepared = std::task::ready!(Pin::new(self.pending.as_mut().unwrap()).poll(cx));
