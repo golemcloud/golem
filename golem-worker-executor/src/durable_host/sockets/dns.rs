@@ -20,9 +20,7 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::authorization::targets::dns_target;
 use crate::durable_host::concurrent::reserve_invocation_id_before_await;
-use crate::durable_host::durability::{
-    ClassifiedHostError, CustomInvocationContext, HostFailureKind,
-};
+use crate::durable_host::durability::{ClassifiedHostError, GuestTaskContext, HostFailureKind};
 use crate::durable_host::p3::{durable_worker_ctx, run_deniable_access_classified};
 use crate::preview2::golem::network::dns::{
     CaaRecord, DnsError, DnsRecord, Host, HostWithStore, MxRecord, NaptrRecord, RecordData,
@@ -69,7 +67,7 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
 ) -> wasmtime::Result<Result<Vec<DnsRecord>, DnsError>> {
     {
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)?;
-        let custom_invocation = store.guest_task_context::<CustomInvocationContext>()?;
+        let custom_invocation = store.guest_task_context::<GuestTaskContext>()?;
         // The A and AAAA records link when the guest receives the answer, where the rebuild after
         // a snapshot reads them from the delivery marker: an answer that the guest discards links
         // nothing.
