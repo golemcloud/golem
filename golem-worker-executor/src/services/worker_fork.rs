@@ -1480,6 +1480,7 @@ impl ForkUpdates {
                         admission.target_revision,
                         admission.index,
                         CANCELLED_BY_FORK.into(),
+                        golem_common::model::oplog::UpdateFailureClass::Other,
                     )
                 })),
             self.baseline,

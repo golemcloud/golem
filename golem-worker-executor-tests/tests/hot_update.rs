@@ -29,7 +29,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogErrorKind, OplogIndex, PublicAgentInvocation,
-    PublicOplogEntry,
+    PublicOplogEntry, UpdateFailureClass,
 };
 use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCursor, Timestamp};
 use golem_common::{agent_id, data_value, phantom_agent_id};
@@ -2075,12 +2075,26 @@ async fn assert_snapshot_assisted_suffix_failure(
         .write(&executor, &component, &agent_id, "/tail.txt")
         .await?;
 
-    let (function, input, expected_cause) = match failure {
-        SnapshotAssistedSuffixFailure::HostCallDivergence => {
-            ("suffix_host_value", data_value!(), "unexpected oplog entry")
-        }
-        SnapshotAssistedSuffixFailure::Trap => ("suffix_trap", data_value!(), "component trapped"),
-        SnapshotAssistedSuffixFailure::Exit => ("suffix_exit", data_value!(), "exit"),
+    // An exit is a lifecycle failure, not a failure of the target code.
+    let (function, input, expected_cause, expected_class) = match failure {
+        SnapshotAssistedSuffixFailure::HostCallDivergence => (
+            "suffix_host_value",
+            data_value!(),
+            "unexpected oplog entry",
+            UpdateFailureClass::Divergence,
+        ),
+        SnapshotAssistedSuffixFailure::Trap => (
+            "suffix_trap",
+            data_value!(),
+            "component trapped",
+            UpdateFailureClass::TargetTrap,
+        ),
+        SnapshotAssistedSuffixFailure::Exit => (
+            "suffix_exit",
+            data_value!(),
+            "exit",
+            UpdateFailureClass::Interrupted,
+        ),
     };
     let source_result = executor
         .invoke_and_await_agent(&component, &agent_id, function, input)
@@ -2119,6 +2133,7 @@ async fn assert_snapshot_assisted_suffix_failure(
         details.contains(expected_cause),
         "unexpected assisted failure: {details}"
     );
+    assert_eq!(failed.failure_class, expected_class, "{details}");
     assert_eq!(
         failed
             .snapshot_assisted_details
@@ -4808,13 +4823,14 @@ impl KeyValueService for SnapshotLoadKeyValueService {
 }
 
 /// The update agent of a manual update test, on revision 2 with `f1` called once, so its state is
-/// 150. The env of the agent steers the load of the target revision 3 (`LOAD_SNAPSHOT`).
-async fn manual_update_agent_with_load(
+/// 150. The env variable `snapshot_env` of the agent steers the save of revision 2
+/// (`SAVE_SNAPSHOT`) or the load of the target revision 3 (`LOAD_SNAPSHOT`).
+async fn manual_update_agent_with_snapshot_env(
     executor: &TestWorkerExecutor,
     context: &TestContext,
     agent_update_v2: &PrecompiledComponent,
     http_server: &TestHttpServer,
-    load: &str,
+    snapshot_env: (&str, &str),
 ) -> anyhow::Result<(
     ComponentDto,
     golem_common::model::agent::ParsedAgentKey,
@@ -4832,7 +4848,7 @@ async fn manual_update_agent_with_load(
             agent_id.clone(),
             HashMap::from([
                 ("PORT".to_string(), http_server.port().to_string()),
-                ("LOAD_SNAPSHOT".to_string(), load.to_string()),
+                (snapshot_env.0.to_string(), snapshot_env.1.to_string()),
             ]),
             Vec::new(),
         )
@@ -4878,12 +4894,12 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
     )
     .await?;
     let http_server = TestHttpServer::start().await;
-    let (component, agent_id, worker_id, target) = manual_update_agent_with_load(
+    let (component, agent_id, worker_id, target) = manual_update_agent_with_snapshot_env(
         &executor,
         &context,
         agent_update_v2,
         &http_server,
-        "read-key",
+        ("LOAD_SNAPSHOT", "read-key"),
     )
     .await?;
     let before_update = executor
@@ -4965,9 +4981,14 @@ async fn a_guest_exit_during_the_snapshot_load_fails_a_manual_update_and_keeps_t
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let http_server = TestHttpServer::start().await;
-    let (component, agent_id, worker_id, target) =
-        manual_update_agent_with_load(&executor, &context, agent_update_v2, &http_server, "exit")
-            .await?;
+    let (component, agent_id, worker_id, target) = manual_update_agent_with_snapshot_env(
+        &executor,
+        &context,
+        agent_update_v2,
+        &http_server,
+        ("LOAD_SNAPSHOT", "exit"),
+    )
+    .await?;
 
     executor
         .manual_update_worker(&worker_id, target.revision, false)
@@ -4981,22 +5002,74 @@ async fn a_guest_exit_during_the_snapshot_load_fails_a_manual_update_and_keeps_t
     executor.check_oplog_is_queryable(&worker_id).await?;
     http_server.abort();
 
-    let details = failed
+    let (details, class) = failed
         .updates
         .iter()
         .find_map(|record| match record {
-            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            UpdateRecord::FailedUpdate(update) => Some((
+                update.details.clone().unwrap_or_default(),
+                update.failure_class,
+            )),
             _ => None,
         })
-        .unwrap_or_default();
+        .expect("the exit must record a failed update");
     assert_eq!(
         details,
         "Manual update failed to load snapshot: the agent exited during the snapshot load"
     );
+    assert_eq!(class, UpdateFailureClass::Interrupted);
     assert_eq!(state, 150);
     assert_eq!(metadata.component_revision, component.revision);
     assert_eq!(metadata.status, AgentStatus::Idle);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
+    Ok(())
+}
+
+/// A guest exit during the snapshot save of a manual update is a lifecycle event: the update fails
+/// with the class `Interrupted`, and the agent stays on its source revision.
+#[test]
+#[timeout("120s")]
+async fn a_guest_exit_during_the_snapshot_save_fails_a_manual_update_as_interrupted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let http_server = TestHttpServer::start().await;
+    let (component, _agent_id, worker_id, target) = manual_update_agent_with_snapshot_env(
+        &executor,
+        &context,
+        agent_update_v2,
+        &http_server,
+        ("SAVE_SNAPSHOT", "exit"),
+    )
+    .await?;
+
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    http_server.abort();
+
+    let (details, class) = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some((
+                update.details.clone().unwrap_or_default(),
+                update.failure_class,
+            )),
+            _ => None,
+        })
+        .expect("the exit must record a failed update");
+    assert_eq!(
+        details,
+        "failed to get a snapshot for manual update: it called exit"
+    );
+    assert_eq!(class, UpdateFailureClass::Interrupted);
+    assert_eq!(failed.component_revision, component.revision);
     Ok(())
 }
 
@@ -9559,7 +9632,7 @@ async fn a_diverging_automatic_update_keeps_its_class_and_divergence_across_a_re
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::model::oplog::{ReplayStep, StartIdentityField, UpdateFailureClass};
+    use golem_common::model::oplog::{ReplayStep, StartIdentityField};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;

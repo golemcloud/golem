@@ -397,7 +397,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                 Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind))
                                             }
                                             TrapType::Exit => {
-                                                provenance = Some(FailureProvenance::TargetReturned);
+                                                provenance = Some(FailureProvenance::Lifecycle);
                                                 break Err(WorkerExecutorError::runtime("Process exited during a speculative replay"))
                                             }
                                         }
@@ -455,7 +455,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
-                                                    provenance = Some(FailureProvenance::TargetReturned);
+                                                    provenance = Some(FailureProvenance::Lifecycle);
                                                     break Err(
                                                         WorkerExecutorError::PreviousInvocationExited,
                                                     );

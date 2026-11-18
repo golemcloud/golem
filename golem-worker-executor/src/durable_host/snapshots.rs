@@ -549,11 +549,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     FailureProvenance::Host,
                 )),
             },
-            Ok(InvokeResult::Exited { .. } | InvokeResult::MethodFailed { .. }) => Some((
+            Ok(InvokeResult::MethodFailed { .. }) => Some((
                 "Snapshot recovery interrupted".to_string(),
                 FailureProvenance::TargetReturned,
             )),
-            Ok(InvokeResult::Interrupted { .. }) => Some((
+            Ok(InvokeResult::Exited { .. } | InvokeResult::Interrupted { .. }) => Some((
                 "Snapshot recovery interrupted".to_string(),
                 FailureProvenance::Lifecycle,
             )),

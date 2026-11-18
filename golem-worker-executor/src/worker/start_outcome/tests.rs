@@ -1841,6 +1841,7 @@ fn a_failed_manual_admission_names_its_invocation() {
         revision(3),
         OplogIndex::from_u64(9),
         "cannot take a snapshot".to_string(),
+        UpdateFailureClass::Other,
     );
     assert_eq!(
         entry_fields(&entry),
@@ -2094,6 +2095,16 @@ fn an_interrupted_manual_load_keeps_the_update_pending_and_an_exit_fails_it() {
     assert_eq!(
         details,
         "Manual update failed to load snapshot: the agent exited during the snapshot load"
+    );
+    assert_eq!(
+        class_and_divergence(decide_now(
+            &role,
+            Some(&manual),
+            RawStartError::ManualLoad(&ManualLoadResult::Exited),
+        ))
+        .0,
+        UpdateFailureClass::Interrupted,
+        "an exit is a lifecycle event, not a failure of the load"
     );
     assert!(matches!(
         decide(

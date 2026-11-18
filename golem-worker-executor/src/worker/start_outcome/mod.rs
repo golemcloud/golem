@@ -250,11 +250,13 @@ pub(crate) fn decide(
 }
 
 /// The failed update of the manual update invocation at `admission_index`, which no
-/// `PendingUpdate` entry paired. Its class is `Other`: the update failed before any replay.
+/// `PendingUpdate` entry paired. The update failed before any replay, so its class is `Other`,
+/// or `Interrupted` when the save of the snapshot exited or was interrupted.
 pub(crate) fn failed_admission_of(
     target_revision: ComponentRevision,
     admission_index: OplogIndex,
     details: String,
+    failure_class: UpdateFailureClass,
 ) -> OplogEntry {
     OplogEntry::failed_update(
         target_revision,
@@ -262,7 +264,7 @@ pub(crate) fn failed_admission_of(
         None,
         Some(admission_index),
         None,
-        UpdateFailureClass::Other,
+        failure_class,
         None,
     )
 }
@@ -1100,6 +1102,9 @@ impl RawStartError<'_> {
                 SnapshotRecoveryResult::Failed(_, provenance)
                 | SnapshotRecoveryResult::Unavailable(_, provenance),
             ) => Some(*provenance),
+            RawStartError::ManualLoad(ManualLoadResult::Exited) => {
+                Some(FailureProvenance::Lifecycle)
+            }
             _ => None,
         }
     }
