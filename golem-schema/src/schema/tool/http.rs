@@ -98,7 +98,7 @@ impl Tool {
     pub fn http_endpoints(&self) -> Result<Vec<ComposedToolHttpEndpoint<'_>>, ToolValidationError> {
         check_command_tree_structure(self)?;
         let mut routes = Vec::new();
-        self.compose_http_endpoints(0, &[], &[], self.http_mount.is_some(), &mut routes)?;
+        self.compose_http_endpoints(0, &[], &[], None, &mut routes)?;
         Ok(routes)
     }
 
@@ -107,7 +107,7 @@ impl Tool {
         index: usize,
         command_path: &[String],
         parent_path: &[PathSegment],
-        ancestors_declared: bool,
+        undeclared_ancestor: Option<&str>,
         routes: &mut Vec<ComposedToolHttpEndpoint<'a>>,
     ) -> Result<(), ToolValidationError> {
         let node = &self.commands.nodes[index];
@@ -127,10 +127,15 @@ impl Tool {
                     input: None,
                     detail: detail.into(),
                 };
-                if !ancestors_declared {
+                if self.http_mount.is_none() {
                     return Err(error(
-                        "an HTTP endpoint requires a tool mount and an HTTP declaration on every ancestor",
+                        "an HTTP endpoint requires a tool mount on the enclosing tool",
                     ));
+                }
+                if let Some(ancestor) = undeclared_ancestor {
+                    return Err(error(&format!(
+                        "ancestor command `{ancestor}` requires an HTTP prefix or endpoint declaration",
+                    )));
                 }
                 let body = node
                     .body
@@ -151,12 +156,14 @@ impl Tool {
             }
             None => {}
         }
-        let declared = ancestors_declared && (index == 0 || node.http.is_some());
+        let command = command_path.join(".");
+        let undeclared_ancestor = undeclared_ancestor
+            .or_else(|| (index != 0 && node.http.is_none()).then_some(command.as_str()));
         for child in &node.subcommands {
             let child = child.0 as usize;
             let mut command_path = command_path.to_vec();
             command_path.push(self.commands.nodes[child].name.clone());
-            self.compose_http_endpoints(child, &command_path, &path, declared, routes)?;
+            self.compose_http_endpoints(child, &command_path, &path, undeclared_ancestor, routes)?;
         }
         Ok(())
     }

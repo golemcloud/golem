@@ -10,15 +10,19 @@ use quote::quote;
 use syn::parse::Parser;
 use syn::{Attribute, Error, Meta};
 
-pub fn mount_tokens(mount: Option<&str>) -> TokenStream {
+pub fn mount_tokens(mount: Option<&str>, command: &str) -> TokenStream {
     mount.map_or_else(|| quote! { None }, |path| quote! {
         Some(golem_rust::schema::tool::ToolHttpMount {
-            path_prefix: golem_rust::agentic::parse_tool_http_path(#path).expect("Invalid tool HTTP mount"),
+            path_prefix: golem_rust::agentic::parse_tool_http_path(#path)
+                .map_err(|detail| golem_rust::agentic::ToolBuildError::InvalidHttpDeclaration {
+                    command: #command.to_string(), input: None,
+                    detail: format!("invalid tool HTTP mount: {detail}"),
+                })?,
         })
     })
 }
 
-pub fn command_http_tokens(attr: Option<&Attribute>) -> Result<TokenStream, Error> {
+pub fn command_http_tokens(attr: Option<&Attribute>, command: &str) -> Result<TokenStream, Error> {
     let Some(attr) = attr else {
         return Ok(quote! { None });
     };
@@ -80,7 +84,11 @@ pub fn command_http_tokens(attr: Option<&Attribute>) -> Result<TokenStream, Erro
         }
         return Ok(
             quote! { Some(golem_rust::schema::tool::CommandHttp::Prefix(golem_rust::schema::tool::ToolHttpPrefix {
-                path_suffix: golem_rust::agentic::parse_tool_http_path(#path).expect("Invalid tool HTTP prefix"),
+                path_suffix: golem_rust::agentic::parse_tool_http_path(#path)
+                    .map_err(|detail| golem_rust::agentic::ToolBuildError::InvalidHttpDeclaration {
+                        command: #command.to_string(), input: None,
+                        detail: format!("invalid tool HTTP prefix: {detail}"),
+                    })?,
             })) },
         );
     }
@@ -141,7 +149,11 @@ pub fn command_http_tokens(attr: Option<&Attribute>) -> Result<TokenStream, Erro
         quote! { Some(golem_rust::golem_schema::http::DurableStreamRouteOptions { slots: vec![#(#slots),*], load: #load }) }
     });
     Ok(quote! { Some({
-        let mut endpoint = golem_rust::agentic::get_tool_http_endpoint(#method, #path, vec![#(#headers),*]).expect("Invalid tool HTTP endpoint");
+        let mut endpoint = golem_rust::agentic::get_tool_http_endpoint(#method, #path, vec![#(#headers),*])
+            .map_err(|detail| golem_rust::agentic::ToolBuildError::InvalidHttpDeclaration {
+                command: #command.to_string(), input: None,
+                detail: format!("invalid tool HTTP endpoint: {detail}"),
+            })?;
         endpoint.route_id = #route_id;
         endpoint.response_headers = vec![#(#response_headers),*];
         endpoint.mode = #mode;

@@ -39,6 +39,61 @@ mod tests {
     use std::process::Command;
     use test_r::test;
 
+    #[tool_definition(mount = "/reports?tenant={tenant}")]
+    trait InvalidHttpMount {
+        fn run(&self);
+    }
+
+    #[tool_definition(mount = "/reports")]
+    trait InvalidHttpPrefix {
+        #[endpoint(prefix = "/admin?x={y}")]
+        fn admin(&self);
+    }
+
+    #[tool_definition(mount = "/reports")]
+    trait InvalidHttpEndpoint {
+        #[endpoint(get = "missing-leading-slash")]
+        fn status(&self);
+    }
+
+    #[test]
+    fn invalid_http_declarations_return_build_errors() {
+        let schema = golem_rust::agentic::WireToolSchema::default();
+        for (result, context) in [
+            (
+                __golem_tool_descriptor_for_InvalidHttpMount(&mut ToolBuildCtx::new()).map(|_| ()),
+                "mount",
+            ),
+            (
+                __golem_tool_descriptor_for_InvalidHttpPrefix(&mut ToolBuildCtx::new()).map(|_| ()),
+                "prefix",
+            ),
+            (
+                __golem_tool_descriptor_for_InvalidHttpEndpoint(&mut ToolBuildCtx::new())
+                    .map(|_| ()),
+                "endpoint",
+            ),
+            (
+                __golem_standalone_wire_tool_descriptor_for_InvalidHttpMount(&schema).map(|_| ()),
+                "mount",
+            ),
+            (
+                __golem_standalone_wire_tool_descriptor_for_InvalidHttpPrefix(&schema).map(|_| ()),
+                "prefix",
+            ),
+            (
+                __golem_standalone_wire_tool_descriptor_for_InvalidHttpEndpoint(&schema)
+                    .map(|_| ()),
+                "endpoint",
+            ),
+        ] {
+            assert!(
+                matches!(result, Err(ToolBuildError::InvalidHttpDeclaration { detail, .. }) if detail.contains(context)),
+                "{context}"
+            );
+        }
+    }
+
     #[tool_definition(mount = "/discarded")]
     trait ReportAdministration {
         #[endpoint(prefix = "/own")]

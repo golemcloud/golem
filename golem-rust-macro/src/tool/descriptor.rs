@@ -103,7 +103,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
         None => quote! { env!("CARGO_PKG_VERSION").to_string() },
     };
     let requires_filesystem = ir.requires_filesystem;
-    let http_mount = crate::tool::http::mount_tokens(ir.mount.as_deref());
+    let http_mount = crate::tool::http::mount_tokens(ir.mount.as_deref(), &plan.tool_name);
     let standalone = if needs_composition(ir) {
         quote! { #ident(&mut golem_rust::agentic::ToolBuildCtx::new(), __golem_wire_schema) }
     } else {
@@ -158,7 +158,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
         None => quote! { env!("CARGO_PKG_VERSION").to_string() },
     };
     let requires_filesystem = ir.requires_filesystem;
-    let http_mount = crate::tool::http::mount_tokens(ir.mount.as_deref());
+    let http_mount = crate::tool::http::mount_tokens(ir.mount.as_deref(), &plan.tool_name);
 
     // Index 0 is always the root command.
     let root_node = build_root_node(ir, &plan, DescriptorRepr::Dynamic)?;
@@ -606,7 +606,6 @@ fn build_subtree_link(
     repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let subtree = cmd.subtree.as_ref().expect("subtree present");
-    let http = crate::tool::http::command_http_tokens(cmd.http.as_ref())?;
     let call_path = subtree_call_path(&subtree.path)?;
     let call = if repr == DescriptorRepr::Wire {
         let mut path = subtree.path.clone();
@@ -621,6 +620,7 @@ fn build_subtree_link(
         .name_override
         .clone()
         .unwrap_or_else(|| expected_name.clone());
+    let http = crate::tool::http::command_http_tokens(cmd.http.as_ref(), &grafted_name)?;
 
     let override_name = match &subtree.name_override {
         Some(n) => quote! { ::std::option::Option::Some(#n.to_string()) },
@@ -771,7 +771,7 @@ fn build_command_node(
     repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let name = command_name(cmd, tool_name, is_root);
-    let http = crate::tool::http::command_http_tokens(cmd.http.as_ref())?;
+    let http = crate::tool::http::command_http_tokens(cmd.http.as_ref(), &name)?;
     let doc = doc_tokens(&cmd.doc);
     let aliases = cmd.aliases.iter().map(|a| quote! { #a.to_string() });
 

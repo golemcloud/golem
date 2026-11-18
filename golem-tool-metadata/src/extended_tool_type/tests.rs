@@ -1781,6 +1781,7 @@ fn http_validation_binding_shape_matrix() {
     use golem_schema::http::{HeaderVariable, HttpMethod, QueryVariable};
     for (ty, path_ok, query_ok, header_ok) in [
         (SchemaType::string(), true, true, true),
+        (SchemaType::bool(), true, true, true),
         (SchemaType::option(SchemaType::u32()), true, true, true),
         (SchemaType::list(SchemaType::string()), false, true, true),
         (
@@ -1845,6 +1846,106 @@ fn http_validation_binding_shape_matrix() {
     assert!(
         matches!(validate_tool(&tool), Err(ToolBuildError::InvalidHttpDeclaration { input: Some(name), .. }) if name == "id")
     );
+}
+
+#[test]
+fn http_validation_flags_bind_outside_paths_only() {
+    use golem_schema::Empty;
+    use golem_schema::http::{HeaderVariable, HttpMethod, QueryVariable};
+    for count in [false, true] {
+        for global in [false, true] {
+            for source in [
+                "path", "mount", "prefix", "query", "header", "body", "implicit",
+            ] {
+                let mut tool = report_http_tool();
+                let mut flag = bool_flag("draft", None);
+                if count {
+                    flag.shape = wire::FlagShape::CountFlag(None);
+                }
+                let body = tool.commands[1].body.as_mut().unwrap();
+                body.positionals.fixed.clear();
+                if global {
+                    tool.commands[0].globals.flags = vec![flag];
+                } else {
+                    body.flags = vec![flag];
+                }
+                let mut http = http_endpoint(
+                    if source == "implicit" {
+                        HttpMethod::Get(Empty {})
+                    } else {
+                        HttpMethod::Post(Empty {})
+                    },
+                    if source == "path" {
+                        "/generate/{draft}"
+                    } else {
+                        "/generate"
+                    },
+                );
+                let CommandHttp::Endpoint(endpoint) = &mut http else {
+                    unreachable!()
+                };
+                if source == "query" {
+                    endpoint.query_vars.push(QueryVariable {
+                        query_param_name: "d".into(),
+                        variable_name: "draft".into(),
+                    });
+                }
+                if source == "header" {
+                    endpoint.header_vars.push(HeaderVariable {
+                        header_name: "X-Draft".into(),
+                        variable_name: "draft".into(),
+                    });
+                }
+                tool.commands[1].http = Some(http);
+                if source == "mount" {
+                    tool.http_mount.as_mut().unwrap().path_prefix = http_path("/reports/{draft}");
+                }
+                if source == "prefix" {
+                    tool.commands[3].http = Some(CommandHttp::Prefix(ToolHttpPrefix {
+                        path_suffix: http_path("/admin/{draft}"),
+                    }));
+                }
+                assert_eq!(
+                    validate_tool(&tool).is_ok(),
+                    !matches!(source, "path" | "mount" | "prefix"),
+                    "count={count}, global={global}, source={source}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn http_validation_requires_unique_nonempty_route_ids() {
+    for id in ["", "status", "shared", "custom"] {
+        let mut tool = report_http_tool();
+        let Some(CommandHttp::Endpoint(endpoint)) = &mut tool.commands[1].http else {
+            unreachable!()
+        };
+        endpoint.route_id = Some(id.into());
+        let Some(CommandHttp::Endpoint(endpoint)) = &mut tool.commands[4].http else {
+            unreachable!()
+        };
+        endpoint.route_id = Some("shared".into());
+        assert_eq!(validate_tool(&tool).is_ok(), id == "custom", "{id:?}");
+    }
+    let mut tool = tool_with_nodes(vec![bare_node("report", vec![])]);
+    tool.http_mount = Some(ToolHttpMount {
+        path_prefix: http_path("/reports"),
+    });
+    tool.commands[0].body = Some(empty_body());
+    tool.commands[0].http = Some(http_endpoint(
+        golem_schema::http::HttpMethod::Get(golem_schema::Empty {}),
+        "/",
+    ));
+    assert!(
+        matches!(validate_tool(&tool), Err(ToolBuildError::InvalidHttpDeclaration { detail, .. }) if detail.contains("route ID"))
+    );
+    let Some(CommandHttp::Endpoint(endpoint)) = &mut tool.commands[0].http else {
+        unreachable!()
+    };
+    endpoint.route_id = Some("root".into());
+    validate_tool(&tool).unwrap();
 }
 
 #[test]
@@ -1969,6 +2070,74 @@ fn http_graft_uses_parent_mount_and_explicit_root_override() {
             })
         );
         assert_eq!(routes[0].route_id, "admin.status");
+    }
+}
+
+#[test]
+fn http_graft_requires_parent_mount_and_declared_graft_ancestor() {
+    use golem_schema::Empty;
+    use golem_schema::http::HttpMethod;
+    for mounted in [false, true] {
+        for declared in [false, true] {
+            let mut child = tool_with_nodes(vec![
+                bare_node("child", vec![1]),
+                bare_node("status", vec![]),
+            ]);
+            child.http_mount = Some(ToolHttpMount {
+                path_prefix: http_path("/child"),
+            });
+            child.commands[1].body = Some(empty_body());
+            child.commands[1].http = Some(http_endpoint(HttpMethod::Get(Empty {}), "/status"));
+            validate_tool(&child).unwrap();
+            let graft = graft_subtree(
+                child,
+                "child",
+                ExtendedGlobals::default(),
+                &[],
+                Some("admin".into()),
+                None,
+                None,
+                None,
+                declared.then(|| {
+                    CommandHttp::Prefix(ToolHttpPrefix {
+                        path_suffix: http_path("/admin"),
+                    })
+                }),
+            )
+            .unwrap();
+            let mut parent = tool_with_nodes(vec![bare_node("parent", vec![])]);
+            parent.http_mount = mounted.then(|| ToolHttpMount {
+                path_prefix: http_path("/reports"),
+            });
+            let offset = append_grafted_subtree(&mut parent.commands, graft);
+            parent.commands[0].subcommands.push(offset);
+            match validate_tool(&parent) {
+                Ok(()) => {
+                    assert!(mounted && declared);
+                    assert_eq!(
+                        parent
+                            .try_to_native_tool()
+                            .unwrap()
+                            .http_endpoints()
+                            .unwrap()[0]
+                            .path,
+                        http_path("/reports/admin/status")
+                    );
+                }
+                Err(ToolBuildError::InvalidHttpDeclaration {
+                    command, detail, ..
+                }) => {
+                    assert_eq!(command, "admin.status");
+                    if !mounted {
+                        assert!(detail.contains("tool mount"), "{detail}");
+                    } else {
+                        assert!(!declared);
+                        assert!(detail.contains("ancestor command `admin`"), "{detail}");
+                    }
+                }
+                Err(error) => panic!("unexpected error: {error:?}"),
+            }
+        }
     }
 }
 

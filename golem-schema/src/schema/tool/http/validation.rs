@@ -22,9 +22,19 @@ impl Tool {
         let routes = self.http_endpoints()?;
         self.validate_http_prefixes(0, "")?;
         let mut identities = HashSet::new();
+        let mut route_ids = HashSet::new();
         for route in routes {
             let command = route.command_path.join(".");
             let fail = |input: Option<&str>, detail: &str| http_error(&command, input, detail);
+            if route.route_id.is_empty() {
+                return Err(fail(
+                    None,
+                    "HTTP route ID must not be empty; a root endpoint requires an explicit route ID",
+                ));
+            }
+            if !route_ids.insert(route.route_id) {
+                return Err(fail(None, "duplicate HTTP route ID"));
+            }
             let endpoint = route.endpoint;
             let method = method_name(&endpoint.http_method);
             if http::Method::from_bytes(method.as_bytes()).is_err() {
@@ -61,9 +71,18 @@ impl Tool {
                 .collect();
             let mut bound = HashSet::new();
             let mut bind = |name: &str, source| {
-                let (field, _) = inputs
+                let (field, surface) = inputs
                     .get(name)
                     .ok_or_else(|| fail(Some(name), "binding names an unknown input"))?;
+                if matches!(source, Source::Path)
+                    && matches!(
+                        surface,
+                        CanonicalSurfaceRef::GlobalFlag { .. }
+                            | CanonicalSurfaceRef::BodyFlag { .. }
+                    )
+                {
+                    return Err(fail(Some(name), "a flag cannot bind from the HTTP path"));
+                }
                 if !bound.insert(name.to_string()) {
                     return Err(fail(Some(name), "input has more than one HTTP binding"));
                 }
@@ -174,9 +193,6 @@ impl Tool {
                                 Some(super::super::canonical::option_collected_type(
                                     &option.shape,
                                 ))
-                            }
-                            EffectiveCommandField::Flag(flag) if flag.long == var.variable_name => {
-                                Some(super::super::canonical::flag_type(flag))
                             }
                             _ => None,
                         });

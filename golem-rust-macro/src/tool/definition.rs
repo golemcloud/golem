@@ -973,7 +973,7 @@ fn build_command_ir(method: &syn::TraitItemFn) -> Result<CommandIr, Error> {
                     "a command may have at most one HTTP declaration",
                 ));
             }
-            crate::tool::http::command_http_tokens(Some(attr))?;
+            crate::tool::http::command_http_tokens(Some(attr), &method.sig.ident.to_string())?;
         } else if path.is_ident("arg") {
             args.push(parse_arg(attr)?);
         } else if path.is_ident("constraint") {
