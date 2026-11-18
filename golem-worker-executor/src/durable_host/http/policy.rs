@@ -190,6 +190,7 @@ pub(crate) fn golem_managed_http_headers<Ctx: WorkerCtx>(
     if ctx.state.forward_trace_context_headers {
         let invocation_context =
             ctx.state
+                .invocation_state()
                 .invocation_context
                 .get_stack(span_id)
                 .map_err(|err| {

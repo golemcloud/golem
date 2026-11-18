@@ -20,10 +20,16 @@
 //! ([`SocketPolicy::allows`]) is a backstop on every native bind, listen, connect and datagram;
 //! it depends only on its arguments and the executor configuration.
 
+use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::resolve_current_observational_owner;
+use crate::durable_host::durability::CustomInvocationContext;
+use crate::durable_host::sockets::resolved_names::{ResolvedNames, SharedResolvedNames};
 use crate::services::golem_config::GolemConfig;
+use crate::workerctx::WorkerCtx;
 use golem_common::base_model::address_class::{AddressClass, embedded_ipv4};
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::network_target::socket_target;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use wasmtime_wasi::sockets::SocketAddrUse;
@@ -63,17 +69,26 @@ impl SocketPolicy {
         }
     }
 
-    /// The permission target of a connect or outgoing datagram, or the refusal of
-    /// [`Self::refusal`]. A public address of this host's interfaces is marked as this host, so
-    /// that only a grant that names it admits it, like a loopback address.
-    pub fn target(&self, address: SocketAddr) -> Result<PermissionTarget, String> {
+    /// The permission target of a connect or outgoing datagram, with the hostnames that the
+    /// Store's lookups linked to the address, or the refusal of [`Self::refusal`]. A public
+    /// address of this host's interfaces is marked as this host, so that only a grant that names
+    /// it, or an exact hostname linked to it, admits it, like a loopback address.
+    pub fn target(
+        &self,
+        address: SocketAddr,
+        resolved_names: &ResolvedNames,
+    ) -> Result<PermissionTarget, String> {
         match self.refusal(address) {
             Some(refusal) => Err(refusal.to_string()),
             None => {
                 let ip = address.ip().to_canonical();
                 let this_host =
                     AddressClass::of(ip) == AddressClass::Public && reaches_this_host(ip);
-                Ok(socket_target(address, this_host))
+                Ok(socket_target(
+                    address,
+                    this_host,
+                    resolved_names.hostnames(address.ip()),
+                ))
             }
         }
     }
@@ -89,6 +104,51 @@ impl SocketPolicy {
             SocketAddrUse::TcpConnect | SocketAddrUse::UdpSend => self.refusal(address).is_none(),
             SocketAddrUse::UdpReceive => true,
         }
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// The permission target of a connect or outgoing datagram from this Store to `address`, or
+    /// the refusal of [`SocketPolicy::refusal`].
+    pub(crate) fn socket_target(&self, address: SocketAddr) -> Result<PermissionTarget, String> {
+        let policy = SocketPolicy::new(&self.state.config);
+        self.state
+            .resolved_names
+            .with(|names| policy.target(address, names))
+    }
+
+    /// Whether a completed lookup of this Store links its addresses. Only a lookup that replay
+    /// returns again links: neither a lookup in snapshotting mode, which is not recorded, nor a
+    /// physical call of the custom durable invocation `custom_invocation`, which replay does not
+    /// claim, does. So live execution, replay and the rebuild after a snapshot agree on the links.
+    pub(crate) fn lookup_links(
+        &mut self,
+        custom_invocation: Option<&CustomInvocationContext>,
+    ) -> Result<bool, WorkerExecutorError> {
+        Ok(!self.state.snapshotting_mode
+            && resolve_current_observational_owner(self, custom_invocation)?.is_none())
+    }
+
+    /// Links the addresses that a completed P2 lookup of `name` returned to its hostname, when
+    /// [`Self::lookup_links`] allows it. A P2 lookup has no delivery marker: its result reaches
+    /// the guest when the call returns.
+    pub(crate) fn link_resolved_addresses(
+        &mut self,
+        custom_invocation: Option<&CustomInvocationContext>,
+        name: &str,
+        addresses: impl IntoIterator<Item = IpAddr>,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.lookup_links(custom_invocation)? {
+            self.state
+                .resolved_names
+                .with(|names| names.insert(name, addresses));
+        }
+        Ok(())
+    }
+
+    /// The index of this Store, for the deferred links of P3 lookups.
+    pub(crate) fn shared_resolved_names(&self) -> SharedResolvedNames {
+        self.state.resolved_names.clone()
     }
 }
 
@@ -143,7 +203,11 @@ mod tests {
                 policy.refusal(address(refused)).is_some(),
                 "{refused} must be refused"
             );
-            assert!(policy.target(address(refused)).is_err());
+            assert!(
+                policy
+                    .target(address(refused), &ResolvedNames::default())
+                    .is_err()
+            );
             for usage in [SocketAddrUse::TcpConnect, SocketAddrUse::UdpSend] {
                 assert!(!policy.allows(address(refused), usage), "{refused}");
             }

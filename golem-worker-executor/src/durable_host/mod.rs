@@ -15,6 +15,7 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
+mod attribution;
 pub(crate) mod authorization;
 pub mod blobstore;
 mod call_coordinator;
@@ -22,6 +23,7 @@ mod calls;
 mod construction;
 mod entity_context;
 mod error_history;
+mod execution_state;
 mod filesystem;
 mod invocation;
 mod recovery;
@@ -40,9 +42,8 @@ pub(crate) use authorization::context::{
 };
 #[cfg(test)]
 use authorization::context::{
-    assert_live_authorization, clear_invocation_scope_state, derive_permission_uuid,
-    derive_permission_uuid_for_sequence, expired_wallet_card_ids_at,
-    remove_invocation_scope_for_revoked_roots,
+    assert_live_authorization, derive_permission_uuid, derive_permission_uuid_for_sequence,
+    expired_wallet_card_ids_at,
 };
 use authorization::context::{
     component_baseline_effective_surface_from_wallet, live_scope_root_cards_from_states,
@@ -395,12 +396,11 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     pub(crate) schema_producers: stream_outcome::ProducerOutcomeScope,
     schema_output_tasks: Mutex<Option<crate::worker::tasks::NativeReconstructionTasks>>,
-    primary_invocation_start_index: Option<OplogIndex>,
-    invocation_principal: Option<Principal>,
-    invocation_id: Option<golem_common::model::OwnedInvocationId>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     pub(crate) guest_imports: Arc<durability::GuestImportNumbering>,
+    /// Which invocation each task group of this Store belongs to; see [`attribution`].
+    pub(crate) attribution: attribution::InvocationAttribution,
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
@@ -915,12 +915,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
         let trace_context = self
             .state
+            .invocation_state()
             .invocation_context
-            .span_origin(&self.state.current_span_id)
+            .span_origin(&self.state.invocation_state().current_span_id)
             .map(
                 |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
                     trace_id,
-                    span_id: self.state.current_span_id.clone(),
+                    span_id: self.state.invocation_state().current_span_id.clone(),
                 },
             );
         logging::policy::emit_log_event_with_state::<Ctx>(
@@ -1124,7 +1125,11 @@ struct PrivateDurableWorkerState {
     created_by: AccountId,
     owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
-    current_idempotency_key: Option<golem_common::model::InvocationId>,
+    /// The same attribution as [`DurableWorkerCtx::attribution`], so the state's own readers
+    /// resolve their invocation.
+    attribution: attribution::InvocationAttribution,
+    /// The execution state of each invocation of this Store; see [`execution_state`].
+    invocations: execution_state::Invocations,
     /// Store-local child positions under an entity seed.
     entity_logical_key_position: Option<OplogIndex>,
     rpc: Arc<dyn Rpc>,
@@ -1136,8 +1141,6 @@ struct PrivateDurableWorkerState {
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
-    /// Next tool invocation attempt ordinal in each durable parent namespace.
-    tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
     custom_invocation_scopes: HashMap<u64, OpenCustomInvocationScope>,
     next_custom_invocation_scope_id: u64,
@@ -1178,6 +1181,9 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
+    /// The hostnames that this Store's completed address lookups linked to addresses, for the
+    /// grant check of socket connects and datagrams.
+    resolved_names: sockets::resolved_names::SharedResolvedNames,
     open_tcp_input_streams: HashSet<u32>,
     open_tcp_output_streams: HashSet<u32>,
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
@@ -1186,15 +1192,6 @@ struct PrivateDurableWorkerState {
     socket_entries: sockets::SocketEntries,
 
     snapshotting_mode: bool,
-
-    /// Tracks whether the currently executing invocation is restricted to read-only side effects.
-    /// When `ReadOnly`, outgoing HTTP and RPC host calls are trapped before any oplog entry is
-    /// written. Defaults to `Normal` and is reset on every invocation exit path.
-    invocation_strictness: InvocationStrictness,
-
-    /// Name of the agent method currently being invoked under read-only strictness. Captured at
-    /// the invocation entry point so it can be reported in `AgentError::ReadOnlyViolation`.
-    read_only_method_name: Option<String>,
 
     /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
     /// completed and can change the state of the agent, replayed or live. A `read_only` agent
@@ -1214,15 +1211,10 @@ struct PrivateDurableWorkerState {
     authority_wallet: Arc<WalletSnapshot>,
     card_boundary: Weak<CardEventBoundary>,
     replay_applications: VecDeque<Arc<replay_application::ReplayApplication>>,
-    agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: WalletCards,
-    invocation_scope_card: Option<ScopeCard>,
-    invocation_scope_root_cards: BTreeMap<CardId, StoredCard>,
-    invocation_scope_handles: HashMap<u32, Vec<CardId>>,
     /// Invocation scope an entity Store inherits from the Store that started its current entity
     /// invocation. It bounds the entity's effective surface but is not exposed as a wallet handle.
     inherited_invocation_scope: Option<InheritedInvocationScope>,
-    scope_interest: Option<Arc<crate::services::card_interest::CardInterestContribution>>,
     /// Cards the owner worker has revoked. Revocation events are drained by whichever of the
     /// owner's Stores reaches a boundary first, so every Store excludes these cards from its
     /// surfaces instead of relying on draining every event itself.
@@ -1230,12 +1222,7 @@ struct PrivateDurableWorkerState {
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
     published_authority_generation: Arc<AtomicU64>,
-    processed_authority_generation: u64,
-    authority_initialized: bool,
-    next_authority_expiration: Option<DateTime<Utc>>,
 
-    invocation_context: InvocationContext,
-    current_span_id: SpanId,
     forward_trace_context_headers: bool,
     set_outgoing_http_idempotency_key: bool,
 
@@ -1258,21 +1245,12 @@ struct PrivateDurableWorkerState {
     /// `Some(policy)` = set/overwrite, `None` = tombstone (removed).
     /// Applied on top of base policies from agent_config during `named_retry_policies()`.
     runtime_retry_policy_mutations: BTreeMap<String, Option<NamedRetryPolicy>>,
+    /// The identity of the next retry policy scope a task opens in this Store.
+    next_retry_policy_scope_id: u64,
 
     /// Maps child pollable rep → parent FutureInvokeResult rep.
     /// Used to finalize deferred parent deletion when a child pollable is dropped.
     rpc_pollable_to_parent: HashMap<u32, u32>,
-
-    /// The **global fallback** retry point: the index attached to an `Error` entry for a trap that
-    /// happens outside any in-flight durable call. It is maintained by `begin_function` /
-    /// transaction begin and the explicit HTTP/RPC retry-point writes, so it normally tracks the
-    /// last persisted side effect / open scope `Start`.
-    ///
-    /// An in-flight durable call no longer mirrors its own retry point into this field: a concurrent
-    /// durable call carries its retry grouping in its call-owned `execution_scope`
-    /// (`durable_host::concurrent`, read by `ScopedRetryHost`) and in the semantic-trap error
-    /// marker, so an overlapping call completing cannot clobber a sibling's grouping.
-    current_retry_point: OplogIndex,
 
     /// Transaction-owned protocol terminals. Each entry holds a host-call permit until closed.
     transaction_protocols: HashMap<OplogIndex, TransactionProtocol>,
@@ -1334,20 +1312,11 @@ struct PrivateDurableWorkerState {
     /// durable calls that the core initializer appended or claimed. `None` when it made none.
     bootstrap_range: Option<OplogRegion>,
 
-    /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
-    /// Reset to 0 at the start of each exported function invocation.
-    http_call_count: u64,
     /// Per-invocation HTTP call limit from the account's Plan.
     per_invocation_http_call_limit: u64,
 
-    /// Number of RPC calls made in the current invocation (live only, not replayed).
-    /// Reset to 0 at the start of each exported function invocation.
-    rpc_call_count: u64,
     /// Per-invocation RPC call limit from the account's Plan.
     per_invocation_rpc_call_limit: u64,
-
-    /// Zero-based ordinal of the next successfully derived invocation-local scope card.
-    scope_card_mint_ordinal: u64,
 
     /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
     /// and to check remaining budgets from the epoch callback.
@@ -1409,6 +1378,15 @@ impl WakeupScheduler {
     }
 }
 
+fn overlay_retry_policy_scopes(
+    mutations: &mut BTreeMap<String, Option<NamedRetryPolicy>>,
+    scopes: &[durability::RetryPolicyScope],
+) {
+    for scope in scopes {
+        mutations.insert(scope.policy.name.clone(), Some(scope.policy.clone()));
+    }
+}
+
 impl PrivateDurableWorkerState {
     /// Returns the agent-config-derived retry policies (cached, cheap).
     pub fn agent_config_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
@@ -1425,6 +1403,23 @@ impl PrivateDurableWorkerState {
     /// agent config, environment-level policies (fetched dynamically via EnvironmentStateService),
     /// and runtime overlay.
     pub async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        let mutations = self.retry_policy_mutations();
+        self.named_retry_policies_with(&mutations).await
+    }
+
+    /// The named retry policies for the retry decision of a guest trap: the agent-wide policies
+    /// overlaid with the retry policy scopes that a task of the invocation had open after its
+    /// latest scope change.
+    pub async fn guest_trap_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        let mut mutations = self.runtime_retry_policy_mutations.clone();
+        overlay_retry_policy_scopes(&mut mutations, &self.invocation_state().trap_retry_scopes);
+        self.named_retry_policies_with(&mutations).await
+    }
+
+    async fn named_retry_policies_with(
+        &mut self,
+        mutations: &BTreeMap<String, Option<NamedRetryPolicy>>,
+    ) -> Vec<NamedRetryPolicy> {
         // Tier 0: default catch-all policy from GolemConfig (priority 0, Predicate::True)
         let default_policy = NamedRetryPolicy::default_from_config(&self.config.retry);
 
@@ -1446,8 +1441,18 @@ impl PrivateDurableWorkerState {
             default_policy,
             agent_config_policies,
             environment_policies,
-            &self.runtime_retry_policy_mutations,
+            mutations,
         )
+    }
+
+    /// The agent-wide runtime retry policy mutations, overlaid with the retry policy scopes open
+    /// in the task the running host code belongs to. The innermost scope with a name wins.
+    pub fn retry_policy_mutations(&self) -> BTreeMap<String, Option<NamedRetryPolicy>> {
+        let mut mutations = self.runtime_retry_policy_mutations.clone();
+        if let Some(context) = self.attribution.guest_task_context() {
+            overlay_retry_policy_scopes(&mut mutations, &context.retry_scopes);
+        }
+        mutations
     }
 
     /// Apply a set-retry-policy mutation (from oplog replay or live execution).
@@ -1484,10 +1489,12 @@ impl PrivateDurableWorkerState {
         self.live_host_calls.load(Ordering::Acquire) > 0
     }
 
-    /// Activity tracker for Golem-spawned store background tasks; used to delay invocation
-    /// completion until every spawned task is either finished or parked in a recognized safe wait.
+    /// The per-worker activity tracker of Golem-spawned store tasks, which delays invocation
+    /// completion until every spawned task is finished or parked in a recognized safe wait. It also
+    /// counts on the invocation the running host code belongs to.
     pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
-        self.tail_work.clone()
+        self.tail_work
+            .counting_on(&self.invocation_state().tail_work)
     }
 
     fn wakeup_scheduler(
@@ -1523,7 +1530,7 @@ impl PrivateDurableWorkerState {
     /// add a tier here: with overlapping sibling scopes there is no meaningful "innermost" scope, so
     /// grouping is driven by the explicitly-maintained `current_retry_point` instead.
     fn effective_retry_point(&self) -> OplogIndex {
-        self.current_retry_point
+        self.invocation_state().retry_point
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
@@ -1689,15 +1696,71 @@ impl PrivateDurableWorkerState {
         !self.is_live()
     }
 
+    /// The idempotency key of the invocation the running host code belongs to.
     pub fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
-        self.current_idempotency_key
+        self.attributed_key().invocation_id()
     }
 
+    /// The invocation whose entry the running host code reads; see [`Invocations::key`].
+    pub fn attributed_key(&self) -> attribution::InvocationKey {
+        self.invocations.key(self.attribution.resolve())
+    }
+
+    /// Begins the invocation the invocation loop runs next.
     pub fn set_current_idempotency_key(
         &mut self,
         invocation_key: golem_common::model::InvocationId,
     ) {
-        self.current_idempotency_key = Some(invocation_key);
+        self.invocations
+            .begin(attribution::InvocationKey::Invocation(invocation_key));
+    }
+
+    /// Ends the loop's invocation without beginning another, as an entity Store does when its
+    /// entity invocation scope is removed.
+    pub fn clear_current_idempotency_key(&mut self) {
+        self.invocations
+            .begin(attribution::InvocationKey::AgentLevel);
+    }
+
+    /// The execution state of the invocation the running host code belongs to.
+    pub fn invocation_state(&self) -> &execution_state::InvocationExecutionState {
+        self.invocations.get(self.attribution.resolve())
+    }
+
+    pub fn invocation_state_mut(&mut self) -> &mut execution_state::InvocationExecutionState {
+        let attributed = self.attribution.resolve();
+        self.invocations.get_mut(attributed)
+    }
+
+    /// The execution state of exactly the invocation that the calling code is attributed to,
+    /// while that invocation's entry lives.
+    pub fn own_invocation_state_mut(
+        &mut self,
+    ) -> Option<&mut execution_state::InvocationExecutionState> {
+        let attributed = self.attribution.resolve();
+        self.invocations.own_mut(attributed)
+    }
+
+    /// The authority of the invocation the calling code is attributed to.
+    pub fn authority(&self) -> &execution_state::InvocationAuthority {
+        &self.invocation_state().authority
+    }
+
+    pub fn authority_mut(&mut self) -> &mut execution_state::InvocationAuthority {
+        &mut self.invocation_state_mut().authority
+    }
+
+    /// Marks the authority of every invocation as not synchronized, after a change to the
+    /// agent's wallet.
+    pub fn invalidate_authority(&mut self) {
+        for entry in self.invocations.entries_mut() {
+            entry.authority.invalidate();
+        }
+    }
+
+    /// The execution state of the invocation the invocation loop runs.
+    pub fn loop_invocation_state_mut(&mut self) -> &mut execution_state::InvocationExecutionState {
+        self.invocations.loop_entry_mut()
     }
 
     pub async fn get_workers(
