@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
@@ -276,7 +277,7 @@ func WebsocketConnectionConnect(url string, headers witTypes.Option[[]witTypes.T
 
 		result7 = witTypes.Ok[*WebsocketConnection, Error](WebsocketConnectionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result6 := wasm_lift_1_t1231(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result6 := wasm_lift_1_t1250(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result7 = witTypes.Err[*WebsocketConnection, Error](result6)
 	default:
@@ -327,7 +328,7 @@ func (self *WebsocketConnection) Send(message Message) witTypes.Result[witTypes.
 
 		result2 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t1231(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1250(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
@@ -351,11 +352,11 @@ func (self *WebsocketConnection) Receive() witTypes.Result[Message, Error] {
 	var result1 witTypes.Result[Message, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t1233(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1252(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Ok[Message, Error](result)
 	case 1:
-		result0 := wasm_lift_1_t1231(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t1250(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[Message, Error](result0)
 	default:
@@ -385,7 +386,7 @@ func (self *WebsocketConnection) ReceiveWithTimeout(timeoutMs uint64) witTypes.R
 
 			option = witTypes.None[Message]()
 		case 1:
-			result := wasm_lift_1_t1233(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))
+			result := wasm_lift_1_t1252(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))
 
 			option = witTypes.Some[Message](result)
 		default:
@@ -394,7 +395,7 @@ func (self *WebsocketConnection) ReceiveWithTimeout(timeoutMs uint64) witTypes.R
 
 		result1 = witTypes.Ok[witTypes.Option[Message], Error](option)
 	case 1:
-		result0 := wasm_lift_1_t1231(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t1250(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[witTypes.Option[Message], Error](result0)
 	default:
@@ -455,7 +456,7 @@ func (self *WebsocketConnection) Close(code witTypes.Option[uint16], reason witT
 
 		result4 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t1231(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1250(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result4 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
@@ -467,7 +468,7 @@ func (self *WebsocketConnection) Close(code witTypes.Option[uint16], reason witT
 }
 
 //go:noinline
-func wasm_lift_1_t1231(src unsafe.Pointer) Error {
+func wasm_lift_1_t1250(src unsafe.Pointer) Error {
 	var variant Error
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -497,7 +498,7 @@ func wasm_lift_1_t1231(src unsafe.Pointer) Error {
 
 			option = witTypes.None[CloseInfo]()
 		case 1:
-			result := wasm_lift_1_t1229(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+			result := wasm_lift_1_t1248(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 
 			option = witTypes.Some[CloseInfo](result)
 		default:
@@ -523,7 +524,7 @@ func wasm_lift_1_t1231(src unsafe.Pointer) Error {
 }
 
 //go:noinline
-func wasm_lift_1_t1233(src unsafe.Pointer) Message {
+func wasm_lift_1_t1252(src unsafe.Pointer) Message {
 	var variant Message
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -544,7 +545,7 @@ func wasm_lift_1_t1233(src unsafe.Pointer) Message {
 }
 
 //go:noinline
-func wasm_lift_1_t1229(src unsafe.Pointer) CloseInfo {
+func wasm_lift_1_t1248(src unsafe.Pointer) CloseInfo {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 
 	return CloseInfo{Code: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), Reason: value0}

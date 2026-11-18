@@ -20,4 +20,14 @@ struct Bad {
     field: u32,
 }
 
+struct Payload {
+    original: String,
+}
+
+#[derive(PoemSchema)]
+#[serde(tag = "type")]
+enum BadNewtype {
+    Item(#[serde(with = "some_module")] Payload),
+}
+
 fn main() {}

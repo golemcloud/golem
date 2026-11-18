@@ -4063,6 +4063,31 @@ components:
           allOf:
           - $ref: '#/components/schemas/CommandAnnotations'
           - nullable: true
+    CommandHttp:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - endpoint
+          value:
+            $ref: '#/components/schemas/ToolHttpEndpoint'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - prefix
+          value:
+            $ref: '#/components/schemas/ToolHttpPrefix'
     CommandNode:
       type: object
       required:
@@ -4080,6 +4105,11 @@ components:
             type: string
         doc:
           $ref: '#/components/schemas/Doc'
+        http:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandHttp'
+          - nullable: true
         globals:
           $ref: '#/components/schemas/Globals'
         subcommands:
@@ -4235,6 +4265,13 @@ components:
         componentRevision:
           type: integer
           format: uint64
+    CustomHttpMethod:
+      type: object
+      required:
+      - value
+      properties:
+        value:
+          type: string
     DeactivatePluginResponse:
       type: object
       title: DeactivatePluginResponse
@@ -4375,6 +4412,90 @@ components:
         ordinal:
           type: integer
           format: uint64
+    DurableStreamInputSlotSource:
+      type: object
+      title: DurableStreamInputSlotSource
+      required:
+      - name
+      properties:
+        name:
+          type: string
+    DurableStreamOutputSlotSource:
+      type: object
+      title: DurableStreamOutputSlotSource
+      required:
+      - name
+      properties:
+        name:
+          type: string
+    DurableStreamRouteLoadOptions:
+      type: object
+      title: DurableStreamRouteLoadOptions
+      properties:
+        maxConcurrentReadersPerStream:
+          type: integer
+          format: uint32
+        maxAppendRequestsPerSecondPerStream:
+          type: integer
+          format: uint32
+    DurableStreamRouteOptions:
+      type: object
+      title: DurableStreamRouteOptions
+      required:
+      - slots
+      properties:
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/DurableStreamSlotOptions'
+        load:
+          $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
+    DurableStreamSlotOptions:
+      type: object
+      title: DurableStreamSlotOptions
+      required:
+      - source
+      properties:
+        source:
+          $ref: '#/components/schemas/DurableStreamSlotSource'
+        name:
+          type: string
+        contentType:
+          type: string
+    DurableStreamSlotSource:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DurableStreamSlotSource_DurableStreamInputSlotSource'
+      - $ref: '#/components/schemas/DurableStreamSlotSource_DurableStreamOutputSlotSource'
+      discriminator:
+        propertyName: type
+        mapping:
+          input: '#/components/schemas/DurableStreamSlotSource_DurableStreamInputSlotSource'
+          output: '#/components/schemas/DurableStreamSlotSource_DurableStreamOutputSlotSource'
+    DurableStreamSlotSource_DurableStreamInputSlotSource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - input
+            example: input
+      - $ref: '#/components/schemas/DurableStreamInputSlotSource'
+    DurableStreamSlotSource_DurableStreamOutputSlotSource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - output
+            example: output
+      - $ref: '#/components/schemas/DurableStreamOutputSlotSource'
     DurationValuePayload:
       type: object
       required:
@@ -4385,7 +4506,6 @@ components:
           format: int64
     Empty:
       type: object
-      title: Empty
     EnvironmentId:
       type: object
       required:
@@ -5131,6 +5251,17 @@ components:
         literal:
           type: string
           nullable: true
+    FileResponseHeader:
+      type: object
+      title: FileResponseHeader
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          type: string
     FilterComparator:
       type: string
       enum:
@@ -5277,6 +5408,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FlagSpec'
+    HeaderVariable:
+      type: object
+      title: HeaderVariable
+      required:
+      - headerName
+      - variableName
+      properties:
+        headerName:
+          type: string
+        variableName:
+          type: string
     HostStreamKind:
       type: string
       description: |-
@@ -5284,6 +5426,126 @@ components:
         to. The kind determines how the entry's payload is interpreted.
       enum:
       - P3HttpRequestBody
+    HttpMethod:
+      type: object
+      oneOf:
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Get
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Head
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Post
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Put
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Delete
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Connect
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Options
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Trace
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Patch
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Custom
+        - $ref: '#/components/schemas/CustomHttpMethod'
+    HttpRouteMode:
+      type: string
+      enum:
+      - durableStreams
+      - plain
+      - sse
+      - webSocket
     ImpliesC:
       type: object
       required:
@@ -5321,6 +5583,13 @@ components:
       - data
       properties:
         data: {}
+    LiteralSegment:
+      type: object
+      required:
+      - value
+      properties:
+        value:
+          type: string
     LoadSnapshotParameters:
       type: object
       title: LoadSnapshotParameters
@@ -5842,6 +6111,42 @@ components:
       - file
       - directory
       - any
+    PathSegment:
+      type: object
+      oneOf:
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Literal
+        - $ref: '#/components/schemas/LiteralSegment'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - PathVariable
+        - $ref: '#/components/schemas/PathVariable'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - RemainingPathVariable
+        - $ref: '#/components/schemas/PathVariable'
     PathSpec:
       type: object
       required:
@@ -5862,6 +6167,13 @@ components:
           items:
             type: string
           nullable: true
+    PathVariable:
+      type: object
+      required:
+      - variableName
+      properties:
+        variableName:
+          type: string
     PendingUpdate:
       type: object
       title: PendingUpdate
@@ -8018,6 +8330,17 @@ components:
           format: int32
         unit:
           type: string
+    QueryVariable:
+      type: object
+      title: QueryVariable
+      required:
+      - queryParamName
+      - variableName
+      properties:
+        queryParamName:
+          type: string
+        variableName:
+          type: string
     QuotaTokenSpec:
       type: object
       properties:
@@ -9889,10 +10212,73 @@ components:
           type: string
         requires_filesystem:
           type: boolean
+        http_mount:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ToolHttpMount'
+          - nullable: true
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:
           $ref: '#/components/schemas/SchemaGraph'
+    ToolHttpEndpoint:
+      type: object
+      required:
+      - http_method
+      - path_suffix
+      - query_vars
+      - header_vars
+      - response_headers
+      properties:
+        route_id:
+          type: string
+          nullable: true
+        http_method:
+          $ref: '#/components/schemas/HttpMethod'
+        path_suffix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+        query_vars:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryVariable'
+        header_vars:
+          type: array
+          items:
+            $ref: '#/components/schemas/HeaderVariable'
+        response_headers:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileResponseHeader'
+        mode:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/HttpRouteMode'
+          - nullable: true
+        durable_streams:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/DurableStreamRouteOptions'
+          - nullable: true
+    ToolHttpMount:
+      type: object
+      required:
+      - path_prefix
+      properties:
+        path_prefix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+    ToolHttpPrefix:
+      type: object
+      required:
+      - path_suffix
+      properties:
+        path_suffix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
     ToolResultSpec:
       type: object
       required:

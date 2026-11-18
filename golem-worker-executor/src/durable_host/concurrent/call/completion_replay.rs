@@ -120,18 +120,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_access_with_delivered(store, get_ctx, Box::new(|| {}))
+        self.replay_access_with_delivered(store, get_ctx, |_| Box::new(|| {}))
             .await
     }
 
-    /// [`Self::replay_access`] that runs `on_delivered` when the guest receives the replayed
-    /// result at its recorded boundary (see
+    /// [`Self::replay_access`] that builds a hook from the replayed response and runs it when
+    /// the guest receives that response at its recorded boundary (see
     /// [`CompletionDelivery::deliver_at_accessor_terminal_with_delivered`]).
     pub(crate) async fn replay_access_with_delivered<T, D, Ctx>(
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        on_delivered: crate::durable_host::concurrent::OnDelivered,
+        on_delivered: impl FnOnce(&Pair::Resp) -> OnDelivered,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
@@ -170,7 +170,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             AccessResultDestination::Host,
             false,
             Some(activity),
-            Box::new(|| {}),
+            |_| Box::new(|| {}),
         )
         .await
         .map_err(|source| TerminalCallError::new(source, context))
@@ -183,7 +183,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         destination: AccessResultDestination,
         require_completed: bool,
         drop_activity: Option<&crate::durable_host::tail_work::TailActivity>,
-        on_delivered: crate::durable_host::concurrent::OnDelivered,
+        on_delivered: impl FnOnce(&Pair::Resp) -> OnDelivered,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
@@ -268,7 +268,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         self.cleanup_sink.clone(),
                         self.teardown_probe(),
                     )
-                    .deliver_at_accessor_terminal_with_delivered(store, on_delivered)
+                    .deliver_at_accessor_terminal_with_delivered(store, on_delivered(&response))
                     .await?;
                 }
                 Ok(CallReplayOutcome::Replayed(response))
@@ -298,6 +298,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
+                if destination == AccessResultDestination::Guest
+                    && store.with(|mut access| {
+                        get_ctx(access.data_mut()).parks_incomplete_tool_guest_replay()
+                    })
+                {
+                    // Successful tool return can leave admitted imports without an End.
+                    // Reconstruct their Start, but never repair or deliver them to the guest.
+                    let _parked_call = pending_call.park_undelivered();
+                    return park_undelivered_forever().await;
+                }
                 if let Some(activity) = drop_activity {
                     if store.with(|mut access| {
                         get_ctx(access.data_mut()).rejects_live_continuation_at_replay_tail()
@@ -551,15 +561,32 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_deferred(&mut AccessorContext::new(store, get_ctx))
+        self.replay_guest_deferred(&mut AccessorContext::new(store, get_ctx))
+            .await
+    }
+
+    pub(crate) async fn replay_guest_deferred<Ctx: WorkerCtx>(
+        self,
+        access: &mut impl DurableContext<Ctx>,
+    ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError> {
+        self.replay_deferred_to(access, AccessResultDestination::Guest)
             .await
     }
 
     /// Resolves the recorded terminal while retaining the actual caller-delivery boundary.
     /// Callers map errors with the session's trap context, as on the accessor path.
     pub(crate) async fn replay_deferred<Ctx: WorkerCtx>(
+        self,
+        access: &mut impl DurableContext<Ctx>,
+    ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError> {
+        self.replay_deferred_to(access, AccessResultDestination::Host)
+            .await
+    }
+
+    async fn replay_deferred_to<Ctx: WorkerCtx>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
+        destination: AccessResultDestination,
     ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError> {
         self.ensure_accessor_terminal_supported("replay_access_deferred")?;
         self.reproduce_refusal_for_claimed_start(access).await?;
@@ -642,6 +669,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
+                if destination == AccessResultDestination::Guest
+                    && access.with_ctx(|ctx| ctx.parks_incomplete_tool_guest_replay())
+                {
+                    let _parked_call = pending_call.park_undelivered();
+                    return park_undelivered_forever().await;
+                }
                 self.prepare_incomplete_live_repair_at(access, pending_call)
                     .await?;
                 let transition = publish_incomplete_replay_tail_at(

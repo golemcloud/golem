@@ -265,6 +265,11 @@ fn run_agents(project_root : String, component_dir : String) -> Unit raise {
             ("golemcloud/golem_sdk/interface/golem/core/types", "@types"),
           )
         }
+        if middleware_formatted.contains("@coreHttp.") {
+          required_pkg_imports.push(
+            ("golemcloud/golem_sdk/interface/golem/core/http", "@coreHttp"),
+          )
+        }
         required_pkg_imports.push(
           ("golemcloud/golem_sdk/interface/golem/tool/common", "@toolCommon"),
         )
@@ -300,6 +305,11 @@ fn run_agents(project_root : String, component_dir : String) -> Unit raise {
       required_pkg_imports.push(("golemcloud/golem_sdk/tool", "@tool"))
       required_pkg_imports.push(("golemcloud/golem_sdk/schema", "@schema"))
       required_pkg_imports.push(("golemcloud/golem_sdk/schema_model", "@model"))
+      if tool_formatted.contains("@coreHttp.") {
+        required_pkg_imports.push(
+          ("golemcloud/golem_sdk/interface/golem/core/http", "@coreHttp"),
+        )
+      }
       required_pkg_imports.push(
         ("golemcloud/golem_sdk/interface/golem/core/types", "@types"),
       )

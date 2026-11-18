@@ -16,7 +16,15 @@
 
 package golem.host.js.tool
 
-import golem.host.js.JsShape
+import golem.host.js.{
+  JsShape,
+  JsNeutralPathSegment,
+  JsConcreteHttpMethod,
+  JsQueryVariable,
+  JsHeaderVariable,
+  JsFileResponseHeader,
+  JsDurableStreamRouteOptions
+}
 import golem.host.js.schema.{JsSchemaGraph, JsSchemaValueTree, JsTypedSchemaValue}
 
 import scala.scalajs.js
@@ -533,6 +541,7 @@ sealed trait JsCommandNode extends js.Object {
   def globals: JsGlobals              = js.native
   def subcommands: js.Array[Int]      = js.native
   def body: js.UndefOr[JsCommandBody] = js.native
+  def http: js.UndefOr[JsCommandHttp] = js.native
 }
 object JsCommandNode {
   def apply(
@@ -541,7 +550,8 @@ object JsCommandNode {
     doc: JsDoc,
     globals: JsGlobals,
     subcommands: js.Array[Int],
-    body: js.UndefOr[JsCommandBody]
+    body: js.UndefOr[JsCommandBody],
+    http: js.UndefOr[JsCommandHttp] = js.undefined
   ): JsCommandNode = {
     val o = js.Dynamic.literal(
       "name"        -> name,
@@ -551,6 +561,7 @@ object JsCommandNode {
       "subcommands" -> subcommands
     )
     body.foreach(v => o.updateDynamic("body")(v))
+    http.foreach(v => o.updateDynamic("http")(v))
     o.asInstanceOf[JsCommandNode]
   }
 }
@@ -567,22 +578,57 @@ object JsCommandTree {
 // === Top level ===
 
 @js.native
+sealed trait JsToolHttpMount extends js.Object {
+  def pathPrefix: js.Array[JsNeutralPathSegment] = js.native
+}
+object JsToolHttpMount {
+  def apply(path: js.Array[JsNeutralPathSegment]): JsToolHttpMount =
+    js.Dynamic.literal("pathPrefix" -> path).asInstanceOf[JsToolHttpMount]
+}
+
+@js.native
+sealed trait JsCommandHttp extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsToolHttpEndpoint extends js.Object {
+  def routeId: js.UndefOr[String]                             = js.native
+  def httpMethod: JsConcreteHttpMethod                        = js.native
+  def pathSuffix: js.Array[JsNeutralPathSegment]              = js.native
+  def queryVars: js.Array[JsQueryVariable]                    = js.native
+  def headerVars: js.Array[JsHeaderVariable]                  = js.native
+  def responseHeaders: js.Array[JsFileResponseHeader]         = js.native
+  def mode: js.UndefOr[String]                                = js.native
+  def durableStreams: js.UndefOr[JsDurableStreamRouteOptions] = js.native
+}
+
+@js.native
 sealed trait JsTool extends js.Object {
-  def version: String             = js.native
-  def requiresFilesystem: Boolean = js.native
-  def commands: JsCommandTree     = js.native
-  def schema: JsSchemaGraph       = js.native
+  def version: String                        = js.native
+  def requiresFilesystem: Boolean            = js.native
+  def commands: JsCommandTree                = js.native
+  def schema: JsSchemaGraph                  = js.native
+  def httpMount: js.UndefOr[JsToolHttpMount] = js.native
 }
 object JsTool {
-  def apply(version: String, requiresFilesystem: Boolean, commands: JsCommandTree, schema: JsSchemaGraph): JsTool =
-    js.Dynamic
+  def apply(
+    version: String,
+    requiresFilesystem: Boolean,
+    commands: JsCommandTree,
+    schema: JsSchemaGraph,
+    httpMount: js.UndefOr[JsToolHttpMount] = js.undefined
+  ): JsTool = {
+    val result = js.Dynamic
       .literal(
         "version"            -> version,
         "requiresFilesystem" -> requiresFilesystem,
         "commands"           -> commands,
         "schema"             -> schema
       )
-      .asInstanceOf[JsTool]
+    httpMount.foreach(value => result.updateDynamic("httpMount")(value))
+    result.asInstanceOf[JsTool]
+  }
 }
 
 // === Invocation contract ===

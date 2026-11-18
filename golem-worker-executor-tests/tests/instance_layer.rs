@@ -1516,6 +1516,7 @@ async fn stage_entity_boundary(
             next_effective_definition: Tool {
                 version: "1.0.0".to_string(),
                 requires_filesystem: false,
+                http_mount: None,
                 commands: CommandTree { nodes: vec![] },
                 schema: SchemaGraph::empty(),
             },

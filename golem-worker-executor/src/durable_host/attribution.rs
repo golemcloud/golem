@@ -232,15 +232,17 @@ pub struct CapturedAttribution {
 }
 
 impl CapturedAttribution {
+    /// Runs a context window with the invocation and task context captured at initiation.
+    pub(crate) fn with<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.attribution
+            .with_task_scope(self.key, self.context.clone(), f)
+    }
+
     /// Polls `future` with the captured invocation and task context as the scoped attribution of
     /// its Store.
     pub async fn run<F: Future>(&self, future: F) -> F::Output {
         let mut future = pin!(future);
-        std::future::poll_fn(move |cx| {
-            self.attribution
-                .with_task_scope(self.key, self.context.clone(), || future.as_mut().poll(cx))
-        })
-        .await
+        std::future::poll_fn(move |cx| self.with(|| future.as_mut().poll(cx))).await
     }
 }
 
@@ -423,6 +425,31 @@ mod tests {
 
     use super::*;
     use futures::FutureExt;
+
+    #[test]
+    fn a_captured_context_window_preserves_its_origin_and_restores_the_caller() {
+        let attribution = InvocationAttribution::default();
+        let origin = InvocationKey::Invocation(InvocationId(uuid::Uuid::new_v4()));
+        let caller = InvocationKey::Invocation(InvocationId(uuid::Uuid::new_v4()));
+        let context = Arc::new(GuestTaskContext::default());
+        let captured = attribution.with_task_scope(Some(origin), Some(context.clone()), || {
+            attribution.capture()
+        });
+
+        attribution.with_scope(Some(caller), || {
+            captured.with(|| {
+                assert_eq!(attribution.resolve(), Some(origin));
+                assert!(Arc::ptr_eq(
+                    &attribution.guest_task_context().unwrap(),
+                    &context,
+                ));
+            });
+            assert_eq!(attribution.resolve(), Some(caller));
+            assert!(attribution.guest_task_context().is_none());
+        });
+        assert_eq!(attribution.resolve(), None);
+        assert!(attribution.guest_task_context().is_none());
+    }
 
     #[test]
     fn a_scoped_invocation_answers_only_for_its_store_and_only_while_polled() {

@@ -1802,6 +1802,7 @@ fn emit_descriptor_plumbing(buf : StringBuilder, symbol_scope : String) -> Unit 
     #|    globals: node.globals,
     #|    subcommands: node.subcommands.map(index => index + offset),
     #|    body: node.body,
+    #|    http: node.http,
     #|  }
     #|}
     #|
@@ -1810,6 +1811,7 @@ fn emit_descriptor_plumbing(buf : StringBuilder, symbol_scope : String) -> Unit 
     #|  {
     #|    version: def.version,
     #|    requires_filesystem: def.requires_filesystem,
+    #|    http_mount: def.http_mount,
     #|    commands: def.commands[1:].map(node => {
     #|      __golem_tool_rebase_node(node, -1)
     #|    }),
@@ -1831,11 +1833,12 @@ fn emit_descriptor_plumbing(buf : StringBuilder, symbol_scope : String) -> Unit 
     #|    globals: root.globals,
     #|    subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
     #|    body: root.body,
+    #|    http: root.http,
     #|  }
     #|  for node in child.commands {
     #|    commands.push(__golem_tool_rebase_node(node, offset))
     #|  }
-    #|  { version: def.version, requires_filesystem: def.requires_filesystem, commands }
+    #|  { version: def.version, requires_filesystem: def.requires_filesystem, http_mount: def.http_mount, commands }
     #|}
     #|
     #|
@@ -1870,6 +1873,8 @@ fn emit_descriptor(
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
     "\", requires_filesystem: " +
     tool.requires_filesystem.to_string() +
+    ", http_mount: " +
+    tool_mount_str(tool.http_mount) +
     ", commands: [\n",
   )
   let root = tool.root_command
@@ -1914,6 +1919,8 @@ fn emit_descriptor(
     emitted_leaf_indices.join(", ") +
     "], body: " +
     root_body +
+    ", http: " +
+    tool_http_str(root.map(i => tool.commands[i].http).flatten()) +
     " },\n",
   )
   for i in leaves {
@@ -1929,6 +1936,8 @@ fn emit_descriptor(
       emit_globals(plans[i]) +
       ", subcommands: [], body: " +
       emit_body(command, plans[i]) +
+      ", http: " +
+      tool_http_str(command.http) +
       " },\n",
     )
   }
@@ -1936,17 +1945,19 @@ fn emit_descriptor(
   buf.write_string(
     "  ] }\n    def\n  } catch { error => abort(\"invalid generated raw tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
     prepared_descriptor_name(tool, symbol_scope) +
-    "(strict_ancestors : @tool.GlobalsDef, parent_globals : @tool.GlobalsDef, override_name : String?, override_doc : @toolCommon.Doc?, override_aliases : Array[String]?) -> @tool.ToolDef {\n  try {\n    let carrier : @tool.ToolDef = { version: \"" +
+    "(strict_ancestors : @tool.GlobalsDef, parent_globals : @tool.GlobalsDef, override_name : String?, override_doc : @toolCommon.Doc?, override_aliases : Array[String]?, override_http : @toolCommon.CommandHttp?) -> @tool.ToolDef {\n  try {\n    let carrier : @tool.ToolDef = { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
     "\", requires_filesystem: " +
     tool.requires_filesystem.to_string() +
-    ", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None }] }\n    let prepared = " +
+    ", http_mount: " +
+    tool_mount_str(tool.http_mount) +
+    ", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None, http: None }] }\n    let prepared = " +
     descriptor_helper_name(symbol_scope, "extract_prepared") +
     "(carrier.graft_subtree(" +
     raw_descriptor_name(tool, symbol_scope) +
     "(), \"" +
     escape_string_lit(tool.name) +
-    "\", parent_globals, override_name, override_doc, override_aliases))\n",
+    "\", parent_globals, override_name, override_doc, override_aliases, override_http?))\n",
   )
   if has_subtrees {
     buf.write_string(
@@ -1985,6 +1996,8 @@ fn emit_descriptor(
         override_doc +
         ", " +
         override_aliases +
+        ", " +
+        tool_http_str(command.http) +
         ")\n    let def = " +
         descriptor_helper_name(symbol_scope, "append_prepared") +
         "(def, child)\n",
@@ -1996,7 +2009,7 @@ fn emit_descriptor(
     descriptor_name(tool, symbol_scope) +
     "() -> @tool.ToolDef {\n  try {\n    " +
     prepared_descriptor_name(tool, symbol_scope) +
-    "({ options: [], flags: [] }, { options: [], flags: [] }, None, None, None).normalize_inherited_globals()\n  } catch { error => abort(\"invalid generated tool definition: \" + repr(error)) }\n}\n\n",
+    "({ options: [], flags: [] }, { options: [], flags: [] }, None, None, None, None).normalize_inherited_globals()\n  } catch { error => abort(\"invalid generated tool definition: \" + repr(error)) }\n}\n\n",
   )
   if include_invoker {
     emit_invoker(buf, tool, tools, plans, leaves, symbol_scope)

@@ -793,6 +793,118 @@ pub enum SerializableP3IpNameLookupError {
     Other(Option<String>),
 }
 
+/// The record type of a `golem:network/dns` lookup.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableDnsRecordType {
+    A,
+    Aaaa,
+    Cname,
+    Mx,
+    Ns,
+    Ptr,
+    Srv,
+    Txt,
+    Caa,
+    Soa,
+    Naptr,
+}
+
+/// One record of a `golem:network/dns` answer.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableDnsRecord {
+    pub ttl: u32,
+    pub data: SerializableDnsRecordData,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableDnsRecordData {
+    A(SerializableIpAddress),
+    Aaaa(SerializableIpAddress),
+    Cname(String),
+    Mx {
+        preference: u16,
+        exchange: String,
+    },
+    Ns(String),
+    Ptr(String),
+    Srv {
+        priority: u16,
+        weight: u16,
+        port: u16,
+        target: String,
+    },
+    Txt(Vec<Vec<u8>>),
+    Caa {
+        issuer_critical: bool,
+        tag: String,
+        value: Vec<u8>,
+    },
+    Soa {
+        mname: String,
+        rname: String,
+        serial: u32,
+        refresh: u32,
+        retry: u32,
+        expire: u32,
+        minimum: u32,
+    },
+    Naptr {
+        order: u16,
+        preference: u16,
+        flags: String,
+        services: String,
+        regexp: String,
+        replacement: String,
+    },
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableDnsError {
+    AccessDenied,
+    InvalidName,
+    NameNotFound,
+    NoData,
+    TemporaryResolverFailure,
+    PermanentResolverFailure,
+}
+
 #[derive(
     Debug,
     Clone,
