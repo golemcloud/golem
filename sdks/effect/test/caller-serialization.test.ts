@@ -13,7 +13,9 @@ describe("ordinary serialization of a live caller", () => {
   const caller = callerFromHost({
     original: userPrincipal("bob"),
     immediate: agentPrincipal(),
-    tokens: [{ id: { highBits: 1n, lowBits: 2n }, maker: { issuer: "golem", subject: "account:1" } }],
+    tokens: [
+      { id: { highBits: 1n, lowBits: 2n }, maker: { issuer: "golem", subject: "account:1" } },
+    ],
   })
   const other = callerFromHost({
     original: accountPrincipal(),

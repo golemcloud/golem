@@ -59,8 +59,11 @@ describe('ordinary serialization of a live caller', () => {
       caller.tokens[0],
       others[0]!.original,
       others[0]!.immediate,
-      callerFromHost({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' }, tokens: [] })
-        .original,
+      callerFromHost({
+        original: { tag: 'anonymous' },
+        immediate: { tag: 'anonymous' },
+        tokens: [],
+      }).original,
     ];
     for (const value of live) {
       expect(() => JSON.stringify(value)).toThrow(/live value.*ctx\.caller\.original\.ref/);
