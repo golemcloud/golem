@@ -27,11 +27,13 @@ env = { MAIN_VALIDATION_TASKS = "wit main-validation-builtins main-validation-ge
 script_runner = "@duckscript"
 script = '''
 mkdir ${MAIN_VALIDATION_REPORT_DIR}
+temporary = exec --fail-on-error python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='golem-main-validation-'))"
+temporary = trim ${temporary.stdout}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt ${temporary}
 branches = array worker service cli exclusive checks
 for branch in ${branches}
     rm ${MAIN_VALIDATION_REPORT_DIR}/${branch}.status
-    rm -r ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-tmp/${branch}
-    mkdir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-tmp/${branch}
+    mkdir ${temporary}/${branch}
 end
 # A runner without local metadata and bounded test retries must not fall back to Cargo.
 help = exec cargo-test-r run --help
@@ -135,9 +137,11 @@ end
 # every fork. The final task rejects failures and missing completion records.
 [tasks.main-validation-workers]
 private = true
-env = { MAIN_VALIDATION_TASKS = "misc group1 group2 group3 group4 group5 tool-streaming", GOLEM_TEST_PORT_OFFSET = "0", TMPDIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-tmp/worker" }
+env = { MAIN_VALIDATION_TASKS = "misc group1 group2 group3 group4 group5 tool-streaming", GOLEM_TEST_PORT_OFFSET = "0" }
 script_runner = "@duckscript"
 script = '''
+temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
+set_env TMPDIR ${temporary}/worker
 set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json"
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
@@ -174,9 +178,11 @@ run_task = [
 
 [tasks.main-validation-service-tests]
 private = true
-env = { MAIN_VALIDATION_TASKS = "1 2 3 4 5 6-coordinated 6-rest 7 8 9 10 11 12 13", GOLEM_TEST_PORT_OFFSET = "10000", GOLEM_TEST_BIN_PROFILE = "dev-ci", TMPDIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-tmp/service" }
+env = { MAIN_VALIDATION_TASKS = "1 2 3 4 5 6-coordinated 6-rest 7 8 9 10 11 12 13", GOLEM_TEST_PORT_OFFSET = "10000", GOLEM_TEST_BIN_PROFILE = "dev-ci" }
 script_runner = "@duckscript"
 script = '''
+temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
+set_env TMPDIR ${temporary}/service
 set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/service-binaries.json"
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
@@ -192,9 +198,11 @@ writefile ${MAIN_VALIDATION_REPORT_DIR}/service.status ${failed}
 
 [tasks.main-validation-cli-tests]
 private = true
-env = { MAIN_VALIDATION_TASKS = "agents agents-guest-bridge agents-guest-bridge-sources agents-streaming bridge bridge-rust deploy deploy-runtime core", GOLEM_TEST_PORT_OFFSET = "20000", TMPDIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-tmp/cli" }
+env = { MAIN_VALIDATION_TASKS = "agents agents-guest-bridge agents-guest-bridge-sources agents-streaming bridge bridge-rust deploy deploy-runtime core", GOLEM_TEST_PORT_OFFSET = "20000" }
 script_runner = "@duckscript"
 script = '''
+temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
+set_env TMPDIR ${temporary}/cli
 set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/service-binaries.json"
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
@@ -244,6 +252,8 @@ for branch in ${branches}
         failed = set true
     end
 end
+temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
+rm -r ${temporary}
 if ${failed}
     trigger_error "Main validation failed; retain every original report and log"
 end
@@ -345,5 +355,5 @@ if not eq ${kind} lib
     trigger_error "Expected exactly one native APFS library executable"
 end
 executable = array_get ${fields} 1
-exec --fail-on-error bash integration-tests/scripts/apfs/run-native-tests.sh ${executable} :tag:native_apfs --include-ignored --test-threads 1 --report-time
+exec --fail-on-error bash integration-tests/scripts/apfs/run-native-tests.sh ${executable} :tag:native_apfs --include-ignored --test-threads 1 --report-time --format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf-apfs.json
 '''

@@ -190,6 +190,29 @@ def failure_excerpt(path):
         print("[validation] Log excerpt unavailable; inspect retained evidence", flush=True)
 
 
+def resource_sample():
+    cpu = [int(value) for value in Path("/proc/stat").read_text().splitlines()[0].split()[1:9]]
+    memory = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        name, value = line.split(":", 1)
+        if name in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+            memory[name] = int(value.split()[0]) * 1024
+    disks = {}
+    for name, path in (("worktree", Path.cwd()), ("target", Path(os.environ.get("CARGO_TARGET_DIR", "target")))):
+        if path.exists():
+            usage = shutil.disk_usage(path)
+            disks[name] = {"total_bytes": usage.total, "free_bytes": usage.free}
+    pressure = {}
+    for name in ("cpu", "memory", "io"):
+        path = Path("/proc/pressure") / name
+        if path.exists():
+            pressure[name] = path.read_text().strip()
+    return {"timestamp": now(), "monotonic_seconds": time.monotonic(), "scope": "runner-host",
+            "available_cpus": len(os.sched_getaffinity(0)), "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"),
+            "cpu_ticks": dict(zip(("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"), cpu)),
+            "memory_bytes": memory, "load_average": os.getloadavg(), "disks": disks, "pressure": pressure}
+
+
 def observe(directory, command):
     directory.mkdir(parents=True, exist_ok=True)
     progress_dir = directory / "progress"
@@ -205,11 +228,23 @@ def observe(directory, command):
     created_at = now()
     mode = "parallel" if os.environ.get("MAIN_VALIDATION_PARALLEL", "true") == "true" else "serial"
     last_heartbeat = 0
+    last_resource_sample = 0
+    resource_sampling = True
     previous = {}
     (directory / "logs").mkdir(exist_ok=True)
+    resources = directory / "resources.jsonl"
 
     def report(final=False):
-        nonlocal last_heartbeat, previous
+        nonlocal last_heartbeat, last_resource_sample, resource_sampling, previous
+        if resource_sampling and (final or time.monotonic() - last_resource_sample >= 5):
+            try:
+                sample = resource_sample()
+                with resources.open("w" if last_resource_sample == 0 else "a") as output:
+                    output.write(json.dumps(sample) + "\n")
+                last_resource_sample = time.monotonic()
+            except (OSError, ValueError, IndexError, AttributeError):
+                print("[validation] Resource sampling unavailable; validation continues without resource evidence", flush=True)
+                resource_sampling = False
         tasks = records(directory)
         for task in tasks:
             if task["status"] != previous.get(task["id"], "pending"):

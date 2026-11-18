@@ -173,7 +173,7 @@ else:
         runner.chmod(0o755)
         self.env["PATH"] = str(bin_dir) + os.pathsep + self.env["PATH"]
         self.env["CI_DASHBOARD_PROGRESS_TOKEN"] = "fixture-credential-never-forwarded"
-        (self.directory / "workload.py").write_text('''import json, os, sys, time
+        (self.directory / "workload.py").write_text('''import json, os, subprocess, sys, tempfile, time
 from pathlib import Path
 assert 'CI_DASHBOARD_PROGRESS_TOKEN' not in os.environ
 name = sys.argv[1]
@@ -187,6 +187,14 @@ elif name.startswith('integration-tests-group'):
 elif name.startswith('cli-integration-tests-'):
     assert os.environ['GOLEM_TEST_PORT_OFFSET'] == '20000'
     assert os.environ['TMPDIR'].endswith('/cli')
+    if name == 'cli-integration-tests-agents':
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            (project / 'Cargo.toml').write_text('[package]\\nname = "generated-client"\\nversion = "0.1.0"\\n[lib]\\npath = "lib.rs"\\n')
+            (project / 'lib.rs').write_text('')
+            metadata = subprocess.run(['cargo', 'metadata', '--offline', '--no-deps', '--format-version=1'],
+                                      cwd=project, capture_output=True, text=True)
+            assert metadata.returncode == 0, metadata.stderr
 print('full fixture output for ' + name, flush=True)
 if os.environ.get('MAIN_VALIDATION_PARALLEL') == 'true' and name in ('worker-executor-tests-misc', 'main-validation-service-native'):
     Path(name + '.started').touch()
@@ -214,6 +222,7 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
         self.assertEqual(tasks["exclusive--main-validation-docker"]["status"], "passed")
         self.assertEqual(tasks["prepare--unit-tests-and-checks"]["status"], "passed")
         self.assertEqual(tasks["service-build--main-validation-service-native"]["status"], "passed" if parallel else "failed")
+        self.assertEqual(tasks["cli--agents"]["status"], "passed" if parallel else "blocked")
         self.assertEqual(tasks["cli--core"]["status"], "passed" if parallel else "blocked")
         self.assertEqual(tasks["service--13"]["status"], "passed" if parallel else "blocked")
         self.assertEqual(tasks["worker--group1"]["status"], "failed" if parallel else "passed")
@@ -231,6 +240,14 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
         self.assertLess(len(result.stdout), 50000)
         self.assertIn(b"log:", result.stdout)
         self.assertTrue((self.directory / "summary.md").exists())
+        self.assertFalse(Path((self.report / "temporary-root.txt").read_text()).exists())
+        samples = [json.loads(line) for line in (self.report / "resources.jsonl").read_text().splitlines()]
+        self.assertGreaterEqual(len(samples), 2)
+        self.assertTrue(all(sample["scope"] == "runner-host" for sample in samples))
+        self.assertGreater(samples[-1]["monotonic_seconds"], samples[0]["monotonic_seconds"])
+        self.assertGreater(sum(samples[-1]["cpu_ticks"].values()), sum(samples[0]["cpu_ticks"].values()))
+        self.assertGreater(samples[0]["memory_bytes"]["MemTotal"], 0)
+        self.assertGreater(samples[0]["disks"]["worktree"]["total_bytes"], 0)
         # Feed a real helper snapshot through the public API's schema, not a hand-made copy.
         public = runpy.run_path(str(ROOT / ".github/main-validation/observer/dashboard/server.py"))["public_progress"]
         created = min(task["started_at"] for task in tasks.values() if task["started_at"])
@@ -243,6 +260,42 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
 
     def test_serial_graph_blocks_consumers_after_failed_producer(self):
         self.check_graph(False, "main-validation-service-native")
+
+    def test_apfs_wrapper_requires_executed_tests_with_console_or_ctrf_output(self):
+        binaries = self.directory / "bin"
+        binaries.mkdir()
+        for name, text in (("uname", "Darwin"), ("hdiutil", "")):
+            path = binaries / name
+            path.write_text(f'#!/bin/sh\nprintf "%s\\n" "{text}"\n')
+            path.chmod(0o755)
+        environment = {**self.env, "PATH": str(binaries) + os.pathsep + self.env["PATH"],
+                       "TMPDIR": str(self.directory)}
+        for output, code, expected in (
+            ("test result: ok; 31 passed; 0 failed;", 0, 0),
+            ("[1/31] Finished test: native_apfs::clone [PASSED]", 0, 0),
+            ("Running 31 tests", 0, 1),
+            ("test result: ok; 0 passed; 0 failed;", 0, 1),
+            ("[1/31] Finished test: native_apfs::clone [IGNORED]", 0, 1),
+            ("[1/31] Finished test: native_apfs::clone [PASSED]", 7, 7),
+        ):
+            with self.subTest(output=output, code=code):
+                result = subprocess.run(
+                    ["bash", str(ROOT / "integration-tests/scripts/apfs/run-native-tests.sh"),
+                     sys.executable, "-c", f"print({output!r}); raise SystemExit({code})"],
+                    env=environment, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, expected, result.stderr)
+        self.assertFalse(list(self.directory.glob("golem-apfs-tests.*")))
+
+    def test_unwritable_resource_evidence_does_not_change_workload_result(self):
+        self.report.mkdir()
+        (self.report / "resources.jsonl").mkdir()
+        for code in (0, 7):
+            with self.subTest(code=code):
+                result = self.execute(["observe", "--", sys.executable, "-c",
+                                       f"print('controller evidence'); raise SystemExit({code})"])
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertIn(b"Resource sampling unavailable", result.stdout)
+                self.assertIn(b"controller evidence", gzip.decompress((self.report / "logs/controller.log.gz").read_bytes()))
 
 
 if __name__ == "__main__":

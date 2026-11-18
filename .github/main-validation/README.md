@@ -65,9 +65,14 @@ acceptance `parallel` input to false for a serial diagnostic run. Production
 sampling always uses parallel execution. Accept real overlap before cutover.
 
 Offsets are 0 for worker tests, 10000 for service tests, and 20000 for CLI tests.
-Each subflow receives its own absolute `TMPDIR`. The framework applies offsets
-to its default service ports and derives spawned-service blob roots from the
-process temporary directory. Explicit endpoint overrides remain absolute.
+Preparation creates a unique root in the runner's system temporary directory.
+Each subflow receives its own absolute `TMPDIR` below that root. Keep the system
+temporary directory outside the checkout: generated Rust applications must not
+inherit Golem's Cargo workspace. The final task removes the root after all lanes
+join, including ordinary failures. An interrupted or failed preparation can leave
+temporary files for the runner to reclaim. The framework applies offsets to its
+default service ports and derives spawned-service blob roots from the process
+temporary directory. Explicit endpoint overrides remain absolute.
 CLI integration tests start their own server on dynamic ports rather than using
 the framework defaults, so the CLI offset is not a claim of extra isolation.
 Real overlap must still establish independent Redis, files, containers and ports.
@@ -119,6 +124,18 @@ semantics. Redirecting their output at the process boundary does not change
 test-r's capture mode or serialize the cargo-make forks. Recorded intervals show
 actual process lifetime overlap, not CPU utilization or isolation. APFS retains
 its separate job-level reporting.
+
+The Linux progress helper also retains `resources.jsonl` in the report artifact. It
+samples host CPU counters, available memory and swap, load averages, worktree
+and target filesystem capacity, and available Linux pressure metrics every five
+seconds and at completion. UTC timestamps join samples to task intervals;
+monotonic timestamps support elapsed-time calculations. CPU counters exclude
+guest counters, which are already included in user and nice time. These are
+host-wide observations, not per-task attribution or cgroup quotas. Samples can
+miss short peaks and pause during dashboard requests; missing samples are not
+zero utilization. A collection or storage error disables sampling with a warning
+without changing the workload result or log retention. Resource data stays in
+the evidence artifact and is not sent to the public dashboard.
 
 Optional live dashboard publication uses the repository variable
 `CI_DASHBOARD_URL` and the separate secret `CI_DASHBOARD_PROGRESS_TOKEN`, also

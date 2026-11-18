@@ -239,7 +239,7 @@ jobs:
         with:
           artifact-name: main-validation-test-report
           github-token: ${{ github.token }}
-          report-path: evidence/linux/ctrf-*.json
+          report-path: evidence/**/ctrf-*.json
       - name: Publish the exact-source result
         if: always()
         env:
