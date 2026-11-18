@@ -33,6 +33,7 @@ use crate::preview2::golem_api_1_x::oplog::SearchOplog;
 use crate::services::HasOplogService;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use golem_common::base_model::caller::ClaimVisibility;
 use golem_common::model::AgentId;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
@@ -160,6 +161,11 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
     }
 }
 
+/// Guests that read an oplog never get the users' verified claims. The `golem:api/oplog` records
+/// have no place for them, and a guest's own oplog keeps a copy of every chunk that it reads, so
+/// claims in a chunk would reach every reader of that oplog without being asked for.
+const GUEST_CLAIM_VISIBILITY: ClaimVisibility = ClaimVisibility::Hidden;
+
 async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
@@ -196,6 +202,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         current_component_revision,
         entry.next_oplog_index,
         entry.page_size,
+        GUEST_CLAIM_VISIBILITY,
     )
     .await
 }
@@ -239,6 +246,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         entry.page_size,
         &entry.query,
         ctx.state.config.limits.scan_budget,
+        GUEST_CLAIM_VISIBILITY,
     )
     .await
 }
@@ -785,6 +793,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                             identity.create_parameters().owner_kind,
                             agent_type.as_ref(),
                             current_revision,
+                            GUEST_CLAIM_VISIBILITY,
                         )
                         .await?,
                     );

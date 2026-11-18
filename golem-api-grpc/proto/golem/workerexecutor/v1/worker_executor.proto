@@ -331,6 +331,9 @@ message GetOplogRequest {
   uint64 count = 5;
   golem.common.EnvironmentId environment_id = 6;
   golem.auth.AuthCtx auth_ctx = 7;
+  // Include the verified claims of the users among the callers. The worker service sets it only
+  // for a reader that asked for the claims and passed the oplog read check.
+  bool include_claims = 8;
 }
 
 message GetOplogResponse {
@@ -358,6 +361,9 @@ message GetOplogEntryRequest {
   // The component revision to decode the entry with. Without it, the executor scans the oplog
   // up to the entry to find it.
   optional uint64 component_revision = 5;
+  // Include the verified claims of the users among the callers. The worker service sets it only
+  // for a reader that asked for the claims and passed the oplog read check.
+  bool include_claims = 6;
 }
 
 message GetOplogEntryResponse {
@@ -374,6 +380,9 @@ message SearchOplogRequest {
   uint64 count = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
+  // Include the verified claims of the users among the callers. The worker service sets it only
+  // for a reader that asked for the claims and passed the oplog read check.
+  bool include_claims = 7;
 }
 
 message SearchOplogResponse {

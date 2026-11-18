@@ -45,6 +45,9 @@ use values::{
 mod tests;
 
 use crate::preview2::golem_api_1_x::oplog;
+use golem_common::base_model::caller::{
+    AccountAuthentication, Pair, PublicCaller, PublicPrincipal,
+};
 use golem_common::base_model::oplog::{
     CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent, QueuedCardEventCard,
 };

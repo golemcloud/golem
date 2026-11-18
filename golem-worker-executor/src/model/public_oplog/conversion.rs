@@ -40,6 +40,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         owner_kind: OwnerKind,
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
+        claims: ClaimVisibility,
     ) -> Result<Self, String> {
         let value = match value {
             golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
@@ -260,6 +261,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     agent_type_name,
                     component_revision,
                     invocation,
+                    claims,
                 )
                 .await?;
 
@@ -383,6 +385,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     agent_type_name,
                     component_revision,
                     invocation,
+                    claims,
                 )
                 .await?;
 
