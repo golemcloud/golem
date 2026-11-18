@@ -1399,7 +1399,10 @@ stream session reads. `Worker::try_get_last_known_status` answers a stopped stat
 routing miss when the shard was lost, with "Worker is being deleted" when a deletion owns the
 generation, and otherwise with the actor's runtime error. `try_lookup_invocation_result` gives the
 routing miss too but leaves the deletion's refusal to its caller, because its callers can hold the
-instance lock. A wake refused this way is not acknowledged and runs again after its lease. Only the
+instance lock. A wake refused this way is not acknowledged and runs again after its lease.
+Interrupt refuses a generation whose deletion failed before `DurableStateRemoved` with "Worker is
+being deleted" even while its status actor runs, as update and plugin changes do; a running
+deletion answers as a missing agent. Only the
 deletion's `OwnedWorkJoined` stage and executor shutdown stop the status actor of a generation that
 is still reachable; a lost-shard retirement does not. Failures after the bind keep
 their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`

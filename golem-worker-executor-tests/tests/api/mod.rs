@@ -12574,42 +12574,42 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
     );
 
     // Called on the client, because the test DSL panics on a refused interrupt.
-    let interrupt = async {
-        let response = executor
-            .client
-            .clone()
-            .interrupt_worker(InterruptWorkerRequest {
-                agent_id: Some(worker_id.clone().into()),
-                recover_immediately: false,
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(executor.auth_ctx().into()),
-                principal: None,
-            })
-            .await?
-            .into_inner();
-        match response.result {
-            Some(interrupt_worker_response::Result::Success(_)) => Ok(()),
-            Some(interrupt_worker_response::Result::Failure(error)) => Err(anyhow!("{error:?}")),
-            None => Err(anyhow!("no result")),
+    let interrupt = |worker_id: AgentId| {
+        let mut client = executor.client.clone();
+        let request = InterruptWorkerRequest {
+            agent_id: Some(worker_id.into()),
+            recover_immediately: false,
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        };
+        async move {
+            let response = client.interrupt_worker(request).await?.into_inner();
+            match response.result {
+                Some(interrupt_worker_response::Result::Success(_)) => Ok(()),
+                Some(interrupt_worker_response::Result::Failure(error)) => {
+                    Err(anyhow!("{error:?}"))
+                }
+                None => Err(anyhow!("no result")),
+            }
         }
     };
-    let activate_plugin = async {
-        let response = executor
-            .client
-            .clone()
-            .activate_plugin(ActivatePluginRequest {
-                agent_id: Some(worker_id.clone().into()),
-                plugin_priority: 0,
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(executor.auth_ctx().into()),
-                principal: None,
-            })
-            .await?
-            .into_inner();
-        match response.result {
-            Some(activate_plugin_response::Result::Success(_)) => Ok(()),
-            Some(activate_plugin_response::Result::Failure(error)) => Err(anyhow!("{error:?}")),
-            None => Err(anyhow!("no result")),
+    let activate_plugin = |worker_id: AgentId| {
+        let mut client = executor.client.clone();
+        let request = ActivatePluginRequest {
+            agent_id: Some(worker_id.into()),
+            plugin_priority: 0,
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        };
+        async move {
+            let response = client.activate_plugin(request).await?.into_inner();
+            match response.result {
+                Some(activate_plugin_response::Result::Success(_)) => Ok(()),
+                Some(activate_plugin_response::Result::Failure(error)) => Err(anyhow!("{error:?}")),
+                None => Err(anyhow!("no result")),
+            }
         }
     };
     let create = async {
@@ -12634,7 +12634,10 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
     };
     let answers = [
         ("create", format!("{:?}", create.await)),
-        ("interrupt", format!("{:?}", interrupt.await)),
+        (
+            "interrupt",
+            format!("{:?}", interrupt(worker_id.clone()).await),
+        ),
         (
             "resume",
             format!("{:?}", executor.resume(&worker_id, false).await),
@@ -12648,7 +12651,10 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
                     .await
             ),
         ),
-        ("activate plugin", format!("{:?}", activate_plugin.await)),
+        (
+            "activate plugin",
+            format!("{:?}", activate_plugin(worker_id.clone()).await),
+        ),
         (
             "cancel",
             format!(
@@ -12685,6 +12691,60 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             .await?
             .is_none()
     );
+
+    // A deletion that fails before it stops the state actor gets the same refusal.
+    let early_worker_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", "failed-delete-management-early"),
+        )
+        .await?;
+    executor.set_worker_deletion_hook(Arc::new(DeletionStageHook::new(
+        OwnedAgentId::new(context.default_environment_id, &early_worker_id),
+        None,
+        Some(WorkerDeletionStage::StreamsCleaned),
+    )));
+    assert!(
+        executor.delete_worker(&early_worker_id).await.is_err(),
+        "the injected failure has to fail the first delete"
+    );
+    let answers = [
+        (
+            "interrupt",
+            format!("{:?}", interrupt(early_worker_id.clone()).await),
+        ),
+        (
+            "resume",
+            format!("{:?}", executor.resume(&early_worker_id, false).await),
+        ),
+        (
+            "update",
+            format!(
+                "{:?}",
+                executor
+                    .auto_update_worker(&early_worker_id, component.revision, false)
+                    .await
+            ),
+        ),
+        (
+            "activate plugin",
+            format!("{:?}", activate_plugin(early_worker_id.clone()).await),
+        ),
+    ];
+    let failures: Vec<_> = answers
+        .iter()
+        .filter(|(_, answer)| !answer.contains("being deleted"))
+        .collect();
+    assert!(failures.is_empty(), "{failures:#?}");
+    executor.delete_worker(&early_worker_id).await?;
+    assert!(
+        executor
+            .get_worker_metadata_opt(&early_worker_id)
+            .await?
+            .is_none()
+    );
+    let panics = crate::panic_watch::panics_naming(name);
+    assert!(panics.is_empty(), "{panics:#?}");
     Ok(())
 }
 

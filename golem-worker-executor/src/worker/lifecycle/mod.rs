@@ -193,6 +193,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Err(_) if worker.answers_as_deleted().await => return Ok(()),
             metadata => metadata?,
         };
+        // A deletion that failed before it removed the durable state keeps the agent, and is
+        // refused. A running deletion, or one past that stage, answers as a missing agent below;
+        // a lost shard keeps the routing miss that the read above or the retirement below gives.
+        if !worker.retired_for_lost_shard()
+            && worker.deletion_owns_retirement().await
+            && !worker.answers_as_deleted().await
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ));
+        }
 
         let decision = interrupt_decision(&metadata.last_known_status.status, recover_immediately);
         if decision == InterruptDecision::Ignore {
