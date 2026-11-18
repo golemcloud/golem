@@ -132,10 +132,28 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// As with [`Self::complete`], a terminal failure carries this call's own
     /// [`DurableCallTrapContext`] via [`TerminalCallError`].
     pub async fn complete_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.complete_access_with_delivered(store, get_ctx, response, Box::new(|| {}))
+            .await
+    }
+
+    /// [`Self::complete_access`] that runs `on_delivered` when the guest receives the result
+    /// (see [`CompletionDelivery::deliver_at_accessor_terminal_with_delivered`]).
+    pub(crate) async fn complete_access_with_delivered<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
+        on_delivered: crate::durable_host::concurrent::OnDelivered,
     ) -> Result<Pair::Resp, TerminalCallError>
     where
         T: 'static,
@@ -156,7 +174,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // the impl returning and this call) — the observer settles it when the guest actually
         // consumes (or discards) the lowered result.
         delivery
-            .deliver_at_accessor_terminal(store)
+            .deliver_at_accessor_terminal_with_delivered(store, on_delivered)
             .await
             .map_err(|source| TerminalCallError::new(source, context))?;
         Ok(response)

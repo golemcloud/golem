@@ -23,7 +23,7 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::resolve_current_observational_owner;
 use crate::durable_host::durability::CustomInvocationContext;
-use crate::durable_host::sockets::resolved_names::ResolvedNames;
+use crate::durable_host::sockets::resolved_names::{ResolvedNames, SharedResolvedNames};
 use crate::services::golem_config::GolemConfig;
 use crate::workerctx::WorkerCtx;
 use golem_common::base_model::address_class::{AddressClass, embedded_ipv4};
@@ -111,26 +111,44 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// The permission target of a connect or outgoing datagram from this Store to `address`, or
     /// the refusal of [`SocketPolicy::refusal`].
     pub(crate) fn socket_target(&self, address: SocketAddr) -> Result<PermissionTarget, String> {
-        SocketPolicy::new(&self.state.config).target(address, &self.state.resolved_names)
+        let policy = SocketPolicy::new(&self.state.config);
+        self.state
+            .resolved_names
+            .with(|names| policy.target(address, names))
     }
 
-    /// Links the addresses that a completed lookup of `name` returned to its hostname. Only a
-    /// lookup that replay returns again links: neither a lookup in snapshotting mode, which is not
-    /// recorded, nor a physical call of the custom durable invocation `custom_invocation`, which
-    /// replay does not claim, does. So live execution, replay and the rebuild after a snapshot
-    /// agree on the links.
+    /// Whether a completed lookup of this Store links its addresses. Only a lookup that replay
+    /// returns again links: neither a lookup in snapshotting mode, which is not recorded, nor a
+    /// physical call of the custom durable invocation `custom_invocation`, which replay does not
+    /// claim, does. So live execution, replay and the rebuild after a snapshot agree on the links.
+    pub(crate) fn lookup_links(
+        &mut self,
+        custom_invocation: Option<&CustomInvocationContext>,
+    ) -> Result<bool, WorkerExecutorError> {
+        Ok(!self.state.snapshotting_mode
+            && resolve_current_observational_owner(self, custom_invocation)?.is_none())
+    }
+
+    /// Links the addresses that a completed P2 lookup of `name` returned to its hostname, when
+    /// [`Self::lookup_links`] allows it. A P2 lookup has no delivery marker: its result reaches
+    /// the guest when the call returns.
     pub(crate) fn link_resolved_addresses(
         &mut self,
         custom_invocation: Option<&CustomInvocationContext>,
         name: &str,
         addresses: impl IntoIterator<Item = IpAddr>,
     ) -> Result<(), WorkerExecutorError> {
-        if !self.state.snapshotting_mode
-            && resolve_current_observational_owner(self, custom_invocation)?.is_none()
-        {
-            self.state.resolved_names.insert(name, addresses);
+        if self.lookup_links(custom_invocation)? {
+            self.state
+                .resolved_names
+                .with(|names| names.insert(name, addresses));
         }
         Ok(())
+    }
+
+    /// The index of this Store, for the deferred links of P3 lookups.
+    pub(crate) fn shared_resolved_names(&self) -> SharedResolvedNames {
+        self.state.resolved_names.clone()
     }
 }
 

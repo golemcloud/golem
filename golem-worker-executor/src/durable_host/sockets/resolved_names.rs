@@ -16,7 +16,9 @@
 //! returned them for, so that a hostname grant matches a raw-socket connect to the address.
 //!
 //! Every completed lookup of the Store adds its links, live and on replay: a P2 lookup when its
-//! call returns, a P3 lookup when its completion reaches the guest. A tool entity Store has its
+//! call returns, a P3 lookup when its delivery observer settles its completion as delivered, which
+//! is where the `CompletionDelivered` marker is recorded or, on replay, reached. A P3 completion
+//! that the guest discards, also after the host call returned it, adds no link. A tool entity Store has its
 //! own index. The links are derived from the
 //! oplog: a full replay fills the index again, and a start from a snapshot rebuilds it from the
 //! lookups that the snapshot skipped ([`ResolvedNames::rebuild`]). Only the lookups that replay
@@ -36,11 +38,64 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
 
 /// The most links one Store keeps. A lookup that adds a link past it evicts the link that was
 /// added or refreshed longest ago. With hostnames of at most 253 bytes the index holds at most
 /// about 270 KiB, and adding or reading links scans at most this many entries.
 pub const MAX_RESOLVED_NAME_LINKS: usize = 1024;
+
+/// The [`ResolvedNames`] of a Store, shared with the delivery observers that link P3 lookups
+/// when the guest receives their result. An observer runs in Wasmtime's event loop without the
+/// Store, so the index is behind a lock of its own; every holder keeps the lock for one index
+/// operation only.
+#[derive(Debug, Clone, Default)]
+pub struct SharedResolvedNames(Arc<Mutex<ResolvedNames>>);
+
+impl SharedResolvedNames {
+    pub fn with<R>(&self, f: impl FnOnce(&mut ResolvedNames) -> R) -> R {
+        f(&mut self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()))
+    }
+
+    /// A link that a P3 lookup sets once its result is known, and the hook that adds it to the
+    /// index when the guest receives that result. A hook that never runs, because the guest
+    /// discarded the result, adds nothing. Every clone of the hook adds the link at most once.
+    pub fn deferred_link(&self) -> (DeferredLink, impl FnOnce() + Clone + Send + use<>) {
+        let slot: LinkSlot = Arc::new(Mutex::new(None));
+        let link = DeferredLink(slot.clone());
+        let names = self.clone();
+        let on_delivered = move || {
+            let taken = slot
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            if let Some((name, addresses)) = taken {
+                names.with(|names| names.insert(&name, addresses));
+            }
+        };
+        (link, on_delivered)
+    }
+}
+
+/// The link of one P3 lookup, set before the guest can receive its result; see
+/// [`SharedResolvedNames::deferred_link`].
+pub struct DeferredLink(LinkSlot);
+
+/// The hostname and addresses of a deferred link, once its lookup has completed.
+type LinkSlot = Arc<Mutex<Option<(String, Vec<IpAddr>)>>>;
+
+impl DeferredLink {
+    pub fn set(&self, name: &str, addresses: impl IntoIterator<Item = IpAddr>) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((name.to_string(), addresses.into_iter().collect()));
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedNames {
@@ -601,6 +656,29 @@ mod tests {
         );
         assert_eq!(updated.hostnames(bulk_address(0)), vec!["initializer.test"]);
         assert!(updated.hostnames(bulk_address(1)).is_empty());
+    }
+
+    #[test]
+    fn a_deferred_link_is_added_only_when_its_hook_runs() {
+        let shared = SharedResolvedNames::default();
+        // The guest discards the returned result: the observer drops the hook unrun.
+        let (discarded, hook) = shared.deferred_link();
+        discarded.set("discarded.test", [ip("10.0.0.5")]);
+        drop(hook);
+        // The guest receives the result: the hook runs, and a clone of it adds nothing more.
+        let (delivered, hook) = shared.deferred_link();
+        delivered.set("delivered.test", [ip("10.0.0.6")]);
+        let replay_clone = hook.clone();
+        hook();
+        shared.with(|names| names.insert("later.test", [ip("10.0.0.6")]));
+        replay_clone();
+        shared.with(|names| {
+            assert!(names.hostnames(ip("10.0.0.5")).is_empty());
+            assert_eq!(
+                names.hostnames(ip("10.0.0.6")),
+                vec!["later.test", "delivered.test"]
+            );
+        });
     }
 
     #[test]

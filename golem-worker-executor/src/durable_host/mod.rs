@@ -1181,7 +1181,7 @@ struct PrivateDurableWorkerState {
     tcp_connect_replay: sockets::tcp::TcpConnectReplay,
     /// The hostnames that this Store's completed address lookups linked to addresses, for the
     /// grant check of socket connects and datagrams.
-    resolved_names: sockets::resolved_names::ResolvedNames,
+    resolved_names: sockets::resolved_names::SharedResolvedNames,
     open_tcp_input_streams: HashSet<u32>,
     open_tcp_output_streams: HashSet<u32>,
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
