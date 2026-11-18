@@ -8768,12 +8768,22 @@ async fn scheduled_invocation(
         .start_agent(&component.id, client_agent_id.clone())
         .await?;
 
+    // The account that starts each schedule, and another account that calls the client before the
+    // scheduled call runs.
+    let scheduling_account = callers::account(AccountId::new());
+    let other_account = callers::account(AccountId::new());
+    let client_id = AgentId {
+        component_id: component.id,
+        agent_id: client_agent_id.to_string(),
+    };
+
     // first invocation: schedule increment in the future and poll
     {
         executor
-            .invoke_and_await_agent(
+            .invoke_and_await_agent_as_caller(
                 &component,
                 &client_agent_id,
+                scheduling_account.clone(),
                 "test1",
                 data_value!(server_agent_name.clone()),
             )
@@ -8857,6 +8867,95 @@ async fn scheduled_invocation(
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
+    }
+
+    // fourth invocation: a schedule keeps the caller of the invocation that made it, also when
+    // another caller invokes the scheduling agent before the scheduled call runs
+    {
+        let late_server_name = format!("scheduled-late-server-{}", context.redis_prefix());
+        let late_server_agent_id = agent_id!("ScheduledInvocationServer", late_server_name.clone());
+        let late_server = executor
+            .start_agent(&component.id, late_server_agent_id.clone())
+            .await?;
+        let due = Utc::now() + chrono::Duration::seconds(3);
+        executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &client_agent_id,
+                scheduling_account.clone(),
+                "schedule_at",
+                data_value!(
+                    late_server_name,
+                    due.timestamp() as u64,
+                    due.timestamp_subsec_nanos()
+                ),
+            )
+            .await?;
+        executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &client_agent_id,
+                other_account,
+                "get_global_value",
+                data_value!(),
+            )
+            .await?;
+        assert!(
+            Utc::now() < due,
+            "the second caller must reach the client before the scheduled call runs"
+        );
+        loop {
+            let value = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &late_server_agent_id,
+                    "get_global_value",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<u64>()?;
+            if value == 17 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let client = callers::agent_in(
+            client_id.clone(),
+            executor.get_worker_metadata(&client_id).await?.fingerprint,
+            component.environment_id,
+        )
+        .immediate;
+        let expected = golem_common::model::caller::Caller {
+            immediate: client,
+            ..scheduling_account.clone()
+        };
+        let recorded = executor
+            .recorded_callers(&late_server)
+            .await
+            .into_iter()
+            .filter(|(name, _)| name.ends_with("inc_global_by"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recorded
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["pending inc_global_by", "inc_global_by"]
+        );
+        for (name, recorded) in recorded {
+            assert_eq!(recorded, expected, "{name}");
+        }
+
+        // The first schedule recorded the same caller.
+        let first = executor
+            .recorded_callers(&server_worker)
+            .await
+            .into_iter()
+            .filter(|(name, _)| name == "inc_global_by")
+            .map(|(_, caller)| caller)
+            .collect::<Vec<_>>();
+        assert_eq!(first, [expected]);
     }
 
     executor.check_oplog_is_queryable(&client_worker).await?;

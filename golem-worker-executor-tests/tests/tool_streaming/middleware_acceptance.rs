@@ -1418,10 +1418,15 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
         assert_eq!(record["toolName"], "secret-policy-probe");
         assert_eq!(record["input"]["secretHandles"], 1);
         assert_eq!(record["outcome"]["kind"], "success");
-        // The middleware reads the caller from the invocation context: the user who invoked
-        // the agent whose call reached the tool.
-        assert_eq!(record["principal"]["kind"], "user");
-        assert_eq!(record["principal"]["subject"], "audit-user");
+        // The middleware reads the immediate caller from the invocation context: the agent
+        // whose call reached the tool, which the user invoked.
+        assert_eq!(record["principal"]["kind"], "agent");
+        assert!(
+            record["principal"]["subject"]
+                .as_str()
+                .is_some_and(|subject| subject.starts_with("agent:")),
+            "{record}"
+        );
         assert!(
             record["owner"]["agentId"]
                 .as_str()

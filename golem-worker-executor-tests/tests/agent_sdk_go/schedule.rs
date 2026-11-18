@@ -17,10 +17,13 @@
 //! one that has not started yet.
 
 use crate::Tracing;
+use golem_common::model::AgentId;
+use golem_common::model::account::AccountId;
+use golem_common::model::caller::Caller;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, callers, start,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -63,10 +66,12 @@ async fn go_scheduled_invocation_runs(
         )
         .await?;
 
+    let account = callers::account(AccountId::new());
     executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_as_caller(
             &component,
             &scheduler_id,
+            account.clone(),
             "bump",
             data_value!("go-sched-target-1", 500i64),
         )
@@ -85,9 +90,44 @@ async fn go_scheduled_invocation_runs(
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    drop(executor);
-
     assert_eq!(value, 1, "the scheduled increment should have run");
+
+    // The counter recorded the account that started `bump` as the original caller and the
+    // scheduler as the immediate caller, for the schedule and for the run.
+    let scheduler = AgentId {
+        component_id: component.id,
+        agent_id: scheduler_id.to_string(),
+    };
+    let counter = AgentId {
+        component_id: component.id,
+        agent_id: counter_id.to_string(),
+    };
+    let expected = Caller {
+        immediate: callers::agent_in(
+            scheduler.clone(),
+            executor.get_worker_metadata(&scheduler).await?.fingerprint,
+            component.environment_id,
+        )
+        .immediate,
+        ..account
+    };
+    let recorded = executor
+        .recorded_callers(&counter)
+        .await
+        .into_iter()
+        .filter(|(name, _)| name.ends_with("increment"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["pending increment", "increment"]
+    );
+    for (name, recorded) in recorded {
+        assert_eq!(recorded, expected, "{name}");
+    }
+    drop(executor);
     Ok(())
 }
 

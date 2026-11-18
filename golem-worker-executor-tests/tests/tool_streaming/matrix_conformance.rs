@@ -263,11 +263,31 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
                 )
                 .await?
                 .into_typed()?;
+            // The provider sees the user as the original caller and the calling agent as the
+            // immediate one.
+            let calling_agent = golem_common::model::AgentId {
+                component_id: caller_component.id,
+                agent_id: owner_agent_id.clone(),
+            };
+            let calling_agent_text = callers::principal_text(
+                &callers::agent_in(
+                    calling_agent.clone(),
+                    executor
+                        .get_worker_metadata(&calling_agent)
+                        .await?
+                        .fingerprint,
+                    context.default_environment_id,
+                )
+                .immediate,
+            );
             assert_matrix_observation(
                 &observation,
                 caller.language,
                 provider.language,
-                &callers::user_text("https://matrix-conformance.test", "matrix-caller-a"),
+                &format!(
+                    "{}|{calling_agent_text}",
+                    callers::user_text("https://matrix-conformance.test", "matrix-caller-a")
+                ),
                 &owner_agent_id,
             );
 
@@ -286,13 +306,19 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
                     &second_observation,
                     caller.language,
                     provider.language,
-                    &callers::user_text("https://matrix-conformance.test", "matrix-caller-b"),
+                    &format!(
+                        "{}|{calling_agent_text}",
+                        callers::user_text("https://matrix-conformance.test", "matrix-caller-b")
+                    ),
                     &owner_agent_id,
                 );
+                let original = |principal: &str| principal.split('|').next().unwrap().to_string();
                 assert_ne!(
-                    observation.principal, second_observation.principal,
+                    original(&observation.principal),
+                    original(&second_observation.principal),
                     "matrix[{}->{}].principal must follow the runtime caller",
-                    caller.language, provider.language
+                    caller.language,
+                    provider.language
                 );
                 assert_eq!(
                     observation.owner_agent_id, second_observation.owner_agent_id,

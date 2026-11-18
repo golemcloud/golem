@@ -2378,17 +2378,22 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     let source = agent_id!("GolemHostApi", "fork-crash");
     let source_id = executor.start_agent(&component.id, source.clone()).await?;
     let key = IdempotencyKey::fresh();
+    // The account that starts the forking invocation, also on its retry.
+    let account = callers::account(golem_common::model::account::AccountId::new());
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
         let source = source.clone();
         let key = key.clone();
+        let account = account.clone();
         async move {
             executor
-                .invoke_and_await_agent_with_key(
+                .invoke_and_await_agent_impl(
                     &component,
                     &source,
-                    &key,
+                    Some(&key),
+                    None,
+                    Some(account),
                     "self_fork_result",
                     data_value!(),
                 )
@@ -2417,10 +2422,12 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
 
     let executor = start_with_local_resume(deps, &context, false).await?;
     let result = executor
-        .invoke_and_await_agent_with_key(
+        .invoke_and_await_agent_impl(
             &component,
             &source,
-            &key,
+            Some(&key),
+            None,
+            Some(account.clone()),
             "self_fork_result",
             data_value!(),
         )
@@ -2453,12 +2460,16 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     let source_fingerprint = executor.get_worker_metadata(&source_id).await?.fingerprint;
     assert_eq!(
         child_requests[0].caller,
-        callers::agent_in(
-            source_id.clone(),
-            source_fingerprint,
-            component.environment_id
-        ),
-        "the child records the forking agent, not the request that created the source"
+        golem_common::model::caller::Caller {
+            immediate: callers::agent_in(
+                source_id.clone(),
+                source_fingerprint,
+                component.environment_id
+            )
+            .immediate,
+            ..account
+        },
+        "the child records the account that started the fork and the forking agent"
     );
     let result = executor
         .invoke_and_await_agent(&component, &source, "self_fork_result", data_value!())

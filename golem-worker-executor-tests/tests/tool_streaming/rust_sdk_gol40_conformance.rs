@@ -85,6 +85,19 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         )
         .await?
         .into_typed()?;
+    // The provider sees the user as the original caller and the agent as the immediate one.
+    let principal = format!(
+        "{}|{}",
+        callers::user_text("https://gol40.test", "gol40-rust"),
+        callers::principal_text(
+            &callers::agent_in(
+                worker_id.clone(),
+                executor.get_worker_metadata(&worker_id).await?.fingerprint,
+                context.default_environment_id,
+            )
+            .immediate
+        )
+    );
     assert_eq!(
         proxy,
         [
@@ -93,7 +106,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
             "MATRIX.SAMPLE",
             "108",
             "south|east|north",
-            callers::user_text("https://gol40.test", "gol40-rust").as_str(),
+            principal.as_str(),
             "request.source",
             "unsupported source",
             "false",
@@ -115,7 +128,8 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
     assert_eq!(reflection[1], reflection[0]);
     assert!(reflection[2].contains("Declared"), "{reflection:?}");
     assert!(reflection[3].contains("declared"), "{reflection:?}");
-    assert_eq!(&reflection[4..], ["user", "user", "0", "0"]);
+    // The generated and the reflected client both reach the tool as the calling agent.
+    assert_eq!(&reflection[4..], ["agent", "agent", "0", "0"]);
     assert_eq!(
         executor.get_file_contents(&worker_id, capable_path).await?,
         Vec::<u8>::new(),
