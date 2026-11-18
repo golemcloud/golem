@@ -616,6 +616,46 @@ mod query_or_header_tests {
     }
 
     #[test]
+    fn repeated_options_share_one_presence_decision() {
+        let ty = QueryOrHeaderType::Option {
+            name: None,
+            owner: None,
+            inner: Box::new(QueryOrHeaderType::Option {
+                name: None,
+                owner: None,
+                inner: Box::new(QueryOrHeaderType::Primitive(PathSegmentType::U32)),
+            }),
+        };
+        assert_eq!(
+            parse_query_or_header_value(&[], &ty).unwrap(),
+            SchemaValue::Option { inner: None }
+        );
+        let expected = SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(3))),
+            })),
+        };
+        assert_eq!(
+            parse_query_or_header_value(&["3".into()], &ty).unwrap(),
+            expected
+        );
+        let request = super::super::RichRequest::new(
+            poem::Request::builder()
+                .uri("/?limit=3".parse().unwrap())
+                .finish(),
+        );
+        assert_eq!(
+            parse_query_parameter("limit", request.query_params(), &ty).unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse_query_parameter("missing", request.query_params(), &ty).unwrap(),
+            SchemaValue::Option { inner: None }
+        );
+        assert!(parse_query_or_header_value(&[String::new()], &ty).is_err());
+    }
+
+    #[test]
     fn list_values() {
         let values = vec!["1".to_string(), "2".to_string(), "3".to_string()];
 

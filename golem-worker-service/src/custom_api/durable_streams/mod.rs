@@ -404,6 +404,9 @@ pub(super) fn error_response(
         | RequestHandlerError::BodyIsNotValidJson { .. }
         | RequestHandlerError::JsonBodyParsingFailed { .. }
         | RequestHandlerError::ValueParsingFailed { .. }
+        | RequestHandlerError::ParameterParsingFailed { .. }
+        | RequestHandlerError::InvalidParameter { .. }
+        | RequestHandlerError::UnknownQueryParameter { .. }
         | RequestHandlerError::MissingValue { .. }
         | RequestHandlerError::TooManyValues { .. }
         | RequestHandlerError::HeaderIsNotAscii { .. } => StatusCode::BAD_REQUEST,

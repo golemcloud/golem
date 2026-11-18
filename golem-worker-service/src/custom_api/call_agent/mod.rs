@@ -32,7 +32,6 @@ use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
-use golem_common::SafeDisplay;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{
     AgentMode, AgentTarget, OidcPrincipal, ParsedAgentKey, Principal, ReadOnlyConfig,
@@ -350,10 +349,11 @@ impl CallAgentHandler {
             let field = input_fields.next().ok_or_else(|| {
                 RequestHandlerError::invariant_violated("Method parameter has no input field")
             })?;
-            let invalid = |error: RequestHandlerError| RequestHandlerError::InvalidParameter {
-                name: field.name.clone(),
-                error: error.to_safe_string(),
-            };
+            let invalid =
+                |error: RequestHandlerError| RequestHandlerError::ParameterParsingFailed {
+                    name: field.name.clone(),
+                    error: Box::new(error),
+                };
             let value = match param {
                 MethodParameter::Path {
                     path_segment_index,

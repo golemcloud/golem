@@ -235,12 +235,6 @@ pub fn build_http_agent_method_parameters<E>(
 
     let mut query_names: Vec<(&str, bool)> = Vec::new();
     if let Some(PhantomIdBinding::Query(selector)) = &mount.phantom_id_binding {
-        if fields.iter().any(|field| field.name == selector.name) {
-            return Err(make_error(format!(
-                "Method input '{}' conflicts with the mount query selector",
-                selector.name
-            )));
-        }
         query_names.push((&selector.name, false));
     }
     for parameter in &method_parameters {
@@ -698,7 +692,69 @@ mod test {
             &|error| error,
         )
         .unwrap_err();
-        assert!(error.contains("instance") && error.contains("selector"));
+        assert!(error.contains("instance") && error.contains("conflicting bindings"));
+    }
+
+    #[test]
+    fn query_selector_conflicts_use_wire_names_not_input_names() {
+        use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+
+        let mut mount = empty_mount();
+        mount.phantom_id_binding = Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+            name: "instance".into(),
+            optional: true,
+        }));
+        for method in [
+            schema_http::HttpMethod::Post(Empty {}),
+            schema_http::HttpMethod::Put(Empty {}),
+        ] {
+            let mut endpoint = empty_post_endpoint();
+            endpoint.http_method = HttpMethod::Method(method);
+            let (body, parameters) = build_http_agent_method_parameters(
+                &mount,
+                &endpoint,
+                &empty_graph(),
+                &input(vec![str_field("instance")]),
+                &|error| error,
+            )
+            .unwrap();
+            assert!(matches!(body, RequestBodySchema::JsonBody { .. }));
+            assert!(matches!(
+                parameters[0],
+                MethodParameter::JsonObjectBodyField { .. }
+            ));
+        }
+
+        let mut endpoint = empty_post_endpoint();
+        endpoint.http_method = HttpMethod::Method(schema_http::HttpMethod::Get(Empty {}));
+        endpoint.query_vars = vec![QueryVariable {
+            query_param_name: "q".into(),
+            variable_name: "instance".into(),
+        }];
+        let (_, parameters) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &input(vec![str_field("instance")]),
+            &|error| error,
+        )
+        .unwrap();
+        assert!(
+            matches!(&parameters[0], MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == "q")
+        );
+
+        endpoint.query_vars[0].query_param_name = "instance".into();
+        endpoint.query_vars[0].variable_name = "search".into();
+        assert!(
+            build_http_agent_method_parameters(
+                &mount,
+                &endpoint,
+                &empty_graph(),
+                &input(vec![str_field("search")]),
+                &|error| error,
+            )
+            .is_err()
+        );
     }
 
     #[test]

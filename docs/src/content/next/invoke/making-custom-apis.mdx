@@ -258,6 +258,8 @@ Both inferred bindings and explicit query templates support these forms:
 | Map with scalar keys and values | `?label[env]=prod&label[tier]=web`; brackets and keys may be URL-encoded. |
 | Outer options around any supported form | Absence means none. Repeated outer options are supported. |
 
+Repeated outer options express one presence decision, not separate nullable states. For `option<option<u32>>`, omitting `limit` produces `None`, while `?limit=3` produces `Some(Some(3))`. No query value represents `Some(None)`. The same presence rule applies to header bindings. This permits schema wrappers such as Zod `.nullish()` without adding a null token to the HTTP wire format.
+
 A required list or map must have at least one entry. An absent optional collection is none, not an empty collection. A present empty string is still a value and must satisfy the scalar schema. Collection elements, map keys, and map values cannot be optional or themselves collections. Records, tuples, general variants, JSON values, and rich payloads require a body binding rather than a query binding. Maps are query-only and cannot bind from headers.
 
 Map syntax is flat: `?label=x`, `?label[env][region]=west`, malformed brackets, and duplicate keys are errors. Keys are compared after scalar parsing, so numeric keys `1` and `01` also conflict. Schema constraints apply to scalars, list elements, and map keys and values. Invalid requests return `400` with the input name. Conflicting query names, including explicit aliases, map bracket namespaces, and phantom selectors, fail route compilation.

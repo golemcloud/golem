@@ -31,6 +31,11 @@ pub enum RequestHandlerError {
     TooManyValues { expected: &'static str },
     #[error("Invalid input parameter '{name}': {error}")]
     InvalidParameter { name: String, error: String },
+    #[error("Invalid input parameter '{name}': {error}")]
+    ParameterParsingFailed {
+        name: String,
+        error: Box<RequestHandlerError>,
+    },
     #[error("Unknown query parameter '{name}'")]
     UnknownQueryParameter { name: String },
     #[error("Header value of {header_name} is not valid ascii")]
@@ -102,6 +107,12 @@ impl SafeDisplay for RequestHandlerError {
             Self::MissingValue { .. } => self.to_string(),
             Self::TooManyValues { .. } => self.to_string(),
             Self::InvalidParameter { .. } => self.to_string(),
+            Self::ParameterParsingFailed { name, error } => {
+                format!(
+                    "Invalid input parameter '{name}': {}",
+                    error.to_safe_string()
+                )
+            }
             Self::UnknownQueryParameter { .. } => self.to_string(),
             Self::HeaderIsNotAscii { .. } => self.to_string(),
             Self::BodyIsNotValidJson { .. } => self.to_string(),
