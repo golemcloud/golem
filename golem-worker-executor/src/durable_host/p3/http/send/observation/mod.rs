@@ -42,7 +42,7 @@ pub(super) fn install_p3_send_span<Ctx: WorkerCtx>(
     let parent = started
         .parent_span_id
         .as_ref()
-        .map(|id| ctx.state.invocation_context.get(id))
+        .map(|id| ctx.state.invocation_state().invocation_context.get(id))
         .transpose()
         .map_err(WorkerExecutorError::runtime)?;
     let mut builder = InvocationContextSpan::local()
@@ -53,11 +53,14 @@ pub(super) fn install_p3_send_span<Ctx: WorkerCtx>(
         builder = builder.with_parent(parent);
     }
     let span = builder.build();
-    ctx.state.invocation_context.add_span_with_origin(
-        span.clone(),
-        started.trace_id.clone(),
-        started.trace_states.clone(),
-    );
+    ctx.state
+        .invocation_state_mut()
+        .invocation_context
+        .add_span_with_origin(
+            span.clone(),
+            started.trace_id.clone(),
+            started.trace_states.clone(),
+        );
     Ok(span)
 }
 

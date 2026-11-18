@@ -393,7 +393,7 @@ impl BenchmarkTestDependencies {
 
         // Spawned contexts use fresh databases and exclusive service ports. Blob data from
         // the previous context is unreachable and must not accumulate across the suite.
-        let blob_root = PathBuf::from("/tmp/ittest-local-object-store/golem");
+        let blob_root = std::env::temp_dir().join("ittest-local-object-store/golem");
         match tokio::fs::remove_dir_all(&blob_root).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

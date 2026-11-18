@@ -1700,7 +1700,7 @@ async fn retry_transaction_resolution<Ctx: WorkerCtx, R>(
 ) -> anyhow::Result<R> {
     // A failed status observation is not a transaction outcome. Leave the scope incomplete,
     // even if policy gives up, so another recovery can still discover a committed transaction.
-    ctx.state.current_retry_point = begin;
+    ctx.state.invocation_state_mut().retry_point = begin;
     let properties = rdbms_retry_properties(ctx, "transaction-status", pool_key);
     match ctx
         .try_trigger_retry(anyhow!(error.clone()), properties)

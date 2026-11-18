@@ -15,7 +15,6 @@
 use std::collections::{HashMap, HashSet};
 use wasmtime::component::Resource;
 
-use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::durable_host::{DurabilityHost, DurableCallSession, DurableWorkerCtx, NotCancellable};
 use crate::workerctx::WorkerCtx;
@@ -119,9 +118,10 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         result
     }
 
-    async fn start_listen(&mut self, self_: Resource<TcpSocket>) -> Result<(), SocketError> {
+    /// Agents expose no ports, so `listen` is always refused.
+    async fn start_listen(&mut self, _socket: Resource<TcpSocket>) -> Result<(), SocketError> {
         self.observe_function_call("sockets::tcp", "start_listen");
-        HostTcpSocket::start_listen(&mut self.as_wasi_view().sockets(), self_).await
+        Err(ErrorCode::AccessDenied.into())
     }
 
     fn finish_listen(&mut self, self_: Resource<TcpSocket>) -> Result<(), SocketError> {
@@ -319,7 +319,7 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 /// Checks the permission of a connect in a durable call, so that replay returns the recorded
-/// decision instead of checking again. An address that has no permission target is denied. A
+/// decision instead of checking again. An address that the socket policy refuses is denied. A
 /// denied check records the denial in its `Start`, so the recovery of an incomplete denied check
 /// denies the connect too; an incomplete check without a denial was allowed.
 async fn authorize_connect<Ctx: WorkerCtx>(
@@ -338,14 +338,15 @@ async fn authorize_connect<Ctx: WorkerCtx>(
     let response = 'resp: {
         let handle = match begun.resolve(ctx).await.map_err(SocketError::trap)? {
             ResolvedCall::Live(begun) => {
-                let denial = match ip_socket_target(remote_address) {
-                    Some(target) => ctx
+                let target = ctx.socket_target(std::net::SocketAddr::from(*remote_address));
+                let denial = match target {
+                    Ok(target) => ctx
                         .authorize_live_permission(&target)
                         .await
                         .map_err(SocketError::trap)?
                         .err()
                         .map(|error| error.to_safe_string()),
-                    None => Some("the address has no permission target".to_string()),
+                    Err(refusal) => Some(refusal),
                 };
                 if let Some(denial) = denial {
                     break 'resp begun
@@ -368,22 +369,6 @@ async fn authorize_connect<Ctx: WorkerCtx>(
             .map_err(SocketError::trap)?
     };
     response.result.map_err(|_| ErrorCode::AccessDenied.into())
-}
-
-fn ip_socket_target(
-    address: &IpSocketAddress,
-) -> Option<golem_common::model::card::PermissionTarget> {
-    match address {
-        IpSocketAddress::Ipv4(address) => {
-            let (a, b, c, d) = address.address;
-            tcp_target(
-                &std::net::Ipv4Addr::new(a, b, c, d).to_string(),
-                address.port,
-            )
-            .ok()
-        }
-        IpSocketAddress::Ipv6(_) => None,
-    }
 }
 
 #[cfg(test)]

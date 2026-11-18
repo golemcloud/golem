@@ -24,7 +24,7 @@
 use crate::Tracing;
 use golem_common::model::agent::{ParsedAgentKey, UpdateRecord};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::{FromSchema, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
@@ -334,6 +334,37 @@ impl<'a> Session<'a> {
         })
         .await
         .map_err(|_| anyhow::anyhow!("no snapshot after {count}"))?
+    }
+
+    /// Waits until the oplog holds a snapshot after the start of the latest invocation of
+    /// `method`, and gives the number of snapshots. A snapshot of an earlier invocation, such as
+    /// the initialization, does not count.
+    async fn wait_for_snapshot_after_call(&self, method: &str) -> anyhow::Result<usize> {
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let oplog = self.oplog().await?;
+                let start = oplog.iter().rposition(|entry| {
+                    matches!(entry, PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation)
+                            if invocation.method_name == method))
+                });
+                if let Some(start) = start
+                    && oplog[start..]
+                        .iter()
+                        .any(|entry| matches!(entry, PublicOplogEntry::Snapshot(_)))
+                {
+                    return Ok::<_, anyhow::Error>(
+                        oplog
+                            .iter()
+                            .filter(|entry| matches!(entry, PublicOplogEntry::Snapshot(_)))
+                            .count(),
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("no snapshot after the latest call of {method}"))?
     }
 
     /// Waits for the outcome of the latest update attempt: `Ok` with nothing for a successful
@@ -943,7 +974,7 @@ async fn an_open_p3_tcp_receive_stream_blocks_snapshots_and_manual_updates(
     .await?;
 
     let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
-    let baseline = session.wait_for_snapshot_after(0).await?;
+    let baseline = session.wait_for_snapshot_after_call("received").await?;
 
     let _: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))

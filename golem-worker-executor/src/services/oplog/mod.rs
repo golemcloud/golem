@@ -122,6 +122,19 @@ pub mod tests;
 /// publication takes it by value, and it can be neither cloned nor copied. Only the filesystem
 /// snapshot service makes one, so each publication of a fork goes through the decision of that
 /// service about the snapshots of the stage.
+/// One page of `OplogService::scan_for_component`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScanPage {
+    /// The cursor of the next page.
+    pub cursor: ScanCursor,
+    /// The agents of this page.
+    pub agent_ids: Vec<OwnedAgentId>,
+    /// The number of storage keys the scan examined for the page. It also counts the keys of
+    /// agents left out of the page, such as those a lower oplog layer lists, so it is the work
+    /// the page cost.
+    pub examined_keys: u64,
+}
+
 pub struct StagePublication {
     stage_id: uuid::Uuid,
 }
@@ -373,7 +386,8 @@ pub trait OplogService: Debug + Send + Sync {
     /// active mode is encoded into the returned `ScanCursor` so the caller resumes the same
     /// pagination correctly.
     ///
-    /// Pages can be empty. This operation is slow and is not locking the oplog.
+    /// Pages can be empty. This operation is slow and is not locking the oplog. `count` is a hint
+    /// to the storage, which can examine more or fewer keys.
     async fn scan_for_component(
         &self,
         environment_id: &EnvironmentId,
@@ -381,7 +395,7 @@ pub trait OplogService: Debug + Send + Sync {
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError>;
+    ) -> Result<ScanPage, WorkerExecutorError>;
 
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_raw_payload(

@@ -187,6 +187,8 @@ enum Slot {
 pub trait SocketSession {
     fn new(name: String) -> Self;
 
+    /// Looks up `name` and returns how many addresses it has.
+    async fn p3_resolve(&self, name: String) -> Result<u32, String>;
     /// Connects a P3 TCP socket, takes its receive stream and keeps both in `slot`.
     async fn p3_tcp_connect(&self, slot: String, port: u16) -> Result<(), String>;
     /// Sends `data` on the P3 TCP socket in `slot` and closes its send stream.
@@ -370,6 +372,13 @@ impl SocketSession for SocketSessionImpl {
             slots: RefCell::new(HashMap::new()),
             received: RefCell::new(Vec::new()),
         }
+    }
+
+    async fn p3_resolve(&self, name: String) -> Result<u32, String> {
+        golem_rust::wasip3::sockets::ip_name_lookup::resolve_addresses(name)
+            .await
+            .map(|addresses| addresses.len() as u32)
+            .map_err(error)
     }
 
     async fn p3_tcp_connect(&self, slot: String, port: u16) -> Result<(), String> {

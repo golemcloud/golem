@@ -38,7 +38,14 @@ async fn serve_routes(
     app: Router,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<u16, anyhow::Error> {
-    let listener = crate::net::bind_tcp_listener(addr)?;
+    serve_routes_on(crate::net::bind_tcp_listener(addr)?, app, join_set)
+}
+
+fn serve_routes_on(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<u16, anyhow::Error> {
     let local_addr = listener.local_addr()?;
 
     join_set.spawn(
@@ -52,6 +59,20 @@ async fn serve_routes(
     info!("Health and metrics server started on ports: http: {local_addr}");
 
     Ok(local_addr.port())
+}
+
+/// [`start_health_and_metrics_server`] on a listener that the caller has bound.
+pub fn start_health_and_metrics_server_on(
+    listener: tokio::net::TcpListener,
+    registry: Registry,
+    body_message: &'static str,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<u16, anyhow::Error> {
+    serve_routes_on(
+        listener,
+        health_and_metrics_routes(registry, body_message),
+        join_set,
+    )
 }
 
 pub async fn start_health_and_metrics_server(

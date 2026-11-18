@@ -268,6 +268,10 @@ before (value) {}
         timestamp: timestamp_from_datetime(params.timestamp),
         delta: params.delta,
     } }
+    MemorySizeReconciled { record (params) {
+        timestamp: timestamp_from_datetime(params.timestamp),
+        bytes: params.bytes,
+    } }
     CreateResource { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
         entity_parent_start_index: None,
@@ -702,6 +706,10 @@ before (value) {}
     GrowMemory { record () => GrowMemoryParameters {
         timestamp: timestamp.into(),
         delta: delta,
+    } }
+    MemorySizeReconciled { record () => MemorySizeReconciledParameters {
+        timestamp: timestamp.into(),
+        bytes: bytes,
     } }
     CreateResource { record (entity_parent_start_index) => RawCreateResourceParameters {
         timestamp: timestamp.into(),

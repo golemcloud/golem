@@ -48,6 +48,7 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
 
         let span = self
             .state
+            .invocation_state()
             .invocation_context
             .get(&span_id)
             .map_err(|err| anyhow!(err))?;
@@ -161,6 +162,7 @@ impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
 
         let attribute = self
             .state
+            .invocation_state()
             .invocation_context
             .get_attribute(&span_id, &key, inherited)
             .map_err(|err| anyhow!(err))?;
@@ -179,6 +181,7 @@ impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
 
         let attributes = self
             .state
+            .invocation_state()
             .invocation_context
             .get_attributes(&span_id, inherited)
             .map_err(|err| anyhow!(err))?;
@@ -209,6 +212,7 @@ impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
 
         let chain = self
             .state
+            .invocation_state()
             .invocation_context
             .get_attribute_chain(&span_id, &key)
             .map_err(|err| anyhow!(err))?
@@ -230,6 +234,7 @@ impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
 
         let attributes = self
             .state
+            .invocation_state()
             .invocation_context
             .get_attributes(&span_id, true)
             .map_err(|err| anyhow!(err))?;
@@ -257,6 +262,7 @@ impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
 
         let stack = self
             .state
+            .invocation_state()
             .invocation_context
             .get_stack(&span_id)
             .map_err(|err| anyhow!(err))?;
@@ -309,7 +315,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             live.complete(self, HostResponseGolemApiUnit { result: Ok(()) })
                 .await?;
         }
-        self.state.current_span_id = span.span_id().clone();
+        self.state.invocation_state_mut().current_span_id = span.span_id().clone();
         let entry = SpanEntry {
             span_id: span.span_id().clone(),
             creation_index,
@@ -322,11 +328,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn current_context(&mut self) -> anyhow::Result<Resource<InvocationContextEntry>> {
         self.observe_function_call("golem::api::context", "current-context");
 
-        let trace_id = self.state.invocation_context.trace_id.to_string();
+        let trace_id = self
+            .state
+            .invocation_state()
+            .invocation_context
+            .trace_id
+            .to_string();
         let span = self
             .state
+            .invocation_state()
             .invocation_context
-            .get(&self.state.current_span_id)
+            .get(&self.state.invocation_state().current_span_id)
             .map_err(|err| anyhow!(err))?;
         let entry = InvocationContextEntry { trace_id, span };
         let result = self.table().push(entry)?;
@@ -360,9 +372,19 @@ fn guest_span_started<Ctx: WorkerCtx>(
 ) -> SpanStarted {
     SpanStarted {
         span_id: golem_common::model::invocation_context::SpanId::generate(),
-        trace_id: ctx.state.invocation_context.trace_id.clone(),
-        trace_states: ctx.state.invocation_context.trace_states.clone(),
-        parent_span_id: Some(ctx.state.current_span_id.clone()),
+        trace_id: ctx
+            .state
+            .invocation_state()
+            .invocation_context
+            .trace_id
+            .clone(),
+        trace_states: ctx
+            .state
+            .invocation_state()
+            .invocation_context
+            .trace_states
+            .clone(),
+        parent_span_id: Some(ctx.state.invocation_state().current_span_id.clone()),
         links: Vec::new(),
         started_at: Timestamp::now_utc(),
         attributes: AttributeMap(attributes),
@@ -377,7 +399,7 @@ fn install_guest_span<Ctx: WorkerCtx>(
     let parent = started
         .parent_span_id
         .as_ref()
-        .map(|id| ctx.state.invocation_context.get(id))
+        .map(|id| ctx.state.invocation_state().invocation_context.get(id))
         .transpose()
         .map_err(|err| anyhow!(err))?;
     let mut builder = InvocationContextSpan::local()
@@ -388,11 +410,14 @@ fn install_guest_span<Ctx: WorkerCtx>(
         builder = builder.with_parent(parent);
     }
     let span = builder.build();
-    ctx.state.invocation_context.add_span_with_origin(
-        span.clone(),
-        started.trace_id.clone(),
-        started.trace_states.clone(),
-    );
+    ctx.state
+        .invocation_state_mut()
+        .invocation_context
+        .add_span_with_origin(
+            span.clone(),
+            started.trace_id.clone(),
+            started.trace_states.clone(),
+        );
     Ok(span)
 }
 
@@ -455,6 +480,7 @@ async fn set_guest_span_attributes<Ctx: WorkerCtx>(
     }
     let span = ctx
         .state
+        .invocation_state()
         .invocation_context
         .get(span_id)
         .map_err(|err| anyhow!(err))?;

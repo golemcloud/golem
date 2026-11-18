@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::authorization::targets::udp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     ResolvedCall, reserve_invocation_id_before_await,
@@ -48,7 +47,7 @@ use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 use wasmtime_wasi::sockets::{UdpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
-use super::tcp::UNSUPPORTED_SOCKET_TARGET;
+use super::tcp::socket_target;
 
 #[cfg(test)]
 mod tests;
@@ -60,19 +59,6 @@ async fn interruptible_receive<T>(
     tokio::select! {
         result = native => Ok(result),
         kind = interrupt => Err(wasmtime::Error::from_anyhow(kind.into())),
-    }
-}
-
-pub(super) fn socket_target(
-    address: &types::IpSocketAddress,
-) -> Option<golem_common::model::card::PermissionTarget> {
-    match address {
-        types::IpSocketAddress::Ipv4(address) => {
-            let (a, b, c, d) = address.address;
-            let host = std::net::Ipv4Addr::new(a, b, c, d).to_string();
-            udp_target(&host, address.port).ok()
-        }
-        types::IpSocketAddress::Ipv6(_) => None,
     }
 }
 
@@ -382,8 +368,12 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
             .map_err(SocketError::trap)?
         {
             ResolvedCall::Live(begun) => {
-                let denial = match socket_target(&remote_address) {
-                    Some(target) => match self
+                let target = self
+                    .0
+                    .durable_ctx_mut()
+                    .socket_target(remote_address.into());
+                let denial = match target {
+                    Ok(target) => match self
                         .0
                         .durable_ctx_mut()
                         .authorize_live_permission(&target)
@@ -393,7 +383,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
                         Ok(Err(error)) => Some(error.to_string()),
                         Err(error) => Some(error.to_string()),
                     },
-                    None => Some(UNSUPPORTED_SOCKET_TARGET.to_string()),
+                    Err(refusal) => Some(refusal),
                 };
                 match denial {
                     Some(denial) => {
@@ -652,9 +642,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
             .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
         let rep = socket.rep();
         let targets = match remote_address.as_ref() {
-            Some(remote_address) => socket_target(remote_address)
-                .map(|target| vec![target])
-                .ok_or_else(|| UNSUPPORTED_SOCKET_TARGET.to_string()),
+            Some(remote_address) => {
+                socket_target(store, (*remote_address).into()).map(|target| vec![target])
+            }
             None => Ok(Vec::new()),
         };
         // The datagram is never stored: a completed or ambiguous send is never repeated.

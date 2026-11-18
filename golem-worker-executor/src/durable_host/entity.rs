@@ -351,9 +351,17 @@ impl EntityInvocationDurability {
         let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
-                ctx.state.invocation_context.trace_id.clone(),
-                ctx.state.invocation_context.trace_states.clone(),
-                ctx.state.current_span_id.clone(),
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_id
+                    .clone(),
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_states
+                    .clone(),
+                ctx.state.invocation_state().current_span_id.clone(),
             )
         });
         let span_started = entity_span_started(
@@ -1213,9 +1221,17 @@ where
     let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
-            ctx.state.invocation_context.trace_id.clone(),
-            ctx.state.invocation_context.trace_states.clone(),
-            ctx.state.current_span_id.clone(),
+            ctx.state
+                .invocation_state()
+                .invocation_context
+                .trace_id
+                .clone(),
+            ctx.state
+                .invocation_state()
+                .invocation_context
+                .trace_states
+                .clone(),
+            ctx.state.invocation_state().current_span_id.clone(),
         )
     });
     let span_started = SpanStarted {

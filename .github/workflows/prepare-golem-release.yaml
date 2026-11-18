@@ -19,6 +19,11 @@ concurrency:
 jobs:
   validate:
     runs-on: blacksmith
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      statuses: read
     steps:
       - uses: actions/checkout@v5
         with:
@@ -30,14 +35,58 @@ jobs:
       - name: Validate the public release tag and source
         shell: bash
         run: BUILTIN_VERSION="${GITHUB_REF_NAME#v}" cargo make --profile ci validate-golem-release-source
+      - name: Require completed validation of this exact release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=$(git rev-parse HEAD)
+          state=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$source/statuses?per_page=100" | \
+            jq -r '[.[][] | select(.context == "Main validation" and .creator.login == "github-actions[bot]")][0].state // "missing"')
+          [[ "$state" == success ]] || { echo "Exact release source $source has Main validation status: $state" >&2; exit 1; }
 
-  preflight:
+  release-prerequisites:
     needs: validate
-    uses: ./.github/workflows/ci.yaml
-    secrets: inherit
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: 20
+      WASI_SDK_PATH: /opt/wasi-sdk
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-binstall: 'true'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Install the test runner
+        run: cargo binstall --force --locked cargo-test-r@2.2.11
+      - uses: ./.github/actions/check-published-sdks
+        with:
+          prepare-binaries: 'true'
+          wasm-rquickjs-version: '0.5.3'
+          moonbit-version: '0.10.18+6c83a7f62'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-prerequisite-logs
+          path: |
+            tmp/check-published-sdks.log
+            tmp/golem-cli-test-server-logs/
 
   publish-builtins:
-    needs: [validate, preflight]
+    needs: [validate, release-prerequisites]
+    if: >-
+      ${{ !cancelled() && needs.validate.result == 'success' &&
+      needs.release-prerequisites.result == 'success' }}
     environment: golem-release
     permissions:
       contents: read

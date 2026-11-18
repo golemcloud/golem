@@ -523,7 +523,7 @@ impl SecretValueInput {
 }
 
 fn read_secret_value_from_stdin() -> anyhow::Result<String> {
-    let stdin = std::io::stdin();
+    let stdin = crate::command_handler::interactive::stdin("the secret value")?;
     if stdin.is_terminal() {
         log_error("--value-stdin requires the secret value to be piped to STDIN");
         bail!(NonSuccessfulExit);
