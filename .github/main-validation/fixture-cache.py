@@ -161,11 +161,18 @@ def stage(root, pending, key, before):
 
 def publish(pending, cache):
     cache.mkdir(parents=True, exist_ok=True)
+    retained = set()
+    for receipt in pending.glob("*.json"):
+        key = json.loads(receipt.read_text())["key"]
+        if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise ValueError("invalid cache receipt key")
+        retained.add(key)
     for bundle in sorted(pending.iterdir()):
         if not bundle.is_dir() or bundle.name.startswith("."):
             continue
         key = bundle.name
         verify(bundle, key)
+        retained.add(key)
         with tempfile.TemporaryDirectory(prefix=".publish-", dir=cache) as temporary:
             copied = Path(temporary) / "bundle"
             shutil.copytree(bundle, copied)
@@ -175,6 +182,12 @@ def publish(pending, cache):
                 shutil.rmtree(destination)
             copied.rename(destination)
         print(f"Fixture cache published: {key}", flush=True)
+    # Called only after fixture checks succeed; interrupted cycles keep old entries.
+    for bundle in cache.iterdir():
+        if (re.fullmatch(r"[0-9a-f]{64}", bundle.name)
+                and bundle.name not in retained and bundle.is_dir()):
+            shutil.rmtree(bundle)
+            print(f"Fixture cache evicted: {bundle.name}", flush=True)
 
 
 def main():

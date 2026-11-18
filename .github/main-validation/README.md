@@ -73,6 +73,9 @@ validation and fixture assertions, including the distinct update-v3/v4 guard.
 Missing or corrupt bundles rebuild. Entries are staged under
 `.validation-cache/fixtures-v1/pending` and published atomically to `completed`
 only after fixture validation succeeds. A new cycle discards unvalidated staging.
+After publication, remove completed bundles not used or built by that cycle.
+Eviction starts only after validation and bundle publication succeed. Retention uses
+ordinary directory operations and does not depend on Blacksmith or sticky disks.
 
 The outer Lima workload VM is parked on the local
 `gol-1971-own-machine-vm` branch; only the existing managed-XFS tests use Lima.

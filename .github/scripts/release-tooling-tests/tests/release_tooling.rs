@@ -25,6 +25,24 @@ fn copy_makefiles(repo: &Path) {
 }
 
 #[test]
+fn main_validation_dashboard_validates_and_persists_public_observations() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/main-validation/observer/dashboard/test_server.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn main_validation_retains_logs_and_reports_actual_task_lifetimes() {
     let output = Command::new("python3")
         .args([

@@ -74,6 +74,49 @@ class FixtureCacheTests(unittest.TestCase):
         self.assertEqual(second.stat().st_mode & 0o777, 0o751)
         self.assertEqual(set(CACHE.verify(self.cache / key, key)), {"first.wasm", "second.wasm"})
 
+    def test_eviction_keeps_current_restores_and_builds_in_an_ordinary_directory(self):
+        restored = self.bundle()
+        self.write("test-components/example/golem.yaml", "obsolete source")
+        for output in (self.root / "test-components").glob("*.wasm"):
+            output.unlink()
+        obsolete = self.bundle()
+        CACHE.publish(self.pending, self.cache)
+        shutil.rmtree(self.pending)
+        self.pending.mkdir()
+        CACHE.restore(self.root, self.cache / restored, restored)
+        (self.pending / "restored.json").write_text(json.dumps({"key": restored}))
+        self.write("test-components/example/golem.yaml", "new source")
+        for output in (self.root / "test-components").glob("*.wasm"):
+            output.unlink()
+        built = self.bundle()
+        CACHE.publish(self.pending, self.cache)
+        self.assertEqual({path.name for path in self.cache.iterdir()}, {restored, built})
+        self.assertFalse((self.cache / obsolete).exists())
+        CACHE.restore(self.root, self.cache / built, built)
+
+        # A hit-only cycle has receipts but no staged bundles.
+        shutil.rmtree(self.pending)
+        self.pending.mkdir()
+        (self.pending / "restored.json").write_text(json.dumps({"key": restored}))
+        CACHE.publish(self.pending, self.cache)
+        self.assertEqual({path.name for path in self.cache.iterdir()}, {restored})
+        CACHE.restore(self.root, self.cache / restored, restored)
+
+    def test_failed_publication_does_not_evict_previous_bundles(self):
+        previous = self.bundle()
+        CACHE.publish(self.pending, self.cache)
+        shutil.rmtree(self.pending)
+        self.pending.mkdir()
+        self.write("test-components/example/golem.yaml", "new source")
+        for output in (self.root / "test-components").glob("*.wasm"):
+            output.unlink()
+        broken = self.bundle()
+        (self.pending / broken / "files/first.wasm").unlink()
+        with self.assertRaises(ValueError):
+            CACHE.publish(self.pending, self.cache)
+        CACHE.restore(self.root, self.cache / previous, previous)
+        self.assertEqual({path.name for path in self.cache.iterdir()}, {previous})
+
     def test_source_invalidation_is_per_application_and_language_independent(self):
         baseline = self.key()
         for path in ("sdks/anything/runtime", "cli/golem-cli/src/lib.rs", "wit/interface.wit",
