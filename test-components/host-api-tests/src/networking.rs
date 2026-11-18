@@ -714,13 +714,47 @@ impl Networking for NetworkingImpl {
                     .map(|record| {
                         let data = match record.data {
                             RecordData::A((a, b, c, d)) => format!("{a}.{b}.{c}.{d}"),
+                            RecordData::Aaaa((a, b, c, d, e, f, g, h)) => {
+                                std::net::Ipv6Addr::new(a, b, c, d, e, f, g, h).to_string()
+                            }
+                            RecordData::Cname(name)
+                            | RecordData::Ns(name)
+                            | RecordData::Ptr(name) => name,
                             RecordData::Mx(mx) => format!("{} {}", mx.preference, mx.exchange),
+                            RecordData::Srv(srv) => format!(
+                                "{} {} {} {}",
+                                srv.priority, srv.weight, srv.port, srv.target
+                            ),
                             RecordData::Txt(strings) => strings
                                 .iter()
                                 .map(|s| String::from_utf8_lossy(s).into_owned())
                                 .collect::<Vec<_>>()
                                 .join(""),
-                            other => format!("{other:?}"),
+                            RecordData::Caa(caa) => format!(
+                                "{} {} {}",
+                                caa.issuer_critical,
+                                caa.tag,
+                                String::from_utf8_lossy(&caa.value)
+                            ),
+                            RecordData::Soa(soa) => format!(
+                                "{} {} {} {} {} {} {}",
+                                soa.mname,
+                                soa.rname,
+                                soa.serial,
+                                soa.refresh,
+                                soa.retry,
+                                soa.expire,
+                                soa.minimum
+                            ),
+                            RecordData::Naptr(naptr) => format!(
+                                "{} {} {} {} {} {}",
+                                naptr.order,
+                                naptr.preference,
+                                naptr.naptr_flags,
+                                naptr.services,
+                                naptr.regexp,
+                                naptr.replacement
+                            ),
                         };
                         format!("{} {data}", record.ttl)
                     })
