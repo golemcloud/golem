@@ -5,7 +5,7 @@ priv suberror SnapshotSaveError {
 
 ///|
 /// The version 2 JSON envelope: {"version":2,"state":<state>}.
-fn json_snapshot_envelope(state_bytes : Bytes) -> FixedArray[Byte] {
+fn json_snapshot_envelope(state_bytes : Bytes) -> FixedArray[Byte] raise {
   let state_str = @utf8.decode(state_bytes)
   let state_json = @json.parse(state_str) catch { _ => Json::string(state_str) }
   let envelope : Map[String, Json] = Map([])
