@@ -2,10 +2,12 @@
 """Self-tests for the conformance harness's exact result comparison."""
 
 import importlib.util
+import os
 import pathlib
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = pathlib.Path(__file__).with_name("conformance.py")
@@ -193,6 +195,15 @@ class GoldenTests(unittest.TestCase):
 
 
 class CallTests(unittest.TestCase):
+    def test_jobs_follow_the_executor_budget_with_an_explicit_override(self):
+        with patch.dict(os.environ, {"BASH_CONFORMANCE_JOBS": "4"}), \
+                patch.object(HARNESS, "load_cases", return_value=[]), \
+                patch.object(HARNESS, "command_check", return_value=True) as check:
+            self.assertEqual(HARNESS.main(["check", "--wasm", "fixture.wasm"]), 0)
+            self.assertEqual(check.call_args.args[0].jobs, 4)
+            self.assertEqual(HARNESS.main(["check", "--wasm", "fixture.wasm", "--jobs", "7"]), 0)
+            self.assertEqual(check.call_args.args[0].jobs, 7)
+
     def test_a_script_without_markers_is_one_call_in_the_root(self):
         self.assertEqual([("/", "echo a\necho b")], HARNESS.split_calls("echo a\necho b"))
 

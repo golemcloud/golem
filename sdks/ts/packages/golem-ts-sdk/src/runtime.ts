@@ -37,6 +37,7 @@ import {
   mergeGraphDefs,
   resolveShapeType,
   SchemaGraph,
+  SchemaType,
   schemaShapesMatch,
   schemaValueFromWit,
   schemaValueToWit,
@@ -500,7 +501,61 @@ function validateHttpConsistency(
       for (const h of ep.headerVars) {
         assertEndpointVar(name, mc.name, h.variableName, 'header', inputNames, mountVars);
       }
+      const explicitQuery = new Set(ep.queryVars.map((q) => q.variableName));
+      const bound = new Set([
+        ...pathVariableNames(ep.pathSuffix),
+        ...explicitQuery,
+        ...ep.headerVars.map((h) => h.variableName),
+      ]);
+      const implicitQuery =
+        ep.httpMethod.tag === 'method' && ['get', 'head', 'delete'].includes(ep.httpMethod.val.tag);
+      for (const input of mc.inputCodecs) {
+        if (input.codec.autoInjected) continue;
+        if (!explicitQuery.has(input.name) && !(implicitQuery && !bound.has(input.name))) continue;
+        // Stream resource slots are classified by the registry's route compiler.
+        const shape = resolveShapeType(input.codec.graph, input.codec.graph.root);
+        if (!explicitQuery.has(input.name) && shape?.tag === 'stream') continue;
+        if (!isQueryShape(input.codec.graph, input.codec.graph.root)) {
+          throw new Error(
+            `Agent "${name}" method "${mc.name}" input "${input.name}" cannot bind from query: expected a scalar, scalar list, scalar map, or outer option`,
+          );
+        }
+      }
     }
+  }
+}
+
+function isQueryShape(graph: SchemaGraph, type: SchemaType, collections = true): boolean {
+  const shape = resolveShapeType(graph, type);
+  if (!shape) return false;
+  switch (shape.tag) {
+    case 'bool':
+    case 's8':
+    case 's16':
+    case 's32':
+    case 's64':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 'u64':
+    case 'f32':
+    case 'f64':
+    case 'char':
+    case 'string':
+    case 'enum':
+      return true;
+    case 'option':
+      return collections && isQueryShape(graph, shape.element);
+    case 'list':
+      return collections && isQueryShape(graph, shape.element, false);
+    case 'map':
+      return (
+        collections &&
+        isQueryShape(graph, shape.key, false) &&
+        isQueryShape(graph, shape.value, false)
+      );
+    default:
+      return false;
   }
 }
 
