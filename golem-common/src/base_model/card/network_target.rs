@@ -38,13 +38,31 @@ pub fn network_target(
 }
 
 /// The permission target of a raw socket connect or outgoing datagram to `address`;
-/// `this_host` tells whether the address is an address of the executor host.
-pub fn socket_target(address: SocketAddr, this_host: bool) -> PermissionTarget {
+/// `this_host` tells whether the address is an address of the executor host, and `hostnames` are
+/// the hostnames that the agent's recorded lookups linked to the address.
+pub fn socket_target(
+    address: SocketAddr,
+    this_host: bool,
+    hostnames: Vec<String>,
+) -> PermissionTarget {
     PermissionTarget::Network(ClassPermissionTarget {
         verb: Some(NetworkVerb::Connect),
         owner: EmptyOwnerPattern,
-        resource: NetworkResourcePattern::socket_address(address.ip(), address.port(), this_host),
+        resource: NetworkResourcePattern::socket_address(
+            address.ip(),
+            address.port(),
+            this_host,
+            hostnames,
+        ),
     })
+}
+
+/// The hostname that an address lookup of `name` links its addresses to: the name as a grant
+/// names it. An IP literal or an invalid name links nothing.
+pub fn link_hostname(name: &str) -> Option<String> {
+    normalize_host(name)
+        .ok()
+        .filter(|host| host.parse::<IpAddr>().is_err())
 }
 
 fn normalize_host(host: &str) -> Result<String, NetworkTargetError> {

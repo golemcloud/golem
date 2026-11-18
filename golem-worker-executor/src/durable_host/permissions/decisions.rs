@@ -94,6 +94,11 @@ pub(super) fn permission_error_from_serializable(
 /// records nothing can observe on replay a card event that live execution applied only to a later
 /// operation. Replay returns the recorded decision instead of deciding again; the repair of an
 /// incomplete decision decides at its own `Start`.
+///
+/// The request names the invocation that the deciding host call is attributed to. The host sets
+/// the attribution, the same way live and on replay; the fallback to the loop's invocation is not
+/// recorded, because the loop's key after a snapshot is random. Replay and repair fail when the
+/// recorded decision belongs to a different invocation than the one now asking for it.
 pub(super) async fn record_card_decision<Ctx, Pair, T, Decide>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     card_ids: Vec<Uuid>,
@@ -110,11 +115,36 @@ where
         &mut DurableWorkerCtx<Ctx>,
     ) -> anyhow::Result<Result<T, permissions_types::PermissionError>>,
 {
-    let response = DurableCallSession::<Pair, NotCancellable>::invoke(
+    let invocation_id = ctx
+        .attribution
+        .resolve()
+        .and_then(|key| key.invocation_id());
+    let mut call = DurableCallSession::<Pair, NotCancellable>::start(
         ctx,
-        HostRequestPermissionCardDecision { card_ids },
+        HostRequestPermissionCardDecision {
+            invocation_id,
+            card_ids,
+        },
         DurableFunctionType::ReadLocal,
-        async move |ctx| {
+    )
+    .await?;
+    if !call.is_live() {
+        let recorded = match call.recorded_request(ctx).await {
+            Ok(recorded) => recorded,
+            Err(error) => return Err(call.trap(error)),
+        };
+        if recorded.invocation_id != invocation_id {
+            return Err(call.trap(WorkerExecutorError::unexpected_oplog_entry(
+                format!("permission-card decision for invocation {invocation_id:?}"),
+                format!(
+                    "permission-card decision for invocation {:?}",
+                    recorded.invocation_id
+                ),
+            )));
+        }
+    }
+    let response = call
+        .run(ctx, async move |ctx| {
             let result = match decide(ctx).await? {
                 Ok(decided) => Ok(serialize(&decided).map_err(|error| {
                     anyhow!("failed to serialize a permission-card decision: {error}")
@@ -122,9 +152,8 @@ where
                 Err(error) => Err(permission_error_to_serializable(error)),
             };
             Ok::<_, anyhow::Error>(HostResponsePermissionCardDecision { result })
-        },
-    )
-    .await?;
+        })
+        .await?;
     match response.result {
         Ok(decided) => Ok(Ok(deserialize(&decided).map_err(|error| {
             anyhow!("failed to deserialize a recorded permission-card decision: {error}")

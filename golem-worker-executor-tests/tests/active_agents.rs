@@ -1097,10 +1097,10 @@ async fn ttl_eviction_removes_the_evicted_owners_card_interests(
     })
     .await?;
 
-    assert!(
-        executor.tracked_card_ids().await.is_empty(),
-        "evicting the owner must unregister its card interests, as explicit ActiveAgents removal does"
-    );
+    wait_until("evicted owner's card interests to be removed", || async {
+        executor.tracked_card_ids().await.is_empty()
+    })
+    .await?;
     Ok(())
 }
 

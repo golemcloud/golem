@@ -428,13 +428,16 @@ impl ApplicationContext {
         Ok(())
     }
 
+    /// Finds and reads the application's manifests by `source_mode`, searching from
+    /// `calling_working_dir`, and makes the application's root the current directory.
     pub fn preload_application(
         source_mode: ApplicationSourceMode,
+        calling_working_dir: &Path,
         dev_mode: bool,
     ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
-        match preload_app(source_mode, dev_mode) {
+        match preload_app(source_mode, calling_working_dir, dev_mode) {
             Some(environments) => validated_to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,
@@ -903,7 +906,16 @@ fn load_app(
     component_presets: ComponentPresetSelector,
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<(Application, PathBuf)>> {
-    load_raw_apps(source_mode).map(|loaded_raw_apps| {
+    // The context loads the result of a preload, which needs no search. A mode that still needs
+    // one searches from the current directory, the application's root after the preload.
+    let loaded_raw_apps = match source_mode {
+        ApplicationSourceMode::Preloaded(loaded_raw_apps) => {
+            Some(ValidatedResult::Ok(loaded_raw_apps))
+        }
+        ApplicationSourceMode::None => None,
+        source_mode => load_raw_apps(source_mode, &fs::current_dir_lexical().unwrap()),
+    };
+    loaded_raw_apps.map(|loaded_raw_apps| {
         loaded_raw_apps.and_then(|loaded_raw_apps| {
             Application::from_raw_apps(
                 loaded_raw_apps.app_root_dir,
@@ -920,9 +932,10 @@ fn load_app(
 
 fn preload_app(
     source_mode: ApplicationSourceMode,
+    calling_working_dir: &Path,
     dev_mode: bool,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
-    load_raw_apps(source_mode).map(|loaded_raw_apps| {
+    load_raw_apps(source_mode, calling_working_dir).map(|loaded_raw_apps| {
         loaded_raw_apps.and_then(|loaded_raw_apps| {
             let referenced_template_names =
                 Application::referenced_template_names_from_raw_apps(&loaded_raw_apps.raw_apps);
@@ -996,29 +1009,34 @@ fn ensure_on_demand_commons(
     Ok(on_demand_raw_apps)
 }
 
-fn load_raw_apps(source_mode: ApplicationSourceMode) -> Option<ValidatedResult<LoadedRawApps>> {
-    fn load(root_source: Option<&Path>) -> Option<ValidatedResult<LoadedRawApps>> {
-        collect_sources_and_switch_to_app_root(root_source).map(|collected_sources| {
-            collected_sources.and_then(|collected_sources| {
-                validate_manifest_versions(&collected_sources.sources).and_then(|()| {
-                    collected_sources
-                        .sources
-                        .into_iter()
-                        .map(|source| {
-                            ValidatedResult::from_result(
-                                app_raw::ApplicationWithSource::from_yaml_file(&source),
-                            )
-                        })
-                        .collect::<ValidatedResult<Vec<_>>>()
-                        .map(|raw_apps| LoadedRawApps {
-                            app_root_dir: collected_sources.app_root_dir,
-                            calling_working_dir: collected_sources.calling_working_dir,
-                            raw_apps,
-                        })
+fn load_raw_apps(
+    source_mode: ApplicationSourceMode,
+    calling_working_dir: &Path,
+) -> Option<ValidatedResult<LoadedRawApps>> {
+    let load = |root_source: Option<&Path>| -> Option<ValidatedResult<LoadedRawApps>> {
+        collect_sources_and_switch_to_app_root(calling_working_dir, root_source).map(
+            |collected_sources| {
+                collected_sources.and_then(|collected_sources| {
+                    validate_manifest_versions(&collected_sources.sources).and_then(|()| {
+                        collected_sources
+                            .sources
+                            .into_iter()
+                            .map(|source| {
+                                ValidatedResult::from_result(
+                                    app_raw::ApplicationWithSource::from_yaml_file(&source),
+                                )
+                            })
+                            .collect::<ValidatedResult<Vec<_>>>()
+                            .map(|raw_apps| LoadedRawApps {
+                                app_root_dir: collected_sources.app_root_dir,
+                                calling_working_dir: collected_sources.calling_working_dir,
+                                raw_apps,
+                            })
+                    })
                 })
-            })
-        })
-    }
+            },
+        )
+    };
 
     match source_mode {
         ApplicationSourceMode::Automatic => load(None),
@@ -1037,10 +1055,10 @@ struct CollectedSources {
 }
 
 fn collect_sources_and_switch_to_app_root(
+    calling_working_dir: &Path,
     root_manifest: Option<&Path>,
 ) -> Option<ValidatedResult<CollectedSources>> {
-    let calling_working_dir = fs::current_dir_lexical().unwrap();
-    collect_sources_from(&calling_working_dir, root_manifest).map(|collected_sources| {
+    collect_sources_from(calling_working_dir, root_manifest).map(|collected_sources| {
         collected_sources.inspect(|collected_sources| {
             std::env::set_current_dir(&collected_sources.app_root_dir)
                 .expect("Failed to set current dir for config parent");

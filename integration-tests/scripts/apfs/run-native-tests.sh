@@ -48,7 +48,7 @@ GOLEM_APFS_NON_CLONE_ROOT="${mount_point}" "$@" 2>&1 | tee "${fixture}/tests.log
 result=${PIPESTATUS[0]}
 set -e
 if [[ ${result} -ne 0 ]]; then exit "${result}"; fi
-if ! grep -Eq 'test result: ok; [1-9][0-9]* passed;' "${fixture}/tests.log"; then
+if ! grep -Eq 'test result: ok; [1-9][0-9]* passed;|Finished test: .+\[PASSED\]' "${fixture}/tests.log"; then
   echo "The native APFS suite did not report an executed test" >&2
   exit 1
 fi

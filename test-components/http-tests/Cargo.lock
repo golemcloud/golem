@@ -504,6 +504,7 @@ dependencies = [
 name = "golem_it_http_tests"
 version = "0.0.1"
 dependencies = [
+ "futures-channel",
  "futures-concurrency",
  "futures-util",
  "golem-rust",

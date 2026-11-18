@@ -106,6 +106,51 @@ impl StructuredOutput for AgentOplogEntryView {
     const KIND: &'static str = "agent.oplog";
 }
 
+/// One page of an oplog, which `agent oplog --page` emits. Each entry is the `agent.oplog`
+/// document that `agent oplog` streams for it, so the entries of every page, in order, are the
+/// stream.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentOplogPageView {
+    #[serde(serialize_with = "serialize_oplog_documents")]
+    pub entries: Vec<AgentOplogEntryView>,
+    /// The cursor of the next page, when the oplog has entries after this page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+fn serialize_oplog_documents<S: serde::Serializer>(
+    entries: &[AgentOplogEntryView],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::{Error, SerializeSeq};
+    let mut documents = serializer.serialize_seq(Some(entries.len()))?;
+    for entry in entries {
+        let document = crate::model::cli_output::to_structured_output_value(entry.clone())
+            .map_err(S::Error::custom)?;
+        documents.serialize_element(&document)?;
+    }
+    documents.end()
+}
+
+impl StructuredOutput for AgentOplogPageView {
+    const KIND: &'static str = "agent.oplog-page";
+}
+
+impl TextOutput for AgentOplogPageView {
+    fn log(&self) {
+        for entry in &self.entries {
+            entry.log();
+        }
+        if let Some(cursor) = &self.cursor {
+            logln("");
+            logln(format!(
+                "Cursor of the next page: {}",
+                format_id(cursor.as_str())
+            ));
+        }
+    }
+}
+
 impl TextOutput for AgentOplogEntryView {
     fn log(&self) {
         logln(format!(

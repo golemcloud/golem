@@ -24,8 +24,6 @@ jobs:
       pull-requests: read
       actions: read
       statuses: read
-    outputs:
-      use-main-validation: ${{ steps.preflight-mode.outputs.use_main_validation }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -37,13 +35,7 @@ jobs:
       - name: Validate the public release tag and source
         shell: bash
         run: BUILTIN_VERSION="${GITHUB_REF_NAME#v}" cargo make --profile ci validate-golem-release-source
-      - name: Select the accepted preflight path
-        id: preflight-mode
-        env:
-          USE_MAIN_VALIDATION: ${{ vars.MAIN_VALIDATION_RELEASE_GATE_ENABLED == 'true' }}
-        run: echo "use_main_validation=$USE_MAIN_VALIDATION" >> "$GITHUB_OUTPUT"
       - name: Require completed validation of this exact release source
-        if: steps.preflight-mode.outputs.use_main_validation == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -54,15 +46,8 @@ jobs:
             jq -r '[.[][] | select(.context == "Main validation" and .creator.login == "github-actions[bot]")][0].state // "missing"')
           [[ "$state" == success ]] || { echo "Exact release source $source has Main validation status: $state" >&2; exit 1; }
 
-  preflight:
-    needs: validate
-    if: needs.validate.outputs.use-main-validation == 'false'
-    uses: ./.github/workflows/ci.yaml
-    secrets: inherit
-
   release-prerequisites:
     needs: validate
-    if: needs.validate.outputs.use-main-validation == 'true'
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 360
     permissions:
@@ -98,12 +83,10 @@ jobs:
             tmp/golem-cli-test-server-logs/
 
   publish-builtins:
-    needs: [validate, preflight, release-prerequisites]
-    # Exactly one preflight path must succeed; a skipped or failed gate cannot publish.
+    needs: [validate, release-prerequisites]
     if: >-
       ${{ !cancelled() && needs.validate.result == 'success' &&
-      ((needs.validate.outputs.use-main-validation == 'false' && needs.preflight.result == 'success' && needs.release-prerequisites.result == 'skipped') ||
-       (needs.validate.outputs.use-main-validation == 'true' && needs.release-prerequisites.result == 'success' && needs.preflight.result == 'skipped')) }}
+      needs.release-prerequisites.result == 'success' }}
     environment: golem-release
     permissions:
       contents: read
