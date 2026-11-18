@@ -313,7 +313,7 @@ describe("explicit multipart snapshots", () => {
 
   it("rejects duplicate JSON metadata, version spellings, namespaces, names, MIME parameters and invalid UTF-8", () => {
     const enc = new TextEncoder()
-    const envelope = '{"version":1,"principal":{"tag":"anonymous"},"state":null}'
+    const envelope = '{"version":2,"state":null}'
     const wrap = (
       state: Uint8Array,
       extras: Array<{ name: string; contentType: string; body: Uint8Array }> = [],
@@ -325,10 +325,11 @@ describe("explicit multipart snapshots", () => {
       return { payload: data, mimeType: `multipart/mixed; boundary=${boundary}` }
     }
     for (const text of [
-      envelope.replace('"version":1', '"version":1,"version":1'),
-      envelope.replace('"version":1', '"version":1.0'),
-      envelope.replace('"version":1', '"version":1e0'),
-      envelope.replace('"tag":"anonymous"', '"tag":"anonymous","tag":"anonymous"'),
+      envelope.replace('"version":2', '"version":2,"version":2'),
+      envelope.replace('"version":2', '"version":2.0'),
+      envelope.replace('"version":2', '"version":2e0'),
+      // The 1.6 envelope is an unknown version.
+      '{"version":1,"principal":{"tag":"anonymous"},"state":null}',
     ]) {
       expect(() => decodeEnvelope(wrap(enc.encode(text)))).toThrow(Snapshot.SnapshotEnvelopeError)
     }

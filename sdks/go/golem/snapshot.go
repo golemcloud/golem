@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,26 +40,18 @@ const (
 	snapshotJSONMIME = "application/json"
 )
 
-// A 2.0 snapshot carries nothing but the agent's state: the caller of an
+// A snapshot carries nothing but the agent's state: the caller of an
 // invocation comes from the host, never from saved state. A JSON snapshot is
 // {"version":2,"state":…}; a raw one is a version byte (3) then the
-// Snapshotter's bytes. A snapshot written by a 1.6 SDK still loads: it is
-// {"version":1,"principal":…,"state":…} or a raw version byte (2), the
-// principal's length as a big-endian uint32, the principal, then the
-// Snapshotter's bytes. Its principal is checked as before and dropped. A raw
-// snapshot of version 1 (state only) was never written by this SDK, and is
-// refused.
+// Snapshotter's bytes. Any other version is refused.
 const (
-	snapshotJSONVersion       = 2
-	snapshotLegacyJSONVersion = 1
-	snapshotRawVersion        = 3
-	snapshotLegacyRawVersion  = 2
+	snapshotJSONVersion = 2
+	snapshotRawVersion  = 3
 )
 
 type jsonSnapshot struct {
-	Version   int             `json:"version"`
-	Principal json.RawMessage `json:"principal,omitempty"`
-	State     json.RawMessage `json:"state"`
+	Version int             `json:"version"`
+	State   json.RawMessage `json:"state"`
 }
 
 // saveState serializes an agent instance's state into a host snapshot.
@@ -104,8 +95,7 @@ type savedState struct {
 	multipart *MultipartSnapshot
 }
 
-// splitSnapshot reads the state out of a snapshot, in the 2.0 form or in a
-// 1.6 form (whose principal it checks and drops).
+// splitSnapshot reads the state out of a snapshot.
 func splitSnapshot(snap host.Snapshot) (savedState, error) {
 	if _, ok := extractBoundary(snap.MimeType); ok {
 		parts, err := decodeMultipart(snap.Payload, snap.MimeType)
@@ -119,32 +109,16 @@ func splitSnapshot(snap host.Snapshot) (savedState, error) {
 		if err := json.Unmarshal(snap.Payload, &js); err != nil {
 			return savedState{}, fmt.Errorf("golem: decoding the snapshot: %w", err)
 		}
-		switch js.Version {
-		case snapshotJSONVersion:
-		case snapshotLegacyJSONVersion:
-			if err := validateLegacyPrincipal(js.Principal); err != nil {
-				return savedState{}, err
-			}
-		default:
+		if js.Version != snapshotJSONVersion {
 			return savedState{}, fmt.Errorf("golem: unsupported JSON snapshot version %d", js.Version)
 		}
 		return savedState{Payload: js.State}, nil
 	}
 	b := snap.Payload
-	if len(b) >= 1 && b[0] == snapshotRawVersion {
-		return savedState{Payload: b[1:]}, nil
-	}
-	if len(b) < 5 || b[0] != snapshotLegacyRawVersion {
+	if len(b) < 1 || b[0] != snapshotRawVersion {
 		return savedState{}, errors.New("golem: not a snapshot this SDK wrote")
 	}
-	n := binary.BigEndian.Uint32(b[1:5])
-	if uint64(len(b)-5) < uint64(n) {
-		return savedState{}, errors.New("golem: snapshot too short for its principal")
-	}
-	if err := validateLegacyPrincipal(b[5 : 5+n]); err != nil {
-		return savedState{}, err
-	}
-	return savedState{Payload: b[5+n:]}, nil
+	return savedState{Payload: b[1:]}, nil
 }
 
 // restoreState rebuilds an agent's state from a snapshot without running its

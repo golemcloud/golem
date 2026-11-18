@@ -17,7 +17,7 @@
 package golem.host
 
 import golem.{Principal, PrincipalRef}
-import golem.host.js.{CallerConverter, LegacySnapshotPrincipal}
+import golem.host.js.CallerConverter
 import zio.test._
 
 import scala.scalajs.js
@@ -119,26 +119,6 @@ object CallerConverterSpec extends ZIOSpecDefault {
           )
         )
         assertTrue(caller.tokens.head.id == new java.util.UUID(-1L, 1L))
-      }
-    ),
-    suite("1.6 snapshot principal")(
-      test("accepts each 1.6 form") {
-        val forms = List(
-          """{"tag":"anonymous"}""",
-          """{"tag":"agent","val":{"componentId":"00000000-0000-0000-0000-000000000001","agentId":"a"}}""",
-          """{"tag":"golem-user","val":{"accountId":"00000000-0000-0000-0000-000000000002"}}""",
-          """{"tag":"oidc","val":{"sub":"s","issuer":"i","claims":"{}","email":null}}"""
-        )
-        assertTrue(forms.forall(form => LegacySnapshotPrincipal.check(form.getBytes("UTF-8")).isRight))
-      },
-      test("refuses a malformed principal") {
-        val forms = List(
-          "not-json",
-          """{"tag":"unknown"}""",
-          """{"tag":"oidc","val":{"sub":"s"}}""",
-          """{"tag":"agent","val":{"componentId":"not-a-uuid","agentId":"a"}}"""
-        )
-        assertTrue(forms.forall(form => LegacySnapshotPrincipal.check(form.getBytes("UTF-8")).isLeft))
       }
     )
   )

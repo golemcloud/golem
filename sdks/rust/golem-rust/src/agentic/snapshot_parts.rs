@@ -321,8 +321,6 @@ pub(super) fn decode(data: &[u8], mime: &str) -> Result<super::SnapshotData, Str
     struct Envelope<'a> {
         #[serde(borrow)]
         version: &'a serde_json::value::RawValue,
-        #[serde(borrow, default)]
-        principal: Option<&'a serde_json::value::RawValue>,
         #[serde(borrow)]
         state: &'a serde_json::value::RawValue,
     }
@@ -336,33 +334,8 @@ pub(super) fn decode(data: &[u8], mime: &str) -> Result<super::SnapshotData, Str
         return Err("multipart envelope must be an object".to_string());
     }
     let envelope: Envelope<'_> = serde_json::from_slice(state.body).map_err(|e| e.to_string())?;
-    match envelope.version.get() {
-        // A 1.6 envelope: its principal is checked as strictly as before and then dropped.
-        "1" => {
-            let principal = envelope
-                .principal
-                .ok_or_else(|| "multipart principal must be an object".to_string())?;
-            if !principal.get().starts_with('{') {
-                return Err("multipart principal must be an object".to_string());
-            }
-            #[derive(serde::Deserialize)]
-            struct PrincipalRecord<'a> {
-                tag: String,
-                #[serde(borrow)]
-                val: Option<&'a serde_json::value::RawValue>,
-            }
-            let record: PrincipalRecord<'_> =
-                serde_json::from_str(principal.get()).map_err(|e| e.to_string())?;
-            if record.tag != "anonymous"
-                && !record.val.is_some_and(|value| value.get().starts_with('{'))
-            {
-                return Err("multipart principal payload must be an object".to_string());
-            }
-            super::principal_serde::validate_json_bytes(principal.get().as_bytes())
-                .map_err(|e| e.to_string())?;
-        }
-        "2" => {}
-        _ => return Err("multipart version must be integer 1 or 2".to_string()),
+    if envelope.version.get() != "2" {
+        return Err("multipart version must be integer 2".to_string());
     }
     let state = envelope.state.get().as_bytes().to_vec();
     let mut user_parts = BTreeMap::new();
@@ -517,7 +490,7 @@ mod tests {
 
     #[test]
     fn multipart_rejects_malformed_framing_metadata_names_and_namespaces() {
-        let envelope = r#"{"version":1,"principal":{"tag":"anonymous"},"state":null}"#;
+        let envelope = r#"{"version":2,"state":null}"#;
         let wrap = |state: &str, extra: &str| {
             format!(
                 "--b\r\nContent-Type: application/json\r\nContent-Disposition: attachment; name=\"state\"\r\n\r\n{state}\r\n{extra}--b--\r\n"
@@ -527,13 +500,6 @@ mod tests {
         assert!(decode(valid.as_bytes(), "multipart/mixed; boundary=b").is_ok());
         assert!(
             decode(
-                wrap(r#"{"version":2,"state":null}"#, "").as_bytes(),
-                "multipart/mixed; boundary=b"
-            )
-            .is_ok()
-        );
-        assert!(
-            decode(
                 wrap(&envelope.replace("null", "[17,null]"), "").as_bytes(),
                 "multipart/mixed; boundary=b"
             )
@@ -541,20 +507,14 @@ mod tests {
         );
         for state in [
             r#"[1,{"tag":"anonymous"},null]"#.to_string(),
-            r#"{"version":1,"principal":["anonymous",null],"state":null}"#.to_string(),
-            r#"{"version":1,"principal":{"tag":"agent","val":["10203040-5060-7080-9012-3456789abcde","worker(7)"]},"state":null}"#.to_string(),
-            r#"{"version":1,"principal":{"tag":"golem-user","val":["fedcba98-7654-3210-9876-543210abcdef"]},"state":null}"#.to_string(),
-            r#"{"version":1,"principal":{"tag":"oidc","val":["subject","issuer",null,null,null,null,null,null,null,"{}"]},"state":null}"#.to_string(),
+            // The 1.6 envelope is an unknown version.
+            r#"{"version":1,"principal":{"tag":"anonymous"},"state":null}"#.to_string(),
             r#"{"version":1,"state":null}"#.to_string(),
             r#"{"version":3,"state":null}"#.to_string(),
             r#"{"version":2,"state":null,"state":null}"#.to_string(),
-            envelope.replace("\"version\":1", "\"version\":1,\"version\":1"),
-            envelope.replace("\"version\":1", "\"version\":1.0"),
-            envelope.replace("\"version\":1", "\"version\":1e0"),
-            envelope.replace(
-                "\"tag\":\"anonymous\"",
-                "\"tag\":\"anonymous\",\"tag\":\"anonymous\"",
-            ),
+            envelope.replace("\"version\":2", "\"version\":2,\"version\":2"),
+            envelope.replace("\"version\":2", "\"version\":2.0"),
+            envelope.replace("\"version\":2", "\"version\":2e0"),
         ] {
             assert!(decode(wrap(&state, "").as_bytes(), "multipart/mixed; boundary=b").is_err());
         }

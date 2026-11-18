@@ -460,9 +460,7 @@ describe('agent metadata (Phase 3)', () => {
     (globalThis as { currentAgentId?: string }).currentAgentId =
       `AtomicSnapshotRestore(${JSON.stringify(schemaValueToWit(idValue))})`;
     const envelope = (state: object) => ({
-      payload: new TextEncoder().encode(
-        JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state, fileDatabases: {} }),
-      ),
+      payload: new TextEncoder().encode(JSON.stringify({ version: 2, state, fileDatabases: {} })),
       mimeType: 'application/json',
     });
 
@@ -513,19 +511,21 @@ describe('agent metadata (Phase 3)', () => {
       mimeType: 'application/json',
     });
     const invalidJsonEnvelopes: Array<[object, string]> = [
-      [{ principal: { tag: 'anonymous' }, state: {} }, "missing 'version' field"],
-      [{ version: 3, state: {} }, 'version must be 1 or 2'],
+      [{ state: {} }, "missing 'version' field"],
+      [{ version: 3, state: {} }, 'version must be 2'],
+      // The 1.6 envelope is an unknown version.
+      [
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: {} },
+        'version must be 2',
+      ],
       [{ version: 2 }, "missing 'state' field"],
       [{ version: 2, state: {} }, "missing 'fileDatabases' field"],
-      [{ version: 1, state: {} }, "missing 'principal' field"],
-      [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
-      [{ version: 1, principal: { tag: 'anonymous' }, state: {} }, "missing 'fileDatabases' field"],
       [
-        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: { db: 1 } },
+        { version: 2, state: {}, fileDatabases: { db: 1 } },
         "'fileDatabases' must map field names to locations",
       ],
       [
-        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: ['db'] },
+        { version: 2, state: {}, fileDatabases: ['db'] },
         "'fileDatabases' must map field names to locations",
       ],
     ];
@@ -539,9 +539,7 @@ describe('agent metadata (Phase 3)', () => {
       {
         name: 'state',
         contentType: 'application/json',
-        body: new TextEncoder().encode(
-          JSON.stringify({ principal: { tag: 'anonymous' }, state: {} }),
-        ),
+        body: new TextEncoder().encode(JSON.stringify({ state: {} })),
       },
     ]);
     await expect(
@@ -557,18 +555,12 @@ describe('agent metadata (Phase 3)', () => {
         mimeType: 'application/octet-stream',
       }),
     ).rejects.toContain('Snapshot is empty');
-    await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array([2, 0, 0, 0]),
-        mimeType: 'application/octet-stream',
-      }),
-    ).rejects.toContain('too short for principal length');
-    await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array([2, 0, 0, 0, 2, 123]),
-        mimeType: 'application/octet-stream',
-      }),
-    ).rejects.toContain('too short for principal data');
+    // The 1.6 binary envelopes (versions 1 and 2) are unknown versions.
+    for (const payload of [new Uint8Array([2, 0, 0, 0, 2, 123, 125, 5]), new Uint8Array([1, 5])]) {
+      await expect(
+        isolatedGuest.loadSnapshot.load({ payload, mimeType: 'application/octet-stream' }),
+      ).rejects.toContain(`Unsupported snapshot version ${payload[0]}`);
+    }
   });
 
   it('attributes deferred implementation failures to the agent definition name', async () => {

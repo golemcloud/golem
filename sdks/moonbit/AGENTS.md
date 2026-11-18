@@ -96,8 +96,7 @@ sdks/moonbit/
 │   ├── agents/                        # Agent registry + dispatch runtime
 │   │   ├── agents.mbt                # AgentState, RegisteredAgent, RawAgent/Snapshottable traits, register_agent
 │   │   ├── agent_type.mbt            # AgentTypeDef/Method/Constructor/Config defs -> @common.AgentType
-│   │   ├── dispatch.mbt              # encode/decode invocation input/output via @schema
-│   │   └── legacy_principal.mbt      # validates and drops the 1.6 snapshot principal
+│   │   └── dispatch.mbt              # encode/decode invocation input/output via @schema
 │   ├── caller/                        # Caller, Principal, PrincipalRef, TokenProvenance, InvocationContext
 │   ├── config/                        # Code-first configuration (Config[T], Secret[T])
 │   ├── errors/                        # AgentError construction/decoding helpers

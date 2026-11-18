@@ -17,7 +17,7 @@
 package golem.runtime.guest
 
 import golem.host.{SchemaWireInterop, ToolWireInterop}
-import golem.host.js.{JsSnapshot, LegacySnapshotPrincipal}
+import golem.host.js.JsSnapshot
 import golem.host.js.schema.{
   JsAgentError,
   JsMetadataEnvelope,
@@ -143,7 +143,10 @@ object Guest {
     !js.isUndefined(typed) && typed != null && holdsStream(typed.selectDynamic("value"))
   }
 
-  /** Whether an encoded value tree holds a stream, whose producer runs after the call returns. */
+  /**
+   * Whether an encoded value tree holds a stream, whose producer runs after the
+   * call returns.
+   */
   private[runtime] def holdsStream(tree: js.Any): Boolean =
     !js.isUndefined(tree) && tree != null && {
       val nodes = tree.asInstanceOf[js.Dynamic].selectDynamic("valueNodes")
@@ -449,16 +452,12 @@ object Guest {
       }
   }
 
-  /**
-   * The binary snapshot version that 2.0 writes. Versions 1 and 2 are the 1.6
-   * forms.
-   */
+  /** The binary snapshot version. Any other version byte is refused. */
   private val BinarySnapshotVersion = 3
 
   /**
-   * Reads a snapshot envelope. The 2.0 forms and the 1.6 forms (JSON v1,
-   * multipart v1, binary v1 and v2) are accepted; the principal of a 1.6
-   * envelope is checked and then dropped.
+   * Reads a snapshot envelope: JSON and multipart version 2, binary version 3.
+   * Any other version is refused.
    */
   private[runtime] def decodeSnapshotPayload(
     bytes: Array[Byte],
@@ -471,26 +470,12 @@ object Guest {
         case Left(error)     => Left(s"Failed to parse JSON snapshot envelope: $error")
         case Right(envelope) =>
           envelope.get("version").one.toOption match {
-            case None                                                          => Left("JSON snapshot envelope is missing 'version'")
-            case Some(version) if version.print != "1" && version.print != "2" =>
-              Left(s"Unsupported JSON snapshot version: ${version.print}")
-            case Some(version) =>
-              val legacyPrincipal: Either[String, Unit] =
-                if (version.print == "1")
-                  envelope.get("principal").one.toOption match {
-                    case None                => Left("JSON snapshot envelope is missing 'principal'")
-                    case Some(principalJson) =>
-                      LegacySnapshotPrincipal
-                        .check(principalJson.printBytes)
-                        .left
-                        .map(error => s"Failed to deserialize snapshot principal: $error")
-                  }
-                else Right(())
-              legacyPrincipal.flatMap { _ =>
-                envelope.get("state").one.toOption match {
-                  case None        => Left("JSON snapshot envelope is missing 'state'")
-                  case Some(state) => Right(SnapshotPayload(state.printBytes, "application/json"))
-                }
+            case None                                  => Left("JSON snapshot envelope is missing 'version'")
+            case Some(version) if version.print != "2" => Left(s"Unsupported JSON snapshot version: ${version.print}")
+            case Some(_)                               =>
+              envelope.get("state").one.toOption match {
+                case None        => Left("JSON snapshot envelope is missing 'state'")
+                case Some(state) => Right(SnapshotPayload(state.printBytes, "application/json"))
               }
           }
       }
@@ -498,28 +483,8 @@ object Guest {
       Left("Binary snapshot envelope is empty")
     } else {
       val version = bytes(0) & 0xff
-      version match {
-        case 1                     => Right(SnapshotPayload(bytes.drop(1), "application/octet-stream"))
-        case BinarySnapshotVersion => Right(SnapshotPayload(bytes.drop(1), "application/octet-stream"))
-        case 2                     =>
-          if (bytes.length < 5) Left("Version 2 snapshot too short for principal length")
-          else {
-            val principalLen =
-              ((bytes(1) & 0xff) << 24) | ((bytes(2) & 0xff) << 16) |
-                ((bytes(3) & 0xff) << 8) | (bytes(4) & 0xff)
-            if (principalLen < 0 || principalLen > bytes.length - 5)
-              Left("Version 2 snapshot too short for principal data")
-            else {
-              val principalEnd   = 5 + principalLen
-              val principalBytes = java.util.Arrays.copyOfRange(bytes, 5, principalEnd)
-              LegacySnapshotPrincipal.check(principalBytes) match {
-                case Left(error) => Left(s"Failed to deserialize snapshot principal: $error")
-                case Right(_)    => Right(SnapshotPayload(bytes.drop(principalEnd), "application/octet-stream"))
-              }
-            }
-          }
-        case other => Left(s"Unsupported snapshot version: $other")
-      }
+      if (version == BinarySnapshotVersion) Right(SnapshotPayload(bytes.drop(1), "application/octet-stream"))
+      else Left(s"Unsupported snapshot version: $version")
     }
 
   object LoadSnapshot {

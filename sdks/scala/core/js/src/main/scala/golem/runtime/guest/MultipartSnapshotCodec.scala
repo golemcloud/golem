@@ -16,7 +16,6 @@
 
 package golem.runtime.guest
 
-import golem.host.js.LegacySnapshotPrincipal
 import golem.runtime.{MultipartSnapshot, SnapshotError, SnapshotPart, SnapshotPayload}
 import zio.blocks.schema.json.Json
 
@@ -206,29 +205,7 @@ private[runtime] object MultipartSnapshotCodec {
       val envelope = objectFields(checked(Json.parse(statePart.bytes)))
       ensure(envelope.contains("version") && envelope.contains("state"), "Incomplete envelope")
       val version = versionToken(text.trim)
-      ensure(version == "1" || version == "2", "Multipart version must be integer 1 or 2")
-      if (version == "1") {
-        // A 1.6 envelope: its principal is checked as before and then dropped.
-        ensure(envelope.contains("principal"), "Incomplete envelope")
-        val principal = envelope("principal")
-        val metadata  = objectFields(principal)
-        if (metadata.get("tag") != Some(Json.String("anonymous"))) {
-          val value = objectFields(metadata.getOrElse("val", throw SnapshotError("Missing principal payload")))
-          if (metadata.get("tag") == Some(Json.String("oidc"))) {
-            Set("email", "name", "givenName", "familyName", "picture", "preferredUsername").foreach { key =>
-              ensure(
-                value.get(key).forall(v => v == Json.Null || v.isInstanceOf[Json.String]),
-                "Invalid principal optional string"
-              )
-            }
-            ensure(
-              value.get("emailVerified").forall(v => v == Json.Null || v.isInstanceOf[Json.Boolean]),
-              "Invalid principal optional boolean"
-            )
-          }
-        }
-        checked(LegacySnapshotPrincipal.check(principal.printBytes))
-      }
+      ensure(version == "2", "Multipart version must be integer 2")
       val userParts = parts
         .filterNot(_._1 == "state")
         .map { case (wireName, part) =>

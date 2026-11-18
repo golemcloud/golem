@@ -74,8 +74,8 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
   private def wire(state: String, extra: String = ""): Array[Byte] =
     s"--b\r\nContent-Type: application/json\r\nContent-Disposition: attachment; name=\"state\"\r\n\r\n$state\r\n$extra--b--\r\n"
       .getBytes("UTF-8")
-  private val envelope   = """{"version":1,"principal":{"tag":"anonymous"},"state":null}"""
-  private val envelopeV2 = """{"version":2,"state":null}"""
+  private val envelope       = """{"version":2,"state":null}"""
+  private val legacyEnvelope = """{"version":1,"principal":{"tag":"anonymous"},"state":null}"""
 
   /** The text of the `state` part of an encoded envelope. */
   private def restoredEnvelope(encoded: SnapshotPayload): Array[Byte] = {
@@ -138,14 +138,14 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
         MultipartSnapshotCodec.decode(empty.bytes, empty.mimeType).exists(_.state == Json.Null)
       )
     },
-    test("reads the 2.0 envelope and the 1.6 envelope; any other version is refused") {
+    test("reads the 2.0 envelope; the 1.6 envelope and any other version are refused") {
       def decode(text: String) = MultipartSnapshotCodec.decode(wire(text), "multipart/mixed; boundary=b")
       assertTrue(
-        decode(envelopeV2).isRight,
         decode(envelope).isRight,
-        decode(envelopeV2.replace("\"version\":2", "\"version\":3")).isLeft,
-        decode(envelopeV2.replace("\"version\":2", "\"version\":2.0")).isLeft,
-        decode(envelopeV2.replace("\"version\":2", "\"version\":2,\"version\":2")).isLeft,
+        decode(legacyEnvelope).isLeft,
+        decode(envelope.replace("\"version\":2", "\"version\":3")).isLeft,
+        decode(envelope.replace("\"version\":2", "\"version\":2.0")).isLeft,
+        decode(envelope.replace("\"version\":2", "\"version\":2,\"version\":2")).isLeft,
         decode("""{"version":1,"state":null}""").isLeft
       )
     },
@@ -163,10 +163,10 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
     test("rejects malformed metadata, namespaces, MIME and framing without restricting application state") {
       val badMetadata = Vector(
         """[1,{"tag":"anonymous"},null]""",
-        envelope.replace("\"version\":1", "\"version\":1.0"),
-        envelope.replace("\"version\":1", "\"version\":1e0"),
-        envelope.replace("\"version\":1", "\"version\":1,\"version\":1"),
-        envelope.replace("\"tag\":\"anonymous\"", "\"tag\":\"anonymous\",\"tag\":\"anonymous\""),
+        envelope.replace("\"version\":2", "\"version\":2.0"),
+        envelope.replace("\"version\":2", "\"version\":2e0"),
+        envelope.replace("\"version\":2", "\"version\":2,\"version\":2"),
+        legacyEnvelope,
         """{"version":1,"principal":["anonymous"],"state":null}""",
         """{"version":1,"principal":{"tag":"oidc","val":{"sub":"s","issuer":"i","claims":"{}","email":7}},"state":null}""",
         """{"version":1,"principal":{"tag":"agent","val":{"componentId":"10203040-5060-7080-9012-3456789abcde","agentId":"x","agentId":"y"}},"state":null}"""
@@ -188,7 +188,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
           .getBytes("UTF-8")
       )
       val ordered =
-        """{"state":{"version":1e0,"text":"escaped \"version\":9"},"principal":{"tag":"anonymous"},"\u0076ersion":1}"""
+        """{"state":{"version":1e0,"text":"escaped \"version\":9"},"\u0076ersion":2}"""
       assertTrue(
         badMetadata.forall(s => MultipartSnapshotCodec.decode(wire(s), "multipart/mixed; boundary=b").isLeft),
         badWire.forall(b => MultipartSnapshotCodec.decode(b, "multipart/mixed; boundary=b").isLeft),
@@ -259,7 +259,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
                            Guest.LoadSnapshot.load(
                              jsSnapshot(
                                SnapshotPayload(
-                                 wire(envelope.replace("\"version\":1", "\"version\":1e0")),
+                                 wire(envelope.replace("\"version\":2", "\"version\":2e0")),
                                  "multipart/mixed; boundary=b"
                                )
                              )

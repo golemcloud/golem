@@ -253,7 +253,7 @@ func TestOnRestoreTwiceIsADefinitionError(t *testing.T) {
 	})
 }
 
-func TestSnapshotEnvelopeHasNoPrincipalAndEveryLegacyVersionStillLoads(t *testing.T) {
+func TestSnapshotEnvelopeHasNoPrincipalAndOnlyTheCurrentVersionsLoad(t *testing.T) {
 	type State struct{ Total int64 }
 	snap, err := saveState(&State{Total: 7})
 	if err != nil {
@@ -270,23 +270,14 @@ func TestSnapshotEnvelopeHasNoPrincipalAndEveryLegacyVersionStillLoads(t *testin
 		t.Errorf("raw envelope %v", raw.Payload)
 	}
 
-	legacyJSON := host.Snapshot{Payload: []byte(`{"version":1,"principal":{"oidc":{"sub":"s","issuer":"i","claims":"{}"}},"state":{"Total":9}}`), MimeType: snapshotJSONMIME}
-	state, err := splitSnapshot(legacyJSON)
-	if err != nil || string(state.Payload) != `{"Total":9}` {
-		t.Errorf("1.6 JSON: %v %s", err, state.Payload)
-	}
-	legacyRaw := host.Snapshot{Payload: append([]byte{2, 0, 0, 0, 2}, append([]byte("{}"), 5)...), MimeType: snapshotRawMIME}
-	state, err = splitSnapshot(legacyRaw)
-	if err != nil || len(state.Payload) != 1 || state.Payload[0] != 5 {
-		t.Errorf("1.6 raw v2: %v %v", err, state.Payload)
-	}
-	// Binary version 1 (state only) was never written by this SDK.
-	if _, err := splitSnapshot(host.Snapshot{Payload: []byte{1, 5}, MimeType: snapshotRawMIME}); err == nil {
-		t.Error("binary v1 was accepted")
-	}
-	// A malformed 1.6 principal still fails the load.
-	bad := host.Snapshot{Payload: []byte(`{"version":1,"principal":[1],"state":null}`), MimeType: snapshotJSONMIME}
-	if _, err := splitSnapshot(bad); err == nil {
-		t.Error("a malformed 1.6 principal was accepted")
+	// The envelopes of the 1.6 SDK and binary version 1 are unknown versions.
+	for name, refused := range map[string]host.Snapshot{
+		"1.6 JSON":  {Payload: []byte(`{"version":1,"principal":{"oidc":{"sub":"s","issuer":"i","claims":"{}"}},"state":{"Total":9}}`), MimeType: snapshotJSONMIME},
+		"1.6 raw":   {Payload: append([]byte{2, 0, 0, 0, 2}, append([]byte("{}"), 5)...), MimeType: snapshotRawMIME},
+		"binary v1": {Payload: []byte{1, 5}, MimeType: snapshotRawMIME},
+	} {
+		if state, err := splitSnapshot(refused); err == nil {
+			t.Errorf("%s was accepted: %v", name, state.Payload)
+		}
 	}
 }

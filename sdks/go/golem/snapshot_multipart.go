@@ -354,8 +354,7 @@ func encodeMultipart(snap MultipartSnapshot) ([]byte, string, error) {
 
 var errInvalidMultipart = errors.New("golem: invalid multipart snapshot")
 
-// decodeMultipart reads a multipart snapshot, in the 2.0 form or in the 1.6
-// form (whose principal it checks and drops).
+// decodeMultipart reads a multipart snapshot.
 func decodeMultipart(data []byte, mime string) (MultipartSnapshot, error) {
 	boundary, ok := extractBoundary(mime)
 	if !ok {
@@ -373,23 +372,11 @@ func decodeMultipart(data []byte, mime string) (MultipartSnapshot, error) {
 	if err != nil {
 		return MultipartSnapshot{}, fmt.Errorf("golem: the multipart envelope: %w", err)
 	}
-	switch string(envelope["version"]) {
-	case "2":
-		if envelope["state"] == nil {
-			return MultipartSnapshot{}, errors.New("golem: the multipart envelope needs a state")
-		}
-	case "1":
-		if envelope["principal"] == nil || envelope["state"] == nil {
-			return MultipartSnapshot{}, errors.New("golem: the multipart envelope needs version 1, a principal and a state")
-		}
-		if _, err := uniqueObjectFields(envelope["principal"]); err != nil {
-			return MultipartSnapshot{}, fmt.Errorf("golem: the multipart principal: %w", err)
-		}
-		if err := validateLegacyPrincipal(envelope["principal"]); err != nil {
-			return MultipartSnapshot{}, err
-		}
-	default:
-		return MultipartSnapshot{}, errors.New("golem: the multipart envelope needs version 1 or 2")
+	if string(envelope["version"]) != "2" {
+		return MultipartSnapshot{}, errors.New("golem: the multipart envelope needs version 2")
+	}
+	if envelope["state"] == nil {
+		return MultipartSnapshot{}, errors.New("golem: the multipart envelope needs a state")
 	}
 	snap := MultipartSnapshot{State: envelope["state"], Parts: map[string]SnapshotPart{}}
 	for _, p := range parts {

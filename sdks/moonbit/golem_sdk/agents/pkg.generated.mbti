@@ -64,13 +64,8 @@ pub async fn restore_and_set_instance(String, SnapshotData, SnapshotRestoreConte
 
 pub fn set_agent_instance(AgentInstance) -> Unit
 
-pub fn validate_legacy_principal_json(Json) -> Unit raise JsonCodecError
 
 // Errors
-pub suberror JsonCodecError {
-  JsonCodecError(String)
-} derive(@debug.Debug)
-pub fn JsonCodecError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
 pub(all) struct AgentConfigDef {

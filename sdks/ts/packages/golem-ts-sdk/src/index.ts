@@ -30,7 +30,6 @@ import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseS
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { currentInvocationContext, type EndableInvocationContext } from './caller';
-import { validateLegacySnapshotPrincipal } from './internal/legacySnapshotPrincipal';
 import {
   encodeDeclaredToolErrorPayload,
   encodeToolValueAsync,
@@ -780,7 +779,7 @@ function getDefinition(): AgentType {
   return initializedAgent.agent.getAgentType();
 }
 
-/** The binary snapshot version that 2.0 writes. Versions 1 and 2 are the 1.6 forms. */
+/** The binary snapshot version. Any other version byte is refused. */
 const BINARY_SNAPSHOT_VERSION = 3;
 
 async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
@@ -869,13 +868,8 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
           const keys = objects[objects.length - 1]!;
           if (keys.has(key)) throw new SnapshotError(`duplicate JSON key '${key}'`);
           keys.add(key);
-          if (
-            objects.length === 1 &&
-            key === 'version' &&
-            tokens[i + 2] !== '1' &&
-            tokens[i + 2] !== '2'
-          ) {
-            throw new SnapshotError('multipart version must be integer 1 or 2');
+          if (objects.length === 1 && key === 'version' && tokens[i + 2] !== '2') {
+            throw new SnapshotError('multipart version must be integer 2');
           }
         }
       }
@@ -886,15 +880,8 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     if (!Object.hasOwn(envelope, 'version')) {
       throw `${description} missing 'version' field`;
     }
-    if (envelope.version !== 1 && envelope.version !== 2) {
-      throw `${description} version must be 1 or 2`;
-    }
-    if (envelope.version === 1) {
-      // A 1.6 envelope: its principal is checked as before and then dropped.
-      if (!Object.hasOwn(envelope, 'principal')) {
-        throw `${description} missing 'principal' field`;
-      }
-      validateLegacySnapshotPrincipal(envelope.principal, strict);
+    if (envelope.version !== 2) {
+      throw `${description} version must be 2`;
     }
     if (!Object.hasOwn(envelope, 'state')) {
       throw `${description} missing 'state' field`;
@@ -951,23 +938,10 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const version = view.getUint8(0);
 
-    if (version === 1 || version === BINARY_SNAPSHOT_VERSION) {
-      agentSnapshot = bytes.slice(1);
-    } else if (version === 2) {
-      if (bytes.byteLength < 5) {
-        throw `Version 2 snapshot too short for principal length`;
-      }
-      const principalLen = view.getUint32(1, false); // big-endian
-      if (principalLen > bytes.byteLength - 5) {
-        throw `Version 2 snapshot too short for principal data`;
-      }
-      // A 1.6 envelope: its principal is checked as before and then dropped.
-      const principalBytes = bytes.slice(5, 5 + principalLen);
-      validateLegacySnapshotPrincipal(JSON.parse(new TextDecoder().decode(principalBytes)));
-      agentSnapshot = bytes.slice(5 + principalLen);
-    } else {
+    if (version !== BINARY_SNAPSHOT_VERSION) {
       throw `Unsupported snapshot version ${version}`;
     }
+    agentSnapshot = bytes.slice(1);
   }
 
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
