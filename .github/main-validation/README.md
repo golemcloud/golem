@@ -123,8 +123,10 @@ Preparation runs `main-validation-js-guests` after TypeScript and Effect SDK
 validation. It uses their fresh local guest templates and the general native
 producer's metadata to run the in-process `golem-js-guest-tests` crate, which
 does not depend on the CLI.
-Missing guests or failed smoke tests fail preparation. SDK Vitest suites check
-the committed bundles and maps; see `test-components/js-bundle-fixtures/README.md`.
+The task first runs `prepare-js-guest-tests` to bundle current SDK fixture sources
+into the Cargo target directory. Bundles and maps are build outputs, not committed
+snapshots or byte-exact drift gates. Missing guests, failed bundling or failed smoke
+tests fail preparation; see `golem-js-guest-tests/README.md`.
 
 Executor snapshots use ordinary copies, not links. Dependency checks reject
 unresolved libraries and libraries from the mutable Cargo target, and require

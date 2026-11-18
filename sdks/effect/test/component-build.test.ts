@@ -21,7 +21,7 @@ import { __setEnvironment } from "./mocks/wasi-cli-environment.js"
 import { componentConfiguration } from "../build/component.mjs"
 import config from "../vitest.config.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
-import { checkBundleFixtures } from "../../javascript/js-bundle-fixtures.mjs"
+import { bundleSourcePath, writeBundleFixture } from "../../javascript/js-bundle-fixtures.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdk = resolve(root, "dist/component")
@@ -134,14 +134,16 @@ const build = async (fixture: string, execute = true, outputOptions: OutputOptio
   }
 }
 
-it("checks JS guest bundle fixtures", async () => {
+it("builds JS guest bundle fixtures", async () => {
   const { chunk } = await build("js-guest-smoke", false, {
     format: "es",
-    file: resolve(root, "../../test-components/js-bundle-fixtures/effect/smoke.mjs"),
+    file: resolve(process.env.GOLEM_JS_GUEST_BUNDLE_DIR ?? root, "effect/smoke/smoke.mjs"),
     sourcemap: true,
-    sourcemapPathTransform: (source) => source.replaceAll("\\", "/"),
+    sourcemapPathTransform: bundleSourcePath,
   })
-  checkBundleFixtures("effect", {
+  expect(chunk.code).toContain("JsGuestSmoke")
+  expect(chunk.map).not.toBeNull()
+  writeBundleFixture("effect", "smoke", {
     "smoke.mjs": chunk.code,
     "smoke.mjs.map": chunk.map!.toString() + "\n",
   })

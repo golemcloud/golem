@@ -12,6 +12,8 @@ extend = [{ path = "Makefile.sdk-validation.toml" }, { path = "Makefile.main-val
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make unit-tests`: runs unit tests only
+# - `cargo make js-guest-tests`: bundles fresh SDK fixture sources and runs process-free JS guest tests; see golem-js-guest-tests/README.md
+# - `cargo make prepare-js-guest-tests`: prepares only the JS bundles for native test iteration
 # - `cargo make worker-executor-tests`: runs worker executor tests only
 # - `cargo make worker-executor-tests-ignite-service`: runs ignite service tests only (requires GOLEM_IGNITE_URL)
 # - `cargo make integration-tests`: runs integration tests only
@@ -676,28 +678,27 @@ args = [
 ## ** TEST **
 
 [tasks.js-guest-tests]
-description = "Runs in-process JS guest tests on prebuilt TS and Effect templates"
+description = "Bundles fresh inputs and runs in-process JS guest tests on prebuilt SDK templates"
+dependencies = ["prepare-js-guest-tests"]
+env = { GOLEM_JS_GUEST_BUNDLE_DIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/js-guest-bundles" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-js-guest-tests --test js-guest -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
-[tasks.check-js-bundle-fixtures]
-description = "Checks committed JS bundles against the SDK component bundlers"
+[tasks.prepare-js-guest-tests]
+description = "Bundles current SDK fixture sources into ignored native test inputs"
+env = { GOLEM_JS_GUEST_BUNDLE_DIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/js-guest-bundles" }
 script_runner = "@duckscript"
 script = '''
 root = pwd
+rm -r ${GOLEM_JS_GUEST_BUNDLE_DIR}
 cd sdks/ts
 exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk run build
-exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk exec vitest run tests/component-bundle.test.mjs -t "checks JS guest bundle fixtures"
+exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk exec vitest run tests/component-bundle.test.mjs -t "builds JS guest bundle fixtures"
 cd ${root}/sdks/effect
-exec --fail-on-error npm exec -- vitest run test/component-build.test.ts -t "checks JS guest bundle fixtures"
+exec --fail-on-error npm exec -- vitest run test/component-build.test.ts -t "builds JS guest bundle fixtures"
 '''
-
-[tasks.generate-js-bundle-fixtures]
-description = "Updates committed JS bundles and source maps from SDK fixture sources"
-env = { GOLEM_UPDATE_JS_BUNDLES = "1" }
-run_task = "check-js-bundle-fixtures"
 
 [tasks.test]
 description = "Runs all unit tests, worker executor tests and integration tests"

@@ -4,7 +4,7 @@
 use anyhow::{Context, ensure};
 use camino::Utf8Path;
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use test_r::{test, timeout};
 
 test_r::enable!();
@@ -21,8 +21,12 @@ async fn smoke_test(guest: &Path, bundle: &Path, expected: &str) -> anyhow::Resu
         "Empty JS guest: {}",
         guest.display()
     );
-    let source = std::fs::read_to_string(bundle)
-        .with_context(|| format!("Failed to read JS bundle {}", bundle.display()))?;
+    let source = std::fs::read_to_string(bundle).with_context(|| {
+        format!(
+            "Failed to read JS bundle {}; run cargo make prepare-js-guest-tests",
+            bundle.display()
+        )
+    })?;
     let directory = tempfile::tempdir()?;
     let injected = directory.path().join("injected.wasm");
     let initialized = directory.path().join("initialized.wasm");
@@ -31,13 +35,9 @@ async fn smoke_test(guest: &Path, bundle: &Path, expected: &str) -> anyhow::Resu
         Utf8Path::from_path(&injected).context("Non-UTF-8 temporary path")?,
         &[&source],
     )?;
-    wasm_rquickjs::optimize_component_with_options(
+    golem_common::javascript::preinitialize_js(
         Utf8Path::from_path(&injected).context("Non-UTF-8 temporary path")?,
         Utf8Path::from_path(&initialized).context("Non-UTF-8 temporary path")?,
-        "wizer-initialize",
-        &wasm_rquickjs::OptimizeOptions {
-            hostcall_fuel: Some(512 * 1024 * 1024),
-        },
     )
     .await?;
 
@@ -49,13 +49,20 @@ async fn smoke_test(guest: &Path, bundle: &Path, expected: &str) -> anyhow::Resu
     Ok(())
 }
 
+fn bundle(sdk: &str) -> anyhow::Result<PathBuf> {
+    let directory = std::env::var_os("GOLEM_JS_GUEST_BUNDLE_DIR").context(
+        "GOLEM_JS_GUEST_BUNDLE_DIR is unset; run cargo make js-guest-tests to prepare and test fresh bundles",
+    )?;
+    Ok(PathBuf::from(directory).join(sdk).join("smoke/smoke.mjs"))
+}
+
 #[test]
 #[timeout("120s")]
 async fn typescript_guest() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     smoke_test(
         &root.join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
-        &root.join("test-components/js-bundle-fixtures/ts/smoke.mjs"),
+        &bundle("ts")?,
         "TS initialized value: 41, clock: 0",
     )
     .await
@@ -67,7 +74,7 @@ async fn effect_guest() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     smoke_test(
         &root.join("sdks/effect/wasm/agent_guest.wasm"),
-        &root.join("test-components/js-bundle-fixtures/effect/smoke.mjs"),
+        &bundle("effect")?,
         "Effect initialized value: 29, clock: 0",
     )
     .await
