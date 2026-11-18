@@ -14,6 +14,7 @@
 
 use super::spans::{decode_public_span_data, encode_public_span_data};
 use crate::base_model::OplogIndex;
+use crate::model::AgentInvocationResult;
 use crate::model::invocation_context::TraceId;
 use crate::model::oplog::payload::types::{
     SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
@@ -33,7 +34,7 @@ use crate::model::oplog::{
     SaveSnapshotResultParameters,
 };
 use crate::model::quota::ResourceName;
-use crate::model::{AgentInvocationResult, Empty};
+use golem_schema::Empty;
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
     type Error = String;

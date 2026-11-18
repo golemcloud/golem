@@ -147,9 +147,11 @@ gh run list --repo golemcloud/golem --workflow prepare-golem-release.yaml
 gh run watch <run-id> --repo golemcloud/golem --exit-status
 ```
 
-`.github/workflows/prepare-golem-release.yaml` validates source and tag, then runs
-full reusable CI preflight. It checks published shared crates and all six published
-SDKs, without local SDK overrides, including streaming template walkthroughs.
+`.github/workflows/prepare-golem-release.yaml` validates source and tag. It runs full reusable CI preflight while `MAIN_VALIDATION_RELEASE_GATE_ENABLED` is unset or not `true`. The schedule has a separate flag, `MAIN_VALIDATION_ENABLED`. Keep both inactive until their acceptance and coordinated cutover.
+
+After activation, open an issue with the `main-validation-request` label and a JSON body containing the exact tag commit as `source` and the public Golem tag as `release_tag`. Wait for the latest `Main validation` status from `github-actions[bot]` on that exact commit to succeed before dispatching preparation. Acceptance runs use `Main validation (acceptance)` and cannot satisfy this gate. A missing, failed or pending result stops preparation; it does not dispatch validation or fall back to full CI. Release-only shared-crate, built-in and published-SDK checks still run on their own Blacksmith runner and rebuild their local binaries. They do not join the validation concurrency group.
+
+Both paths check all six published SDKs without local overrides, including streaming template walkthroughs.
 Only after preflight does the protected `golem-release` job create or resume the
 draft, rebuild and package all eight inventory entries before any built-in upload,
 then publish them and upload the verified `builtin-artifacts.release.json`.

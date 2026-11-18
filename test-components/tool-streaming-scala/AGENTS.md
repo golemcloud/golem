@@ -1,7 +1,9 @@
 # Scala tool-streaming test component
 
-This application owns the Scala provider/caller fixture used by the worker executor tool-streaming
-tests. It depends on the `0.0.0-SNAPSHOT` Scala SDK published from `../../sdks/scala`.
+This application owns the Scala fixtures used by the worker executor tests: the tool-streaming
+provider/caller, the permission-card agents, and the `ScalaCustomDurability` agent used by
+`custom_durability_scala.rs`. It depends on the `0.0.0-SNAPSHOT` Scala SDK published from
+`../../sdks/scala`.
 
 Build and copy the release artifact through the shared test-component build infrastructure with:
 

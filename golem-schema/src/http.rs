@@ -1,15 +1,174 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1 (https://license.golem.cloud/LICENSE).
 
-//! Shared HTTP path and file-mapping grammar for metadata producers and consumers.
+//! Shared HTTP route metadata and path/file-mapping grammar.
 
+use crate::Empty;
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[cfg(feature = "protobuf")]
 mod protobuf;
 #[cfg(any(feature = "host", feature = "guest"))]
 pub mod wit;
+
+#[cfg(test)]
+mod tests;
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum HttpMethod {
+    Get(Empty),
+    Head(Empty),
+    Post(Empty),
+    Put(Empty),
+    Delete(Empty),
+    Connect(Empty),
+    Options(Empty),
+    Trace(Empty),
+    Patch(Empty),
+    Custom(CustomHttpMethod),
+}
+
+#[cfg(feature = "full")]
+impl TryFrom<HttpMethod> for http::Method {
+    type Error = http::method::InvalidMethod;
+
+    fn try_from(value: HttpMethod) -> Result<Self, Self::Error> {
+        Ok(match value {
+            HttpMethod::Get(_) => http::Method::GET,
+            HttpMethod::Head(_) => http::Method::HEAD,
+            HttpMethod::Post(_) => http::Method::POST,
+            HttpMethod::Put(_) => http::Method::PUT,
+            HttpMethod::Delete(_) => http::Method::DELETE,
+            HttpMethod::Connect(_) => http::Method::CONNECT,
+            HttpMethod::Options(_) => http::Method::OPTIONS,
+            HttpMethod::Trace(_) => http::Method::TRACE,
+            HttpMethod::Patch(_) => http::Method::PATCH,
+            HttpMethod::Custom(value) => http::Method::from_bytes(value.value.as_bytes())?,
+        })
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct CustomHttpMethod {
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum PathSegment {
+    Literal(LiteralSegment),
+    PathVariable(PathVariable),
+    RemainingPathVariable(PathVariable),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct LiteralSegment {
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PathVariable {
+    pub variable_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct HeaderVariable {
+    pub header_name: String,
+    pub variable_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct QueryVariable {
+    pub query_param_name: String,
+    pub variable_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct FileResponseHeader {
+    pub name: String,
+    pub value: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
@@ -109,16 +268,43 @@ pub struct DurableStreamRouteLoadOptions {
     pub max_append_requests_per_second_per_stream: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
 pub enum FileMapping {
-    Exact {
-        public_path: Vec<String>,
-        file_path: String,
-    },
-    Subtree {
-        public_prefix: Vec<String>,
-        filesystem_root: String,
-    },
+    Exact(ExactFileMapping),
+    Subtree(SubtreeFileMapping),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ExactFileMapping {
+    pub public_path: Vec<String>,
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct SubtreeFileMapping {
+    pub public_prefix: Vec<String>,
+    pub filesystem_root: String,
 }
 
 /// A public request target with one shared segment boundary for routing and files.
@@ -202,16 +388,51 @@ impl FileMapping {
         };
         validate_file_mapping(&path.segments, target, allow_root)?;
         Ok(if subtree {
-            Self::Subtree {
+            Self::Subtree(SubtreeFileMapping {
                 public_prefix: path.segments,
                 filesystem_root: target.into(),
-            }
+            })
         } else {
-            Self::Exact {
+            Self::Exact(ExactFileMapping {
                 public_path: path.segments,
                 file_path: target.into(),
-            }
+            })
         })
+    }
+
+    pub fn compile_list<'a>(
+        mappings: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<Vec<Self>, String> {
+        let compiled = mappings
+            .into_iter()
+            .map(|(source, target)| Self::compile(source, target))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::validate_list(&compiled)?;
+        Ok(compiled)
+    }
+
+    /// Structural metadata already contains decoded public segments.
+    pub fn validate(&self) -> Result<(), String> {
+        let (segments, target, allow_root) = match self {
+            Self::Exact(mapping) => (&mapping.public_path, mapping.file_path.as_str(), false),
+            Self::Subtree(mapping) => (
+                &mapping.public_prefix,
+                mapping.filesystem_root.as_str(),
+                true,
+            ),
+        };
+        validate_file_mapping(segments, target, allow_root)
+    }
+
+    pub fn validate_list(mappings: &[Self]) -> Result<(), String> {
+        let mut seen = HashSet::new();
+        for mapping in mappings {
+            mapping.validate()?;
+            if !seen.insert(mapping) {
+                return Err("duplicate-mapping".into());
+            }
+        }
+        Ok(())
     }
 }
 

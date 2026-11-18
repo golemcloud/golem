@@ -37,6 +37,7 @@ use tokio::time::{Duration, timeout};
 use tracing::Instrument;
 
 mod concurrent_recovery;
+mod sse_source_recovery;
 mod transition_probe;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -849,6 +850,61 @@ impl std::fmt::Debug for PartitionedStarts {
     }
 }
 
+async fn wait_for_oplog(
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    description: &str,
+    predicate: impl Fn(&[golem_common::model::oplog::PublicOplogEntryWithIndex]) -> bool,
+) -> anyhow::Result<Vec<golem_common::model::oplog::PublicOplogEntryWithIndex>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        // A pending chunk's Start can follow the guest's last commit. Flush the resident
+        // buffer so this checkpoint observes a durable prefix, not the commit race.
+        executor.commit_oplog(worker_id).await?;
+        let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+        if predicate(&oplog) {
+            return Ok(oplog);
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the oplog to show {description}: {oplog:#?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Every `Start` of the response-body recorder, which the host spawns for the guest's
+/// consume-body call, is numbered under the closest `AgentInvocationStarted` before it: the
+/// invocation that was running when the recorder recorded it.
+fn assert_body_recorders_numbered_under_their_invocations(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+) {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let mut invocation = None;
+    let mut recorded = 0;
+    for entry in oplog {
+        match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(_) => invocation = Some(entry.oplog_index),
+            PublicOplogEntry::Start(params)
+                if params
+                    .function_name
+                    .starts_with("http::types::response::consume-body") =>
+            {
+                recorded += 1;
+                assert_eq!(
+                    params.invocation_id.map(|id| id.anchor),
+                    invocation,
+                    "the recorder Start at {} must be numbered under the invocation running before it",
+                    entry.oplog_index
+                );
+            }
+            _ => {}
+        }
+    }
+    assert!(recorded > 0, "the body recorder must record Starts");
+}
+
 fn partition_starts(
     oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
     function_name: &str,
@@ -1191,6 +1247,7 @@ async fn outgoing_http_pending_body_read_cancellation_replays(
         use golem_common::model::oplog::OplogIndex;
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         assert_cancelled_body_read_entries(&oplog, 2);
+        assert_body_recorders_numbered_under_their_invocations(&oplog);
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;

@@ -259,7 +259,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 activity,
                 authorization_permit,
             );
-            store.spawn(async move |store| task.run(store).await)?;
+            let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                .attribution
+                .capture();
+            store.spawn(async move |store| captured.run(task.run(store)).await)?;
 
             FutureReader::new(
                 &mut store,
@@ -339,7 +342,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 activity,
                 authorization_permit,
             );
-            store.spawn(async move |store| task.run(store).await)?;
+            let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                .attribution
+                .capture();
+            store.spawn(async move |store| captured.run(task.run(store)).await)?;
 
             FutureReader::new(
                 &mut store,

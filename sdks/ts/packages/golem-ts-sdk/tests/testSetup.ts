@@ -29,6 +29,7 @@ function makeWasmRpc() {
 }
 
 const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
+  bindSelf: vi.fn(),
   create: vi.fn(makeWasmRpc),
 });
 
@@ -106,12 +107,16 @@ vi.mock('golem:core/types@2.0.0', () => ({
   // instances; tests build fakes with `fakeRawCard`.
   PermissionCard: class PermissionCard {},
   SchemaValueStream: {
-    unwrap: async (value: { reader: AsyncIterable<unknown> }) => value.reader,
+    unwrap: async (value: { reader: AsyncIterable<unknown>; outcome?: Promise<unknown> }) => [
+      value.reader,
+      value.outcome ?? Promise.resolve({ tag: 'ok' }),
+    ],
     wrap: async (
       reader: AsyncIterable<unknown> & { failWrap?: boolean; onDispose?: () => void },
+      outcome: Promise<unknown>,
     ) => {
       if (reader.failWrap) throw new Error('test schema value stream wrap failure');
-      return { reader, [Symbol.dispose]: () => reader.onDispose?.() };
+      return { reader, outcome, [Symbol.dispose]: () => reader.onDispose?.() };
     },
   },
   parseUuid: (uuid: string) => {
@@ -168,7 +173,10 @@ vi.mock('golem:secrets/reveal@0.1.0', () => ({
 (globalThis as any).currentAgentId = 'foo-agent(123)';
 
 vi.mock('wasi:cli/environment@0.3.0', () => ({
-  getEnvironment: () => [['GOLEM_AGENT_ID', (globalThis as any).currentAgentId]],
+  getEnvironment: () => {
+    const agentId = (globalThis as any).currentAgentId;
+    return agentId === undefined ? [] : [['GOLEM_AGENT_ID', agentId]];
+  },
 }));
 
 // Load the package barrel so its side-effecting imports register the schema

@@ -273,9 +273,12 @@ oplog_payload! {
         PermissionCardLiveness {
             card_id: Uuid,
         },
-        /// The ids of the cards behind the handles that a card operation decides on, in argument
-        /// order.
+        /// The invocation that a card operation decides for, and the ids of the cards behind the
+        /// handles that it decides on, in argument order. `invocation_id` is the ID of the agent
+        /// or entity invocation that the deciding host call is attributed to, or `None` for work
+        /// that no invocation is attributed to.
         PermissionCardDecision {
+            invocation_id: Option<InvocationId>,
             card_ids: Vec<Uuid>,
         },
         PermissionCardTransfer {
@@ -303,6 +306,11 @@ oplog_payload! {
         },
         GolemRpcCreate {
             remote_agent_id: AgentId
+        },
+        GolemRpcBindSelf {
+            remote_agent_id: AgentId,
+            target_environment_id: EnvironmentId,
+            fingerprint: AgentFingerprint
         },
         GolemRpcAsyncInvokeRejection {
             remote_agent_id: AgentId,
@@ -384,6 +392,9 @@ oplog_payload! {
         P3SocketsConnect {
             remote_address: SerializableP3IpSocketAddress
         },
+        P3SocketsBind {
+            local_address: SerializableP3IpSocketAddress
+        },
         GolemToolInvoke {
             tool_name: String,
             command_path: Vec<String>,
@@ -396,11 +407,6 @@ oplog_payload! {
         },
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>
-        },
-        GolemRpcActivate {
-            remote_agent_id: AgentId,
-            method_name: String,
-            decision: Result<(), SerializableRpcError>,
         },
         GolemToolResponseSecretHoldAdmission {
             value: TypedSchemaValue,
@@ -681,7 +687,7 @@ oplog_payload! {
             result: Result<(Vec<u8>, Option<u64>), String>
         },
         GolemRpcCreate {
-            target_fingerprint: AgentFingerprint,
+            result: Result<AgentFingerprint, SerializableRpcError>,
             target_environment_id: EnvironmentId
         },
         P3KeyvalueIncomingValueStream {
@@ -752,6 +758,9 @@ oplog_payload! {
             result: Result<Option<Vec<u8>>, String>,
             next_oplog_index: OplogIndex,
             current_component_revision: ComponentRevision,
+            /// The last entry that a guest search reads. The first page of the search fixes it
+            /// and replay restores it. `None` for a `get-oplog` read.
+            last_oplog_index: Option<OplogIndex>,
         },
         GolemApiOplogEntries {
             result: Result<Vec<u8>, String>
@@ -764,6 +773,13 @@ oplog_payload! {
         },
         P3SocketsConnect {
             result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3SocketsTcpConnect {
+            result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableP3SocketErrorCode>,
+            closed: bool,
+        },
+        P3SocketsBind {
+            result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
         },
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
@@ -782,9 +798,6 @@ oplog_payload! {
         },
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>
-        },
-        GolemRpcActivate {
-            result: Result<AgentFingerprint, SerializableRpcError>
         },
         GolemToolResponseSecretHoldAdmission {
             admitted: bool,
@@ -1003,6 +1016,7 @@ pub mod host_functions {
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcBindSelf => "golem::rpc::wasm-rpc", "bind-self", GolemRpcBindSelf, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
         (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
         (GolemContextSpanFinish => "golem::api::context::span", "finish", GolemContextSpanResource, GolemApiUnit),
@@ -1066,14 +1080,14 @@ pub mod host_functions {
         (WasiConfigGetAll => "wasi:config/store", "get-all", ConfigGetAll, ConfigGetAllResponse),
         (P3FilesystemTypesDescriptorWriteViaStream => "filesystem::types::descriptor", "write-via-stream", NoInput, P3FileSystemWriteAdmission, denied = denied::filesystem::p3_write_admission),
         (P3FilesystemTypesDescriptorAppendViaStream => "filesystem::types::descriptor", "append-via-stream", NoInput, P3FileSystemWriteAdmission, denied = denied::filesystem::p3_write_admission),
-        (P3SocketsTypesTcpSocketConnect => "sockets::types::tcp-socket", "connect", P3SocketsConnect, P3SocketsConnect, denied = denied::sockets::p3_connect),
+        (P3SocketsTypesTcpSocketConnect => "sockets::types::tcp-socket", "connect", P3SocketsConnect, P3SocketsTcpConnect, denied = denied::sockets::p3_tcp_connect),
+        (P3SocketsTypesTcpSocketBind => "sockets::types::tcp-socket", "bind", P3SocketsBind, P3SocketsBind),
         (P3SocketsTypesUdpSocketConnect => "sockets::types::udp-socket", "connect", P3SocketsConnect, P3SocketsConnect, denied = denied::sockets::p3_connect),
         (GolemToolRpcInvokeAndAwait => "golem::tool::host::tool-rpc", "invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemToolRpcInvoke => "golem::tool::host::tool-rpc", "invoke", GolemToolInvoke, GolemToolUnitOrFailure),
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents, denied = denied::golem_api::agents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
-        (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemRpcWasmRpcPrepareInvocation => "golem::rpc::wasm-rpc", "prepare-invocation", GolemRpcPrepareInvocation, GolemRpcPrepareInvocation),
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
         (GolemToolAwaitInvokeResults => "golem::tool::internal", "await-invoke-results", GolemToolAwaitInvokeResults, GolemToolAwaitInvokeResults),

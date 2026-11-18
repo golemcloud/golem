@@ -4,20 +4,18 @@ on:
   workflow_call:
   push:
     branches:
-      - main
       # Long-lived maintenance branches for shipped major.minor lines,
       # e.g. `1.5.x`. The wildcard means a new `1.6.x` branch starts running
       # CI on push automatically when it is created.
       - "[0-9]+.[0-9]+.x"
-    # Skip the heavy Rust/Docker/etc. CI when only docs/ or the cloud billing app changed. They
-    # have their own workflows: .github/workflows/docs.yaml and golem-cloud-billing.yaml. The
-    # required checks of main do not report for such a change, so its pull request is merged
-    # with the ruleset bypass.
+    # Docs and the cloud billing app have dedicated workflows.
     paths-ignore:
       - "docs/**"
       - "golem-cloud-billing/**"
       - ".github/workflows/golem-cloud-billing.yaml"
   pull_request:
+    branches:
+      - "[0-9]+.[0-9]+.x"
     paths-ignore:
       - "docs/**"
       - "golem-cloud-billing/**"
@@ -172,6 +170,9 @@ jobs:
           key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
       - name: Test release tooling
         run: |
           node --test .github/scripts/release-channel.test.mjs
@@ -1387,13 +1388,18 @@ jobs:
             sdks/go/*/go.sum
             test-components/**/go.sum
 
-      # cargo-make drives the WIT dep sync and the go-bindgen-fixup step that the
-      # bindings regeneration runs. componentize-go itself is a pinned `go tool`
-      # (go.mod), so no wasm-tools / WASI SDK are needed here.
+      # cargo-make drives the WIT sync, pinned generator and binding fixups.
+      # Generation does not require wasm-tools or the WASI SDK.
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
           install-cargo-make: 'true'
+
+      - name: Check Go bindings generator
+        run: |
+          cargo fmt --manifest-path dev-tools/go-bindgen/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path dev-tools/go-bindgen/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path dev-tools/go-bindgen/Cargo.toml
 
       # Regenerate the committed WIT bindings (syncs wit/deps first via the task's
       # `wit` dependency) and fail if they drift from what's checked in — mirrors
@@ -1692,8 +1698,10 @@ jobs:
         run: ./scripts/regen-bindings.sh
         working-directory: sdks/moonbit/golem_sdk
 
+      # MoonBit fixtures embed and encode their components; the Rust gc-heap fixture parses and
+      # composes a WAT component.
       - name: Install wasm-tools
-        if: matrix.chunk.needs-moonbit
+        if: matrix.chunk.needs-moonbit || startsWith(matrix.chunk.name, 'rust-')
         run: cargo binstall --force --locked wasm-tools@1.248.0
 
       - name: Restore built TS SDK
@@ -1821,12 +1829,14 @@ jobs:
 
       - name: Collect built WASMs
         env:
-          EXPECTED_ARTIFACT: ${{ matrix.chunk.expected-artifact }}
+          EXPECTED_ARTIFACTS: ${{ matrix.chunk.expected-artifacts }}
         run: |
           mkdir -p tmp/test-components-wasm
-          if [[ -n "$EXPECTED_ARTIFACT" ]]; then
-            test -s "test-components/$EXPECTED_ARTIFACT"
-            cp "test-components/$EXPECTED_ARTIFACT" tmp/test-components-wasm/
+          if [[ -n "$EXPECTED_ARTIFACTS" ]]; then
+            for artifact in $EXPECTED_ARTIFACTS; do
+              test -s "test-components/$artifact"
+              cp "test-components/$artifact" tmp/test-components-wasm/
+            done
           else
             cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
           fi

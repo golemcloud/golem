@@ -22,6 +22,7 @@ use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+use crate::command::mcp::McpSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
 use crate::command::resource_definition::ResourceDefinitionSubcommand;
@@ -90,6 +91,7 @@ impl GolemCliCommand {
                     vec!["clean"],
                     vec!["completion"],
                     vec!["generate-bridge"],
+                    vec!["mcp"],
                     vec!["new"],
                     vec!["output-schema"],
                     vec!["plugin"],
@@ -995,6 +997,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ResourceDefinitionSubcommand,
     },
+    /// Serve Golem management over the Model Context Protocol (MCP)
+    Mcp {
+        #[clap(subcommand)]
+        subcommand: McpSubcommand,
+    },
     /// Print the structured CLI output JSON schema to stdout
     #[command(after_help = crate::command_examples::OUTPUT_SCHEMA)]
     OutputSchema {
@@ -1094,6 +1101,7 @@ pub mod shared_args {
         /// Write the oplog into a self-contained interactive HTML viewer at the given path instead of printing it.
         /// The page embeds every selected entry; use `--serve` for very large oplogs.
         /// Structured formats still emit one output document per oplog entry.
+        /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.
         #[arg(long, value_name = "FILE", conflicts_with = "serve")]
         pub html: Option<std::path::PathBuf>,
         /// Serve the interactive oplog viewer on a local port. The viewer loads the oplog page by page
@@ -1110,6 +1118,35 @@ pub mod shared_args {
         /// Do not open the served viewer in the default browser.
         #[arg(long, requires = "serve")]
         pub no_open: bool,
+    }
+
+    /// Options of the obfuscated oplog export.
+    #[derive(Debug, Args)]
+    pub struct OplogExportArgs {
+        /// Export an obfuscated report: customer values become tokens. Tokens are equal only inside
+        /// one export, because each CLI process draws a new random key. The report is for reading,
+        /// not for replay.
+        #[arg(long)]
+        pub obfuscate: bool,
+        /// Show numbers, bools, datetimes, durations and the mantissa, scale and unit of quantities
+        /// in clear. Never byte lists, discriminants, lengths or text.
+        #[arg(long, requires = "obfuscate")]
+        pub keep_scalars: bool,
+        /// Show discriminants, presence, and list, map and byte lengths.
+        #[arg(long, requires = "obfuscate")]
+        pub keep_shape: bool,
+        /// Keep the free text of error messages. It can contain any customer value.
+        #[arg(long, requires = "obfuscate")]
+        pub keep_error_text: bool,
+        /// Read an entry that the oplog page omitted only when its size is at most N bytes. A
+        /// larger entry stays omitted with its size.
+        #[arg(
+            long,
+            value_name = "N",
+            default_value_t = 16_777_216,
+            requires = "obfuscate"
+        )]
+        pub max_entry_bytes: u64,
     }
 
     #[derive(Debug, Args)]
@@ -1582,8 +1619,8 @@ pub mod worker {
     use crate::args::parse_cursor;
     use crate::args::parse_key_val;
     use crate::command::shared_args::{
-        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogViewerArgs, PostDeployArgs,
-        StreamArgs,
+        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogExportArgs, OplogViewerArgs,
+        PostDeployArgs, StreamArgs,
     };
     use crate::model::agent::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
@@ -1593,6 +1630,7 @@ pub mod worker {
     use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{ComponentName, ComponentRevision};
+    use golem_common::model::oplog::OplogCursor;
     use uuid::Uuid;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1742,13 +1780,28 @@ pub mod worker {
             /// those values back as `--scan-cursor` to fetch the next page.
             /// An entry being absent means that component has been fully scanned.
             ///
+            /// With `--page`, pass back the `cursor` of the previous page instead, with the
+            /// same component selection and filters.
+            ///
             /// Mutually exclusive with `--refresh`.
             #[arg(long, short, value_parser = parse_cursor)]
             scan_cursor: Option<ScanCursor>,
             /// The maximum number of returned agents; returns all values if not specified.
             /// When multiple components are selected, the limit is applied separately.
+            /// With `--page`, the limit is the size of the page; see `--page` for Redis.
             #[arg(long, short)]
             max_count: Option<u64>,
+            /// Read one page of agents: at most `--max-count` agents (default: the HTTP batch
+            /// size, 50), from the selected components in the order of their names. On a server
+            /// whose indexed storage is Redis, `--max-count` is a target: Redis `SCAN` treats its
+            /// count as a hint, so a page can have more agents. The output has the `cursor` of the
+            /// next page when there can be more agents; pass it back as `--scan-cursor`. A page
+            /// ends early when the server's scan budget ends a component's scan, so a page with a
+            /// cursor can have fewer agents, or none.
+            ///
+            /// Mutually exclusive with `--refresh`.
+            #[arg(long, conflicts_with = "refresh")]
+            page: bool,
             /// When set to true it queries for most up-to-date status for each agent, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
@@ -1828,13 +1881,15 @@ pub mod worker {
             agent_id: AgentIdArgs,
         },
         /// Queries and streams an agent's full oplog.
-        /// Structured formats emit one output document per oplog entry.
+        /// Structured formats emit one output document per oplog entry; with `--page`, one
+        /// `agent.oplog-page` document with one page of entries and the cursor of the next page.
+        /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.
         #[command(after_help = crate::command_examples::AGENT_OPLOG)]
         Oplog {
             #[command(flatten)]
             agent_id: AgentIdArgs,
-            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query.
-            #[arg(long, conflicts_with = "query")]
+            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query and --cursor.
+            #[arg(long, conflicts_with_all = ["query", "cursor"])]
             from: Option<u64>,
             #[arg(
                 long,
@@ -1848,10 +1903,24 @@ pub mod worker {
             /// Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by
             /// default), for example an entry with a large snapshot, invocation input or host call
             /// response. By default the CLI reads each omitted entry in full.
-            #[arg(long)]
+            #[arg(long, conflicts_with = "obfuscate")]
             omit_payloads: bool,
+            /// Read one page of at most the HTTP batch size (50) entries and print it as one
+            /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
+            /// entries after the page. A search page ends early when the server's scan budget ends
+            /// the search, so a page with a cursor can have fewer entries, or none.
+            #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
+            page: bool,
+            /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,
+            /// with the same `--query`. The cursor is opaque; use `--from` to start at an oplog
+            /// index. A cursor of another query, or one past the end of the oplog, is refused as
+            /// stale (`STALE_CURSOR`).
+            #[arg(long, requires = "page")]
+            cursor: Option<OplogCursor>,
             #[command(flatten)]
             viewer: OplogViewerArgs,
+            #[command(flatten)]
+            export: OplogExportArgs,
         },
         /// DESTRUCTIVE: Rewrites the agent's oplog by undoing recent operations. Reverted entries are lost. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
         #[command(after_help = crate::command_examples::AGENT_REVERT)]
@@ -1951,6 +2020,33 @@ pub mod worker {
             #[arg(long)]
             plugin_priority: Option<i32>,
         },
+    }
+}
+
+pub mod mcp {
+    use clap::Subcommand;
+
+    #[derive(Debug, Subcommand)]
+    pub enum McpSubcommand {
+        /// Serve the management commands as MCP tools over stdio, for coding agents.
+        ///
+        /// This is the management server: one tool for each `golem agent` command and each
+        /// other management command that does not need a terminal, such as `golem agent list`
+        /// and `golem agent oplog`. A tool takes the command's arguments, runs the command as the
+        /// CLI does, with the CLI's signed-in identity, and returns the command's JSON output.
+        /// It is not the application MCP server that a deployment serves for its agents' tools.
+        ///
+        /// The server works in one environment, the one this command selects, for example with
+        /// `golem -E app/prod mcp serve` or from the application manifest. No tool takes an
+        /// environment, and a tool refuses an agent or component of another environment. Start
+        /// one server for each environment.
+        ///
+        /// The tool of a destructive command takes `confirm`, which confirms that one call as
+        /// `--yes` does on the CLI. Neither `--yes` nor `cli.autoConfirm` confirms a tool call.
+        /// stdin and stdout carry JSON-RPC; logs and progress go to stderr, and the server never
+        /// asks a question.
+        #[command(after_help = crate::command_examples::MCP_SERVE)]
+        Serve,
     }
 }
 
@@ -3317,6 +3413,86 @@ mod test {
     #[test]
     fn command_debug_assert() {
         GolemCliCommand::command().debug_assert();
+    }
+
+    fn parse_oplog(extra: &[&str]) -> Result<GolemCliCommand, clap::Error> {
+        GolemCliCommand::try_parse_from(
+            ["golem", "agent", "oplog", "A(\"x\")"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+    }
+
+    fn oplog_export_args(command: GolemCliCommand) -> crate::command::shared_args::OplogExportArgs {
+        match command.subcommand {
+            GolemCliSubcommand::Agent {
+                subcommand: crate::command::worker::AgentSubcommand::Oplog { export, .. },
+            } => export,
+            _ => panic!("expected agent oplog"),
+        }
+    }
+
+    #[test]
+    fn oplog_keep_flags_and_max_entry_bytes_require_obfuscate() {
+        for flag in [
+            vec!["--keep-scalars"],
+            vec!["--keep-shape"],
+            vec!["--keep-error-text"],
+            vec!["--max-entry-bytes", "10"],
+        ] {
+            let error = parse_oplog(&flag).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "{flag:?}"
+            );
+            let with_obfuscate: Vec<&str> = flag.iter().copied().chain(["--obfuscate"]).collect();
+            assert!(parse_oplog(&with_obfuscate).is_ok(), "{flag:?}");
+        }
+        let plain = oplog_export_args(parse_oplog(&[]).unwrap());
+        assert!(!plain.obfuscate);
+        let export = oplog_export_args(parse_oplog(&["--obfuscate"]).unwrap());
+        assert!(export.obfuscate);
+        assert_eq!(export.max_entry_bytes, 16_777_216);
+        assert!(!export.keep_scalars && !export.keep_shape && !export.keep_error_text);
+    }
+
+    #[test]
+    fn oplog_omit_payloads_and_page_conflict_with_obfuscate() {
+        for flag in ["--omit-payloads", "--page"] {
+            let error = parse_oplog(&[flag, "--obfuscate"]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{flag}"
+            );
+            assert!(parse_oplog(&[flag]).is_ok(), "{flag}");
+        }
+    }
+
+    #[test]
+    fn oplog_obfuscate_parses_with_from_query_html_serve() {
+        for extra in [
+            vec!["--from", "5"],
+            vec!["--query", "error"],
+            vec!["--html", "report.html", "--open"],
+            vec!["--serve", "--port", "0", "--no-open"],
+            vec![
+                "--keep-scalars",
+                "--keep-shape",
+                "--keep-error-text",
+                "--max-entry-bytes",
+                "400000",
+            ],
+        ] {
+            let args: Vec<&str> = extra.iter().copied().chain(["--obfuscate"]).collect();
+            let export = oplog_export_args(parse_oplog(&args).unwrap_or_else(|e| {
+                panic!("{args:?}: {e}");
+            }));
+            assert!(export.obfuscate);
+        }
+        assert!(parse_oplog(&["--obfuscate", "--from", "5", "--query", "x"]).is_err());
+        assert!(parse_oplog(&["--obfuscate", "--html", "a.html", "--serve"]).is_err());
     }
 
     #[test]

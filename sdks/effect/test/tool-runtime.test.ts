@@ -9,6 +9,8 @@ import {
   ToolInvokeError,
 } from "../src/Tool.js"
 import { invokeRegistered } from "../src/internal/tool/runtime.js"
+import * as Durability from "../src/Durability.js"
+import * as Host from "./mocks/golem-durability.js"
 
 const input = () => {
   const codec = Effect.runSync(compile(Schema.Struct({})))
@@ -67,6 +69,32 @@ describe("registered tool guest runtime", () => {
     )
     const codec = Effect.runSync(compile(Schema.String))
     await expect(Effect.runPromise(codec.decode(result.result!.value))).resolves.toBe("value!")
+  })
+
+  it("runs custom durability in registered layer acquisition and release", async () => {
+    Host.__resetAll()
+    const durable = (name: string) =>
+      Durability.wrapInfallible(
+        {
+          iface: "",
+          function: name,
+          functionType: Durability.FunctionType.writeRemote,
+          requestSchema: Schema.Struct({}),
+          success: Schema.String,
+        },
+        {},
+        Effect.succeed(name),
+      )
+    toolDefinition("layer-durability")
+      .body((body) => body)
+      .implement(
+        { layerDurability: () => Effect.void },
+        Layer.effectDiscard(Effect.acquireRelease(durable("acquire"), () => durable("release"))),
+      )
+    await expect(
+      invokeRegistered("layer-durability", [], input(), undefined, undefined, undefined),
+    ).resolves.toEqual({ result: undefined })
+    expect(Host.__getBeginCalls().map((call) => call.functionName)).toEqual(["acquire", "release"])
   })
 
   it("closes the registered layer scope after output encoding", async () => {

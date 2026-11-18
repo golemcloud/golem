@@ -21,7 +21,7 @@ use desert_rust::{
 };
 use lazy_static::lazy_static;
 use nonempty_collections::NEVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::{Arc, RwLock};
 
@@ -177,7 +177,7 @@ impl From<PublicAttributeValue> for AttributeValue {
 #[derive(Debug, PartialEq)]
 pub struct LocalInvocationContextSpanState {
     pub parent: Option<Arc<InvocationContextSpan>>,
-    pub attributes: HashMap<String, AttributeValue>,
+    pub attributes: BTreeMap<String, AttributeValue>,
     pub linked_context: Option<Arc<InvocationContextSpan>>,
 }
 
@@ -185,7 +185,7 @@ pub struct LocalInvocationContextSpanBuilder {
     span_id: Option<SpanId>,
     start: Timestamp,
     parent: Option<Arc<InvocationContextSpan>>,
-    attributes: HashMap<String, AttributeValue>,
+    attributes: BTreeMap<String, AttributeValue>,
     linked_context: Option<Arc<InvocationContextSpan>>,
     inherited: bool,
 }
@@ -196,7 +196,7 @@ impl LocalInvocationContextSpanBuilder {
             span_id: None,
             start: Timestamp::now_utc(),
             parent: None,
-            attributes: HashMap::new(),
+            attributes: BTreeMap::new(),
             linked_context: None,
             inherited: false,
         }
@@ -232,7 +232,7 @@ impl LocalInvocationContextSpanBuilder {
         self
     }
 
-    pub fn with_attributes(mut self, attributes: HashMap<String, AttributeValue>) -> Self {
+    pub fn with_attributes(mut self, attributes: BTreeMap<String, AttributeValue>) -> Self {
         self.attributes = attributes;
         self
     }
@@ -418,9 +418,12 @@ impl InvocationContextSpan {
         }
     }
 
-    pub fn get_attributes(self: &Arc<Self>, inherit: bool) -> HashMap<String, Vec<AttributeValue>> {
+    pub fn get_attributes(
+        self: &Arc<Self>,
+        inherit: bool,
+    ) -> BTreeMap<String, Vec<AttributeValue>> {
         let mut current = self.clone();
-        let mut result = HashMap::new();
+        let mut result = BTreeMap::new();
         loop {
             current = match &*current {
                 Self::Local { state, .. } => {
@@ -904,7 +907,7 @@ mod protobuf {
         LocalInvocationContextSpanState, SpanId, TraceId,
     };
     use nonempty_collections::NEVec;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::num::NonZeroU64;
     use std::sync::Arc;
     use std::sync::RwLock;
@@ -951,10 +954,11 @@ mod protobuf {
                     ..
                 } => {
                     let value_state = state.read().unwrap();
-                    let mut attributes = HashMap::new();
-                    for (key, value) in &value_state.attributes {
-                        attributes.insert(key.clone(), value.clone().into());
-                    }
+                    let attributes = value_state
+                        .attributes
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone().into()))
+                        .collect();
 
                     let linked_context_stack = match &value_state.linked_context {
                         Some(linked_context) => {
@@ -1007,7 +1011,7 @@ mod protobuf {
                         .start
                         .ok_or_else(|| "Missing timestamp".to_string())?
                         .into();
-                    let mut attributes = HashMap::new();
+                    let mut attributes = BTreeMap::new();
                     for (key, value) in value.attributes {
                         attributes.insert(key, value.try_into()?);
                     }
@@ -1198,6 +1202,74 @@ mod tests {
         stack.push(span6);
 
         stack
+    }
+
+    #[test]
+    fn get_attributes_iterates_keys_in_sorted_order() {
+        let timestamp = Timestamp::from(1724701930000);
+        let keys = [
+            "m", "c", "t", "a", "q", "h", "x", "e", "o", "b", "s", "j", "w", "d", "r", "g", "v",
+            "k", "p", "f",
+        ];
+        let own_keys = &keys[0..10];
+        let linked_keys = &keys[5..13];
+        let parent_keys: Vec<&str> = keys[8..20].iter().chain(&keys[0..1]).copied().collect();
+        let value = |origin: &str, key: &str| AttributeValue::String(format!("{origin}-{key}"));
+
+        let parent = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_2())
+            .build();
+        for key in &parent_keys {
+            parent.set_attribute(key.to_string(), value("parent", key));
+        }
+
+        let linked = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_3())
+            .build();
+        for key in linked_keys {
+            linked.set_attribute(key.to_string(), value("linked", key));
+        }
+
+        let span = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_4())
+            .with_parent(parent)
+            .with_linked_context(linked)
+            .build();
+        for key in own_keys {
+            span.set_attribute(key.to_string(), value("own", key));
+        }
+
+        let attributes = span.get_attributes(true);
+
+        let mut sorted_keys = keys.to_vec();
+        sorted_keys.sort();
+        assert_eq!(
+            attributes.keys().map(String::as_str).collect::<Vec<_>>(),
+            sorted_keys
+        );
+        assert_eq!(
+            attributes["o"],
+            vec![
+                value("own", "o"),
+                value("linked", "o"),
+                value("parent", "o")
+            ]
+        );
+        assert_eq!(
+            attributes["h"],
+            vec![value("own", "h"), value("linked", "h")]
+        );
+        assert_eq!(
+            attributes["m"],
+            vec![value("own", "m"), value("parent", "m")]
+        );
+        assert_eq!(
+            attributes["s"],
+            vec![value("linked", "s"), value("parent", "s")]
+        );
     }
 
     #[test]

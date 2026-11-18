@@ -1,6 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
+use crate::log::print_text;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text_format::{TextOutput, logln};
 use golem_client::model::NativeToolInvocationResponse;
@@ -42,6 +43,24 @@ impl StructuredOutput for ToolInvocationSessionView {
 impl TextOutput for ToolInvocationSessionView {
     fn log(&self) {
         logln(serde_json::to_string_pretty(self).expect("serializable tool session result"));
+    }
+}
+
+/// The help of a tool or of one of its subcommands, which `tool invoke` returns
+/// for `-- --help` instead of invoking the tool.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolInvokeHelpView {
+    pub help: String,
+}
+
+impl StructuredOutput for ToolInvokeHelpView {
+    const KIND: &'static str = "tool.invoke-help";
+}
+
+impl TextOutput for ToolInvokeHelpView {
+    fn log(&self) {
+        print_text(&self.help);
     }
 }
 

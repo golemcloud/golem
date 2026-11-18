@@ -112,18 +112,31 @@ impl Default for WorkerServiceGrpcConfig {
 /// through `wasi:http`, `golem:websocket`, `golem:rdbms`, durable streams and MCP do not depend
 /// on this setting.
 ///
-/// When `enabled` is `true`, agent code can connect to any address that the executor can reach,
-/// including loopback and private addresses of the deployment. The `network` permission of the
-/// agent's cards matches host strings only and does not restrict address ranges.
+/// When `enabled` is `true`, agent code can use sockets under this policy:
+///
+/// - TCP `listen` fails with `access-denied`: agents expose no ports. A TCP or UDP bind takes
+///   port 0 or a loopback address.
+/// - Each connect and outgoing datagram must match a `network : connect` grant of the agent's
+///   cards, by IPv4 or bracketed IPv6 address and port. A grant with a wildcard host reaches only
+///   public addresses; a loopback, private, unspecified or other non-public address needs a grant
+///   that names it.
+/// - Cloud metadata addresses, link-local addresses, and the executor's gRPC and HTTP ports and
+///   `refused_ports` on loopback, unspecified and this host's own addresses are refused even
+///   against a grant that names them.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AgentSocketsConfig {
     pub enabled: bool,
+    /// Further ports that this process listens on, next to the executor's gRPC and HTTP ports.
+    /// The single executable sets the ports of its other services here.
+    #[serde(default)]
+    pub refused_ports: Vec<u16>,
 }
 
 impl SafeDisplay for AgentSocketsConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "enabled: {}", self.enabled);
+        let _ = writeln!(&mut result, "refused ports: {:?}", self.refused_ports);
         result
     }
 }

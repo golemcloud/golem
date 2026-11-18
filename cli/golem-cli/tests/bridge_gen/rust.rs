@@ -24,7 +24,6 @@ use golem_cli::bridge_gen::rust::{
 };
 use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::language::GuestLanguage;
-use golem_common::model::Empty;
 use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentMethodSchema, InputSchema,
@@ -46,6 +45,7 @@ use golem_common::schema::unstructured::{
 use golem_common::schema::{
     AgentTypeSchema, MetadataEnvelope, NamedField, NamedFieldType, SchemaType,
 };
+use golem_schema::Empty;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
@@ -205,10 +205,10 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
         }
         source.push_str(&format!(
             r#"
-            async fn exercise_{name}(mut input: {reader}) -> Result<(), String> {{
+            async fn exercise_{name}(mut input: {reader}) -> Result<(), golem_rust::agentic::StreamError> {{
                 let (mut writer, output) = {name}();
-                if let Some(item) = input.next().await? {{
-                    writer.write_one(item).await?;
+                if let Some(item) = input.next().await {{
+                    writer.write_one(item?).await?;
                 }}
                 writer.write_all(input.collect().await?).await?;
                 drop(writer);

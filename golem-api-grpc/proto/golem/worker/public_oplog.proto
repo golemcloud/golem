@@ -28,6 +28,7 @@ message OplogEntry {
     CreateParameters Create = 1;
     AgentInvocationStartedParameters AgentInvocationStarted = 3;
     AgentInvocationFinishedParameters AgentInvocationFinished = 4;
+    AgentInvocationFailedParameters AgentInvocationFailed = 71;
     TimestampParameter Suspend = 5;
     ErrorParameters Error = 6;
     JumpParameters Jump = 8;
@@ -81,6 +82,7 @@ message OplogEntry {
     ToolAttachmentReadParameters ToolAttachmentRead = 68;
     ToolAttachmentControlParameters ToolAttachmentControl = 69;
     SpanClosedParameters SpanClosed = 70;
+    MemorySizeReconciledParameters MemorySizeReconciled = 72;
   }
 }
 
@@ -247,6 +249,13 @@ message AgentInvocationFinishedParameters {
   uint64 component_revision = 4;
   optional string method_name = 5;
   golem.common.UUID invocation_id = 6;
+}
+
+message AgentInvocationFailedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID invocation_id = 2;
+  string error = 3;
+  uint64 start_index = 4;
 }
 
 message PublicAgentInvocation {
@@ -659,6 +668,11 @@ message FailedSnapshotAssistedUpdateDetails {
 message GrowMemoryParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 delta = 2;
+}
+
+message MemorySizeReconciledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 bytes = 2;
 }
 
 message CreateResourceParameters {

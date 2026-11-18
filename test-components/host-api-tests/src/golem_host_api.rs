@@ -192,6 +192,15 @@ pub trait GolemHostApi {
     ) -> Result<Vec<u64>, String>;
     fn read_own_oplog_result(&self) -> Result<(), String>;
     fn search_own_oplog_result(&self, query: String) -> Result<(), String>;
+    /// Reads a search of the agent's own oplog until it ends, and gives the number of batches.
+    /// Fails when the search has not ended after `max_batches` batches.
+    fn search_own_oplog_to_end(&self, query: String, max_batches: u64) -> Result<u64, String>;
+    /// Opens a search of the agent's own oplog, reads its first batch, and keeps the search for
+    /// `continue_kept_oplog_search`.
+    fn open_kept_oplog_search(&mut self, query: String) -> Result<(), String>;
+    /// Reads the kept search until it ends, and gives the indexes of the entries that it found.
+    /// Fails when the search has not ended after `max_batches` batches.
+    fn continue_kept_oplog_search(&self, max_batches: u64) -> Result<Vec<u64>, String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
     fn search_oplog_result(&self, agent_id: AgentId, query: String) -> Result<(), String>;
     fn get_config_value_result(&self, key: Vec<String>) -> Result<(), String>;
@@ -258,6 +267,7 @@ pub struct GolemHostApiImpl {
     _name: String,
     recorded_tools: Option<Vec<ToolSummary>>,
     kept_rpc: Option<WasmRpc>,
+    kept_search: Option<SearchOplog>,
 }
 
 impl GolemHostApiImpl {
@@ -319,6 +329,7 @@ impl GolemHostApi for GolemHostApiImpl {
             _name: name,
             recorded_tools: None,
             kept_rpc: None,
+            kept_search: None,
         }
     }
 
@@ -653,12 +664,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.invoke(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -670,12 +682,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.async_invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .future
             .get()
@@ -690,12 +703,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -707,12 +721,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.schedule_invocation(
             Datetime {
                 seconds: 0,
@@ -732,12 +747,13 @@ impl GolemHostApi for GolemHostApiImpl {
         constructor: String,
         method: String,
     ) -> Result<(), String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::create(
             &agent_type,
             encode_parameters(vec![SchemaValue::String(constructor)])?,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.schedule_cancelable_invocation(
             Datetime {
                 seconds: 0,
@@ -828,6 +844,7 @@ impl GolemHostApi for GolemHostApiImpl {
             .map_err(|error| format!("{error:?}"))?
             .collect()
             .await
+            .map_err(|error| format!("{error:?}"))
     }
 
     fn read_own_oplog_result(&self) -> Result<(), String> {
@@ -852,6 +869,56 @@ impl GolemHostApi for GolemHostApiImpl {
             .get_next()
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
+    }
+
+    fn search_own_oplog_to_end(&self, query: String, max_batches: u64) -> Result<u64, String> {
+        let agent_id = wire_agent_id(
+            get_self_metadata()
+                .map_err(|error| format!("{error:?}"))?
+                .agent_id,
+        );
+        let search = SearchOplog::new(&agent_id, &query);
+        for batch in 0..max_batches {
+            if search
+                .get_next()
+                .map_err(|error| format!("{error:?}"))?
+                .is_none()
+            {
+                return Ok(batch);
+            }
+        }
+        Err(format!(
+            "the search did not end after {max_batches} batches"
+        ))
+    }
+
+    fn open_kept_oplog_search(&mut self, query: String) -> Result<(), String> {
+        let agent_id = wire_agent_id(
+            get_self_metadata()
+                .map_err(|error| format!("{error:?}"))?
+                .agent_id,
+        );
+        let search = SearchOplog::new(&agent_id, &query);
+        search.get_next().map_err(|error| format!("{error:?}"))?;
+        self.kept_search = Some(search);
+        Ok(())
+    }
+
+    fn continue_kept_oplog_search(&self, max_batches: u64) -> Result<Vec<u64>, String> {
+        let search = self
+            .kept_search
+            .as_ref()
+            .ok_or("open_kept_oplog_search must be called first")?;
+        let mut found = Vec::new();
+        for _ in 0..max_batches {
+            match search.get_next().map_err(|error| format!("{error:?}"))? {
+                Some(batch) => found.extend(batch.into_iter().map(|(index, _)| index)),
+                None => return Ok(found),
+            }
+        }
+        Err(format!(
+            "the search did not end after {max_batches} batches"
+        ))
     }
 
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String> {

@@ -13,16 +13,17 @@
 // limitations under the License.
 
 pub(crate) mod invocation_session;
+mod oplog_export;
 pub mod oplog_serve;
 mod stream;
 mod stream_output;
 
 pub(crate) use stream::insecure_connector;
 
-use crate::command::shared_args::OplogViewerArgs;
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
+use crate::command::shared_args::{OplogExportArgs, OplogViewerArgs};
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
@@ -44,7 +45,7 @@ use crate::model::agent::action_result::{
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
-use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView};
 use crate::model::agent::oplog_html::{
     OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
 };
@@ -99,6 +100,7 @@ use golem_common::model::{
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
+use crate::command_handler::interactive::Ask;
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
 use crossterm::queue;
@@ -211,6 +213,7 @@ impl AgentCommandHandler {
                     mode,
                     scan_cursor,
                     max_count,
+                    page,
                     precise,
                     refresh,
                 } => {
@@ -221,6 +224,7 @@ impl AgentCommandHandler {
                         mode,
                         scan_cursor,
                         max_count,
+                        page,
                         precise,
                         refresh,
                     )
@@ -274,10 +278,18 @@ impl AgentCommandHandler {
                     from,
                     query,
                     omit_payloads,
+                    page,
+                    cursor,
                     viewer,
+                    export,
                 } => {
-                    self.cmd_oplog(agent_id, from, query, omit_payloads, viewer)
-                        .await
+                    if page {
+                        self.cmd_oplog_page(agent_id, from, cursor, query, omit_payloads)
+                            .await
+                    } else {
+                        self.cmd_oplog(agent_id, from, query, omit_payloads, viewer, export)
+                            .await
+                    }
                 }
                 AgentSubcommand::Revert {
                     agent_id,
@@ -843,7 +855,9 @@ impl AgentCommandHandler {
         // The REPL writes the accepted invocation ID to stdin once the call returns.
         let invocation_target = connection.invocation_goal().map(|goal| async move {
             use tokio::io::AsyncBufReadExt;
-            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+            let stdin =
+                crate::command_handler::interactive::async_stdin("the accepted invocation ID")?;
+            let mut lines = tokio::io::BufReader::new(stdin).lines();
             if let Ok(Some(line)) = lines.next_line().await {
                 goal.set_target(
                     line.trim()
@@ -906,12 +920,35 @@ impl AgentCommandHandler {
         query: Option<String>,
         omit_payloads: bool,
         viewer: OplogViewerArgs,
+        export: OplogExportArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
         let batch_size = self.ctx.http_batch_size();
+        if export.obfuscate {
+            let options = oplog_export::export_options(&export, from, query, batch_size);
+            if viewer.serve {
+                return oplog_serve::serve_oplog_export_viewer(
+                    self.ctx.clone(),
+                    component.id.0,
+                    agent_id.0.clone(),
+                    options,
+                    viewer.port,
+                    !viewer.no_open,
+                )
+                .await;
+            }
+            return oplog_export::cmd_oplog_export(
+                self.ctx.clone(),
+                component.id.0,
+                agent_id.0.clone(),
+                options,
+                viewer,
+            )
+            .await;
+        }
         let viewer_document =
             |mode: OplogViewerMode, entries: Vec<AgentOplogEntryView>| OplogViewerDocument {
                 mode,
@@ -936,6 +973,7 @@ impl AgentCommandHandler {
                     page,
                     page_size: batch_size,
                     omit_payloads,
+                    export: None,
                 },
                 viewer.port,
                 !viewer.no_open,
@@ -1036,6 +1074,54 @@ impl AgentCommandHandler {
         }
 
         Ok(())
+    }
+
+    /// One server page of the oplog, as one `agent.oplog-page` document.
+    async fn cmd_oplog_page(
+        &self,
+        agent_id: AgentIdArgs,
+        from: Option<u64>,
+        cursor: Option<OplogCursor>,
+        query: Option<String>,
+        omit_payloads: bool,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        let page = self
+            .ctx
+            .golem_clients()
+            .await?
+            .worker
+            .get_oplog(
+                &component.id.0,
+                &agent_id.0,
+                from,
+                self.ctx.http_batch_size(),
+                cursor.as_ref(),
+                query.as_deref(),
+            )
+            .await
+            .map_service_error()?;
+
+        let mut entries = Vec::with_capacity(page.entries.len());
+        for entry in page.entries {
+            entries.push(
+                oplog_page_entry_view(
+                    &self.ctx,
+                    &component.id.0,
+                    &agent_id.0,
+                    entry,
+                    omit_payloads,
+                )
+                .await?,
+            );
+        }
+        self.ctx.log_handler().log_output(AgentOplogPageView {
+            entries,
+            cursor: page.next.map(|cursor| cursor.to_string()),
+        })
     }
 
     async fn cmd_revert(
@@ -1162,6 +1248,7 @@ impl AgentCommandHandler {
         mode: AgentListMode,
         scan_cursor: Option<ScanCursor>,
         max_count: Option<u64>,
+        page: bool,
         precise: bool,
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
@@ -1179,7 +1266,19 @@ impl AgentCommandHandler {
             .resolve_list_components(agent_type_name, component_name, filters)
             .await?;
 
-        if let Some(interval_ms) = refresh {
+        if page {
+            let view = self
+                .list_agents_page(
+                    components,
+                    &filters,
+                    mode_overlay.as_ref(),
+                    scan_cursor.as_ref(),
+                    max_count.unwrap_or(self.ctx.http_batch_size()),
+                    precise,
+                )
+                .await?;
+            self.ctx.log_handler().log_output(view)
+        } else if let Some(interval_ms) = refresh {
             self.list_with_refresh(
                 &components,
                 &filters,
@@ -1430,61 +1529,7 @@ impl AgentCommandHandler {
                 )
                 .await?;
 
-            for agent in agents {
-                let raw_agent_id = agent.raw_agent_id().to_owned();
-
-                let agent_component = self
-                    .ctx
-                    .component_handler()
-                    .get_component_revision_by_id(&agent.component_id(), agent.component_revision)
-                    .await?;
-
-                let parsed_agent_type_name = agent.agent_type_name();
-                let component_metadata: ComponentMetadata = agent_component.metadata.into();
-
-                let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
-                    component_metadata
-                        .agent_type_provision_configs()
-                        .get(agent_type_name)
-                        .cloned()
-                });
-
-                let source_language = parsed_agent_type_name
-                    .as_ref()
-                    .and_then(|type_name| {
-                        component_metadata
-                            .agent_types()
-                            .iter()
-                            .find(|at| &at.type_name == type_name)
-                            .map(|at| SourceLanguage::from(at.source_language.as_str()))
-                    })
-                    .unwrap_or_default();
-
-                let secret_config_paths = parsed_agent_type_name
-                    .as_ref()
-                    .map(|agent_type_name| {
-                        secret_config_paths_for_agent_type(
-                            component_metadata.agent_types(),
-                            agent_type_name,
-                        )
-                    })
-                    .unwrap_or_default();
-
-                let parsed = agent.parsed_agent_id(&component_metadata);
-                let mut agent_view = AgentMetadataView::from(agent)
-                    .with_defaults(defaults)
-                    .with_secret_config_paths(secret_config_paths);
-
-                agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
-                    parsed.as_ref(),
-                    &source_language,
-                    &raw_agent_id,
-                )
-                .into();
-
-                view.agents
-                    .push(agent_view.with_source_language(source_language));
-            }
+            view.agents.extend(self.agent_views(agents).await?);
             component_scan_cursor
                 .into_iter()
                 .for_each(|component_scan_cursor| {
@@ -1504,6 +1549,110 @@ impl AgentCommandHandler {
         }
 
         Ok(view)
+    }
+
+    /// The views of listed agents, with their IDs rendered in their source language.
+    async fn agent_views(
+        &self,
+        agents: Vec<AgentMetadata>,
+    ) -> anyhow::Result<Vec<AgentMetadataView>> {
+        let mut views = Vec::with_capacity(agents.len());
+        for agent in agents {
+            let raw_agent_id = agent.raw_agent_id().to_owned();
+
+            let agent_component = self
+                .ctx
+                .component_handler()
+                .get_component_revision_by_id(&agent.component_id(), agent.component_revision)
+                .await?;
+
+            let parsed_agent_type_name = agent.agent_type_name();
+            let component_metadata: ComponentMetadata = agent_component.metadata.into();
+
+            let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
+                component_metadata
+                    .agent_type_provision_configs()
+                    .get(agent_type_name)
+                    .cloned()
+            });
+
+            let source_language = parsed_agent_type_name
+                .as_ref()
+                .and_then(|type_name| {
+                    component_metadata
+                        .agent_types()
+                        .iter()
+                        .find(|at| &at.type_name == type_name)
+                        .map(|at| SourceLanguage::from(at.source_language.as_str()))
+                })
+                .unwrap_or_default();
+
+            let secret_config_paths = parsed_agent_type_name
+                .as_ref()
+                .map(|agent_type_name| {
+                    secret_config_paths_for_agent_type(
+                        component_metadata.agent_types(),
+                        agent_type_name,
+                    )
+                })
+                .unwrap_or_default();
+
+            let parsed = agent.parsed_agent_id(&component_metadata);
+            let mut agent_view = AgentMetadataView::from(agent)
+                .with_defaults(defaults)
+                .with_secret_config_paths(secret_config_paths);
+
+            agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
+                parsed.as_ref(),
+                &source_language,
+                &raw_agent_id,
+            )
+            .into();
+
+            views.push(agent_view.with_source_language(source_language));
+        }
+        Ok(views)
+    }
+
+    /// One page of agents across `components`, in the order of their names; see [`read_page`].
+    async fn list_agents_page(
+        &self,
+        mut components: Vec<ComponentDto>,
+        filters: &[String],
+        mode_overlay: Option<&AgentFilter>,
+        cursor: Option<&ScanCursor>,
+        count: u64,
+        precise: bool,
+    ) -> anyhow::Result<AgentsMetadataResponseView> {
+        components.sort_by(|a, b| a.component_name.0.cmp(&b.component_name.0));
+        let names = components
+            .iter()
+            .map(|component| component.component_name.0.as_str())
+            .collect::<Vec<_>>();
+        let (agents, cursor) = read_page(
+            &names,
+            cursor,
+            count,
+            async |position, scan_cursor, limit| {
+                let component = &components[position];
+                self.list_component_agents(
+                    &component.component_name,
+                    &component.id,
+                    Some(filters),
+                    mode_overlay,
+                    scan_cursor.as_ref(),
+                    Some(limit),
+                    precise,
+                )
+                .await
+            },
+        )
+        .await?;
+        Ok(AgentsMetadataResponseView {
+            agents: self.agent_views(agents).await?,
+            cursors: Default::default(),
+            cursor,
+        })
     }
 
     async fn cmd_interrupt(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
@@ -2837,19 +2986,15 @@ impl AgentCommandHandler {
         error: anyhow::Error,
         agent_id_match: &AgentIdMatch,
     ) -> anyhow::Error {
-        let rendered = if let Some(service_error) = error
+        let previous_invocation_failed = error
             .downcast_ref::<ServiceError>()
-            .filter(|service_error| service_error.is_previous_invocation_failed())
-        {
-            service_error.render()
-        } else if let Some(failure) = error
-            .downcast_ref::<invocation_session::InvocationFailure>()
-            .filter(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed)
-        {
-            failure.to_string()
-        } else {
+            .is_some_and(|service_error| service_error.is_previous_invocation_failed())
+            || error
+                .downcast_ref::<invocation_session::InvocationFailure>()
+                .is_some_and(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed);
+        if !previous_invocation_failed {
             return error;
-        };
+        }
 
         let command = render_revert_command(
             &crate::command_name(),
@@ -2861,11 +3006,11 @@ impl AgentCommandHandler {
             &agent_id_match.agent_id,
         );
 
-        anyhow!(
-            "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
-            rendered,
-            command,
-        )
+        // The original error stays the source, so that its code and details reach structured
+        // error reports; `{:#}` prints the hint and then the original error.
+        error.context(format!(
+            "The previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {command}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.\n\nThe error of the server"
+        ))
     }
 
     async fn interrupt_agent(
@@ -3184,7 +3329,7 @@ impl AgentCommandHandler {
             output_path.log_color_highlight()
         ))
         .with_default(false)
-        .prompt()?;
+        .ask()?;
 
         Ok(result)
     }
@@ -3401,6 +3546,65 @@ pub(super) fn parse_method_argument_schema_value(
     }
 
     parsed
+}
+
+/// One page of `count` items across the components named in `component_names`, in their order,
+/// under one budget. `scan(position, scan_cursor, limit)` lists the items of the component at
+/// `position` from `scan_cursor`, and gives the scan cursor of its next items. It asks for `limit`
+/// items, but a scan of a Redis indexed storage can list more, and the page keeps all of them, so
+/// `count` is a target there and a limit elsewhere.
+/// The page ends at the first scan that gives a scan cursor, or when `count` items are listed.
+/// The cursor of the next page is `<component name>/<scan cursor>`, with an empty scan cursor
+/// when the next page starts at the beginning of that component.
+async fn read_page<T>(
+    component_names: &[&str],
+    cursor: Option<&ScanCursor>,
+    count: u64,
+    mut scan: impl AsyncFnMut(
+        usize,
+        Option<ScanCursor>,
+        u64,
+    ) -> anyhow::Result<(Vec<T>, Option<ScanCursor>)>,
+) -> anyhow::Result<(Vec<T>, Option<String>)> {
+    if count == 0 {
+        bail!("A page needs a --max-count of at least 1");
+    }
+    let (mut position, mut scan_cursor) = match cursor {
+        None => (0, None),
+        Some(cursor) => {
+            let Some((component_name, scan_cursor)) = cursor.as_str().split_once('/') else {
+                bail!("Invalid page cursor: {cursor}");
+            };
+            let Some(position) = component_names
+                .iter()
+                .position(|name| *name == component_name)
+            else {
+                bail!(
+                    "The page cursor is for the component {component_name}, which is not selected"
+                );
+            };
+            (
+                position,
+                ScanCursor::new(scan_cursor.to_string()).into_option(),
+            )
+        }
+    };
+
+    let mut items = Vec::new();
+    let mut remaining = count;
+    while let Some(component_name) = component_names.get(position) {
+        if remaining == 0 {
+            return Ok((items, Some(format!("{component_name}/"))));
+        }
+        let (listed, next_scan_cursor) = scan(position, scan_cursor.take(), remaining).await?;
+        remaining = remaining.saturating_sub(listed.len() as u64);
+        items.extend(listed);
+        if let Some(next_scan_cursor) = next_scan_cursor {
+            return Ok((items, Some(format!("{component_name}/{next_scan_cursor}"))));
+        }
+        position += 1;
+    }
+    Ok((items, None))
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
@@ -3646,10 +3850,11 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, AgentUpdateMode, apply_list_mode_filter, invocation_agent_id,
+        AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter, invocation_agent_id,
         is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
-        parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
-        split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
+        parse_method_parameters_with_error_table, pending_update_progress, read_page,
+        render_revert_command, split_agent_id, validate_ordinary_agent_type,
+        validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -3660,7 +3865,7 @@ mod tests {
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
+    use golem_common::model::{IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
         NamedField, OutputSchema,
@@ -3668,9 +3873,81 @@ mod tests {
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
+    use golem_schema::Empty;
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    /// Reads every page of `components` (name and item count) with pages of `count`, over a fake
+    /// scan whose scan cursor is the index of the next item. Gives each page's items and cursor,
+    /// and each scan's component position and scan cursor.
+    async fn read_all_pages(
+        components: &[(&str, usize)],
+        count: u64,
+    ) -> (
+        Vec<(Vec<String>, Option<String>)>,
+        Vec<(usize, Option<String>)>,
+    ) {
+        let names = components.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        let mut pages = Vec::new();
+        let mut scans = Vec::new();
+        let mut cursor = None::<ScanCursor>;
+        loop {
+            let (items, next) = read_page(
+                &names,
+                cursor.as_ref(),
+                count,
+                async |position, scan_cursor: Option<ScanCursor>, limit| {
+                    scans.push((position, scan_cursor.as_ref().map(ToString::to_string)));
+                    let (name, len) = components[position];
+                    let start = scan_cursor.map_or(0, |cursor| cursor.as_str().parse().unwrap());
+                    let end = (start + limit as usize).min(len);
+                    let items = (start..end).map(|item| format!("{name}#{item}")).collect();
+                    let next = (end < len).then(|| ScanCursor::new(end.to_string()));
+                    Ok((items, next))
+                },
+            )
+            .await
+            .unwrap();
+            pages.push((items, next.clone()));
+            let Some(next) = next else {
+                return (pages, scans);
+            };
+            cursor = Some(ScanCursor::new(next));
+            assert!(pages.len() < 100, "the pages do not end");
+        }
+    }
+
+    #[test]
+    async fn a_page_that_ends_a_component_at_its_limit_names_the_next_component() {
+        let (pages, scans) = read_all_pages(&[("a:x", 2), ("b:y", 3)], 2).await;
+        assert_eq!(
+            pages,
+            vec![
+                (
+                    vec!["a:x#0".to_string(), "a:x#1".to_string()],
+                    Some("b:y/".to_string())
+                ),
+                (
+                    vec!["b:y#0".to_string(), "b:y#1".to_string()],
+                    Some("b:y/2".to_string())
+                ),
+                (vec!["b:y#2".to_string()], None),
+            ]
+        );
+        // The cursor `b:y/` starts `b:y` at its beginning, and no scan asks for 0 items.
+        assert_eq!(
+            scans,
+            vec![(0, None), (1, None), (1, Some("2".to_string()))]
+        );
+
+        // The last component ending at the limit ends the pages.
+        let (pages, _) = read_all_pages(&[("a:x", 1), ("b:y", 1)], 2).await;
+        assert_eq!(
+            pages,
+            vec![(vec!["a:x#0".to_string(), "b:y#0".to_string()], None)]
+        );
+    }
 
     #[test]
     fn await_update_attempt_filter_ignores_earlier_same_target_outcomes() {

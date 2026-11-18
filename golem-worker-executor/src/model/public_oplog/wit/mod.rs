@@ -54,25 +54,27 @@ use golem_common::model::card::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
-    CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams, CardInstalledParams,
-    CardRevokedParams, CommittedRemoteTransactionParams, CompletionDeliveredParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult,
-    PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
-    PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
-    ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams,
-    StreamRegisteredParams, StreamSessionParams, StreamTerminalParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
+    ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
+    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
+    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, ManualUpdateParameters, MemorySizeReconciledParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicExternalToolResult, PublicSpanAttributes, PublicSpanData, PublicSpanFinished,
+    PublicSpanKind, PublicSpanOutcome, PublicSpanStarted, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StreamTerminalParams, StringAttributeValue, SuccessfulUpdateParams,
+    SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
 };
 
+use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FallibleResultParameters,
@@ -81,10 +83,10 @@ use golem_common::model::oplog::{
     SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{Empty, Timestamp};
 use golem_common::schema::{
     SchemaValue, TypedSchemaValue, redact_host_managed_typed_value, redact_host_managed_value,
 };
+use golem_schema::Empty;
 use golem_schema::schema::wit::{
     PermissionCardHandleDropper, QuotaTokenHandleDropper, SecretHandleDropper, decode_value,
     encode_typed, encode_value, reject_quota_handles_in_value_tree, wire,

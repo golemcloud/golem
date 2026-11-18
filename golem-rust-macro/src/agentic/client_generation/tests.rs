@@ -189,6 +189,8 @@ fn constructor_helper_does_not_duplicate_user_method_name() {
         trait ExampleAgent {
             fn new() -> Self;
             fn new_phantom(&self);
+            fn bind_self(&self);
+            fn bind_self1(&self);
         }
     };
 
@@ -203,6 +205,12 @@ fn constructor_helper_does_not_duplicate_user_method_name() {
         rendered.matches("fn new_phantom (").count(),
         1,
         "generated client must not emit a constructor helper with the same inherent method name as a user method:\n{rendered}"
+    );
+    assert!(rendered.contains("pub async fn bind_self ("));
+    assert!(rendered.contains("pub async fn bind_self1 ("));
+    assert!(
+        rendered
+            .contains("pub fn bind_self2 () -> Result < Self , golem_rust :: GolemReflectError >")
     );
 }
 

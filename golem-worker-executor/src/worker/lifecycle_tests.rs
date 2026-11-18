@@ -73,19 +73,18 @@ async fn entity_fence_keeps_attached_store_and_registration_until_the_body_exits
             AgentMode::Durable,
         ))),
     );
-    registration
-        .attach_linear_memory(
-            crate::services::linear_memory::LinearMemoryTracker::new_with_metering(
-                64,
-                64,
-                AgentMode::Durable,
-                false,
-                resources.resource_limits(),
-                Arc::new(StdMutex::new(MemoryGrant::inert(64))),
-                false,
-            ),
-        )
-        .unwrap();
+    let memory = crate::services::linear_memory::LinearMemoryTracker::new_with_metering(
+        64,
+        64,
+        AgentMode::Durable,
+        false,
+        false,
+        resources.resource_limits(),
+        Arc::new(StdMutex::new(MemoryGrant::inert(64))),
+        false,
+    );
+    memory.grow(64, Instant::now());
+    registration.attach_linear_memory(memory).unwrap();
     let primary_dropped = Arc::new(AtomicBool::new(false));
     let entity_dropped = Arc::new(AtomicBool::new(false));
     let engine = wasmtime::Engine::default();

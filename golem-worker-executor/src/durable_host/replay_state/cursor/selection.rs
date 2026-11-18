@@ -39,6 +39,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         OplogEntry::Create { .. }
         | OplogEntry::AgentInvocationStarted { .. }
         | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::AgentInvocationFailed { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::RecoverySucceeded { .. }
         | OplogEntry::Jump { .. }
@@ -49,6 +50,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::SuccessfulUpdate { .. }
         | OplogEntry::FailedUpdate { .. }
         | OplogEntry::GrowMemory { .. }
+        | OplogEntry::MemorySizeReconciled { .. }
         | OplogEntry::CreateResource { .. }
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log {
@@ -109,6 +111,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::CompletionDelivered { .. }
         | OplogEntry::AgentInvocationStarted { .. }
         | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::AgentInvocationFailed { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
         | OplogEntry::RecoverySucceeded { .. }
@@ -120,6 +123,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::SuccessfulUpdate { .. }
         | OplogEntry::FailedUpdate { .. }
         | OplogEntry::GrowMemory { .. }
+        | OplogEntry::MemorySizeReconciled { .. }
         | OplogEntry::CreateResource { .. }
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log { .. }

@@ -133,6 +133,32 @@ func TestDeclaredErrorsAreInTheCommandContract(t *testing.T) {
 	}
 }
 
+type ExitProbe struct{}
+
+type ExitProbeArgs struct{}
+
+// TestAnErrorCaseWithoutAnExitCodeExitsWithOne — exit code 0 means success, so
+// an ErrorSpec that leaves ExitCode out publishes 1; a code that is set stays.
+func TestAnErrorCaseWithoutAnExitCodeExitsWithOne(t *testing.T) {
+	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) {
+		def := defineToolInto[ExitProbe](r, d, "exit-probe", Spec{Version: "1.0.0"}, false)
+		unset := DefineToolError[golem.Unit](def, "unset", ErrorSpec{Kind: RuntimeError})
+		usage := DefineToolError[golem.Unit](def, "usage", ErrorSpec{Kind: UsageError, ExitCode: 2})
+		cmd := def.Body[ExitProbeArgs, string](func(_ *ExitProbeArgs, s *CommandSpec) {
+			s.Raises(unset, usage)
+		})
+		_ = cmd.Handle(func(_ *Context, _ ExitProbeArgs) (string, error) { return "", unset.New(golem.Unit{}) })
+	})
+
+	exitCodes := map[string]uint8{}
+	for _, e := range tool.Commands.Nodes[0].Body.Some().Errors {
+		exitCodes[e.Name] = e.ExitCode
+	}
+	if want := map[string]uint8{"unset": 1, "usage": 2}; !reflect.DeepEqual(exitCodes, want) {
+		t.Errorf("published exit codes %v, want %v", exitCodes, want)
+	}
+}
+
 // invokeLookup runs the lookup command the way the host would.
 func invokeLookup(t *testing.T, d *definitions, r *toolRegistry, name string) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	t.Helper()

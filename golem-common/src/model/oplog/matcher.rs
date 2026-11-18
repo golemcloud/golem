@@ -333,6 +333,23 @@ impl PublicOplogEntry {
                     || Self::string_match(&params.consumed_fuel.to_string(), &[], query_path, query)
                     || Self::string_match(&params.invocation_id.to_string(), &[], query_path, query)
             }
+            PublicOplogEntry::AgentInvocationFailed(params) => {
+                Self::string_match("agentinvocationfailed", &[], query_path, query)
+                    || Self::string_match("agent-invocation-failed", &[], query_path, query)
+                    || Self::string_match(
+                        &params.invocation_id.to_string(),
+                        &["invocation-id".into()],
+                        query_path,
+                        query,
+                    )
+                    || Self::string_match(
+                        &params.start_index.to_string(),
+                        &["start-index".into()],
+                        query_path,
+                        query,
+                    )
+                    || Self::string_match(&params.error, &["error".into()], query_path, query)
+            }
             PublicOplogEntry::Suspend(_params) => {
                 Self::string_match("suspend", &[], query_path, query)
             }
@@ -446,6 +463,10 @@ impl PublicOplogEntry {
             PublicOplogEntry::GrowMemory(_params) => {
                 Self::string_match("growmemory", &[], query_path, query)
                     || Self::string_match("grow-memory", &[], query_path, query)
+            }
+            PublicOplogEntry::MemorySizeReconciled(_) => {
+                Self::string_match("memorysizereconciled", &[], query_path, query)
+                    || Self::string_match("memory-size-reconciled", &[], query_path, query)
             }
             PublicOplogEntry::CreateResource(_params) => {
                 Self::string_match("createresource", &[], query_path, query)

@@ -2,7 +2,11 @@
 // Licensed under the Golem Source License v1.1
 
 import { WasmRpc } from 'golem:agent/host@2.0.0';
-import { connectRemoteAgent, type RemoteAgentCreation } from '../internal/agentIdentity';
+import {
+  connectRemoteAgent,
+  decodeAgentId,
+  type RemoteAgentCreation,
+} from '../internal/agentIdentity';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import type { CancellationToken, Datetime, RpcError } from 'golem:agent/host@2.0.0';
 import { awaitAbortable, throwIfAborted } from '../internal/pollableUtils';
@@ -11,7 +15,6 @@ import {
   schemaValueToWit,
   schemaValueToWitAsync,
   typedSchemaValueFromWit,
-  typedSchemaValueToWit,
   preflightWitValueTree,
   type SchemaValue,
   type TypedSchemaValue,
@@ -306,6 +309,31 @@ function resolveRemoteAgentWith(
     mode,
     create,
   );
+  return boundRemoteAgent(agentId, rpc);
+}
+
+/** Bind self without creating or initializing a target, retaining its recorded identity. */
+export function bindSelfRemoteAgent(expectedTypeName: string): RemoteAgentHandle {
+  const [agentId, rpc] = mapRpcError('Failed to bind self', () => WasmRpc.bindSelf());
+  try {
+    const [typeName] = decodeAgentId(agentId);
+    if (typeName !== expectedTypeName) {
+      throw remoteCallError('Failed to bind self', {
+        tag: 'remote-agent-error',
+        val: {
+          tag: 'invalid-type',
+          val: `Full agent client '${expectedTypeName}' cannot bind agent type '${typeName}'`,
+        },
+      });
+    }
+    return boundRemoteAgent(agentId, rpc);
+  } catch (error) {
+    (rpc as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    throw error;
+  }
+}
+
+function boundRemoteAgent(agentId: string, rpc: WasmRpc): RemoteAgentHandle {
   const remote = remoteTransport(
     rpc,
     agentId,

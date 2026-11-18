@@ -173,6 +173,28 @@ golem agent oplog 'CounterAgent("my-counter")' --html oplog.html --open
 
 The generated file has no external dependencies, so it can be opened directly from disk or shared. `--open` opens it in the default browser. Because the page embeds all entries, it is meant for oplogs of moderate size; use `--from` or `--query` to narrow the selection, or `--serve` for large oplogs. The static viewer can also load a dump produced by `--format json` through its _Load JSON_ button.
 
+### Exporting an obfuscated oplog
+
+The `--obfuscate` parameter exports a report of the oplog that you can attach to a bug report. The CLI replaces the customer values with tokens on your machine:
+
+```shell
+golem agent oplog <agent> --obfuscate [--keep-scalars] [--keep-shape] [--keep-error-text] [--max-entry-bytes N] [--query Q | --from N] [--html FILE | --serve]
+```
+
+Write the report into a self-contained HTML file:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")' --obfuscate --html report.html
+```
+
+Or serve the viewer locally, with each page obfuscated:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")' --obfuscate --serve
+```
+
+In the structured formats, the export emits a sequence of documents in place of the `agent.oplog` documents: one `agent.oplog-export-header` document, one `agent.oplog-export-entry` document per oplog entry and one `agent.oplog-export-coverage` document. `--omit-payloads` cannot be used with `--obfuscate`. See [Sharing an Oplog](/next/debug/oplog-export) for what the report keeps, what it removes and what each `--keep-*` parameter leaks.
+
 ### Searching for oplog entries
 
 Use `golem agent oplog --query` to return matching entries. `--query` cannot be combined with `--from`. The query language supports a subset of Lucene syntax:

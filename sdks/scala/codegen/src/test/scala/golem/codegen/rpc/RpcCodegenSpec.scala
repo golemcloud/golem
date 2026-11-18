@@ -893,6 +893,8 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
+    assert(content.contains("def bindSelf()"))
+    assert(content.contains("AgentClientRuntime.bindSelfWire"))
     assertEquals(content.split("AgentClientRuntime.resolveWire", -1).length - 1, 4)
     assert(
       !content.contains("AgentClientRuntime.resolve["),
@@ -919,6 +921,8 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
+    assert(!content.contains("def bindSelf()"))
+    assert(!content.contains("AgentClientRuntime.bindSelfWire"))
     assertEquals(content.split("AgentClientRuntime.resolveWire", -1).length - 1, 4)
     assert(
       !content.contains("AgentClientRuntime.resolve["),

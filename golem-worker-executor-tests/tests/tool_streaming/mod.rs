@@ -4377,8 +4377,36 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         ..Default::default()
     };
     let executor = start_with_overrides(deps, &context, overrides()).await?;
-    let (provider_checkpoint_port, provider_checkpoint_server, mut provider_checkpoints) =
-        start_promise_checkpoint_server().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let provider_checkpoint_port = listener.local_addr()?.port();
+    let (arrivals, mut provider_checkpoints) = tokio::sync::mpsc::unbounded_channel();
+    let (promises, mut provider_promises) = tokio::sync::mpsc::unbounded_channel();
+    let app = Router::new().route(
+        "/{name}",
+        post(move |Path(name): Path<String>, body: Bytes| {
+            let arrivals = arrivals.clone();
+            let promises = promises.clone();
+            async move {
+                let (release, wait) = tokio::sync::oneshot::channel();
+                announce_promise_checkpoint(Path(name.clone()), State(promises), body).await;
+                arrivals
+                    .send(CrashCheckpointArrival { name, release })
+                    .expect("record held HTTP checkpoint");
+                // Keep the HTTP request pending, not a promise wait that can unload the owner.
+                if wait.await.is_ok() {
+                    axum::http::StatusCode::NO_CONTENT
+                } else {
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                }
+            }
+        }),
+    );
+    let provider_checkpoint_server =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve held HTTP checkpoints");
+        }));
     let (caller_checkpoint_port, caller_checkpoint_server, mut caller_checkpoints) =
         start_promise_checkpoint_server().await;
     let provider_component = executor
@@ -4463,7 +4491,9 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             .await
     });
     let provider =
-        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let provider_promise =
+        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4494,11 +4524,15 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     executor
         .complete_promise(
             &executor
-                .promise_id(&direct_worker, provider.oplog_idx)
+                .promise_id(&direct_worker, provider_promise.oplog_idx)
                 .await?,
             Vec::new(),
         )
         .await?;
+    provider
+        .release
+        .send(())
+        .expect("release direct typed output producer");
     let caller = next_promise_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
@@ -4586,8 +4620,10 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
-    let provider_promise =
-        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let _provider_gate =
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let _provider_promise =
+        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4661,14 +4697,22 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
+    let replayed_provider_gate =
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let replayed_provider_promise =
+        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
     executor
         .complete_promise(
             &executor
-                .promise_id(&decorated_worker, provider_promise.oplog_idx)
+                .promise_id(&decorated_worker, replayed_provider_promise.oplog_idx)
                 .await?,
             Vec::new(),
         )
         .await?;
+    replayed_provider_gate
+        .release
+        .send(())
+        .expect("release replayed typed output producer");
     let caller_promise = next_promise_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
@@ -4715,6 +4759,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         "universal middleware, typed middleware, and provider terminate once each"
     );
     assert!(provider_checkpoints.try_recv().is_err());
+    assert!(provider_promises.try_recv().is_err());
     assert!(caller_checkpoints.try_recv().is_err());
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
@@ -22551,6 +22596,13 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             )
             .await?;
         let loads = executor.instance_load_count(&worker);
+        let write_start_gate = markerless_crash.then(|| {
+            executor.gate_next_replay_access_admission(
+                &worker,
+                "tool-output-writer::write",
+                ReplayAdmissionStage::BeforeLiveStart,
+            )
+        });
         let mut acceptance = (!acknowledged && !storage_failure).then(|| {
             executor.gate_next_replay_access_admission(
                 &worker,
@@ -22575,6 +22627,11 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         let synchronize = async {
             let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
+            if let Some(mut write_start_gate) = write_start_gate {
+                // The checkpoint commit must not incidentally persist the output write.
+                tokio::time::timeout(Duration::from_secs(30), write_start_gate.entered()).await?;
+                write_start_gate.release();
+            }
             if let Some((entered, _)) = failure_gate.as_mut() {
                 tokio::time::timeout(Duration::from_secs(30), entered).await??;
                 executor
@@ -22620,6 +22677,8 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 )
             };
             if markerless_crash {
+                // Acceptance appends the local write but does not commit it to storage.
+                executor.commit_oplog(&worker).await?;
                 let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                 let write = entries
                     .iter()
@@ -22888,6 +22947,218 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         );
         executor.delete_worker(&worker).await?;
     }
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.retry.max_attempts = 0;
+            config.oplog.max_operations_before_commit = u64::MAX;
+            config.suspend.wait_suspend_grace = Duration::from_secs(600);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let agent = agent_id!("ToolStreamingCaller", "accepted-uncommitted");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([(
+                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let mut write_start = executor.gate_next_replay_access_admission(
+        &worker,
+        "tool-output-writer::write",
+        ReplayAdmissionStage::BeforeLiveStart,
+    );
+    let mut accepted = executor.gate_next_replay_access_admission(
+        &worker,
+        "tool-output-writer::write",
+        ReplayAdmissionStage::AfterToolOutputAccepted,
+    );
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &caller_component,
+            &agent,
+            &key,
+            "recover_accepted_unread_output",
+            data_value!(false),
+        )
+        .await?;
+    let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
+    let before_promise = executor.promise_id(&worker, before.oplog_idx).await?;
+    tokio::time::timeout(Duration::from_secs(30), write_start.entered()).await?;
+    let committed = executor.stored_oplog(&worker).await;
+    write_start.release();
+    tokio::time::timeout(Duration::from_secs(30), accepted.entered()).await?;
+    assert_eq!(
+        executor.stored_oplog(&worker).await,
+        committed,
+        "acceptance must leave the output write buffered, not persisted"
+    );
+    assert!(!committed.iter().any(|entry| matches!(entry,
+        golem_common::model::oplog::OplogEntry::Start { function_name, .. }
+            if *function_name == golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite
+    )), "the checkpoint helper must not commit the output write");
+
+    // Restart interrupts can commit the buffered suffix; executor loss must discard it instead.
+    drop(executor);
+    context.wait_for_shut_down_executors().await?;
+    let owned_worker = OwnedAgentId::new(context.default_environment_id, &worker);
+    assert_eq!(
+        golem_worker_executor_test_utils::agent_oplog_length(deps, &context, &owned_worker).await?,
+        committed.len() as u64,
+        "teardown must not persist the buffered output write"
+    );
+
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    executor.resume(&worker, true).await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if executor.worker_is_loaded(&owned_worker).await {
+                executor.commit_oplog(&worker).await?;
+                let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                if entries.iter().any(|entry| {
+                    matches!(&entry.entry,
+                        PublicOplogEntry::Log(log) if log.message.contains("accepted-unread-marker")
+                    )
+                }) {
+                    return Ok::<(), anyhow::Error>(());
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    executor
+        .complete_promise(&before_promise, Vec::new())
+        .await?;
+    let after = next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker, &after).await?;
+    executor
+        .complete_promise(
+            &executor.promise_id(&worker, after.oplog_idx).await?,
+            Vec::new(),
+        )
+        .await?;
+    let output = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent,
+            &key,
+            "recover_accepted_unread_output",
+            data_value!(false),
+        )
+        .await?
+        .into_typed::<Vec<u8>>()?;
+    assert_eq!(output, b"marker:");
+    assert!(
+        checkpoints.try_recv().is_err(),
+        "reconstruction must not repeat checkpoint HTTP effects"
+    );
+    let settled = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let writes = settled
+        .iter()
+        .filter_map(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::tool::streams::tool-output-writer::write"
+            )
+            .then_some(entry.oplog_index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1, "only the regenerated write must survive");
+    let write = writes[0];
+    assert_eq!(
+        settled
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == write
+            ))
+            .count(),
+        1,
+        "the regenerated write must finish once"
+    );
+    assert_eq!(
+        settled
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write
+            ))
+            .count(),
+        1,
+        "the regenerated write acknowledgment must be delivered once"
+    );
+    assert!(
+        !settled.iter().any(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancel) => cancel.start_index == write,
+            PublicOplogEntry::CompletionDiscarded(marker) => marker.start_index == write,
+            _ => false,
+        }),
+        "cancellation must not replace the acknowledged write"
+    );
+    assert_eq!(
+        settled
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::Log(log) if log.message.contains("accepted-unread-marker")
+            ))
+            .count(),
+        1,
+        "the provider must observe the write acknowledgment once"
+    );
+    executor.delete_worker(&worker).await?;
     server.abort();
     Ok(())
 }

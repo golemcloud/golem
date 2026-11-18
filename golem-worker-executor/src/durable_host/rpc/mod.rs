@@ -23,7 +23,6 @@ use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use golem_common::model::AgentFingerprint;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
@@ -31,7 +30,6 @@ use golem_common::model::OwnedInvocationId;
 use golem_common::model::RetryProperties;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
@@ -79,16 +77,6 @@ pub struct CancellationTokenEntry {
     pub metadata: InvocationMetadata,
     pub owner: OwnedAgentId,
     pub recipient: OwnedAgentId,
-}
-
-struct OutboundRpcDenial {
-    error: RpcError,
-    activation_decision: Option<IdempotencyKey>,
-}
-
-enum RpcTargetAdmission {
-    Recorded,
-    LiveOnly(Box<PermissionTarget>),
 }
 
 #[derive(Clone)]
@@ -166,10 +154,6 @@ pub struct WasmRpcEntryPayload {
 
 pub enum WasmRpcTargetActivation {
     DeferredEphemeral {
-        env: Vec<(String, String)>,
-        config: Vec<AgentConfigEntryDto>,
-    },
-    DeferredDurable {
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
     },

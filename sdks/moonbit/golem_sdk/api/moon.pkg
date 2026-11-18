@@ -1,7 +1,9 @@
 import {
+  "golemcloud/golem_sdk/async-core" @async_core,
   "golemcloud/golem_sdk/interface/golem/api/host" @raw,
   "golemcloud/golem_sdk/interface/golem/api/oplog",
   "golemcloud/golem_sdk/interface/golem/api/retry",
+  "golemcloud/golem_sdk/interface/golem/api/retry-scope" @retry_scope,
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/golem/durability/durability" @raw_durability,
   "golemcloud/golem_sdk/interface/wasi/clocks/monotonic-clock" @monotonic,

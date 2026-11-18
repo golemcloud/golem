@@ -642,6 +642,7 @@ impl NativeToolTask {
                 let parent = ctx.owner_invocation_id()?;
                 let next_ordinal = ctx
                     .state
+                    .invocation_state_mut()
                     .tool_invocation_attempt_ordinals
                     .entry(parent.clone())
                     .or_default();

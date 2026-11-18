@@ -172,6 +172,7 @@ pub(super) fn next_tool_attempt_ordinal<Ctx: WorkerCtx>(
     let parent = ctx.owner_invocation_id()?;
     let next = ctx
         .state
+        .invocation_state_mut()
         .tool_invocation_attempt_ordinals
         .entry(parent.clone())
         .or_default();
@@ -935,7 +936,8 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
                 env_overlay,
                 result,
             };
-            accessor.spawn(async move |accessor| task.run(accessor).await)?;
+            let captured = accessor.with(|mut access| access.get().attribution.capture());
+            accessor.spawn(async move |accessor| captured.run(task.run(accessor)).await)?;
             receiver
                 .await
                 .map_err(|_| anyhow!("native tool task ended without a result"))

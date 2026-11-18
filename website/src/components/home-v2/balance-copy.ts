@@ -1,5 +1,5 @@
 const groups = [
-  [".primitive-copy", ":scope > div > p"],
+  [".primitive-comparison", ":scope > article > p"],
   [".guarantees", ".guarantee-description"],
   [".use-cases", ":scope > .use-case > p"],
   [".capability-list", ".capability-item > span:nth-child(2) > span"],

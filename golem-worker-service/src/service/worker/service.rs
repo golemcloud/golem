@@ -762,6 +762,7 @@ impl WorkerService {
                 auth_ctx,
                 invocation_context,
                 principal,
+                None,
             )
             .await
             .map(|(_, fingerprint)| fingerprint)
@@ -776,6 +777,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         let target = agent_id;
         let AgentTarget::Current(agent_id) = target;
@@ -793,6 +795,7 @@ impl WorkerService {
             auth_ctx,
             invocation_context,
             principal,
+            idempotency_key,
         )
         .await
     }
@@ -807,6 +810,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         let target = agent_id;
         let AgentTarget::Current(agent_id) = target;
@@ -824,6 +828,7 @@ impl WorkerService {
             auth_ctx,
             invocation_context,
             principal,
+            idempotency_key,
             AgentResourcePattern::Method(AgentMethodName(method_name)),
         )
         .await
@@ -888,6 +893,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         self.create_with_component_and_resource(
             agent_id,
@@ -898,6 +904,7 @@ impl WorkerService {
             auth_ctx,
             invocation_context,
             principal,
+            idempotency_key,
             AgentResourcePattern::Any,
         )
         .await
@@ -914,6 +921,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        idempotency_key: Option<IdempotencyKey>,
         resource: AgentResourcePattern,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         let target = agent_id;
@@ -934,6 +942,7 @@ impl WorkerService {
                 auth_ctx,
                 invocation_context,
                 principal,
+                idempotency_key,
             )
             .await?;
 
@@ -3248,6 +3257,7 @@ impl WorkerService {
                 auth,
                 None,
                 None,
+                None,
             )
             .await?;
 
@@ -3908,7 +3918,6 @@ mod tests {
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::base_model::plugin_registration::PluginRegistrationId;
     use golem_common::model::AgentInvocationOutput;
-    use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
         AgentConfigEntryDto, AgentMetadataDto, AgentTarget, AgentUpdateMode, ResolvedRevert,
@@ -3952,6 +3961,7 @@ mod tests {
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, ExternalSchemaValue,
         InputSchema, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
     };
+    use golem_schema::Empty;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::auth::AuthCtx;
@@ -4550,6 +4560,7 @@ mod tests {
 
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
+        creating_idempotency_keys: Mutex<Vec<Option<IdempotencyKey>>>,
         prepared_agent_ids: Mutex<Vec<AgentId>>,
         delivered_card_transfers: Mutex<Vec<RecordedCardTransfer>>,
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
@@ -4570,6 +4581,7 @@ mod tests {
         fn new(invocation_output: AgentInvocationOutput) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                creating_idempotency_keys: Mutex::new(Vec::new()),
                 prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
@@ -4593,6 +4605,7 @@ mod tests {
         ) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                creating_idempotency_keys: Mutex::new(Vec::new()),
                 prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
@@ -4705,12 +4718,17 @@ mod tests {
             _: AuthCtx,
             _: Option<InvocationContext>,
             _: Option<golem_api_grpc::proto::golem::component::Principal>,
+            idempotency_key: Option<IdempotencyKey>,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
             let AgentTarget::Current(agent_id) = agent_id;
             self.created_agent_ids
                 .lock()
                 .unwrap()
                 .push(agent_id.clone());
+            self.creating_idempotency_keys
+                .lock()
+                .unwrap()
+                .push(idempotency_key);
             Ok((agent_id.clone(), self.fingerprint))
         }
 
@@ -5481,7 +5499,9 @@ mod tests {
                 input_schema: InputSchema::Parameters(vec![]),
                 output_schema: OutputSchema::Unit,
                 http_endpoint: vec![HttpEndpointDetails {
-                    http_method: golem_common::model::agent::HttpMethod::Get(Empty {}),
+                    http_method: golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(Default::default()),
+                    ),
                     path_suffix: vec![],
                     header_vars: vec![],
                     query_vars: vec![],
@@ -5671,6 +5691,54 @@ mod tests {
     }
 
     #[test]
+    async fn explicit_create_requires_any_invoke_grant_and_preserves_the_creating_key() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let key = IdempotencyKey::fresh();
+        for (resource, allowed) in [
+            (
+                AgentResourcePattern::Method(AgentMethodName("run".to_string())),
+                false,
+            ),
+            (AgentResourcePattern::Any, true),
+        ] {
+            let result = harness
+                .worker_service
+                .create(
+                    &AgentTarget::Current(agent_id.clone()),
+                    HashMap::new(),
+                    Vec::new(),
+                    true,
+                    auth_ctx_with_permissions(vec![agent_target(
+                        &agent_id,
+                        AgentVerb::Invoke,
+                        resource,
+                    )]),
+                    None,
+                    None,
+                    Some(key.clone()),
+                )
+                .await;
+            if allowed {
+                assert_eq!(result.unwrap().1, harness.worker_client.fingerprint);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        assert_eq!(
+            *harness
+                .worker_client
+                .creating_idempotency_keys
+                .lock()
+                .unwrap(),
+            vec![Some(key)],
+        );
+    }
+
+    #[test]
     async fn invocation_target_activation_accepts_the_concrete_method_grant_only() {
         let harness = RestHarness::new(AgentMode::Durable);
         let agent_id = AgentId {
@@ -5682,6 +5750,7 @@ mod tests {
             AgentVerb::Invoke,
             AgentResourcePattern::Method(AgentMethodName("run".to_string())),
         );
+        let key = IdempotencyKey::fresh();
 
         harness
             .worker_service
@@ -5694,6 +5763,7 @@ mod tests {
                 auth_ctx_with_permissions(vec![run_permission.clone()]),
                 None,
                 None,
+                Some(key.clone()),
             )
             .await
             .unwrap();
@@ -5732,6 +5802,7 @@ mod tests {
                     auth_ctx_with_permissions(vec![other_method_permission.clone()]),
                     None,
                     None,
+                    None,
                 )
                 .await
                 .is_err()
@@ -5763,6 +5834,14 @@ mod tests {
                 .len(),
             1,
             "denied target activation reached the worker client"
+        );
+        assert_eq!(
+            *harness
+                .worker_client
+                .creating_idempotency_keys
+                .lock()
+                .unwrap(),
+            vec![Some(key)],
         );
         assert_eq!(
             harness
@@ -7024,8 +7103,8 @@ mod tests {
         };
         use crate::service::component::RemoteComponentService;
         use crate::service::component::tests::TestRegistry;
-        use golem_common::model::agent::http_files::HttpRequestTarget;
         use golem_common::model::domain_registration::Domain;
+        use golem_schema::http::HttpRequestTarget;
         use golem_service_base::custom_api::{
             AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
             MethodParameter, PathSegmentType, PhantomSelection, QueryOrHeaderType,
@@ -7126,7 +7205,10 @@ mod tests {
                     environment_id: a.environment_id,
                     deployment_revision: DeploymentRevision::new(1).unwrap(),
                     route_id: 1,
-                    route_match: golem_common::model::agent::HttpMethod::Get(Empty {}).into(),
+                    route_match: golem_common::model::agent::HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Get(Default::default()),
+                    )
+                    .into(),
                     path: vec![],
                     behavior: RichRouteBehaviour::CallAgent(behaviour.clone()),
                     security: RichRouteSecurity::None,

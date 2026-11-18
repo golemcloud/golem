@@ -204,9 +204,9 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    CreateRequest, CreateRequestKind, DurableStreamEventSummary, FilesystemSnapshotName,
-    OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
-    SnapshotAssistedUpdateDetails, UpdateDescription,
+    AgentError, CreateRequest, CreateRequestKind, DurableStreamEventSummary,
+    FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
+    ReadOnlyViolationError, SnapshotAssistedUpdateDetails, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
@@ -618,6 +618,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     snapshot_exclusions: StdMutex<SnapshotExclusions>,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
+    memory_accounting: residency::MemoryAccounting,
     memory_limit_interrupt_queued: AtomicBool,
 
     /// Snapshot of the active component, refreshed by `create_instance`.
@@ -1034,7 +1035,7 @@ struct RunningAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesyst
 
 struct RunningAgentRuntime<Ctx: WorkerCtx> {
     instance: Instance,
-    store: ObservedPrimaryStore<async_lock::Mutex<Store<Ctx>>>,
+    store: ObservedPrimaryStore<async_lock::Mutex<instance::PrimaryStore<Ctx>>>,
 }
 
 pub(crate) struct ObservedPrimaryStore<T> {
@@ -1168,9 +1169,9 @@ struct StoppingWorker {
 }
 
 #[derive(Debug, Clone)]
-struct FailedInvocationResult {
-    pub trap_type: TrapType,
-    pub stderr: String,
+enum FailedInvocationResult {
+    Trap { trap_type: TrapType, stderr: String },
+    Method { error: AgentError, stderr: String },
 }
 
 #[derive(Debug, Clone)]
@@ -1212,6 +1213,12 @@ struct HydratedInvocationResultCacheEntry {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether method-failure settlement failed before or after its invocation outcome was recorded.
+pub(crate) enum MethodFailureSettlementError {
+    Invocation(WorkerExecutorError),
+    Recovery(WorkerExecutorError),
+}
 
 /// What follows a failed invocation.
 #[derive(Clone, Debug)]

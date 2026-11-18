@@ -27,7 +27,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let result = async {
         let mut number_of_replayed_functions = 0;
 
-        if refresh_replay_target {
+        // A published cursor has already consumed its historical prefix. Snapshot loading can
+        // append a memory baseline after publication; that live hint must not reopen replay.
+        if refresh_replay_target && !store.as_context().data().durable_ctx().is_live() {
             let worker = store.as_context().data().durable_ctx().public_state.worker();
             // Repaired status covers committed history, not buffered appends. Publish the
             // snapshot-assisted update's full prefix before sampling both target and index.
@@ -192,7 +194,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .as_context_mut()
                             .data_mut()
                             .durable_ctx_mut()
-                            .primary_invocation_start_index = Some(oplog_index);
+                            .state
+                            .loop_invocation_state_mut()
+                            .start_index = Some(oplog_index);
                         // An invocation retained only through its start has no recorded body.
                         // Publish live before pure guest code or logging runs, without waiting
                         // for a durable host call to observe the exhausted replay cursor.
@@ -208,6 +212,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .clear_invocation_scope_card().await;
                             break Err(error);
                         }
+                        let recorded_local_failure = store.as_context().data().durable_ctx()
+                            .state.replay_state.invocation_has_recorded_local_failure(oplog_index);
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -263,8 +269,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     && store.as_context().data().durable_ctx().is_live()
                                 {
                                     let worker = worker.clone();
+                                    let attribution = store.as_context().data().durable_ctx().attribution.clone();
+                                    let invocation_key = store.as_context().data().durable_ctx().invocation_key();
                                     let result = store.run_concurrent(async move |_accessor| {
-                                        worker.complete_durable_streaming_session(&idempotency_key).await
+                                        attribution.scoped(Some(invocation_key), worker.complete_durable_streaming_session(&idempotency_key)).await
                                     }).await;
                                     if let Err(error) = result.map_err(|error| WorkerExecutorError::runtime(error.to_string())).and_then(|result| result) {
                                         error!(%error, "Failed to complete durable streaming session");
@@ -276,6 +284,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;
+                            }
+                            Ok(InvokeResult::MethodFailed { error, .. }) => {
+                                if let Err(
+                                    crate::worker::MethodFailureSettlementError::Invocation(error)
+                                    | crate::worker::MethodFailureSettlementError::Recovery(error)
+                                ) = Self::on_agent_method_failure(store, &full_function_name, error, uses_streams).await {
+                                    break Err(error);
+                                }
+                                number_of_replayed_functions += 1;
+                                continue;
+                            }
+                            Ok(ref result) if recorded_local_failure
+                                && (result.is_snapshot_replay_divergence()
+                                    || matches!(result, InvokeResult::Exited { .. })) =>
+                            {
+                                break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    "invocation-local method failure",
+                                    format!("{result:?}"),
+                                ));
                             }
                             _ => {
                                 let owner_failure = store
@@ -604,6 +631,12 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             ));
                         }
 
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .rebuild_resolved_names(hydrated.reference.oplog_index)
+                            .await?;
                         Self::finalize_pending_snapshot_update(instance, store).await
                     }
                     UpdateDescription::Automatic { .. }

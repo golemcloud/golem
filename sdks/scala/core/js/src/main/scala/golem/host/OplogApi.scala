@@ -193,6 +193,13 @@ object OplogApi {
     consumedFuel: Long
   )
 
+  final case class AgentInvocationFailedParameters(
+    timestamp: ContextApi.DateTime,
+    invocationId: UUID,
+    error: String,
+    startIndex: OplogIndex
+  )
+
   sealed trait OplogErrorKind extends Product with Serializable
   object OplogErrorKind {
     case object Invocation extends OplogErrorKind
@@ -286,6 +293,11 @@ object OplogApi {
   final case class GrowMemoryParameters(
     timestamp: ContextApi.DateTime,
     delta: BigInt
+  )
+
+  final case class MemorySizeReconciledParameters(
+    timestamp: ContextApi.DateTime,
+    bytes: BigInt
   )
 
   final case class CreateResourceParameters(
@@ -398,6 +410,9 @@ object OplogApi {
     final case class AgentInvocationFinished(params: AgentInvocationFinishedParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class AgentInvocationFailed(params: AgentInvocationFailedParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
     final case class Suspend(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
@@ -441,6 +456,9 @@ object OplogApi {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class GrowMemory(params: GrowMemoryParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class MemorySizeReconciled(params: MemorySizeReconciledParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class CreateResource(params: CreateResourceParameters) extends OplogEntry {
@@ -551,6 +569,16 @@ object OplogApi {
           AgentInvocationFinished(
             parseAgentInvocationFinishedParameters(v.asInstanceOf[JsAgentInvocationFinishedParameters])
           )
+        case "agent-invocation-failed" =>
+          val p = v.asInstanceOf[JsAgentInvocationFailedParameters]
+          AgentInvocationFailed(
+            AgentInvocationFailedParameters(
+              timestamp = parseDateTime(p.timestamp),
+              invocationId = JsUuid.toUuid(p.invocationId),
+              error = p.error,
+              startIndex = BigInt(p.startIndex.toString)
+            )
+          )
         case "suspend"            => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "error"              => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
         case "recovery-succeeded" => RecoverySucceeded(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
@@ -571,8 +599,10 @@ object OplogApi {
         case "pending-update"    => PendingUpdate(parsePendingUpdateParameters(v.asInstanceOf[JsPendingUpdateParameters]))
         case "successful-update" =>
           SuccessfulUpdate(parseSuccessfulUpdateParameters(v.asInstanceOf[JsSuccessfulUpdateParameters]))
-        case "failed-update"   => FailedUpdate(parseFailedUpdateParameters(v.asInstanceOf[JsFailedUpdateParameters]))
-        case "grow-memory"     => GrowMemory(parseGrowMemoryParameters(v.asInstanceOf[JsGrowMemoryParameters]))
+        case "failed-update"          => FailedUpdate(parseFailedUpdateParameters(v.asInstanceOf[JsFailedUpdateParameters]))
+        case "grow-memory"            => GrowMemory(parseGrowMemoryParameters(v.asInstanceOf[JsGrowMemoryParameters]))
+        case "memory-size-reconciled" =>
+          MemorySizeReconciled(parseMemorySizeReconciledParameters(v.asInstanceOf[JsMemorySizeReconciledParameters]))
         case "create-resource" =>
           CreateResource(parseCreateResourceParameters(v.asInstanceOf[JsCreateResourceParameters]))
         case "drop-resource"   => DropResource(parseDropResourceParameters(v.asInstanceOf[JsDropResourceParameters]))
@@ -1037,6 +1067,14 @@ object OplogApi {
     GrowMemoryParameters(
       timestamp = parseDateTime(raw.timestamp),
       delta = BigInt(raw.delta.toString)
+    )
+
+  private def parseMemorySizeReconciledParameters(
+    raw: JsMemorySizeReconciledParameters
+  ): MemorySizeReconciledParameters =
+    MemorySizeReconciledParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      bytes = BigInt(raw.bytes.toString)
     )
 
   private def parseCreateResourceParameters(raw: JsCreateResourceParameters): CreateResourceParameters =

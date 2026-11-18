@@ -135,6 +135,10 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 entity_parent_start_index,
                 ..
             }
+            | OplogEntry::AgentInvocationFailed {
+                entity_parent_start_index,
+                ..
+            }
             | OplogEntry::Jump {
                 entity_parent_start_index,
                 ..
@@ -239,6 +243,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::Log {
                 parent_start_index: None,
                 ..

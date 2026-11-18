@@ -214,8 +214,9 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           ),
           encodedMount.selectDynamic("openapiProviderMethod").asInstanceOf[String] == "provider-text",
           endpoints(0).selectDynamic("httpMethod").selectDynamic("tag").asInstanceOf[String] == "any",
-          custom.selectDynamic("tag").asInstanceOf[String] == "custom",
-          custom.selectDynamic("val").asInstanceOf[String] == "ANY"
+          custom.selectDynamic("tag").asInstanceOf[String] == "method",
+          custom.selectDynamic("val").selectDynamic("tag").asInstanceOf[String] == "custom",
+          custom.selectDynamic("val").selectDynamic("val").asInstanceOf[String] == "ANY"
         )
       },
       test("constructor input-schema uses parameters + per-field source/index") {

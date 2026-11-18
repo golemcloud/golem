@@ -274,6 +274,7 @@ fn configured_account(memory_metering: bool) -> (ResourceUsageAccount, Arc<Atomi
         0,
         AgentMode::Durable,
         false,
+        false,
         entry.clone(),
         Arc::new(Mutex::new(MemoryGrant::inert(0))),
         memory_metering,

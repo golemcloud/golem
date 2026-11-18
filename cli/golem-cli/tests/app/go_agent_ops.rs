@@ -215,8 +215,7 @@ async fn test_go_agent_ops() {
     let listed = listed.stdout_text().replace("\\\"", "\"");
     assert!(listed.contains(shelf), "{listed}");
 
-    // A Go producer that fails mid-stream fails its invocation: the reader
-    // must never see the items it got as a complete stream.
+    // A Go reader catches a producer failure after its accepted prefix.
     let failing = ctx
         .cli([
             flag::YES,
@@ -227,18 +226,9 @@ async fn test_go_agent_ops() {
         ])
         .await;
     let text = format!("{}\n{}", failing.stdout_text(), failing.stderr_text());
+    assert!(failing.success_or_dump());
     assert!(
-        !failing.success(),
-        "a failed production was not reported: {text}"
-    );
-    // The failure reaches the caller either through the call itself, carrying
-    // the producer's panic, or through its read of the stream, depending on
-    // whether the caller is still waiting for the result when the producer
-    // fails.
-    assert!(
-        text.contains("stream producer failed: intentional producer failure")
-            || (text.contains("stream terminated: Failed(Trapped(")
-                && text.contains("DeterministicTrap")),
+        text.contains("caught:[1]:intentional producer failure"),
         "{text}"
     );
 }

@@ -412,6 +412,14 @@ sealed trait JsAgentInvocationFinishedParameters extends js.Object {
   def componentRevision: js.BigInt    = js.native
 }
 
+@js.native
+sealed trait JsAgentInvocationFailedParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def invocationId: JsUuid  = js.native
+  def error: String         = js.native
+  def startIndex: js.BigInt = js.native
+}
+
 // --- PendingAgentInvocationParameters ---
 
 @js.native
@@ -494,6 +502,12 @@ sealed trait JsFailedUpdateParameters extends js.Object {
 sealed trait JsGrowMemoryParameters extends js.Object {
   def timestamp: JsDatetime = js.native
   def delta: js.BigInt      = js.native
+}
+
+@js.native
+sealed trait JsMemorySizeReconciledParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def bytes: js.BigInt      = js.native
 }
 
 // --- CreateResourceParameters ---

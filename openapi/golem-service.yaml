@@ -17942,9 +17942,15 @@ components:
         currentComponentRevision:
           type: integer
           format: uint64
+        queryHash:
+          description: |-
+            The hash of the search query of the pages that gave the cursor, or empty for the pages of
+            an oplog read without a query. A read refuses a cursor of another query.
+          type: string
       required:
       - nextOplogIndex
       - currentComponentRevision
+      - queryHash
     OplogErrorKind:
       type: string
       enum:
@@ -18734,6 +18740,7 @@ components:
           Cancelled: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
+          AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -18745,6 +18752,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          MemorySizeReconciled: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -18792,6 +18800,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -18803,6 +18812,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -18903,6 +18913,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#ActivatePluginParams'
+    PublicOplogEntry_r#AgentInvocationFailedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInvocationFailed
+            type: string
+            enum:
+            - AgentInvocationFailed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#AgentInvocationFailedParams'
     PublicOplogEntry_r#AgentInvocationFinishedParams:
       allOf:
       - type: object
@@ -19275,6 +19297,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#LogParams'
+    PublicOplogEntry_r#MemorySizeReconciledParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: MemorySizeReconciled
+            type: string
+            enum:
+            - MemorySizeReconciled
+        required:
+        - type
+      - $ref: '#/components/schemas/r#MemorySizeReconciledParams'
     PublicOplogEntry_r#OplogProcessorCheckpointParams:
       allOf:
       - type: object
@@ -22381,6 +22415,26 @@ components:
       required:
       - timestamp
       - plugin
+    r#AgentInvocationFailedParams:
+      title: r#AgentInvocationFailedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        error:
+          type: string
+        startIndex:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - invocationId
+      - error
+      - startIndex
     r#AgentInvocationFinishedParams:
       title: r#AgentInvocationFinishedParams
       type: object
@@ -22978,6 +23032,19 @@ components:
       - level
       - context
       - message
+    r#MemorySizeReconciledParams:
+      title: r#MemorySizeReconciledParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        bytes:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - bytes
     r#OplogProcessorCheckpointParams:
       title: r#OplogProcessorCheckpointParams
       type: object
@@ -23852,6 +23919,31 @@ components:
           type: boolean
       required:
       - required
+    AgentHttpMethod:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - Method
+          value:
+            $ref: '#/components/schemas/HttpMethod'
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - Any
+          value:
+            $ref: '#/components/schemas/Empty'
+        required:
+        - type
+        - value
     AgentMethodSchema:
       type: object
       properties:
@@ -23891,6 +23983,31 @@ components:
       required:
       - input
       - output
+    AgentPathSegment:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - Segment
+          value:
+            $ref: '#/components/schemas/PathSegment'
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - SystemVariable
+          value:
+            $ref: '#/components/schemas/SystemVariableSegment'
+        required:
+        - type
+        - value
     AgentSecretCreation:
       title: AgentSecretCreation
       type: object
@@ -26188,7 +26305,7 @@ components:
         methodName:
           type: string
         httpMethod:
-          $ref: '#/components/schemas/HttpMethod'
+          $ref: '#/components/schemas/AgentHttpMethod'
         path:
           type: string
       required:
@@ -26221,11 +26338,11 @@ components:
       type: object
       properties:
         httpMethod:
-          $ref: '#/components/schemas/HttpMethod'
+          $ref: '#/components/schemas/AgentHttpMethod'
         pathSuffix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         headerVars:
           type: array
           items:
@@ -26262,7 +26379,6 @@ components:
           Trace: '#/components/schemas/HttpMethod_Empty'
           Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
-          Any: '#/components/schemas/HttpMethod_Empty'
       type: object
       oneOf:
       - $ref: '#/components/schemas/HttpMethod_Empty'
@@ -26275,7 +26391,6 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -26293,10 +26408,10 @@ components:
       - type: object
         properties:
           type:
-            example: Any
+            example: Patch
             type: string
             enum:
-            - Any
+            - Patch
         required:
         - type
       - $ref: '#/components/schemas/Empty'
@@ -26307,7 +26422,7 @@ components:
         pathPrefix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         authDetails:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
@@ -26319,7 +26434,7 @@ components:
         webhookSuffix:
           type: array
           items:
-            $ref: '#/components/schemas/PathSegment'
+            $ref: '#/components/schemas/AgentPathSegment'
         staticBindings:
           type: array
           items:
@@ -27491,13 +27606,11 @@ components:
         propertyName: type
         mapping:
           Literal: '#/components/schemas/PathSegment_LiteralSegment'
-          SystemVariable: '#/components/schemas/PathSegment_SystemVariableSegment'
           PathVariable: '#/components/schemas/PathSegment_PathVariable'
           RemainingPathVariable: '#/components/schemas/PathSegment_PathVariable'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PathSegment_LiteralSegment'
-      - $ref: '#/components/schemas/PathSegment_SystemVariableSegment'
       - $ref: '#/components/schemas/PathSegment_PathVariable'
       - $ref: '#/components/schemas/PathSegment_PathVariable'
     PathSegment_LiteralSegment:
@@ -27524,18 +27637,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PathVariable'
-    PathSegment_SystemVariableSegment:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: SystemVariable
-            type: string
-            enum:
-            - SystemVariable
-        required:
-        - type
-      - $ref: '#/components/schemas/SystemVariableSegment'
     PathVariable:
       title: PathVariable
       type: object

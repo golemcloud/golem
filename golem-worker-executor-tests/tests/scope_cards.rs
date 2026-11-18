@@ -32,9 +32,9 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableRpcError};
 use golem_common::model::oplog::{
-    HostRequestGolemRpcActivate, HostResponse, HostResponseFileSystemStat,
-    HostResponseGolemRpcActivate, HostResponseKVUnit, HostResponseP3FileSystemStat,
-    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
+    HostRequest, HostRequestGolemRpcCreate, HostResponse, HostResponseFileSystemStat,
+    HostResponseGolemRpcCreate, HostResponseKVUnit, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsTcpConnect,
     HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry,
     PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
@@ -52,6 +52,7 @@ use golem_worker_executor::services::card::{
     CardRevokeResult, CardService, CardState, RuntimeCardCreation,
 };
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
@@ -1387,7 +1388,8 @@ fn concrete_card_granting(parent: CardId, verb: &str) -> StoredCard {
 /// The live run applies the event at the second call only, so the two calls return different
 /// outcomes. Then a new executor reconstructs the agent, which must keep both outcomes: replay
 /// commits the entry before the first call and publishes every card event up to the next
-/// recorded entry, so a first decision that records nothing would observe the event.
+/// recorded entry, so a first decision that records nothing would observe the event. Each
+/// recorded decision names the invocation that made it, and replay accepts it for that invocation.
 async fn card_decisions_survive_reconstruction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1465,6 +1467,31 @@ async fn card_decisions_survive_reconstruction(
     );
 
     let entries = read_whole_oplog(&owner).await;
+    let recorded = RecordedCardDecisions::find(&entries, &stored_key, decision)
+        .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
+    let oplog = owner.execution().oplog();
+    for start in &recorded.decisions {
+        let Some(OplogEntry::Start {
+            request: Some(request),
+            ..
+        }) = entries.get(start)
+        else {
+            anyhow::bail!("the decision at {start} has no request");
+        };
+        let request = oplog
+            .download_payload(request.clone())
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let HostRequest::PermissionCardDecision(request) = request else {
+            anyhow::bail!("the decision at {start} has request {request:?}");
+        };
+        assert_eq!(
+            request.invocation_id,
+            Some(stored_key),
+            "the decision at {start} must name the invocation that made it"
+        );
+    }
+    drop(oplog);
     drop(owner);
     drop(executor);
 
@@ -1483,8 +1510,6 @@ async fn card_decisions_survive_reconstruction(
         "reconstruction must keep the outcome of each decision"
     );
 
-    let recorded = RecordedCardDecisions::find(&entries, &stored_key, decision)
-        .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
     let marker = recorded
         .marker
         .ok_or_else(|| anyhow::anyhow!("the gap marker was not logged"))?;
@@ -2103,31 +2128,30 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
     let caller_oplog = executor
         .get_oplog(&caller_worker, OplogIndex::INITIAL)
         .await?;
-    let activation_start = caller_oplog
+    let creation_start = caller_oplog
         .iter()
         .find_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
-                if params.function_name == "golem::rpc::wasm-rpc::activate" =>
+                if params.function_name == "golem::rpc::wasm-rpc::new" =>
             {
                 Some(entry.oplog_index)
             }
             _ => None,
         })
-        .expect("the first admitted RPC call must durably record target activation");
-    let activation_response = caller_oplog
+        .expect("the first admitted RPC call must durably record target creation");
+    let creation_response = caller_oplog
         .iter()
         .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(params) if params.start_index == activation_start => {
+            PublicOplogEntry::End(params) if params.start_index == creation_start => {
                 params.response.clone()
             }
             _ => None,
         })
-        .expect("the activation decision must complete before RPC dispatch");
-    let activation_response =
-        HostResponseGolemRpcActivate::from_value(activation_response.value())?;
-    let persisted_fingerprint = activation_response
+        .expect("the creation decision must complete before RPC dispatch");
+    let creation_response = HostResponseGolemRpcCreate::from_value(creation_response.value())?;
+    let persisted_fingerprint = creation_response
         .result
-        .expect("the admitted activation must persist its target fingerprint");
+        .expect("the admitted creation must persist its target fingerprint");
     assert!(!persisted_fingerprint.0.is_nil());
     executor.check_oplog_is_queryable(&caller_worker).await?;
     executor.check_oplog_is_queryable(&target_worker).await?;
@@ -2169,8 +2193,8 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
         })
         .expect("the admitted RPC call must have a durable invocation Start");
     assert!(
-        activation_start < invocation_start,
-        "target activation must be durable before the invocation Start"
+        creation_start < invocation_start,
+        "target creation must be durable before the invocation Start"
     );
     assert_eq!(
         replayed_caller_oplog
@@ -2178,14 +2202,87 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
             .filter(|entry| matches!(
                 &entry.entry,
                 PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::rpc::wasm-rpc::activate"
+                    if params.function_name == "golem::rpc::wasm-rpc::new"
             ))
             .count(),
         1,
-        "restart must replay the recorded activation and validate its fingerprint without appending a duplicate"
+        "restart must replay the recorded creation and validate its fingerprint without appending a duplicate"
     );
     executor.check_oplog_is_queryable(&caller_worker).await?;
     executor.check_oplog_is_queryable(&target_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn outbound_rpc_create_requires_whole_agent_authority_for_the_concrete_child(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    for resource in ["*", "get_self_uri"] {
+        let context = TestContext::new(last_unique_id);
+        let authority = Arc::new(ScopeCardAuthority::default());
+        let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .unique()
+            .without_default_host_permissions("GolemHostApi")
+            .update_agent_provision_config("GolemHostApi", |config| {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .retain(|permission| !matches!(permission, PolymorphicPermissionPattern::Agent(_)));
+                config.initial_permissions.lower_bound.positive.extend([
+                    parse_polymorphic_permission("agent(?agent) @ * : view : *")
+                        .expect("valid self-view permission"),
+                    parse_polymorphic_permission(&format!(
+                        "agent(?component/GolemHostApi(\"allowed-child\")) @ * : invoke : {resource}"
+                    ))
+                    .expect("valid concrete-child invocation permission"),
+                ]);
+            })
+            .store()
+            .await?;
+        let caller = agent_id!("GolemHostApi", "concrete-create-caller");
+        configure_scope_card_root(&authority, &component, &caller)?;
+        executor.start_agent(&component.id, caller.clone()).await?;
+        for name in ["allowed-child", "other-child"] {
+            let child = AgentId::from_agent_id(component.id, &agent_id!("GolemHostApi", name))
+                .map_err(anyhow::Error::msg)?;
+            let result = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &caller,
+                    "outbound_agent_rpc_invoke_and_await_result",
+                    data_value!("GolemHostApi", name, "get_self_uri"),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+            let allowed = resource == "*" && name == "allowed-child";
+            if allowed {
+                assert_eq!(result, Ok(()));
+                assert!(executor.get_worker_metadata_opt(&child).await?.is_some());
+                let history = executor.stored_oplog(&child).await;
+                assert_eq!(
+                    history
+                        .iter()
+                        .filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { .. }))
+                        .count(),
+                    2,
+                    "one constructor and one method must execute"
+                );
+            } else {
+                assert!(
+                    result.as_ref().is_err_and(|error| error.contains("Denied")),
+                    "resource={resource}, child={name}: {result:?}"
+                );
+                assert!(executor.get_worker_metadata_opt(&child).await?.is_none());
+            }
+        }
+        executor.shutdown_and_wait_for_invocation_loops().await?;
+    }
     Ok(())
 }
 
@@ -2247,48 +2344,42 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
             .get_worker_metadata_opt(&target_id)
             .await?
             .is_none(),
-        "authorization denial must occur before target activation"
+        "authorization denial must occur before target creation"
     );
 
     let caller_oplog = executor
         .get_oplog(&caller_worker, OplogIndex::INITIAL)
         .await?;
-    let activation_starts: Vec<_> = caller_oplog
+    let creation_starts: Vec<_> = caller_oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
-                if params.function_name == "golem::rpc::wasm-rpc::activate" =>
+                if params.function_name == "golem::rpc::wasm-rpc::new" =>
             {
                 Some((entry.oplog_index, params.request.clone()))
             }
             _ => None,
         })
         .collect();
-    assert_eq!(activation_starts.len(), 1);
-    let (activation_start, activation_request) = &activation_starts[0];
-    let activation_request = activation_request
+    assert_eq!(creation_starts.len(), 1);
+    let (creation_start, creation_request) = &creation_starts[0];
+    let creation_request = creation_request
         .as_ref()
-        .expect("activation Start must persist its authorization decision");
-    let activation_request = HostRequestGolemRpcActivate::from_value(activation_request.value())?;
-    assert_eq!(activation_request.remote_agent_id, target_id);
-    assert_eq!(activation_request.method_name, "get_self_uri");
-    assert!(matches!(
-        activation_request.decision,
-        Err(SerializableRpcError::Denied { .. })
-    ));
-    let activation_response = caller_oplog
+        .expect("creation Start must persist its target");
+    let creation_request = HostRequestGolemRpcCreate::from_value(creation_request.value())?;
+    assert_eq!(creation_request.remote_agent_id, target_id);
+    let creation_response = caller_oplog
         .iter()
         .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(params) if params.start_index == *activation_start => {
+            PublicOplogEntry::End(params) if params.start_index == *creation_start => {
                 params.response.clone()
             }
             _ => None,
         })
-        .expect("activation denial must have a durable End response");
-    let activation_response =
-        HostResponseGolemRpcActivate::from_value(activation_response.value())?;
+        .expect("creation denial must have a durable End response");
+    let creation_response = HostResponseGolemRpcCreate::from_value(creation_response.value())?;
     assert!(matches!(
-        activation_response.result,
+        creation_response.result,
         Err(SerializableRpcError::Denied { .. })
     ));
     assert!(
@@ -2297,7 +2388,7 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
             PublicOplogEntry::Start(params)
                 if params.function_name == "golem::rpc::wasm-rpc::invoke_and_await"
         )),
-        "a denied activation must not open the invocation durable call"
+        "a denied creation must not open the invocation durable call"
     );
     drop(executor);
 
@@ -2330,11 +2421,11 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
             .filter(|entry| matches!(
                 &entry.entry,
                 PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::rpc::wasm-rpc::activate"
+                    if params.function_name == "golem::rpc::wasm-rpc::new"
             ))
             .count(),
         1,
-        "replay must consume the recorded denial without appending another activation decision"
+        "replay must consume the recorded denial without appending another creation decision"
     );
     Ok(())
 }
@@ -3327,8 +3418,9 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
             _ => None,
         })
         .expect("denial must have a durable connect End response");
-    let expected_response: HostResponse = HostResponseP3SocketsConnect {
+    let expected_response: HostResponse = HostResponseP3SocketsTcpConnect {
         result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        closed: false,
     }
     .into();
     assert_eq!(
@@ -3521,7 +3613,7 @@ async fn p3_tcp_denial_survives_recovery_before_start_and_before_end(
             })
             .expect("recovery must complete the denied connect");
         assert_eq!(
-            HostResponseP3SocketsConnect::from_value(response.value())?.result,
+            HostResponseP3SocketsTcpConnect::from_value(response.value())?.result,
             Err(SerializableP3SocketErrorCode::AccessDenied),
             "the unfinished invocation must recover with a guest-visible denial"
         );
@@ -8080,6 +8172,7 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
 }
 
 mod moonbit;
+mod socket_policy;
 
 const CARD_LIVENESS_FUNCTION: &str = "golem::permissions::types::card-liveness";
 
