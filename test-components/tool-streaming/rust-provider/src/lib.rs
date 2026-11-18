@@ -1162,10 +1162,11 @@ struct RawCapableInput {
     path: String,
 }
 
+/// The canonical input of `bash run`: the positional script, then the options.
 #[derive(IntoSchema)]
 struct RawBashInput {
-    cwd: String,
     script: String,
+    cwd: String,
     timeout: u32,
 }
 
@@ -1181,8 +1182,8 @@ struct BashOutput {
 /// Runs `script` with the built-in `bash` tool and returns what the script wrote to stdout.
 async fn run_bash(script: &str) -> String {
     let input = RawBashInput {
-        cwd: String::new(),
         script: script.to_string(),
+        cwd: String::new(),
         timeout: 60,
     }
     .into_typed_schema_value()

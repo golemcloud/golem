@@ -5487,9 +5487,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     async fn run_bash(&self, script: String) -> String {
         let input = TypedSchemaValue::new(
             SchemaGraph::anonymous(SchemaType::record(
+                // The canonical input of `bash run`: the positional script, then the options.
                 [
-                    ("cwd", SchemaType::string()),
                     ("script", SchemaType::string()),
+                    ("cwd", SchemaType::string()),
                     ("timeout", SchemaType::u32()),
                 ]
                 .into_iter()
@@ -5502,8 +5503,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             )),
             SchemaValue::Record {
                 fields: vec![
-                    SchemaValue::String(String::new()),
                     SchemaValue::String(script),
+                    SchemaValue::String(String::new()),
                     SchemaValue::U32(60),
                 ],
             },
