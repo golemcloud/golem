@@ -42,7 +42,7 @@ use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
+    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
 };
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
 use golem_common::model::caller::Caller;
@@ -1017,32 +1017,15 @@ impl TestDsl for TestWorkerExecutor {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
-        let latest_version = self
-            .get_latest_component_revision(&agent_id.component_id)
-            .await?;
-
-        let response = self
-            .client
-            .clone()
-            .update_worker(UpdateWorkerRequest {
-                agent_id: Some(agent_id.clone().into()),
-                environment_id: Some(latest_version.environment_id.into()),
-                target_revision: target_revision.into(),
-                mode: UpdateMode::Automatic.into(),
-                auth_ctx: Some(self.auth_ctx().into()),
-                disable_wakeup,
-                caller: Some(Caller::anonymous().into()),
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(update_worker_response::Result::Success(_)) => Ok(()),
-            Some(update_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to update worker: {error:?}"))
-            }
-            _ => Err(anyhow!("Failed to update worker: unknown error")),
-        }
+        self.update_worker_as_caller(
+            agent_id,
+            AgentUpdateMode::Automatic,
+            target_revision,
+            disable_wakeup,
+            Caller::anonymous(),
+        )
+        .await
+        .map(|_| ())
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
@@ -1052,32 +1035,15 @@ impl TestDsl for TestWorkerExecutor {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
-        let latest_version = self
-            .get_latest_component_revision(&agent_id.component_id)
-            .await?;
-
-        let response = self
-            .client
-            .clone()
-            .update_worker(UpdateWorkerRequest {
-                agent_id: Some(agent_id.clone().into()),
-                environment_id: Some(latest_version.environment_id.into()),
-                target_revision: target_revision.into(),
-                mode: UpdateMode::Automatic.into(),
-                auth_ctx: Some(self.auth_ctx().into()),
-                disable_wakeup,
-                caller: Some(Caller::anonymous().into()),
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(update_worker_response::Result::Success(_)) => Ok(()),
-            Some(update_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to update worker: {error:?}"))
-            }
-            _ => Err(anyhow!("Failed to update worker: unknown error")),
-        }
+        self.update_worker_as_caller(
+            agent_id,
+            AgentUpdateMode::Automatic,
+            target_revision,
+            disable_wakeup,
+            Caller::anonymous(),
+        )
+        .await
+        .map(|_| ())
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
@@ -1087,6 +1053,26 @@ impl TestDsl for TestWorkerExecutor {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
+        self.update_worker_as_caller(
+            agent_id,
+            AgentUpdateMode::Manual,
+            target_revision,
+            disable_wakeup,
+            Caller::anonymous(),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, ?mode, target_revision, disable_wakeup))]
+    async fn update_worker_as_caller(
+        &self,
+        agent_id: &AgentId,
+        mode: AgentUpdateMode,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+        caller: Caller,
+    ) -> anyhow::Result<OplogIndex> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
             .await?;
@@ -1098,16 +1084,16 @@ impl TestDsl for TestWorkerExecutor {
                 agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 target_revision: target_revision.into(),
-                mode: UpdateMode::Manual.into(),
+                mode: UpdateMode::from(mode).into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
-                caller: Some(Caller::anonymous().into()),
+                caller: Some(caller.into()),
             })
             .await?
             .into_inner();
 
         match response.result {
-            Some(update_worker_response::Result::Success(_)) => Ok(()),
+            Some(update_worker_response::Result::Success(index)) => Ok(OplogIndex::from_u64(index)),
             Some(update_worker_response::Result::Failure(error)) => {
                 Err(anyhow!("Failed to update worker: {error:?}"))
             }

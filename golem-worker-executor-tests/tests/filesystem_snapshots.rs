@@ -3294,7 +3294,9 @@ fn manual_update_target(entry: &OplogEntry) -> Option<ComponentRevision> {
         OplogPayload::External { .. } => return None,
     };
     match payload {
-        AgentInvocationPayload::ManualUpdate { target_revision } => Some(target_revision),
+        AgentInvocationPayload::ManualUpdate {
+            target_revision, ..
+        } => Some(target_revision),
         _ => None,
     }
 }

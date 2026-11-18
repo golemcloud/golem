@@ -753,6 +753,19 @@ pub trait TestDsl {
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
+    /// Updates an agent as the given caller, which the agent records as the requester of the
+    /// update, and gives the index of the update attempt. Only the worker-executor gRPC DSL can
+    /// send a caller: the REST DSL refuses one, because REST takes the caller from the request's
+    /// credentials.
+    async fn update_worker_as_caller(
+        &self,
+        agent_id: &AgentId,
+        mode: golem_common::model::agent::AgentUpdateMode,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+        caller: golem_common::model::caller::Caller,
+    ) -> anyhow::Result<OplogIndex>;
+
     async fn delete_worker(&self, agent_id: &AgentId) -> anyhow::Result<()>;
 
     async fn get_worker_metadata_opt(
